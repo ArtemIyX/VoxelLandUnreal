@@ -459,6 +459,8 @@ void FVoxelLandGraphToolkit::InitializePreviewForTests()
     PreviewViewport = SNew(SVoxelLandPreviewViewport).Scene(PreviewScene);
     ApplyPreviewMaterial(nullptr);
     PollHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(this, &FVoxelLandGraphToolkit::PollJobs), 0.05f);
+    BeginPIEHandle = FEditorDelegates::PreBeginPIE.AddRaw(this, &FVoxelLandGraphToolkit::BeginPIE);
+    EndPIEHandle = FEditorDelegates::EndPIE.AddRaw(this, &FVoxelLandGraphToolkit::EndPIE);
 }
 FBox FVoxelLandGraphToolkit::GetPreviewBoundsForTests() const
 {

@@ -86,6 +86,7 @@ public:
     bool HasCompileWorkForTests() const { return CompileWork.IsValid(); }
     void AddWorkerForTests(TFuture<void>&& Task) { WorkerTasks.Add(MoveTemp(Task)); }
     bool IsStoppedForTests() const { return bStopped; }
+    bool IsPreviewPIEForTests() const { return bPIE; }
     bool IsReloadPausedForTests() const { return bReloadPaused; }
 #endif
     virtual FName GetToolkitFName() const override { return TEXT("VoxelLandGraph"); }

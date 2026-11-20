@@ -19,6 +19,8 @@
 #include "Engine/World.h"
 #include "World/VoxelLandWorld.h"
 #include "Editor.h"
+#include "Tests/AutomationEditorCommon.h"
+#include "Misc/CommandLine.h"
 #include "ScopedTransaction.h"
 #include "EdGraph/EdGraph.h"
 #include "Graph/VoxelLandEditorNode.h"
@@ -1140,6 +1142,109 @@ bool FVoxelLandActivePreviewTest::RunTest(const FString& Parameters)
     Toolkit->SetPreviewReloadBarrierForTests(Barrier);
     Toolkit->StartPreviewForTests();
     ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandActivePreviewCommand(this, Toolkit, Barrier));
+    return true;
+}
+namespace
+{
+class FVoxelLandRealPIECommand final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandRealPIECommand(FAutomationTestBase* InTest, TSharedRef<FVoxelLandGraphToolkit> InToolkit,
+        TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> InBarrier)
+        : Test(InTest), Toolkit(MoveTemp(InToolkit)), Barrier(MoveTemp(InBarrier)), Deadline(FPlatformTime::Seconds() + 45.0) {}
+    virtual bool Update() override
+    {
+        if (Phase == 4)
+        {
+            if (!GEditor->IsPlaySessionInProgress() && !GEditor->PlayWorld)
+            {
+                return true;
+            }
+            if (FPlatformTime::Seconds() > Deadline)
+            {
+                Test->AddError(TEXT("PIE session did not finish within teardown deadline"));
+                return true;
+            }
+            return false;
+        }
+        if (FPlatformTime::Seconds() > Deadline || Barrier->TimedOut.Load())
+        {
+            Test->AddError(FString::Printf(TEXT("Real PIE lifecycle timed out at phase %d"), Phase));
+            if (GEditor->IsPlaySessionRequestQueued()) { GEditor->CancelRequestPlaySession(); }
+            if (GEditor->IsPlayingSessionInEditor()) { GEditor->RequestEndPlayMap(); }
+            Toolkit->Stop();
+            Phase = 4;
+            Deadline = FPlatformTime::Seconds() + 10.0;
+            return false;
+        }
+        if (Phase == 0 && Barrier->Started.Load())
+        {
+            FStartPIECommand(false).Update();
+            Phase = 1;
+        }
+        else if (Phase == 1 && GEditor->IsPlayingSessionInEditor() && GEditor->PlayWorld)
+        {
+            Test->TestTrue(TEXT("Engine PreBeginPIE reached toolkit"), Toolkit->IsPreviewPIEForTests());
+            Test->TestTrue(TEXT("Real PIE start cancels active preview worker"), Barrier->SawCancellation.Load());
+            Test->TestEqual(TEXT("PIE start publishes no stale preview"), Toolkit->GetPreviewPublishCountForTests(), 0);
+            GEditor->RequestEndPlayMap();
+            Phase = 2;
+        }
+        else if (Phase == 2 && !GEditor->IsPlayingSessionInEditor() && !GEditor->PlayWorld)
+        {
+            Test->TestFalse(TEXT("Engine EndPIE resumes toolkit"), Toolkit->IsPreviewPIEForTests());
+            Phase = 3;
+        }
+        else if (Phase == 3 && Toolkit->GetStatusForTests().StartsWith(TEXT("Ready: render commands complete:")))
+        {
+            Test->TestEqual(TEXT("Post-PIE preview publishes once"), Toolkit->GetPreviewPublishCountForTests(), 1);
+            Test->TestEqual(TEXT("Post-PIE preview retains current seed"), Toolkit->GetPublishedSeedForTests(), int64(1234));
+            Toolkit->Stop();
+            return true;
+        }
+        return false;
+    }
+private:
+    FAutomationTestBase* Test;
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit;
+    TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier;
+    double Deadline;
+    int32 Phase = 0;
+};
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandRealPIETest, "VoxelLand.M3.Editor.IsolatedPIELifecycle",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandRealPIETest::RunTest(const FString& Parameters)
+{
+    if (!FParse::Param(FCommandLine::Get(), TEXT("VoxelLandIsolatedPIE")) || !FApp::IsUnattended() || !FApp::CanEverRender())
+    {
+        AddWarning(TEXT("Real PIE lifecycle requires an isolated unattended real-RHI editor launched with -VoxelLandIsolatedPIE"));
+        return true;
+    }
+    if (GEditor->IsPlaySessionInProgress())
+    {
+        AddError(TEXT("Refusing to replace an existing play session"));
+        return false;
+    }
+    if (!FAutomationEditorCommonUtils::CreateNewMap())
+    {
+        AddError(TEXT("Could not create isolated in-memory editor map"));
+        return false;
+    }
+    UVoxelLandTerrainGraph* Source = LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
+    if (!Source)
+    {
+        AddError(TEXT("Example graph unavailable for isolated PIE"));
+        return false;
+    }
+    UVoxelLandTerrainGraph* Graph = DuplicateObject<UVoxelLandTerrainGraph>(Source, GetTransientPackage());
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+    Toolkit->InitializeForTests(Graph);
+    Toolkit->InitializePreviewForTests();
+    TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
+    Toolkit->SetPreviewReloadBarrierForTests(Barrier);
+    Toolkit->StartPreviewForTests();
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandRealPIECommand(this, Toolkit, Barrier));
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandInitializationReplacementTest, "VoxelLand.M3.Editor.InitializationReplacement",

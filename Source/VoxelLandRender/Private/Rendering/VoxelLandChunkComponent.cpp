@@ -9,6 +9,9 @@
 #include "SceneManagement.h"
 #include "StaticMeshResources.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
+#if WITH_EDITOR
+#include "Rendering/VoxelLandPreviewUploadObservation.h"
+#endif
 
 namespace
 {
@@ -28,10 +31,17 @@ class FVoxelLandChunkProxy final : public FPrimitiveSceneProxy
 {
 public:
 	FVoxelLandChunkProxy(
-		UVoxelLandChunkComponent* Component, TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> InMesh)
+		UVoxelLandChunkComponent* Component, TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> InMesh
+#if WITH_EDITOR
+		, TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> InObservation
+#endif
+		)
 		: FPrimitiveSceneProxy(Component)
 		, Mesh(MoveTemp(InMesh))
 		, Factory(GetScene().GetFeatureLevel(), "VoxelLandChunk")
+#if WITH_EDITOR
+		, UploadObservation(MoveTemp(InObservation))
+#endif
 	{
 		UMaterialInterface* Material = Component->GetMaterial(0);
 		if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
@@ -68,6 +78,13 @@ public:
 		Buffers.InitFromDynamicVertex(RHICmdList, &Factory, Vertices);
 		IndexBuffer.Indices = Mesh->Indices;
 		IndexBuffer.InitResource(RHICmdList);
+#if WITH_EDITOR
+		if (UploadObservation)
+		{
+			UploadObservation->RecordUpload(RHICmdList);
+			UploadObservation.Reset();
+		}
+#endif
 	}
 
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily,
@@ -125,6 +142,9 @@ private:
 	FStaticMeshVertexBuffers Buffers;
 	FVoxelLandIndexBuffer IndexBuffer;
 	FLocalVertexFactory Factory;
+#if WITH_EDITOR
+	TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> UploadObservation;
+#endif
 	const FMaterialRenderProxy* MaterialProxy = nullptr;
 	FMaterialRelevance Relevance;
 };
@@ -176,8 +196,24 @@ void UVoxelLandChunkComponent::ClearMesh()
 
 FPrimitiveSceneProxy* UVoxelLandChunkComponent::CreateSceneProxy()
 {
-	return Mesh && !Mesh->Indices.IsEmpty() ? new FVoxelLandChunkProxy(this, Mesh) : nullptr;
+	if (!Mesh || Mesh->Indices.IsEmpty())
+	{
+		return nullptr;
+	}
+	return new FVoxelLandChunkProxy(this, Mesh
+#if WITH_EDITOR
+		, MoveTemp(PreviewUploadObservation)
+#endif
+	);
 }
+
+#if WITH_EDITOR
+void UVoxelLandChunkComponent::SetPreviewUploadObservation(TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> InObservation)
+{
+	check(IsInGameThread());
+	PreviewUploadObservation = MoveTemp(InObservation);
+}
+#endif
 
 FBoxSphereBounds UVoxelLandChunkComponent::CalcBounds(const FTransform& LocalToWorld) const
 {

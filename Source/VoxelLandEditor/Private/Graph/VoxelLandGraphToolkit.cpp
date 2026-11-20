@@ -22,6 +22,8 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Generation/VoxelLandMeshing.h"
 #include "Rendering/VoxelLandChunkComponent.h"
+#include "Rendering/VoxelLandPreviewUploadObservation.h"
+#include "HAL/IConsoleManager.h"
 #include "AdvancedPreviewScene.h"
 #include "AssetRegistry/AssetData.h"
 #include "Materials/MaterialInterface.h"
@@ -52,6 +54,14 @@
 #define LOCTEXT_NAMESPACE "VoxelLandGraphToolkit"
 namespace
 {
+TAutoConsoleVariable<int32> CVarVoxelLandPreviewGPUUploadTiming(
+    TEXT("VoxelLand.Preview.GPUUploadTiming"), 0,
+    TEXT("Observe preview buffer upload GPU fences on supported D3D12 editor previews."), ECVF_Default);
+#if WITH_DEV_AUTOMATION_TESTS
+TAutoConsoleVariable<int32> CVarVoxelLandPreviewGPUUploadHoldForTests(
+    TEXT("VoxelLand.Preview.GPUUploadHoldForTests"), 0,
+    TEXT("Keep the preview upload observation pending for lifecycle automation."), ECVF_Default);
+#endif
 const FName GraphTab(TEXT("VoxelLandGraph"));
 const FName DetailsTab(TEXT("VoxelLandDetails"));
 const FName DiagnosticsTab(TEXT("VoxelLandDiagnostics"));
@@ -316,6 +326,10 @@ public:
     double CompileMs = 0;
     double GenerationMs = 0;
     double SetupMs = 0;
+    bool bGPURequested = false;
+    bool bRenderComplete = false;
+    FString ReadyStatus;
+    TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> UploadObservation;
 };
 
 FVoxelLandGraphToolkit::~FVoxelLandGraphToolkit()
@@ -1471,9 +1485,16 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
         Staged.Emplace(Entry.Key, Component);
     }
     ClearPreview();
+    const bool bGPURequested = CVarVoxelLandPreviewGPUUploadTiming.GetValueOnGameThread() != 0;
+    TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> UploadObservation;
+    if (bGPURequested && !Staged.IsEmpty() && FVoxelLandPreviewUploadObservation::IsSupported())
+    {
+        UploadObservation = MakeShared<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe>(Staged.Num());
+    }
     FBox TerrainBounds(ForceInit);
     for (const auto& Entry : Staged)
     {
+        Entry.Value->SetPreviewUploadObservation(UploadObservation);
         PreviewScene->AddComponent(Entry.Value, FTransform(VoxelLandMeshCoordinates::RenderOrigin(Entry.Key, Finished.VoxelSize)));
         PreviewComponents.Add(Entry.Value);
         TerrainBounds += Entry.Value->Bounds.GetBox();
@@ -1497,6 +1518,8 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
     PreviewFence->CompileMs = LastCompileMs;
     PreviewFence->GenerationMs = Finished.GenerationMs;
     PreviewFence->SetupMs = (SetupCompleted - UploadStart) * 1000.0;
+    PreviewFence->bGPURequested = bGPURequested;
+    PreviewFence->UploadObservation = MoveTemp(UploadObservation);
     PreviewFence->Fence.BeginFence(FRenderCommandFence::ESyncDepth::RenderThread);
     Status = TEXT("Preview submitted; waiting for render-thread commands.");
     if (PreviewViewport)
@@ -1507,20 +1530,58 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 }
 void FVoxelLandGraphToolkit::PollPreviewFence()
 {
-    if (!PreviewFence || !PreviewFence->Fence.IsFenceComplete())
+    if (!PreviewFence)
     {
         return;
     }
-    const TSharedPtr<FVoxelLandPreviewFence> Finished = MoveTemp(PreviewFence);
+    const TSharedPtr<FVoxelLandPreviewFence> Finished = PreviewFence;
     if (bStopped || bPIE || bReloadPaused || Finished->PreviewRevision != PreviewRevision || Finished->SourceRevision != Revision)
     {
+        PreviewFence.Reset();
         return;
     }
     const double Now = FPlatformTime::Seconds();
-    Status = FString::Printf(TEXT("Ready: render commands complete: %d nonempty / %d chunks; latest compile CPU %.1f ms, generation CPU %.1f ms, game-thread setup %.1f ms, render-thread fence observed after %.1f ms, change-to-fence observed %.1f ms. GPU completion not measured."),
-        Finished->NonemptyChunks, Finished->ChunkCount, Finished->CompileMs, Finished->GenerationMs, Finished->SetupMs,
-        (Now - Finished->SetupCompleted) * 1000.0, (Now - Finished->SemanticStart) * 1000.0);
-    SemanticChangeTime = 0.0;
+    if (!Finished->bRenderComplete)
+    {
+        if (!Finished->Fence.IsFenceComplete())
+        {
+            return;
+        }
+        Finished->bRenderComplete = true;
+        Finished->ReadyStatus = FString::Printf(TEXT("Ready: render commands complete: %d nonempty / %d chunks; latest compile CPU %.1f ms, generation CPU %.1f ms, game-thread setup %.1f ms, render-thread fence observed after %.1f ms, change-to-fence observed %.1f ms."),
+            Finished->NonemptyChunks, Finished->ChunkCount, Finished->CompileMs, Finished->GenerationMs, Finished->SetupMs,
+            (Now - Finished->SetupCompleted) * 1000.0, (Now - Finished->SemanticStart) * 1000.0);
+        SemanticChangeTime = 0.0;
+    }
+    if (!Finished->bGPURequested)
+    {
+        Status = Finished->ReadyStatus + TEXT(" GPU completion not measured.");
+        PreviewFence.Reset();
+    }
+    else if (!Finished->UploadObservation)
+    {
+        Status = Finished->ReadyStatus + TEXT(" GPU upload observation unavailable (unsupported RHI or empty preview); presentation not measured.");
+        PreviewFence.Reset();
+    }
+    else if (
+#if WITH_DEV_AUTOMATION_TESTS
+        CVarVoxelLandPreviewGPUUploadHoldForTests.GetValueOnGameThread() == 0 &&
+#endif
+        Finished->UploadObservation->IsComplete())
+    {
+        Status = Finished->ReadyStatus + FString::Printf(TEXT(" Initial GPU buffer uploads observed complete %.1f ms after setup, %.1f ms after change (upper bounds, include polling); copy duration and presentation not measured."),
+            (Now - Finished->SetupCompleted) * 1000.0, (Now - Finished->SemanticStart) * 1000.0);
+        PreviewFence.Reset();
+    }
+    else if (Now - Finished->SetupCompleted >= 10.0)
+    {
+        Status = Finished->ReadyStatus + TEXT(" GPU upload observation unavailable (timed out); presentation not measured.");
+        PreviewFence.Reset();
+    }
+    else
+    {
+        Status = Finished->ReadyStatus + TEXT(" GPU upload observation pending; presentation not measured.");
+    }
 }
 void FVoxelLandGraphToolkit::ProcessCompileWork()
 {

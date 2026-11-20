@@ -14,6 +14,7 @@
 #include "VoxelLandAssetFactories.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -40,6 +41,7 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Graph/VoxelLandPreviewScene.h"
+#include "Rendering/VoxelLandPreviewUploadObservation.h"
 #include "UObject/Package.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandEditorPayloadDirtyTest, "VoxelLand.M3.Editor.CompiledPayloadDirty",
@@ -873,6 +875,185 @@ bool FVoxelLandPreviewTimingTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Empty preview cannot be framed"), Toolkit->FramePreviewForTests());
     Toolkit->RequestCompileForTests();
     ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandPreviewTimingCommand(this, Toolkit));
+    return true;
+}
+namespace
+{
+class FVoxelLandPreviewGPUUploadCommand final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandPreviewGPUUploadCommand(FAutomationTestBase* InTest, TSharedRef<FVoxelLandGraphToolkit> InToolkit,
+        IConsoleVariable* InCVar, int32 InPrevious)
+        : Test(InTest), Toolkit(MoveTemp(InToolkit)), CVar(InCVar), Previous(InPrevious), Deadline(FPlatformTime::Seconds() + 60.0)
+    {
+    }
+
+    virtual bool Update() override
+    {
+        const FString Status = Toolkit->GetStatusForTests();
+        if (FPlatformTime::Seconds() > Deadline)
+        {
+            Test->AddError(FString::Printf(TEXT("GPU upload observation timed out: %s"), *Status));
+            return Finish();
+        }
+        if (Status.Contains(TEXT("GPU upload observation unavailable")))
+        {
+            Test->AddError(FString::Printf(TEXT("GPU upload observation unavailable on the tested D3D12 path: %s"), *Status));
+            return Finish();
+        }
+        if (!Status.Contains(TEXT("GPU buffer uploads observed complete")))
+        {
+            return false;
+        }
+        Test->TestTrue(TEXT("Measured a nonempty preview"), !Status.Contains(TEXT("0 nonempty")));
+        Test->TestTrue(TEXT("Observation is labeled as an upper bound"), Status.Contains(TEXT("upper bound")));
+        Test->TestTrue(TEXT("Presentation remains unmeasured"), Status.Contains(TEXT("presentation not measured")));
+        Test->AddInfo(FString::Printf(TEXT("GPU upload sample %d: %s"), ++Sample, *Status));
+        Toolkit->SetPreviewSeedForTests(65000 + Sample);
+        Test->TestFalse(TEXT("Superseded upload result is no longer displayed"), Toolkit->GetStatusForTests().Contains(TEXT("GPU buffer uploads observed complete")));
+        return Sample == 20 ? Finish() : false;
+    }
+
+private:
+    bool Finish()
+    {
+        Toolkit->Stop();
+        CVar->Set(Previous, ECVF_SetByCode);
+        return true;
+    }
+    FAutomationTestBase* Test;
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit;
+    IConsoleVariable* CVar;
+    int32 Previous;
+    int32 Sample = 0;
+    double Deadline;
+};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandPreviewGPUUploadTest, "VoxelLand.M3.Editor.PreviewGPUUpload",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandPreviewGPUUploadTest::RunTest(const FString& Parameters)
+{
+    if (!FVoxelLandPreviewUploadObservation::IsSupported())
+    {
+        AddWarning(TEXT("GPU upload observation requires the supported D3D12 render path"));
+        return true;
+    }
+    UVoxelLandTerrainGraph* Source = LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
+    IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("VoxelLand.Preview.GPUUploadTiming"));
+    if (!Source || !CVar)
+    {
+        AddError(TEXT("Example graph or GPU upload timing setting unavailable"));
+        return false;
+    }
+    const int32 Previous = CVar->GetInt();
+    CVar->Set(1, ECVF_SetByCode);
+    UVoxelLandTerrainGraph* Graph = DuplicateObject<UVoxelLandTerrainGraph>(Source, GetTransientPackage());
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+    Toolkit->InitializeForTests(Graph);
+    Toolkit->InitializePreviewForTests();
+    Toolkit->RequestCompileForTests();
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandPreviewGPUUploadCommand(this, Toolkit, CVar, Previous));
+    return true;
+}
+namespace
+{
+class FVoxelLandPreviewGPUUploadLifecycleCommand final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandPreviewGPUUploadLifecycleCommand(FAutomationTestBase* InTest, TSharedRef<FVoxelLandGraphToolkit> InToolkit,
+        IConsoleVariable* InEnabled, IConsoleVariable* InHold, int32 InPreviousEnabled, int32 InPreviousHold)
+        : Test(InTest), Toolkit(MoveTemp(InToolkit)), Enabled(InEnabled), Hold(InHold), PreviousEnabled(InPreviousEnabled),
+          PreviousHold(InPreviousHold), Deadline(FPlatformTime::Seconds() + 45.0)
+    {
+    }
+
+    virtual bool Update() override
+    {
+        const FString Status = Toolkit->GetStatusForTests();
+        if (FPlatformTime::Seconds() > Deadline)
+        {
+            Test->AddError(FString::Printf(TEXT("GPU upload lifecycle timed out at phase %d: %s"), Phase, *Status));
+            return Finish();
+        }
+        if (Phase == 0 && Status.Contains(TEXT("GPU upload observation pending")))
+        {
+            Toolkit->SetPreviewSeedForTests(72001);
+            Test->TestFalse(TEXT("Supersession clears pending upload observation"), Toolkit->HasPreviewFenceForTests());
+            Phase = 1;
+        }
+        else if (Phase == 1 && Status.Contains(TEXT("GPU upload observation pending")))
+        {
+            Phase = 2;
+        }
+        else if (Phase == 2 && Status.Contains(TEXT("GPU upload observation unavailable (timed out)")))
+        {
+            Test->TestFalse(TEXT("Timed-out observation is released"), Toolkit->HasPreviewFenceForTests());
+            Hold->Set(0, ECVF_SetByCode);
+            Toolkit->SetPreviewSeedForTests(72002);
+            Phase = 3;
+        }
+        else if (Phase == 3 && Status.Contains(TEXT("GPU buffer uploads observed complete")))
+        {
+            Hold->Set(1, ECVF_SetByCode);
+            Toolkit->SetPreviewSeedForTests(72003);
+            Phase = 4;
+        }
+        else if (Phase == 4 && Status.Contains(TEXT("GPU upload observation pending")))
+        {
+            Toolkit->Stop();
+            Test->TestFalse(TEXT("Stop releases pending observation"), Toolkit->HasPreviewFenceForTests());
+            return Finish();
+        }
+        return false;
+    }
+
+private:
+    bool Finish()
+    {
+        Toolkit->Stop();
+        Enabled->Set(PreviousEnabled, ECVF_SetByCode);
+        Hold->Set(PreviousHold, ECVF_SetByCode);
+        return true;
+    }
+    FAutomationTestBase* Test;
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit;
+    IConsoleVariable* Enabled;
+    IConsoleVariable* Hold;
+    int32 PreviousEnabled;
+    int32 PreviousHold;
+    double Deadline;
+    int32 Phase = 0;
+};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandPreviewGPUUploadLifecycleTest, "VoxelLand.M3.Editor.PreviewGPUUploadLifecycle",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandPreviewGPUUploadLifecycleTest::RunTest(const FString& Parameters)
+{
+    if (!FVoxelLandPreviewUploadObservation::IsSupported())
+    {
+        AddWarning(TEXT("GPU upload lifecycle requires the supported D3D12 render path"));
+        return true;
+    }
+    UVoxelLandTerrainGraph* Source = LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
+    IConsoleVariable* Enabled = IConsoleManager::Get().FindConsoleVariable(TEXT("VoxelLand.Preview.GPUUploadTiming"));
+    IConsoleVariable* Hold = IConsoleManager::Get().FindConsoleVariable(TEXT("VoxelLand.Preview.GPUUploadHoldForTests"));
+    if (!Source || !Enabled || !Hold)
+    {
+        AddError(TEXT("Example graph or GPU upload lifecycle setting unavailable"));
+        return false;
+    }
+    const int32 PreviousEnabled = Enabled->GetInt();
+    const int32 PreviousHold = Hold->GetInt();
+    Enabled->Set(1, ECVF_SetByCode);
+    Hold->Set(1, ECVF_SetByCode);
+    UVoxelLandTerrainGraph* Graph = DuplicateObject<UVoxelLandTerrainGraph>(Source, GetTransientPackage());
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+    Toolkit->InitializeForTests(Graph);
+    Toolkit->InitializePreviewForTests();
+    Toolkit->RequestCompileForTests();
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandPreviewGPUUploadLifecycleCommand(this, Toolkit, Enabled, Hold, PreviousEnabled, PreviousHold));
     return true;
 }
 namespace

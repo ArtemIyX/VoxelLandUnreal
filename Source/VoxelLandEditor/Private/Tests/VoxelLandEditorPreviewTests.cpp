@@ -1040,6 +1040,108 @@ bool FVoxelLandAssetWorkflowTest::RunTest(const FString& Parameters)
     ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandAssetCleanupCheck(this, PackageNames));
     return true;
 }
+namespace
+{
+class FVoxelLandActivePreviewCommand final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandActivePreviewCommand(FAutomationTestBase* InTest, TSharedRef<FVoxelLandGraphToolkit> InToolkit,
+        TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> InBarrier)
+        : Test(InTest), Toolkit(MoveTemp(InToolkit)), Barrier(MoveTemp(InBarrier)), Deadline(FPlatformTime::Seconds() + 40.0) {}
+    virtual bool Update() override
+    {
+        if (FPlatformTime::Seconds() > Deadline || Barrier->TimedOut.Load())
+        {
+            Test->AddError(FString::Printf(TEXT("Active preview phase %d timed out: %s"), Phase, *Toolkit->GetStatusForTests()));
+            Toolkit->Stop();
+            return true;
+        }
+        if (Phase == 0 && Barrier->Started.Load())
+        {
+            Test->TestEqual(TEXT("No initial preview has published"), Toolkit->GetPreviewPublishCountForTests(), 0);
+            Toolkit->SetPreviewSeedForTests(4321);
+            Test->TestTrue(TEXT("Superseded preview is labeled stale"), Toolkit->GetStatusForTests().Contains(TEXT("stale")));
+            Phase = 1;
+        }
+        else if (Phase == 1 && Toolkit->GetStatusForTests().StartsWith(TEXT("Ready: render commands complete:")))
+        {
+            Test->TestTrue(TEXT("Superseded preview observed cancellation"), Barrier->SawCancellation.Load());
+            Test->TestEqual(TEXT("Only the replacement seed published"), Toolkit->GetPreviewPublishCountForTests(), 1);
+            Test->TestEqual(TEXT("Published preview uses the newest seed"), Toolkit->GetPublishedSeedForTests(), int64(4321));
+            Barrier = MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
+            Toolkit->SetPreviewReloadBarrierForTests(Barrier);
+            Toolkit->SetPreviewSeedForTests(4322);
+            Phase = 2;
+        }
+        else if (Phase == 2 && Barrier->Started.Load())
+        {
+            Toolkit->BeginPIEForTests();
+            Test->TestTrue(TEXT("PIE transition cancels active preview"), Barrier->SawCancellation.Load());
+            Test->TestEqual(TEXT("PIE transition publishes no stale result"), Toolkit->GetPreviewPublishCountForTests(), 1);
+            Test->TestTrue(TEXT("PIE marks retained preview stale"), Toolkit->GetStatusForTests().Contains(TEXT("Stale")));
+            Toolkit->EndPIEForTests();
+            Phase = 3;
+        }
+        else if (Phase == 3 && Toolkit->GetStatusForTests().StartsWith(TEXT("Ready: render commands complete:")))
+        {
+            Test->TestEqual(TEXT("Post-PIE preview publishes once"), Toolkit->GetPreviewPublishCountForTests(), 2);
+            Test->TestEqual(TEXT("Post-PIE preview uses current seed"), Toolkit->GetPublishedSeedForTests(), int64(4322));
+            Barrier = MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
+            Toolkit->SetPreviewReloadBarrierForTests(Barrier);
+            Toolkit->SetPreviewSeedForTests(4323);
+            Phase = 4;
+        }
+        else if (Phase == 4 && Barrier->Started.Load())
+        {
+            Toolkit->Stop();
+            Test->TestTrue(TEXT("Close cancels active preview"), Barrier->SawCancellation.Load());
+            Test->TestEqual(TEXT("Close publishes no stale result"), Toolkit->GetPreviewPublishCountForTests(), 2);
+            Test->TestEqual(TEXT("Close retains last published seed"), Toolkit->GetPublishedSeedForTests(), int64(4322));
+            CheckAfter = FPlatformTime::Seconds() + 0.5;
+            Phase = 5;
+        }
+        else if (Phase == 5 && FPlatformTime::Seconds() >= CheckAfter)
+        {
+            Toolkit->PollJobsForTests();
+            Test->TestEqual(TEXT("Stopped toolkit cannot publish later"), Toolkit->GetPreviewPublishCountForTests(), 2);
+            return true;
+        }
+        return false;
+    }
+private:
+    FAutomationTestBase* Test;
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit;
+    TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier;
+    double Deadline;
+    double CheckAfter = 0.0;
+    int32 Phase = 0;
+};
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandActivePreviewTest, "VoxelLand.M3.Editor.ActivePreviewLifecycle",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandActivePreviewTest::RunTest(const FString& Parameters)
+{
+    if (!FApp::CanEverRender())
+    {
+        AddWarning(TEXT("Active preview lifecycle requires a native render path and was not exercised with NullRHI"));
+        return true;
+    }
+    UVoxelLandTerrainGraph* Source = LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
+    if (!Source)
+    {
+        AddError(TEXT("Example graph unavailable for active preview test"));
+        return false;
+    }
+    UVoxelLandTerrainGraph* Graph = DuplicateObject<UVoxelLandTerrainGraph>(Source, GetTransientPackage());
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+    Toolkit->InitializeForTests(Graph);
+    Toolkit->InitializePreviewForTests();
+    TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
+    Toolkit->SetPreviewReloadBarrierForTests(Barrier);
+    Toolkit->StartPreviewForTests();
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandActivePreviewCommand(this, Toolkit, Barrier));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandInitializationReplacementTest, "VoxelLand.M3.Editor.InitializationReplacement",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandInitializationReplacementTest::RunTest(const FString& Parameters)

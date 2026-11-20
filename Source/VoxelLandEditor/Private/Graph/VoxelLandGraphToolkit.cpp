@@ -297,6 +297,9 @@ public:
     bool bSuccess = false;
     FString Error;
     double GenerationMs = 0;
+#if WITH_DEV_AUTOMATION_TESTS
+    int64 SeedForTests = 0;
+#endif
     FVoxelLandPreviewJob::FResult Meshes;
 };
 
@@ -1423,6 +1426,9 @@ void FVoxelLandGraphToolkit::StartPreview()
     const TSharedRef<FVoxelLandPreviewWork, ESPMode::ThreadSafe> Work = MakeShared<FVoxelLandPreviewWork, ESPMode::ThreadSafe>();
     Work->PreviewRevision = PreviewRevision;
     Work->SourceRevision = Revision;
+#if WITH_DEV_AUTOMATION_TESTS
+    Work->SeedForTests = Seed;
+#endif
     Work->VoxelSize = Profile.VoxelSizeCm;
     Work->ChunkCount = (2 * HorizontalRadius + 1) * (2 * HorizontalRadius + 1) * 2 * VerticalRadius;
     PreviewWork = Work;
@@ -1474,6 +1480,10 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
     {
         PreviewViewport->SetTerrainBounds(TerrainBounds);
     }
+#if WITH_DEV_AUTOMATION_TESTS
+    ++PreviewPublishCountForTests;
+    PublishedSeedForTests = Finished.SeedForTests;
+#endif
     const double SetupCompleted = FPlatformTime::Seconds();
     PreviewFence = MakeShared<FVoxelLandPreviewFence>();
     PreviewFence->PreviewRevision = Finished.PreviewRevision;

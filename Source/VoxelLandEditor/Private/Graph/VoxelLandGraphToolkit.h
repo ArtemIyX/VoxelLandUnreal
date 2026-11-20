@@ -54,6 +54,10 @@ public:
     uint64 GetPreviewRevisionForTests() const { return PreviewRevision; }
     int32 GetMaterialApplyCountForTests() const { return MaterialApplyCountForTests; }
     int32 GetPreviewStartCountForTests() const { return PreviewStartCountForTests; }
+    int32 GetPreviewPublishCountForTests() const { return PreviewPublishCountForTests; }
+    int64 GetPublishedSeedForTests() const { return PublishedSeedForTests; }
+    void BeginPIEForTests() { BeginPIE(false); }
+    void EndPIEForTests() { EndPIE(false); }
     void SynchronizePreviewForTests() { SynchronizePreviewSettings(true); }
     void SetPreviewRadiusForTests(int32 Value, bool bHorizontal) { CommitPreviewRadius(Value, bHorizontal); }
     void SetPreviewSeedForTests(int64 Value) { SeedCommitted(FText::AsCultureInvariant(LexToString(Value)), ETextCommit::OnEnter); }
@@ -205,6 +209,8 @@ private:
     int32 PanelRefreshCountForTests = 0;
     int32 MaterialApplyCountForTests = 0;
     int32 PreviewStartCountForTests = 0;
+    int32 PreviewPublishCountForTests = 0;
+    int64 PublishedSeedForTests = 0;
     TFunction<void()> ReloadDrainingForTests;
     TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> PreviewReloadBarrierForTests;
 #endif

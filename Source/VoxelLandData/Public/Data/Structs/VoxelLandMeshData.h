@@ -34,6 +34,13 @@ enum class EVoxelLandChunkClassification : uint8
 // from the maximum local extent, not from an assumed voxel size.
 namespace VoxelLandMeshCoordinates
 {
+    // Keep local fractional-cell interpolation above double precision noise.
+    // This is a conservative 2^20-voxel envelope, not a measured M1 limit.
+    inline bool IsKeyInPrecisionRange(const FIntVector& Key)
+    {
+        constexpr int32 MaxChunk=32766;
+        return Key.X>=-MaxChunk && Key.X<=MaxChunk && Key.Y>=-MaxChunk && Key.Y<=MaxChunk && Key.Z>=-MaxChunk && Key.Z<=MaxChunk;
+    }
     inline double Grid(float Size)
     {
         int Exponent=0;

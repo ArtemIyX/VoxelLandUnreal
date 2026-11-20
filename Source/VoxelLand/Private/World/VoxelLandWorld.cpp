@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandMeshing.h"
+#include "Data/Structs/VoxelLandPublication.h"
 #include "GameFramework/PlayerController.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Async/Async.h"
@@ -62,7 +63,7 @@ public:
             if (Job.Cancel->bCancelled.Load()) Done.bCancelled=true;
             else
             {
-                if (Current != Job.Generator)
+                if (Current != Job.Generator || !Context)
                 {
                     Context.Reset(); Current=Job.Generator;
                     Done.Error=Current->CreateWorker(Context);
@@ -90,6 +91,7 @@ private:
 struct FRecord
 {
     uint64 Ticket=0; bool bExplicit=false, bDemand=false, bQueued=false, bRunning=false, bFailed=false;
+    int64 MeshBytes=0; int32 Vertices=0, Triangles=0;
     TSharedPtr<FCancel,ESPMode::ThreadSafe> Cancel;
     TSharedPtr<const FVoxelLandChunkData,ESPMode::ThreadSafe> Data;
 };
@@ -97,7 +99,7 @@ struct FRecord
 
 struct FVoxelLandWorldState
 {
-    uint64 Epoch=1, NextTicket=0;
+    uint64 Epoch=1, NextTicket=0, Cancelled=0, Stale=0, Failed=0;
     int32 Active=0;
     TSharedPtr<const FVoxelLandGenerator,ESPMode::ThreadSafe> Generator;
     TSharedRef<FSharedWork,ESPMode::ThreadSafe> Work=MakeShared<FSharedWork,ESPMode::ThreadSafe>();
@@ -115,7 +117,7 @@ AVoxelLandRegion::AVoxelLandRegion()
     Root=CreateDefaultSubobject<USceneComponent>(TEXT("Root")); SetRootComponent(Root);
     SetActorEnableCollision(false); PrimaryActorTick.bCanEverTick=false;
 }
-void AVoxelLandRegion::Publish(const FIntVector& Key,const FVector& Origin,TSharedPtr<const FVoxelLandMeshData,ESPMode::ThreadSafe> Mesh,UMaterialInterface* Material)
+bool AVoxelLandRegion::Publish(const FIntVector& Key,const FVector& Origin,TSharedPtr<const FVoxelLandMeshData,ESPMode::ThreadSafe> Mesh,UMaterialInterface* Material)
 {
     check(IsInGameThread());
     TObjectPtr<UVoxelLandChunkComponent>& Component=Components.FindOrAdd(Key);
@@ -125,8 +127,9 @@ void AVoxelLandRegion::Publish(const FIntVector& Key,const FVector& Origin,TShar
         AddInstanceComponent(Component); Component->SetupAttachment(Root); Component->RegisterComponent();
     }
     Component->SetWorldLocation(Origin); Component->SetMaterial(0,Material);
-    if (!Component->SetMesh(Mesh)) { Remove(Key); return; }
+    if (!Component->SetMesh(Mesh)) { Remove(Key); return false; }
     Component->SetVisibility(true);
+    return true;
 }
 void AVoxelLandRegion::Remove(const FIntVector& Key)
 {
@@ -176,7 +179,7 @@ void AVoxelLandWorld::Shutdown()
 bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 {
     check(IsInGameThread());
-    if (!State || Key.LOD!=0 || (State->Records.Num()>=MaxRecords && !State->Records.Contains(Key))) return false;
+    if (!State || Key.LOD!=0 || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate) || (State->Records.Num()>=MaxRecords && !State->Records.Contains(Key))) return false;
     FRecord& Record=State->Records.FindOrAdd(Key); Record.bExplicit=true; Record.bFailed=false;
     if (!Record.Data && !Record.bRunning) Record.bQueued=true;
     return true;
@@ -203,6 +206,19 @@ void AVoxelLandWorld::SetTerrainMaterial(UMaterialInterface* Material)
     check(IsInGameThread()); TerrainMaterial=Material;
     for (AVoxelLandRegion* Region : Regions) if (IsValid(Region)) Region->SetTerrainMaterial(Material);
 }
+void AVoxelLandWorld::DumpStats() const
+{
+    if (!State) { UE_LOG(LogTemp,Display,TEXT("VoxelLand inactive")); return; }
+    int32 Queued=0, Ready=0, Vertices=0, Triangles=0; int64 FieldBytes=0, MeshBytes=0;
+    for (const auto& Pair : State->Records)
+    {
+        const FRecord& R=Pair.Value; Queued+=R.bQueued ? 1 : 0; Ready+=R.Data ? 1 : 0;
+        if (R.Data) FieldBytes+=R.Data->Density.GetAllocatedSize();
+        MeshBytes+=R.MeshBytes; Vertices+=R.Vertices; Triangles+=R.Triangles;
+    }
+    UE_LOG(LogTemp,Display,TEXT("VoxelLand server=%d requested=%d queued=%d outstanding=%d ready=%d regions=%d vertices=%d triangles=%d fieldBytes=%lld meshBytes=%lld cancelled=%llu stale=%llu failed=%llu"),
+        State->bServer,State->Records.Num(),Queued,State->Active,Ready,Regions.Num(),Vertices,Triangles,FieldBytes,MeshBytes,State->Cancelled,State->Stale,State->Failed);
+}
 void AVoxelLandWorld::UpdateDemand()
 {
     if (!State || State->bServer) return;
@@ -221,6 +237,7 @@ void AVoxelLandWorld::UpdateDemand()
     for (int32 Z=-V; Z<=V; ++Z) for (int32 Y=-H; Y<=H; ++Y) for (int32 X=-H; X<=H; ++X)
     {
         FVoxelLandChunkKey Key; Key.Coordinate=State->CameraChunk+FIntVector(X,Y,Z);
+        if (!VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate)) continue;
         if (State->Records.Num()>=MaxRecords && !State->Records.Contains(Key)) continue;
         FRecord& Record=State->Records.FindOrAdd(Key); Record.bDemand=true;
         if (!Record.Data && !Record.bRunning && !Record.bFailed) Record.bQueued=true;
@@ -236,29 +253,35 @@ void AVoxelLandWorld::PumpCompletions()
     {
         ++Published; --State->Active;
         FRecord* Record=State->Records.Find(Done.Job.Key);
-        if (!Record || Done.Job.Epoch!=State->Epoch || Record->Ticket!=Done.Job.Ticket || Done.Job.Generator!=State->Generator) continue;
+        if (!VoxelLandPublication::IsCurrent(Record!=nullptr,Done.Job.Epoch,State->Epoch,Done.Job.Ticket,Record ? Record->Ticket : 0,Done.Job.Generator==State->Generator,true)) { ++State->Stale; continue; }
         Record->bRunning=false; Record->Cancel.Reset();
-        if (Done.bCancelled || (!Record->bDemand && !Record->bExplicit)) continue;
+        if (Done.bCancelled || (!Record->bDemand && !Record->bExplicit)) { ++State->Cancelled; continue; }
         if (Done.Error)
         {
-            Record->bFailed=true;
+            Record->bFailed=true; ++State->Failed;
             UE_LOG(LogTemp,Error,TEXT("VoxelLand chunk (%d,%d,%d): %s"),Done.Job.Key.Coordinate.X,Done.Job.Key.Coordinate.Y,Done.Job.Key.Coordinate.Z,*Done.Error.Message);
             continue;
         }
         Record->Data=Done.Data;
         if (!Done.Mesh || State->bServer) continue;
+        Record->Vertices=Done.Mesh->Vertices.Num(); Record->Triangles=Done.Mesh->Indices.Num()/3;
+        Record->MeshBytes=Done.Mesh->Vertices.GetAllocatedSize()+Done.Mesh->Indices.GetAllocatedSize();
         const FIntVector RegionKey=VoxelLandCoordinates::RegionOf(Done.Job.Key.Coordinate,RegionDimensions);
         AVoxelLandRegion* Region=State->RegionMap.FindRef(RegionKey).Get();
         if (!Region)
         {
             FActorSpawnParameters Params; Params.Owner=this; Params.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
             Region=GetWorld()->SpawnActor<AVoxelLandRegion>(AVoxelLandRegion::StaticClass(),FTransform::Identity,Params);
-            if (!Region) { Record->bFailed=true; UE_LOG(LogTemp,Error,TEXT("VoxelLand region spawn failed")); continue; }
+            if (!Region) { Record->Data.Reset(); Record->bFailed=true; ++State->Failed; UE_LOG(LogTemp,Error,TEXT("VoxelLand region spawn failed")); continue; }
             Regions.Add(Region); State->RegionMap.Add(RegionKey,Region);
             Region->SetActorHiddenInGame(State->HiddenRegions.Contains(RegionKey));
         }
         const FIntVector C=Done.Job.Key.Coordinate;
-        Region->Publish(C,VoxelLandMeshCoordinates::RenderOrigin(C,State->Generator->GetProfile().VoxelSizeCm),Done.Mesh,TerrainMaterial);
+        if (!Region->Publish(C,VoxelLandMeshCoordinates::RenderOrigin(C,State->Generator->GetProfile().VoxelSizeCm),Done.Mesh,TerrainMaterial))
+        {
+            Record->Data.Reset(); Record->bFailed=true; ++State->Failed;
+            UE_LOG(LogTemp,Error,TEXT("VoxelLand component rejected mesh for (%d,%d,%d)"),C.X,C.Y,C.Z);
+        }
     }
 }
 void AVoxelLandWorld::Dispatch()

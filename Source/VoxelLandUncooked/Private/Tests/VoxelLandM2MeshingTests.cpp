@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Generation/VoxelLandMeshing.h"
+#include "Data/Structs/VoxelLandPublication.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -41,6 +42,8 @@ bool FVoxelLandM2MeshTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("tiny feature survives"), Mesh.Indices.Num()>0);
     }
 
+    TestTrue(TEXT("precision range includes negative edge"),VoxelLandMeshCoordinates::IsKeyInPrecisionRange(FIntVector(-32766,0,0)));
+    TestFalse(TEXT("precision range rejects far key"),VoxelLandMeshCoordinates::IsKeyInPrecisionRange(FIntVector(32767,0,0)));
     for (int32 Axis=0; Axis<3; ++Axis)
     {
         FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;
@@ -61,6 +64,18 @@ bool FVoxelLandM2MeshTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2PublicationTest, "VoxelLand.M2.StalePublication", Flags)
+bool FVoxelLandM2PublicationTest::RunTest(const FString& Parameters)
+{
+    using VoxelLandPublication::IsCurrent;
+    TestTrue(TEXT("current completion"),IsCurrent(true,4,4,9,9,true,true));
+    TestFalse(TEXT("old epoch"),IsCurrent(true,3,4,9,9,true,true));
+    TestFalse(TEXT("old ticket after reuse"),IsCurrent(true,4,4,8,9,true,true));
+    TestFalse(TEXT("evicted record"),IsCurrent(false,4,4,9,9,true,true));
+    TestFalse(TEXT("replaced generator"),IsCurrent(true,4,4,9,9,false,true));
+    TestFalse(TEXT("no longer wanted"),IsCurrent(true,4,4,9,9,true,false));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2SeamTest, "VoxelLand.M2.NegativeChunkSeam", Flags)
 bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
 {

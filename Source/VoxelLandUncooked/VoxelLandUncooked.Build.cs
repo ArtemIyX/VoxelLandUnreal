@@ -1,4 +1,4 @@
-﻿using UnrealBuildTool;
+using UnrealBuildTool;
 
 public class VoxelLandUncooked : ModuleRules
 {
@@ -20,6 +20,7 @@ public class VoxelLandUncooked : ModuleRules
                 "Engine",
                 "VoxelLandData",
                 "VoxelLandAlgo",
+                "VoxelLandRender",
                 "Slate",
                 "SlateCore"
             }

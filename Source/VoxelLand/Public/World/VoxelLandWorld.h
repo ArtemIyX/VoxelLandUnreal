@@ -15,7 +15,7 @@ class VOXELLAND_API AVoxelLandRegion : public AActor
     GENERATED_BODY()
 public:
     AVoxelLandRegion();
-    void Publish(const FIntVector& Key, const FVector& Origin, TSharedPtr<const struct FVoxelLandMeshData,ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material);
+    bool Publish(const FIntVector& Key, const FVector& Origin, TSharedPtr<const struct FVoxelLandMeshData,ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material);
     void Remove(const FIntVector& Key);
     void SetTerrainMaterial(UMaterialInterface* Material);
     bool IsEmpty() const { return Components.IsEmpty(); }
@@ -43,6 +43,7 @@ public:
     TSharedPtr<const FVoxelLandChunkData,ESPMode::ThreadSafe> FindChunk(const FVoxelLandChunkKey& Key) const;
     void SetRegionHidden(FIntVector Region, bool bHidden);
     void SetTerrainMaterial(UMaterialInterface* Material);
+    UFUNCTION(BlueprintCallable, Category="VoxelLand") void DumpStats() const;
 
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") bool bStartDemo = true;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") int32 Seed = 1234;

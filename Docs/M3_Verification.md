@@ -106,3 +106,10 @@ The latest compile CPU time displayed was 0.1 ms, from the initial compile rathe
 The final build’s NullRHI M3 suite reported 31 successful entries, with `PreviewTiming` and `RealPackageReload` explicitly skipped due to their native-render/window requirement; the other 29 ran. Both skipped entries were exercised separately under real RHI as recorded above. Log: `Saved/Logs/M3_PreviewTimingNullRHI.log`.
 
 After adding the explicit Ready status, the editor rebuilt successfully (`Saved/Logs/M3_PreviewReadyBuild.log`). The real-RHI timing test passed again with 20 samples (`Saved/Logs/M3_PreviewReadyRealRHI.log`): generation median/p95 91.05/92.4 ms, setup 0.6/0.7 ms, fence observation 49.25/49.6 ms, seed change to fence observation 141.7/191.6 ms. The same caveats above apply. NullRHI editor tests reported 11 successful entries with PreviewTiming and RealPackageReload skipped; the other nine ran (`Saved/Logs/M3_PreviewReadyEditorNull.log`).
+
+
+## Preview terrain framing
+
+On UE 5.7 Win64 Development Editor with D3D12, the `DA_M3_Hills` preview was checked interactively: Frame terrain and F in the focused preview each moved the camera to the published terrain, and the padded frame kept the sample visible in the tested narrow pane. `VoxelLand.M3.Editor.PreviewTiming` also checks empty, published, stale and stopped framing states and the aggregate bounds of the published components. Build: `Saved/Logs/M3_FrameTerrainBuildFinal2.log`; real-RHI automation: `Saved/Logs/M3_FrameTerrainFinal2.log`.
+
+NullRHI `VoxelLand.M3.Editor` reported 11 successful entries, with `PreviewTiming` and `RealPackageReload` explicitly skipped; the other nine ran. Log: `Saved/Logs/M3_FrameTerrainNull.log`.

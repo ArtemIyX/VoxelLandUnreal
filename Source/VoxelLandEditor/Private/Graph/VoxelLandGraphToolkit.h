@@ -70,6 +70,9 @@ public:
     void SetReloadDrainingForTests(TFunction<void()> Callback) { ReloadDrainingForTests = MoveTemp(Callback); }
     void SetPreviewReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { PreviewReloadBarrierForTests = MoveTemp(Barrier); }
     void InitializePreviewForTests();
+    FBox GetPreviewBoundsForTests() const;
+    FBox GetComponentBoundsForTests() const;
+    bool FramePreviewForTests();
     void PollJobsForTests() { PollJobs(0.0f); }
     const FString& GetStatusForTests() const { return Status; }
     bool HasPreviewFenceForTests() const { return PreviewFence.IsValid(); }
@@ -133,6 +136,7 @@ private:
     void BeginPIE(bool bSimulating);
     void EndPIE(bool bSimulating);
     FReply ResetPreviewCamera();
+    FReply FramePreviewTerrain();
     FReply FocusError();
     bool ResolveDiagnosticTarget(UEdGraphNode*& OutNode, UEdGraphPin*& OutPin) const;
     FReply AddParameter(EVoxelLandGraphValueType Type);

@@ -453,8 +453,29 @@ void FVoxelLandGraphToolkit::SetSettingsPickerForTests(UVoxelLandWorldSettings* 
 void FVoxelLandGraphToolkit::InitializePreviewForTests()
 {
     PreviewScene = MakeShared<FVoxelLandPreviewScene>();
+    PreviewViewport = SNew(SVoxelLandPreviewViewport).Scene(PreviewScene);
     ApplyPreviewMaterial(nullptr);
     PollHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(this, &FVoxelLandGraphToolkit::PollJobs), 0.05f);
+}
+FBox FVoxelLandGraphToolkit::GetPreviewBoundsForTests() const
+{
+    return PreviewViewport ? PreviewViewport->GetTerrainBounds() : FBox(ForceInit);
+}
+FBox FVoxelLandGraphToolkit::GetComponentBoundsForTests() const
+{
+    FBox Bounds(ForceInit);
+    for (const UVoxelLandChunkComponent* Component : PreviewComponents)
+    {
+        if (Component)
+        {
+            Bounds += Component->Bounds.GetBox();
+        }
+    }
+    return Bounds;
+}
+bool FVoxelLandGraphToolkit::FramePreviewForTests()
+{
+    return !bStopped && PreviewViewport && PreviewViewport->FrameTerrain();
 }
 void FVoxelLandGraphToolkit::CreatePanelForTests()
 {
@@ -613,6 +634,7 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
         + SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Seed", "Seed"))]
             + SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox).Text_Lambda([this] { return FText::AsCultureInvariant(LexToString(PreviewSeed)); }).OnTextCommitted_Raw(this, &FVoxelLandGraphToolkit::SeedCommitted)]
+            + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("FrameTerrain", "Frame terrain (F)")).OnClicked_Raw(this, &FVoxelLandGraphToolkit::FramePreviewTerrain)]
             + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("ResetCamera", "Reset camera")).OnClicked_Raw(this, &FVoxelLandGraphToolkit::ResetPreviewCamera)]]
         + SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox).AllowedClass(UMaterialInterface::StaticClass()).ObjectPath_Raw(this, &FVoxelLandGraphToolkit::MaterialPickerPath).OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::MaterialChanged)]
         + SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox).AllowedClass(UVoxelLandWorldSettings::StaticClass()).ObjectPath_Raw(this, &FVoxelLandGraphToolkit::SettingsPickerPath).OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::SettingsChanged)]
@@ -1014,6 +1036,10 @@ void FVoxelLandGraphToolkit::EndPIE(bool)
 }
 void FVoxelLandGraphToolkit::ClearPreview()
 {
+    if (PreviewViewport)
+    {
+        PreviewViewport->SetTerrainBounds(FBox(ForceInit));
+    }
     if (PreviewScene)
     {
         for (UVoxelLandChunkComponent* Component : PreviewComponents)
@@ -1304,6 +1330,14 @@ FReply FVoxelLandGraphToolkit::ResetPreviewCamera()
     }
     return FReply::Handled();
 }
+FReply FVoxelLandGraphToolkit::FramePreviewTerrain()
+{
+    if (!bStopped && PreviewViewport)
+    {
+        PreviewViewport->FrameTerrain();
+    }
+    return FReply::Handled();
+}
 bool FVoxelLandGraphToolkit::BuildPreviewProfile(FVoxelLandZoneProfile& Profile, FString& Error) const
 {
     if (!PreviewSettings || PreviewSettings->Graph != Asset || !PreviewSettings->ValidateSettings(Error))
@@ -1419,10 +1453,16 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
         Staged.Emplace(Entry.Key, Component);
     }
     ClearPreview();
+    FBox TerrainBounds(ForceInit);
     for (const auto& Entry : Staged)
     {
         PreviewScene->AddComponent(Entry.Value, FTransform(VoxelLandMeshCoordinates::RenderOrigin(Entry.Key, Finished.VoxelSize)));
         PreviewComponents.Add(Entry.Value);
+        TerrainBounds += Entry.Value->Bounds.GetBox();
+    }
+    if (PreviewViewport)
+    {
+        PreviewViewport->SetTerrainBounds(TerrainBounds);
     }
     const double SetupCompleted = FPlatformTime::Seconds();
     PreviewFence = MakeShared<FVoxelLandPreviewFence>();

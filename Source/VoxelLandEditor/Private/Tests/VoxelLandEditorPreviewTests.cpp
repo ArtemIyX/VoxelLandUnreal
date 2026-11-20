@@ -673,6 +673,8 @@ public:
             }
             Toolkit->Stop();
             Test->TestFalse(TEXT("Stopping discards an outstanding timing fence"), Toolkit->HasPreviewFenceForTests());
+            Test->TestFalse(TEXT("Stopped preview cannot be framed"), Toolkit->FramePreviewForTests());
+            Test->TestFalse(TEXT("Stopped preview has no terrain bounds"), Toolkit->GetPreviewBoundsForTests().IsValid != 0);
             return true;
         }
         if (!Toolkit->GetStatusForTests().StartsWith(TEXT("Ready: render commands complete:")))
@@ -681,7 +683,15 @@ public:
         }
         if (Phase == 0)
         {
+            const FBox Published = Toolkit->GetPreviewBoundsForTests();
+            const FBox Components = Toolkit->GetComponentBoundsForTests();
+            Test->TestTrue(TEXT("Published terrain has valid world bounds"), Published.IsValid && Components.IsValid);
+            Test->TestTrue(TEXT("Frame bounds match all published components"), Published.Min.Equals(Components.Min) && Published.Max.Equals(Components.Max));
+            Test->TestTrue(TEXT("Published terrain can be framed"), Toolkit->FramePreviewForTests());
             Toolkit->SetPreviewSeedForTests(2900);
+            const FBox StaleBounds = Toolkit->GetPreviewBoundsForTests();
+            Test->TestTrue(TEXT("Stale displayed terrain retains framing bounds"), StaleBounds.IsValid && StaleBounds.Min.Equals(Published.Min) && StaleBounds.Max.Equals(Published.Max));
+            Test->TestTrue(TEXT("Stale displayed terrain remains frameable"), Toolkit->FramePreviewForTests());
             Phase = 1;
             return false;
         }
@@ -726,6 +736,7 @@ bool FVoxelLandPreviewTimingTest::RunTest(const FString& Parameters)
     TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
     Toolkit->InitializeForTests(Graph);
     Toolkit->InitializePreviewForTests();
+    TestFalse(TEXT("Empty preview cannot be framed"), Toolkit->FramePreviewForTests());
     Toolkit->RequestCompileForTests();
     ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandPreviewTimingCommand(this, Toolkit));
     return true;

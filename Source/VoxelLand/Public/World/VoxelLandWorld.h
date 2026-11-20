@@ -52,6 +52,8 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
     void SetNextTestBarrier(TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> Barrier);
     uint64 GetStaleCompletionCount() const;
+    void SetTestViewLocation(FVector Location);
+    int32 GetDemandedChunkCount() const;
 #endif
 
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") bool bStartDemo = true;
@@ -62,6 +64,7 @@ public:
     UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="8")) int32 HorizontalRadius = 4;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="4")) int32 VerticalRadius = 2;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="4")) int32 WorkerCount = 2;
+    UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="8192")) int32 MaxResidentChunks = 8192;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Rendering") TObjectPtr<UMaterialInterface> TerrainMaterial;
 private:
     void StartDemo();

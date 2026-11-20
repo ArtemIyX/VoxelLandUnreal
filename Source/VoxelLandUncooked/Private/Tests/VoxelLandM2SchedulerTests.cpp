@@ -95,6 +95,22 @@ public:
             // but visual output and GPU leak measurements still need a real RHI run.
             FlushRenderingCommands();
         }
+        // Saturate demand with explicit data, free capacity without moving the view,
+        // and verify the stationary camera retries the incomplete desired set.
+        AVoxelLandWorld* Limited=World->SpawnActor<AVoxelLandWorld>();
+        Test->TestNotNull(TEXT("limited streaming actor"),Limited);
+        if (Limited)
+        {
+            Limited->bStartDemo=false; Limited->MaxResidentChunks=1; Limited->HorizontalRadius=1; Limited->VerticalRadius=1;
+            Limited->Initialize(Generator); Limited->SetTestViewLocation(FVector::ZeroVector);
+            Test->TestTrue(TEXT("explicit request fills capacity"),Limited->RequestDataChunk(FIntVector(20,0,0)));
+            Limited->Tick(0.016f);
+            Test->TestEqual(TEXT("camera demand initially saturated"),Limited->GetDemandedChunkCount(),0);
+            Limited->ReleaseDataChunk(FIntVector(20,0,0));
+            Limited->Tick(0.016f); Limited->Tick(0.016f);
+            Test->TestTrue(TEXT("stationary camera retries after eviction"),Limited->GetDemandedChunkCount()>0);
+            Limited->Shutdown(); Limited->Destroy();
+        }
         FVoxelLandChunkKey Other; Other.Coordinate=FIntVector(-1,0,0);
         Actor->RequestChunk(Other); Actor->Tick(0.016f);
         Cleanup(); return true;

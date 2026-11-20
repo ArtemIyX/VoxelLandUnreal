@@ -21,7 +21,7 @@
 TRACE_DECLARE_INT_COUNTER(VoxelQueued, TEXT("VoxelLand/Queued"));
 TRACE_DECLARE_INT_COUNTER(VoxelOutstanding, TEXT("VoxelLand/Outstanding"));
 TRACE_DECLARE_INT_COUNTER(VoxelReady, TEXT("VoxelLand/DataReady"));
-TRACE_DECLARE_INT_COUNTER(VoxelPrimitives, TEXT("VoxelLand/VisiblePrimitives"));
+TRACE_DECLARE_INT_COUNTER(VoxelPrimitives, TEXT("VoxelLand/UnhiddenResidentChunks"));
 TRACE_DECLARE_INT_COUNTER(VoxelRegions, TEXT("VoxelLand/Regions"));
 TRACE_DECLARE_INT_COUNTER(VoxelVertices, TEXT("VoxelLand/Vertices"));
 TRACE_DECLARE_INT_COUNTER(VoxelTriangles, TEXT("VoxelLand/Triangles"));
@@ -141,7 +141,11 @@ struct FVoxelLandWorldState
     TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> NextBarrier;
 #endif
     FIntVector CameraChunk=FIntVector::ZeroValue;
-    int32 LastHorizontal=-1, LastVertical=-1;
+    int32 LastHorizontal=-1, LastVertical=-1, LastLimit=-1;
+    bool bDemandComplete=false;
+#if WITH_DEV_AUTOMATION_TESTS
+    TOptional<FVector> TestView;
+#endif
     bool bHasCamera=false, bServer=false;
 };
 
@@ -217,7 +221,7 @@ void AVoxelLandWorld::Shutdown()
 bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 {
     check(IsInGameThread());
-    if (!State || Key.LOD!=0 || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate) || (State->Records.Num()>=MaxRecords && !State->Records.Contains(Key))) return false;
+    if (!State || Key.LOD!=0 || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate) || (State->Records.Num()>=FMath::Clamp(MaxResidentChunks,1,MaxRecords) && !State->Records.Contains(Key))) return false;
     FRecord& Record=State->Records.FindOrAdd(Key); Record.bExplicit=true; Record.bFailed=false;
     if (!Record.Data && !Record.bRunning) Record.bQueued=true;
     return true;
@@ -267,6 +271,11 @@ void AVoxelLandWorld::SetNextTestBarrier(TSharedPtr<FVoxelLandTestBarrier,ESPMod
     check(IsInGameThread()); if (State) State->NextBarrier=MoveTemp(Barrier);
 }
 uint64 AVoxelLandWorld::GetStaleCompletionCount() const { return State ? State->Stale : 0; }
+void AVoxelLandWorld::SetTestViewLocation(FVector Location) { if (State) State->TestView=Location; }
+int32 AVoxelLandWorld::GetDemandedChunkCount() const
+{
+    int32 Count=0; if (State) for (const auto& Pair : State->Records) Count+=Pair.Value.bDemand ? 1 : 0; return Count;
+}
 #endif
 void AVoxelLandWorld::DumpStats() const
 {
@@ -285,24 +294,32 @@ void AVoxelLandWorld::UpdateDemand()
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_UpdateDemand);
     if (!State || State->bServer) return;
-    APlayerController* Controller=GetWorld()->GetFirstPlayerController();
-    if (!Controller || !Controller->PlayerCameraManager) return;
-    const FVector Location=Controller->PlayerCameraManager->GetCameraLocation();
+    FVector Location;
+#if WITH_DEV_AUTOMATION_TESTS
+    if (State->TestView.IsSet()) Location=State->TestView.GetValue();
+    else
+#endif
+    {
+        APlayerController* Controller=GetWorld()->GetFirstPlayerController();
+        if (!Controller || !Controller->PlayerCameraManager) return;
+        Location=Controller->PlayerCameraManager->GetCameraLocation();
+    }
     const double Width=double(State->Generator->GetProfile().VoxelSizeCm)*32.0;
     const FVector Position=Location/Width;
-    constexpr double Limit=double(MAX_int32)-32.0;
+    constexpr double CoordinateLimit=double(MAX_int32)-32.0;
     if (!FMath::IsFinite(Position.X) || !FMath::IsFinite(Position.Y) || !FMath::IsFinite(Position.Z) ||
-        FMath::Abs(Position.X)>Limit || FMath::Abs(Position.Y)>Limit || FMath::Abs(Position.Z)>Limit) return;
+        FMath::Abs(Position.X)>CoordinateLimit || FMath::Abs(Position.Y)>CoordinateLimit || FMath::Abs(Position.Z)>CoordinateLimit) return;
     const FIntVector NewChunk(FMath::FloorToInt(Position.X),FMath::FloorToInt(Position.Y),FMath::FloorToInt(Position.Z));
     const int32 H=FMath::Clamp(HorizontalRadius,1,8)+1, V=FMath::Clamp(VerticalRadius,1,4)+1;
-    if (State->bHasCamera && State->CameraChunk==NewChunk && State->LastHorizontal==H && State->LastVertical==V) return;
-    State->CameraChunk=NewChunk; State->bHasCamera=true; State->LastHorizontal=H; State->LastVertical=V;
+    const int32 Limit=FMath::Clamp(MaxResidentChunks,1,MaxRecords);
+    if (State->bDemandComplete && State->bHasCamera && State->CameraChunk==NewChunk && State->LastHorizontal==H && State->LastVertical==V && State->LastLimit==Limit) return;
+    State->CameraChunk=NewChunk; State->bHasCamera=true; State->LastHorizontal=H; State->LastVertical=V; State->LastLimit=Limit; State->bDemandComplete=true;
     for (auto& Pair : State->Records) Pair.Value.bDemand=false;
     for (int32 Z=-V; Z<=V; ++Z) for (int32 Y=-H; Y<=H; ++Y) for (int32 X=-H; X<=H; ++X)
     {
         FVoxelLandChunkKey Key; Key.Coordinate=State->CameraChunk+FIntVector(X,Y,Z);
         if (!VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate)) continue;
-        if (State->Records.Num()>=MaxRecords && !State->Records.Contains(Key)) continue;
+        if (State->Records.Num()>=Limit && !State->Records.Contains(Key)) { State->bDemandComplete=false; continue; }
         FRecord& Record=State->Records.FindOrAdd(Key); Record.bDemand=true;
         if (!Record.Data && !Record.bRunning && !Record.bFailed) Record.bQueued=true;
     }

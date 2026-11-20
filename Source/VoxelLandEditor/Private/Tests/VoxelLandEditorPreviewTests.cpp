@@ -5,10 +5,16 @@
 #include "UObject/SavePackage.h"
 #include "Data/Structs/VoxelLandReloadTestBarrier.h"
 #include "UObject/Linker.h"
+#include "UObject/UObjectHash.h"
+#include "UObject/GarbageCollection.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Misc/PackageName.h"
 #include "HAL/FileManager.h"
+#include "AssetToolsModule.h"
+#include "VoxelLandAssetFactories.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/PlatformApplicationMisc.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "World/VoxelLandWorld.h"
@@ -194,6 +200,71 @@ bool FVoxelLandEditorUndoPinsTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("Layout undo succeeds"), GEditor->UndoTransaction());
     TestEqual(TEXT("Layout undo does not recompile"), Toolkit->GetRevisionForTests(), BeforeMove);
+    Toolkit->Stop();
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandGraphEditingWorkflowTest, "VoxelLand.M3.Editor.GraphEditingWorkflow",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandGraphEditingWorkflowTest::RunTest(const FString& Parameters)
+{
+    UVoxelLandTerrainGraph* Asset = NewObject<UVoxelLandTerrainGraph>(GetTransientPackage(), NAME_None, RF_Transactional);
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+    Toolkit->InitializeForTests(Asset);
+    Toolkit->CreatePanelForTests();
+    UEdGraph* Graph = Asset->EditorGraph;
+    UVoxelLandEditorNode* Source = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
+    Source->Kind = int32(EVoxelLandBuiltinNode::PositionX); Source->CreateNewGuid(); Source->AllocateDefaultPins();
+    Graph->AddNode(Source, false, false);
+    UVoxelLandEditorNode* Add = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
+    Add->Kind = int32(EVoxelLandBuiltinNode::Add); Add->CreateNewGuid(); Add->AllocateDefaultPins();
+    Graph->AddNode(Add, false, false); Graph->NotifyGraphChanged();
+    UEdGraphPin* Output = Source->Pins.Last();
+    UEdGraphPin* Input = Add->Pins[0];
+    {
+        const FScopedTransaction Transaction(NSLOCTEXT("VoxelLandTests", "ConnectWorkflow", "Connect workflow"));
+        Graph->Modify(); Source->Modify(); Add->Modify(); Output->Modify(); Input->Modify();
+        TestTrue(TEXT("Connect pins through schema"), Graph->GetSchema()->TryCreateConnection(Output, Input));
+        Graph->NotifyGraphChanged();
+    }
+    TestTrue(TEXT("Connection established"), Input->LinkedTo.Contains(Output));
+    TestTrue(TEXT("Connection undo succeeds"), GEditor->UndoTransaction());
+    TestFalse(TEXT("Undo removes link"), Input->LinkedTo.Contains(Output));
+    TestTrue(TEXT("Connection redo succeeds"), GEditor->RedoTransaction());
+    TestTrue(TEXT("Redo restores link"), Input->LinkedTo.Contains(Output));
+    Add->AddVariadicInput();
+    UEdGraphPin* Extra = Add->Pins[2];
+    const FGuid InputId = Input->PinId;
+    const FGuid ExtraId = Extra->PinId;
+    Add->MoveVariadicInput(InputId, 1);
+    TestTrue(TEXT("Move retains pin identity and wire"), Add->Pins[1] == Input && Input->PinId == InputId && Input->LinkedTo.Contains(Output));
+    Add->RemoveVariadicInput(ExtraId);
+    TestFalse(TEXT("Removed input ID disappears"), Add->Pins.ContainsByPredicate([ExtraId](const UEdGraphPin* Pin) { return Pin && Pin->PinId == ExtraId; }));
+    TestTrue(TEXT("Remaining connection survives removal"), Input->LinkedTo.Contains(Output));
+    FString OldClipboard;
+    FPlatformApplicationMisc::ClipboardPaste(OldClipboard);
+    const int32 Before = Graph->Nodes.Num();
+    Toolkit->CopyPasteNodesForTests({Source, Add});
+    FPlatformApplicationMisc::ClipboardCopy(*OldClipboard);
+    TestEqual(TEXT("Copy and paste creates two nodes"), Graph->Nodes.Num(), Before + 2);
+    UVoxelLandEditorNode* NewSource = nullptr;
+    UVoxelLandEditorNode* NewAdd = nullptr;
+    for (UEdGraphNode* Candidate : Graph->Nodes)
+    {
+        UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(Candidate);
+        if (!Node || Node == Source || Node == Add) { continue; }
+        if (Node->Kind == int32(EVoxelLandBuiltinNode::PositionX)) { NewSource = Node; }
+        if (Node->Kind == int32(EVoxelLandBuiltinNode::Add)) { NewAdd = Node; }
+    }
+    if (TestNotNull(TEXT("Copied source"), NewSource) && TestNotNull(TEXT("Copied add"), NewAdd))
+    {
+        TestTrue(TEXT("Copied node IDs are fresh"), NewSource->NodeGuid != Source->NodeGuid && NewAdd->NodeGuid != Add->NodeGuid);
+        TSet<FGuid> OldPinIds;
+        for (UEdGraphPin* Pin : Source->Pins) { OldPinIds.Add(Pin->PinId); }
+        for (UEdGraphPin* Pin : Add->Pins) { OldPinIds.Add(Pin->PinId); }
+        for (UEdGraphPin* Pin : NewSource->Pins) { TestFalse(TEXT("Copied source pin ID is fresh"), OldPinIds.Contains(Pin->PinId)); }
+        for (UEdGraphPin* Pin : NewAdd->Pins) { TestFalse(TEXT("Copied add pin ID is fresh"), OldPinIds.Contains(Pin->PinId)); }
+        TestTrue(TEXT("Copied internal link preserved"), NewAdd->Pins[1]->LinkedTo.Contains(NewSource->Pins.Last()));
+    }
     Toolkit->Stop();
     return true;
 }
@@ -739,6 +810,234 @@ bool FVoxelLandPreviewTimingTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Empty preview cannot be framed"), Toolkit->FramePreviewForTests());
     Toolkit->RequestCompileForTests();
     ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandPreviewTimingCommand(this, Toolkit));
+    return true;
+}
+namespace
+{
+class FVoxelLandAssetCleanupCheck final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandAssetCleanupCheck(FAutomationTestBase* InTest, TArray<FString> InPackages)
+        : Test(InTest), Packages(MoveTemp(InPackages)), CheckAfter(FPlatformTime::Seconds() + 1.0) {}
+    virtual bool Update() override
+    {
+        if (FPlatformTime::Seconds() < CheckAfter)
+        {
+            return false;
+        }
+        IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+        for (const FString& PackageName : Packages)
+        {
+            const FString ObjectPath = PackageName + TEXT(".") + FPackageName::GetLongPackageAssetName(PackageName);
+            Test->TestNull(TEXT("Fixture package remains unloaded after watcher processing"), FindPackage(nullptr, *PackageName));
+            Test->TestFalse(TEXT("Fixture asset remains unregistered after watcher processing"),
+                Registry.GetAssetByObjectPath(FSoftObjectPath(ObjectPath)).IsValid());
+        }
+        return true;
+    }
+private:
+    FAutomationTestBase* Test;
+    TArray<FString> Packages;
+    double CheckAfter;
+};
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandAssetWorkflowTest, "VoxelLand.M3.Editor.AssetWorkflow",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandAssetWorkflowTest::RunTest(const FString& Parameters)
+{
+    const FString Unique = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    const TArray<FString> Sources = {
+        TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"),
+        TEXT("/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings"),
+        TEXT("/VoxelLand/Examples/DA_M3_MaterialSetup.DA_M3_MaterialSetup") };
+    TArray<FString> Files;
+    TArray<FString> PackageNames;
+    for (int32 Index = 0; Index < Sources.Num(); ++Index)
+    {
+        for (const TCHAR* Suffix : {TEXT("Original"), TEXT("Duplicate"), TEXT("Renamed"), TEXT("Factory")})
+        {
+            const FString Name = FString::Printf(TEXT("/Game/__VoxelLandAsset_%s_%d_%s"), *Unique, Index, Suffix);
+            const FString File = FPackageName::LongPackageNameToFilename(Name, FPackageName::GetAssetPackageExtension());
+            if (IFileManager::Get().FileExists(*File) || FindPackage(nullptr, *Name))
+            {
+                AddError(TEXT("Unique asset fixture already exists"));
+                return false;
+            }
+            Files.Add(File);
+            PackageNames.Add(Name);
+        }
+    }
+    IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+    for (int32 Index = 0; Index < Sources.Num(); ++Index)
+    {
+        UObject* Source = LoadObject<UObject>(nullptr, *Sources[Index]);
+        if (!TestNotNull(TEXT("Example source asset"), Source)) { continue; }
+        const FString Base = FString::Printf(TEXT("__VoxelLandAsset_%s_%d_"), *Unique, Index);
+        const FString OriginalName = Base + TEXT("Original");
+        UFactory* Factory = nullptr;
+        if (Index == 0) { Factory = NewObject<UVoxelLandTerrainGraphFactory>(); }
+        else if (Index == 1) { Factory = NewObject<UVoxelLandWorldSettingsFactory>(); }
+        else { Factory = NewObject<UVoxelLandMaterialSetupFactory>(); }
+        UObject* Created = AssetTools.CreateAsset(Base + TEXT("Factory"), TEXT("/Game"), Source->GetClass(), Factory);
+        TestTrue(TEXT("AssetTools factory creates requested transactional asset"),
+            Created && Created->GetClass() == Source->GetClass() && Created->HasAnyFlags(RF_Transactional));
+        const FString DuplicateName = Base + TEXT("Duplicate");
+        const FString RenamedName = Base + TEXT("Renamed");
+        UPackage* OriginalPackage = CreatePackage(*(TEXT("/Game/") + OriginalName));
+        UObject* Original = DuplicateObject<UObject>(Source, OriginalPackage, *OriginalName);
+        Original->SetFlags(RF_Public | RF_Standalone | RF_Transactional);
+        FAssetRegistryModule::AssetCreated(Original);
+        FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone;
+        if (!TestTrue(TEXT("New asset saves"), UPackage::SavePackage(OriginalPackage, Original, *Files[Index * 4], Args))) { continue; }
+        TestFalse(TEXT("Saved package is clean"), OriginalPackage->IsDirty());
+        if (UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Original))
+        {
+            if (TestTrue(TEXT("Graph has a node for layout edit"), Graph->EditorGraph && !Graph->EditorGraph->Nodes.IsEmpty()))
+            {
+                UEdGraphNode* Node = Graph->EditorGraph->Nodes[0];
+                Node->SetFlags(RF_Transactional);
+                Node->Modify();
+                Node->NodePosX += 32;
+                Graph->EditorGraph->NotifyGraphChanged();
+                TestTrue(TEXT("Layout edit dirties saved graph package"), OriginalPackage->IsDirty());
+                TestTrue(TEXT("Edited graph saves"), UPackage::SavePackage(OriginalPackage, Original, *Files[Index * 4], Args));
+                TestFalse(TEXT("Resaved graph is clean"), OriginalPackage->IsDirty());
+            }
+        }
+        UObject* Duplicate = AssetTools.DuplicateAsset(DuplicateName, TEXT("/Game"), Original);
+        if (!TestNotNull(TEXT("AssetTools duplicates asset"), Duplicate)) { continue; }
+        TArray<FAssetRenameData> Rename;
+        Rename.Emplace(Duplicate, TEXT("/Game"), RenamedName);
+        if (!TestTrue(TEXT("AssetTools renames duplicate"), AssetTools.RenameAssets(Rename))) { continue; }
+        TestEqual(TEXT("Renamed asset has requested name"), Duplicate->GetName(), RenamedName);
+        UPackage* RenamedPackage = Duplicate->GetOutermost();
+        TestTrue(TEXT("Renamed asset saves"), UPackage::SavePackage(RenamedPackage, Duplicate, *Files[Index * 4 + 2], Args));
+        TArray<FGuid> NodeIds;
+        TArray<FGuid> PinIds;
+        TArray<FIntPoint> Layout;
+        TArray<FString> Links;
+        int32 LinkCount = 0;
+        if (UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Duplicate))
+        {
+            if (TestNotNull(TEXT("Graph has editor representation"), Graph->EditorGraph.Get()))
+            {
+                for (const UEdGraphNode* Node : Graph->EditorGraph->Nodes)
+                {
+                    NodeIds.Add(Node->NodeGuid); Layout.Emplace(Node->NodePosX, Node->NodePosY);
+                    for (const UEdGraphPin* Pin : Node->Pins)
+                    {
+                        PinIds.Add(Pin->PinId); LinkCount += Pin->LinkedTo.Num();
+                        for (const UEdGraphPin* Linked : Pin->LinkedTo)
+                        {
+                            Links.Add(Pin->PinId.ToString() + TEXT(":") + Linked->PinId.ToString());
+                        }
+                    }
+                }
+            }
+        }
+        UPackage* Reloaded = ReloadPackage(RenamedPackage, LOAD_None);
+        if (TestNotNull(TEXT("Renamed package reopens from disk"), Reloaded))
+        {
+            UObject* Reopened = FindObject<UObject>(Reloaded, *RenamedName);
+            TestTrue(TEXT("Reopened type preserved"), Reopened && Reopened->GetClass() == Source->GetClass());
+            if (UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Reopened))
+            {
+                TArray<FGuid> ReopenedNodes; TArray<FGuid> ReopenedPins; TArray<FIntPoint> ReopenedLayout;
+                TArray<FString> ReopenedLinks; int32 ReopenedLinkCount = 0;
+                if (TestNotNull(TEXT("Reopened editor graph"), Graph->EditorGraph.Get()))
+                {
+                    for (const UEdGraphNode* Node : Graph->EditorGraph->Nodes)
+                    {
+                        ReopenedNodes.Add(Node->NodeGuid); ReopenedLayout.Emplace(Node->NodePosX, Node->NodePosY);
+                        for (const UEdGraphPin* Pin : Node->Pins)
+                        {
+                            ReopenedPins.Add(Pin->PinId); ReopenedLinkCount += Pin->LinkedTo.Num();
+                            for (const UEdGraphPin* Linked : Pin->LinkedTo)
+                            {
+                                ReopenedLinks.Add(Pin->PinId.ToString() + TEXT(":") + Linked->PinId.ToString());
+                            }
+                        }
+                    }
+                    TestTrue(TEXT("Node IDs and layout survive save and reload"), NodeIds == ReopenedNodes && Layout == ReopenedLayout);
+                    TestTrue(TEXT("Pin IDs and exact links survive save and reload"), PinIds == ReopenedPins && LinkCount == ReopenedLinkCount && LinkCount > 0 && Links == ReopenedLinks);
+                }
+            }
+            if (const UVoxelLandWorldSettings* Settings = Cast<UVoxelLandWorldSettings>(Reopened))
+            {
+                const UVoxelLandWorldSettings* Expected = CastChecked<UVoxelLandWorldSettings>(Source);
+                TestTrue(TEXT("World settings values and graph reference survive reopen"),
+                    Settings->Seed == Expected->Seed && Settings->VoxelSizeCm == Expected->VoxelSizeCm &&
+                    Settings->Graph == Expected->Graph && Settings->MaterialSetup == Expected->MaterialSetup);
+            }
+            if (const UVoxelLandMaterialSetup* Setup = Cast<UVoxelLandMaterialSetup>(Reopened))
+            {
+                const UVoxelLandMaterialSetup* Expected = CastChecked<UVoxelLandMaterialSetup>(Source);
+                TestTrue(TEXT("Material setup version and reference survive reopen"),
+                    Setup->FormatVersion == Expected->FormatVersion && Setup->Material == Expected->Material);
+            }
+            ResetLoaders(Reloaded);
+        }
+        UPackage* ReloadedOriginal = ReloadPackage(OriginalPackage, LOAD_None);
+        if (TestNotNull(TEXT("Original package reopens from disk"), ReloadedOriginal))
+        {
+            UObject* ReopenedOriginal = FindObject<UObject>(ReloadedOriginal, *OriginalName);
+            TestTrue(TEXT("Original reopened type preserved"), ReopenedOriginal && ReopenedOriginal->GetClass() == Source->GetClass());
+            ResetLoaders(ReloadedOriginal);
+        }
+    }
+    IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+    Registry.WaitForCompletion();
+    for (const FString& PackageName : PackageNames)
+    {
+        if (UPackage* Package = FindPackage(nullptr, *PackageName))
+        {
+            ResetLoaders(Package);
+        }
+    }
+    for (const FString& File : Files)
+    {
+        if (IFileManager::Get().FileExists(*File))
+        {
+            TestTrue(TEXT("Remove unique asset fixture file"), IFileManager::Get().Delete(*File));
+        }
+    }
+    for (const FString& PackageName : PackageNames)
+    {
+        UPackage* Package = FindPackage(nullptr, *PackageName);
+        if (!Package)
+        {
+            continue;
+        }
+        TArray<UObject*> Objects;
+        ForEachObjectWithPackage(Package, [&Objects](UObject* Object)
+        {
+            Objects.Add(Object);
+            return true;
+        });
+        for (UObject* Object : Objects)
+        {
+            if (Object->IsAsset())
+            {
+                FAssetRegistryModule::AssetDeleted(Object);
+            }
+            Object->ClearFlags(RF_Public | RF_Standalone);
+            Object->MarkAsGarbage();
+        }
+        Package->SetDirtyFlag(false);
+        Package->ClearFlags(RF_Public | RF_Standalone);
+        Package->MarkAsGarbage();
+    }
+    Registry.ScanModifiedAssetFiles(Files);
+    Registry.WaitForCompletion();
+    CollectGarbage(RF_NoFlags);
+    for (const FString& PackageName : PackageNames)
+    {
+        TestNull(TEXT("Unique fixture package unloaded"), FindPackage(nullptr, *PackageName));
+        const FString ObjectPath = PackageName + TEXT(".") + FPackageName::GetLongPackageAssetName(PackageName);
+        TestFalse(TEXT("Unique fixture asset unregistered"),
+            Registry.GetAssetByObjectPath(FSoftObjectPath(ObjectPath)).IsValid());
+    }
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandAssetCleanupCheck(this, PackageNames));
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandInitializationReplacementTest, "VoxelLand.M3.Editor.InitializationReplacement",

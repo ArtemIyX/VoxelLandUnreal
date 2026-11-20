@@ -481,6 +481,16 @@ void FVoxelLandGraphToolkit::CreatePanelForTests()
 {
     GraphWidget = SNew(SGraphEditor).GraphToEdit(Graph).IsEditable(true);
 }
+void FVoxelLandGraphToolkit::CopyPasteNodesForTests(const TArray<UEdGraphNode*>& Nodes)
+{
+    GraphWidget->ClearSelectionSet();
+    for (UEdGraphNode* Node : Nodes)
+    {
+        GraphWidget->SetNodeSelection(Node, true);
+    }
+    CopySelected();
+    PasteNodes();
+}
 void FVoxelLandGraphToolkit::InitializeForTests(UVoxelLandTerrainGraph* InAsset)
 {
     Asset = InAsset;

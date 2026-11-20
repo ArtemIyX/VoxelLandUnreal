@@ -49,6 +49,7 @@ public:
     uint64 GetRevisionForTests() const { return Revision; }
     int32 GetPanelRefreshCountForTests() const { return PanelRefreshCountForTests; }
     void CreatePanelForTests();
+    void CopyPasteNodesForTests(const TArray<UEdGraphNode*>& Nodes);
     UVoxelLandWorldSettings* GetPreviewSettingsForTests() const { return PreviewSettings; }
     uint64 GetPreviewRevisionForTests() const { return PreviewRevision; }
     int32 GetMaterialApplyCountForTests() const { return MaterialApplyCountForTests; }

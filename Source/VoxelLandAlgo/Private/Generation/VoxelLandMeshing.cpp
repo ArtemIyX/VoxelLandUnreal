@@ -26,7 +26,7 @@ void AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float S
     if (A == B || B == C || C == A) return;
     const FVector3f E1 = (Mesh.Vertices[B].Position-Mesh.Vertices[A].Position)/Scale;
     const FVector3f E2 = (Mesh.Vertices[C].Position-Mesh.Vertices[A].Position)/Scale;
-    if (FVector3f::CrossProduct(E1,E2).SizeSquared() <= 1.e-12f) return;
+    if (FVector3f::CrossProduct(E1,E2).SizeSquared() == 0.f) return;
     Mesh.Indices.Add(A); Mesh.Indices.Add(B); Mesh.Indices.Add(C);
 }
 }
@@ -69,8 +69,8 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
                 Fallback += (PB-PA) * (Q[B] > Q[A] ? 1.f : -1.f);
             }
             const FVector3f Average=Sum/float(Crossings);
-            // Binary grid keeps duplicated cell positions exact after adding either chunk-local integer origin.
-            const FVector3f P(FMath::RoundToFloat(Average.X*65536.f)/65536.f, FMath::RoundToFloat(Average.Y*65536.f)/65536.f, FMath::RoundToFloat(Average.Z*65536.f)/65536.f);
+            // A 1/1024-cell binary grid keeps the 50/100 cm profiles exact after chunk-origin translation.
+            const FVector3f P(FMath::RoundToFloat(Average.X*1024.f)/1024.f, FMath::RoundToFloat(Average.Y*1024.f)/1024.f, FMath::RoundToFloat(Average.Z*1024.f)/1024.f);
             FVector3f N=Gradient(Q,P).GetSafeNormal();
             if (N.IsNearlyZero()) { ++Mesh.NormalFallbacks; N=Fallback.GetSafeNormal(); if (N.IsNearlyZero()) N=FVector3f::UpVector; }
             const FVector3f Abs= N.GetAbs();
@@ -111,4 +111,3 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
     OutMesh=MoveTemp(Mesh);
     return EVoxelLandMeshResult::Success;
 }
-

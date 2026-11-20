@@ -65,6 +65,24 @@ bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
         if (WorldA.Equals(VB.Position,0.001f)) { ++Shared; TestTrue(TEXT("shared normal"), VA.Normal.Equals(VB.Normal,1.e-6f)); }
     }
     TestTrue(TEXT("shared halo vertices"), Shared > 0);
+    // An asymmetric crossing must agree exactly after translating the negative chunk.
+    for (float Scale : {50.f,100.f})
+    {
+        FVoxelLandChunkData Left=Plane(FIntVector(-1,0,0),2,1), Right=Plane(FIntVector(0,0,0),2,1);
+        for (int32 Z=-1; Z<=33; ++Z) for (int32 Y=-1; Y<=33; ++Y) for (int32 X=-1; X<=33; ++X)
+        {
+            const int32 I=(X+1)+35*((Y+1)+35*(Z+1));
+            Left.Density[I]=int16(FMath::Clamp((2*Z-1)*341+(X+32)*3,-32768,32767));
+            Right.Density[I]=int16(FMath::Clamp((2*Z-1)*341+X*3,-32768,32767));
+        }
+        FVoxelLandMeshData L,R;
+        VoxelLandMeshing::BuildSurfaceNets(Left,Scale,S1,L,NeverCancel);
+        VoxelLandMeshing::BuildSurfaceNets(Right,Scale,S2,R,NeverCancel);
+        int32 Exact=0;
+        for (const auto& LV : L.Vertices) for (const auto& RV : R.Vertices)
+            if (LV.Position+FVector3f(-32.f*Scale,0,0)==RV.Position) ++Exact;
+        TestTrue(TEXT("asymmetric seam has exact shared coordinates"), Exact>0);
+    }
     return true;
 }
 #endif

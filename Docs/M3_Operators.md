@@ -1,12 +1,12 @@
 # M3 noise and native operators
 
-This document describes source interfaces that have not been built or executed yet. Native noise uses FastNoise SSE2 on supported x64 platforms; VM scalar selection does not provide scalar native noise. Version-2 programs set the native node feature scale to 1, so graph frequency is applied once in inverse cm. Version-1 programs retain the earlier native default feature scale of 100 and their existing output semantics.
+These interfaces have been built and exercised in Windows UE 5.7 editor automation; the specific results and remaining acceptance checks are recorded in [M3_Verification.md](M3_Verification.md). Native noise uses FastNoise SSE2 on supported x64 platforms; VM scalar selection does not provide scalar native noise. Version-2 programs set the native node feature scale to 1, so graph frequency is applied once in inverse cm. Version-1 programs retain the earlier native default feature scale of 100 and their existing output semantics.
 
 ## Noise node pins
 
 Perlin, Perlin fBm, Value and Simplex each have 2D and 3D forms. Pins are ordered `X`, `Y`, optional `Z`, `Frequency`, `Octaves`, `Gain`, `Lacunarity`, then the float output. Coordinates and frequency are floats; octaves is int32. Uniform settings accept an unconnected default or a direct parameter reference of the matching type, not an arbitrary per-sample expression. Frequency must be finite and positive; octaves must be 1-16; gain must be finite and in [0,1]; lacunarity must be finite and at least 1. Per-node GUID and salt identify independent seed slots. All four settings are validated even for non-fBm families.
 
-Value and Simplex use distinct FastNoise metadata nodes; neither aliases Perlin. Native backend creation fails if the requested family or SSE2 is unavailable. Cross-host output and metadata availability still require actual verification.
+Value and Simplex use distinct FastNoise metadata nodes; neither aliases Perlin. Native backend creation fails if the requested family or SSE2 is unavailable. Windows automation exercised all eight delivered variants; Linux metadata availability and cross-host output parity remain unverified.
 
 ## Native provider contract
 

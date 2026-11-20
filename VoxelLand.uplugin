@@ -1,0 +1,23 @@
+﻿{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "VoxelLand",
+	"Description": "Procedural runtime voxel generation",
+	"Category": "Other",
+	"CreatedBy": "Wellsaik",
+	"CreatedByURL": "https://github.com/ArtemIyX",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "VoxelLand",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

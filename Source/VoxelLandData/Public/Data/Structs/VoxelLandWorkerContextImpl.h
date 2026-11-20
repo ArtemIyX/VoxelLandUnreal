@@ -6,6 +6,7 @@
 #include "Data/Structs/VoxelLandProgramDraft.h"
 
 class FVoxelLandGenerator;
+class IVoxelLandOperatorWorker;
 namespace VoxelLandNative
 {
 class FWorker;
@@ -21,6 +22,13 @@ struct FVoxelLandWorkerContextImpl
 	EVoxelLandNoiseBackend NoiseBackend = EVoxelLandNoiseBackend::Auto;
 	TUniquePtr<VoxelLandNative::FWorker> Noise;
 	TArray<float> Registers, X, Y, Z, Output, NoiseX, NoiseY, NoiseZ;
+	TArray<int32> IntRegisters;
+	TArray<int32> NoiseIndices;
+	TArray<TUniquePtr<IVoxelLandOperatorWorker>> OperatorWorkers;
+	TArray<TUniquePtr<IVoxelLandOperatorWorker>> OperatorSimdWorkers;
+	TArray<bool> OperatorSimdEnabled;
+	TArray<float> OperatorSimdFloatScratch;
+	TArray<int32> OperatorSimdIntScratch;
 	TArray<int16> Quantized;
 	TArray<uint8> HashBytes;
 
@@ -39,6 +47,10 @@ struct FVoxelLandWorkerContextImpl
 		const TArray<float>& FloatParameters, int32 Start, int32 N, const float* A, const float* B, const float* C,
 		float* Dest);
 	FVoxelLandError ExecuteInstruction(const FVoxelLandInstruction& I, const FVoxelLandProgramDraft& D,
-		const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N);
+		const TArray<float>& FloatParameters, const TArray<int32>& IntParameters, const TArray<int32>& Seeds, int32 N);
+	FVoxelLandError ExecuteExternal(const FVoxelLandInstruction& I, const FVoxelLandProgramDraft& D, int32 N);
+	void CheckOperatorSimd(uint32 OperatorIndex, EVoxelLandGraphValueType OutputType,
+		TConstArrayView<const void*> Inputs, void* ScalarOutput, int32 Count);
+	FVoxelLandError ExecuteTyped(const FVoxelLandInstruction& I, const TArray<int32>& IntParameters, int32 N);
 	FVoxelLandError QuantizeOutput(int32 N, float VoxelSizeCm, TArray<int16>& OutDensity);
 };

@@ -1,6 +1,8 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VoxelLand.h"
+#include "World/VoxelLandWorld.h"
+#include "UObject/UObjectIterator.h"
 
 #define LOCTEXT_NAMESPACE "FVoxelLandModule"
 
@@ -11,8 +13,14 @@ void FVoxelLandModule::StartupModule()
 
 void FVoxelLandModule::ShutdownModule()
 {
-	// This function may be called during shutdown to clean up your module.  For modules that support dynamic reloading,
-	// we call this function before unloading the module.
+	// No worker or queued callback may retain module code across unloading.
+	for (TObjectIterator<AVoxelLandWorld> It; It; ++It)
+	{
+		if (It->PendingInitialization || It->PendingDemo || It->State)
+		{
+			It->Shutdown();
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

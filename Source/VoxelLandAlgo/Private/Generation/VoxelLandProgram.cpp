@@ -1,6 +1,7 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Hash/xxhash.h"
+#include "Operators/VoxelLandOperator.h"
 
 namespace
 {
@@ -50,6 +51,10 @@ uint64 ComputeProgramFingerprint(const FVoxelLandProgramDraft& D)
 		W.U16(I.A);
 		W.U16(I.B);
 		W.U16(I.C);
+		if (D.FormatVersion >= 2)
+		{
+			W.U16(I.D); W.U16(I.E); W.U16(I.F);
+		}
 		W.U32(I.Imm);
 	}
 	W.U32(D.Constants.Num());
@@ -83,6 +88,32 @@ uint64 ComputeProgramFingerprint(const FVoxelLandProgramDraft& D)
 		W.Source(N.Gain);
 		W.Source(N.Lacunarity);
 	}
+	if (D.FormatVersion >= 2)
+	{
+		W.U8(D.SmoothFilter.bPresent ? 1 : 0);
+		if (D.SmoothFilter.bPresent)
+		{
+			W.Source(D.SmoothFilter.Enabled);
+			W.Source(D.SmoothFilter.Strength);
+		}
+		W.U32(D.ExternalOperators.Num());
+		for (const FVoxelLandExternalOperator& Operator : D.ExternalOperators)
+		{
+			W.U32(Operator.Id.A); W.U32(Operator.Id.B); W.U32(Operator.Id.C); W.U32(Operator.Id.D);
+			W.U32(uint32(Operator.Version));
+			W.U32(Operator.Inputs.Num());
+			for (EVoxelLandGraphValueType Type : Operator.Inputs)
+			{
+				W.U8(uint8(Type));
+			}
+			W.U8(uint8(Operator.Output)); W.U32(uint32(Operator.SeedSlot));
+			W.U32(Operator.Configuration.Num());
+			for (uint8 Byte : Operator.Configuration)
+			{
+				W.U8(Byte);
+			}
+		}
+	}
 	return FXxHash64::HashBuffer(W.Bytes.GetData(), W.Bytes.Num()).Hash;
 }
 
@@ -97,26 +128,44 @@ bool SourceValid(const FVoxelLandProgramDraft& D, const FVoxelLandValueSource& S
 		return false;
 	}
 	const float V = D.Constants[Source.Index];
-	return Type == EVoxelLandParameterType::Float || (V >= 1.f && V <= 16.f && FMath::FloorToFloat(V) == V);
+	if (Type == EVoxelLandParameterType::Float)
+	{
+		return true;
+	}
+	if (Type == EVoxelLandParameterType::Bool)
+	{
+		return V == 0.f || V == 1.f;
+	}
+	return V >= 1.f && V <= 16.f && FMath::FloorToFloat(V) == V;
 }
+bool DraftWithinLimits(const FVoxelLandProgramDraft& D)
+{
+	if (D.Instructions.Num() > 8192 || D.Constants.Num() > 65536 || D.Parameters.Num() > 4096 ||
+		D.Seeds.Num() > 4096 || D.Noise.Num() > 4096 || D.ExternalOperators.Num() > 4096)
+	{
+		return false;
+	}
+	int64 TotalConfiguration = 0;
+	for (const FVoxelLandParameterSlot& Parameter : D.Parameters)
+	{
+		if (Parameter.Name.Len() > 256)
+		{
+			return false;
+		}
+	}
+	for (const FVoxelLandExternalOperator& Operator : D.ExternalOperators)
+	{
+		TotalConfiguration += Operator.Configuration.Num();
+		if (Operator.Configuration.Num() > 65536 || TotalConfiguration > 1048576 || Operator.Inputs.Num() > 3)
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
-FVoxelLandError FVoxelLandProgram::Validate(
-	const FVoxelLandProgramDraft& Draft, TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram)
+FVoxelLandError ValidateProgramInputs(FVoxelLandProgramDraft& D)
 {
-	if (IsInGameThread())
-	{
-		return MakeVoxelLandError(
-			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Program validation requires a worker thread"));
-	}
-	OutProgram.Reset();
-	if (Draft.FormatVersion != 1 || Draft.RegisterCount < 1 || Draft.RegisterCount > 1024)
-	{
-		return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported version or register count"));
-	}
-	TSharedPtr<FVoxelLandProgram, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandProgram);
-	Result->Data = Draft;
-	FVoxelLandProgramDraft& D = Result->Data;
 	for (float V : D.Constants)
 	{
 		if (!FMath::IsFinite(V))
@@ -129,7 +178,9 @@ FVoxelLandError FVoxelLandProgram::Validate(
 	{
 		FString Name;
 		if (!NormalizeName(P.Name, Name) || Names.Contains(Name)
-			|| (P.Type != EVoxelLandParameterType::Float && P.Type != EVoxelLandParameterType::Int32)
+			|| (P.Type != EVoxelLandParameterType::Float && P.Type != EVoxelLandParameterType::Int32
+				&& !(D.FormatVersion == 2 && P.Type == EVoxelLandParameterType::Bool))
+			|| (P.Type == EVoxelLandParameterType::Bool && P.IntDefault != 0 && P.IntDefault != 1)
 			|| !FMath::IsFinite(P.FloatDefault))
 		{
 			return MakeVoxelLandError(
@@ -137,6 +188,21 @@ FVoxelLandError FVoxelLandProgram::Validate(
 		}
 		P.Name = Name;
 		Names.Add(Name);
+	}
+	if (D.SmoothFilter.bPresent)
+	{
+		const FVoxelLandValueSource& Enabled = D.SmoothFilter.Enabled;
+		const FVoxelLandValueSource& Strength = D.SmoothFilter.Strength;
+		if (D.FormatVersion < 2 || !SourceValid(D, Enabled, EVoxelLandParameterType::Bool) ||
+			!SourceValid(D, Strength, EVoxelLandParameterType::Float))
+		{
+			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid smooth filter source"));
+		}
+		const float DefaultStrength = Strength.bParameter ? D.Parameters[Strength.Index].FloatDefault : D.Constants[Strength.Index];
+		if (DefaultStrength < 0.f || DefaultStrength > 1.f)
+		{
+			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Smooth strength must be in [0,1]"));
+		}
 	}
 	for (int32 SeedIndex = 0; SeedIndex < D.Seeds.Num(); ++SeedIndex)
 	{
@@ -176,13 +242,80 @@ FVoxelLandError FVoxelLandProgram::Validate(
 			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Noise defaults out of range"));
 		}
 	}
+	return {};
+}
+
+}
+
+FVoxelLandError FVoxelLandProgram::Validate(
+	const FVoxelLandProgramDraft& Draft, TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram)
+{
+	OutProgram.Reset();
+	if (IsInGameThread())
+	{
+		return MakeVoxelLandError(
+			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Program validation requires a worker thread"));
+	}
+	if (!DraftWithinLimits(Draft))
+	{
+		return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Program exceeds bounded input limits"));
+	}
+	if ((Draft.FormatVersion != 1 && Draft.FormatVersion != 2) || Draft.RegisterCount < 1 || Draft.RegisterCount > 1024)
+	{
+		return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported version or register count"));
+	}
+	TSharedPtr<FVoxelLandProgram, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandProgram);
+	Result->Data = Draft;
+	FVoxelLandProgramDraft& D = Result->Data;
+	if (FVoxelLandError Error = ValidateProgramInputs(D))
+	{
+		return Error;
+	}
+	if ((D.FormatVersion == 1 && !D.ExternalOperators.IsEmpty()) || D.ExternalOperators.Num() > 4096)
+	{
+		return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid external operator table"));
+	}
+	int64 ConfigBytes = 0;
+	uint64 WorkerBytes = 0;
+	for (const FVoxelLandExternalOperator& Operator : D.ExternalOperators)
+	{
+		ConfigBytes += Operator.Configuration.Num();
+		if (Operator.Configuration.Num() > 65536 || ConfigBytes > 1048576 || Operator.SeedSlot < 0 ||
+			Operator.SeedSlot >= D.Seeds.Num() || Operator.Inputs.Num() < 1 || Operator.Inputs.Num() > 3)
+		{
+			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("External operator exceeds limits"));
+		}
+		TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider =
+			FVoxelLandOperatorRegistry::Resolve(Operator.Id, Operator.Version);
+		FString Error;
+		if (!Provider || Provider->InputTypes() != Operator.Inputs || Provider->OutputType() != Operator.Output ||
+			Provider->MaximumWorkerBytes() > 1048576 || !Provider->ValidateConfiguration(Operator.Configuration, Error))
+		{
+			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram,
+				TEXT("Missing, incompatible or invalid external operator provider"));
+		}
+		WorkerBytes += uint64(Provider->MaximumWorkerBytes()) *
+			(Provider->SimdRequirement() == EVoxelLandOperatorSimdRequirement::None ? 1u : 2u);
+		if (WorkerBytes > 8u * 1024u * 1024u)
+		{
+			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("External operator worker budget exceeded"));
+		}
+		Result->Operators.Add(MoveTemp(Provider));
+	}
 	TArray<bool> Initialized;
 	Initialized.Init(false, D.RegisterCount);
+	TArray<uint8> RegisterTypes;
+	RegisterTypes.Init(0, D.RegisterCount);
 	int32 Stores = 0;
 	for (int32 Index = 0; Index < D.Instructions.Num(); ++Index)
 	{
 		const FVoxelLandInstruction& I = D.Instructions[Index];
-		bool A = false, B = false, C = false, Writes = true;
+		bool A = false, B = false, C = false, ExtraD = false, ExtraE = false, ExtraF = false, ImmReg = false, Writes = true;
+		uint8 TypeA = 1, TypeB = 1, TypeC = 1, WriteType = 1;
+		if (D.FormatVersion == 1 && uint16(I.Op) > uint16(EVoxelLandOpcode::StoreDensity))
+		{
+			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Version 2 opcode in version 1 program"), Index);
+		}
 		switch (I.Op)
 		{
 			case EVoxelLandOpcode::LoadX:
@@ -252,6 +385,8 @@ FVoxelLandError FVoxelLandProgram::Validate(
 				break;
 			case EVoxelLandOpcode::Perlin2:
 			case EVoxelLandOpcode::Fbm2:
+			case EVoxelLandOpcode::Value2:
+			case EVoxelLandOpcode::Simplex2:
 				A = B = true;
 				if (I.Imm >= uint32(D.Noise.Num()))
 				{
@@ -261,6 +396,8 @@ FVoxelLandError FVoxelLandProgram::Validate(
 				break;
 			case EVoxelLandOpcode::Perlin3:
 			case EVoxelLandOpcode::Fbm3:
+			case EVoxelLandOpcode::Value3:
+			case EVoxelLandOpcode::Simplex3:
 				A = B = C = true;
 				if (I.Imm >= uint32(D.Noise.Num()))
 				{
@@ -268,6 +405,75 @@ FVoxelLandError FVoxelLandProgram::Validate(
 						EVoxelLandErrorCode::InvalidProgram, TEXT("Noise config out of range"), Index);
 				}
 				break;
+			case EVoxelLandOpcode::LoadIntConstant:
+				WriteType = 2;
+				break;
+			case EVoxelLandOpcode::LoadBoolConstant:
+				if (I.Imm > 1)
+				{
+					return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Boolean constant must be 0 or 1"), Index);
+				}
+				WriteType = 3;
+				break;
+			case EVoxelLandOpcode::LoadIntParameter:
+			case EVoxelLandOpcode::LoadBoolParameter:
+			{
+				const bool bBool = I.Op == EVoxelLandOpcode::LoadBoolParameter;
+				if (I.Imm >= uint32(D.Parameters.Num()) || D.Parameters[I.Imm].Type !=
+					(bBool ? EVoxelLandParameterType::Bool : EVoxelLandParameterType::Int32))
+				{
+					return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid typed parameter"), Index);
+				}
+				WriteType = bBool ? 3 : 2;
+				break;
+			}
+			case EVoxelLandOpcode::IntToFloat:
+				A = true; TypeA = 2; break;
+			case EVoxelLandOpcode::Less:
+			case EVoxelLandOpcode::LessEqual:
+			case EVoxelLandOpcode::Equal:
+				A = B = true; WriteType = 3; break;
+			case EVoxelLandOpcode::BoolAnd:
+			case EVoxelLandOpcode::BoolOr:
+				A = B = true; TypeA = TypeB = WriteType = 3; break;
+			case EVoxelLandOpcode::BoolNot:
+				A = true; TypeA = WriteType = 3; break;
+			case EVoxelLandOpcode::SelectFloat:
+				A = B = C = true; TypeA = 3; break;
+			case EVoxelLandOpcode::SelectInt:
+				A = B = C = true; TypeA = 3; TypeB = TypeC = WriteType = 2; break;
+			case EVoxelLandOpcode::SelectBool:
+				A = B = C = true; TypeA = TypeB = TypeC = WriteType = 3; break;
+			case EVoxelLandOpcode::Power:
+				A = B = true; break;
+			case EVoxelLandOpcode::Clamp:
+				A = B = C = true; break;
+			case EVoxelLandOpcode::DynamicPlane:
+				A = B = C = ExtraD = ExtraE = ExtraF = ImmReg = true; break;
+			case EVoxelLandOpcode::DynamicSphere:
+				A = B = C = ExtraD = true; break;
+			case EVoxelLandOpcode::DynamicBox:
+				A = B = C = ExtraD = ExtraE = ExtraF = true; break;
+			case EVoxelLandOpcode::ExternalOperator:
+			{
+				if (I.Imm >= uint32(D.ExternalOperators.Num()))
+				{
+					return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("External operator index out of range"), Index);
+				}
+				const FVoxelLandExternalOperator& Operator = D.ExternalOperators[I.Imm];
+				A = true;
+				B = Operator.Inputs.Num() > 1;
+				C = Operator.Inputs.Num() > 2;
+				if (I.Dst == I.A || (B && I.Dst == I.B) || (C && I.Dst == I.C))
+				{
+					return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("External output must not alias an input"), Index);
+				}
+				TypeA = uint8(Operator.Inputs[0]) + 1;
+				if (B) { TypeB = uint8(Operator.Inputs[1]) + 1; }
+				if (C) { TypeC = uint8(Operator.Inputs[2]) + 1; }
+				WriteType = uint8(Operator.Output) + 1;
+				break;
+			}
 			case EVoxelLandOpcode::StoreDensity:
 				A = true;
 				Writes = false;
@@ -277,13 +483,26 @@ FVoxelLandError FVoxelLandProgram::Validate(
 				return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Unknown opcode"), Index);
 		}
 		if ((A && (I.A >= D.RegisterCount || !Initialized[I.A])) || (B && (I.B >= D.RegisterCount || !Initialized[I.B]))
-			|| (C && (I.C >= D.RegisterCount || !Initialized[I.C])) || (Writes && I.Dst >= D.RegisterCount))
+			|| (C && (I.C >= D.RegisterCount || !Initialized[I.C]))
+            || (ExtraD && (I.D >= D.RegisterCount || !Initialized[I.D]))
+            || (ExtraE && (I.E >= D.RegisterCount || !Initialized[I.E]))
+            || (ExtraF && (I.F >= D.RegisterCount || !Initialized[I.F]))
+            || (ImmReg && (I.Imm >= uint32(D.RegisterCount) || !Initialized[I.Imm]))
+            || (Writes && I.Dst >= D.RegisterCount))
 		{
 			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram,
 				TEXT("Register out of range or read before initialization"), Index);
 		}
+		if ((A && RegisterTypes[I.A] != TypeA) || (B && RegisterTypes[I.B] != TypeB) ||
+			(C && RegisterTypes[I.C] != TypeC) || (ExtraD && RegisterTypes[I.D] != 1) ||
+            (ExtraE && RegisterTypes[I.E] != 1) || (ExtraF && RegisterTypes[I.F] != 1) ||
+            (ImmReg && RegisterTypes[I.Imm] != 1))
+		{
+			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Register type mismatch"), Index);
+		}
 		if (Writes)
 		{
+			RegisterTypes[I.Dst] = WriteType;
 			Initialized[I.Dst] = true;
 		}
 	}

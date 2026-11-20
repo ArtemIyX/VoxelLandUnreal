@@ -8,6 +8,7 @@
 #include "Data/Structs/VoxelLandZoneProfile.h"
 #include "Generation/VoxelLandGeneratorSettings.h"
 
+class IVoxelLandOperator;
 class FVoxelLandWorkerContext;
 struct FVoxelLandWorkerContextImpl;
 
@@ -19,12 +20,14 @@ public:
 		const FVoxelLandProgramDraft& Draft, TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
 	const FVoxelLandProgramDraft& GetData() const { return Data; }
 	uint64 GetFingerprint() const { return Fingerprint; }
+	const TArray<TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe>>& GetOperators() const { return Operators; }
 
 private:
 	FVoxelLandProgram() = default;
 	FVoxelLandProgram(const FVoxelLandProgram&) = delete;
 	FVoxelLandProgram& operator=(const FVoxelLandProgram&) = delete;
 	FVoxelLandProgramDraft Data;
+	TArray<TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe>> Operators;
 	uint64 Fingerprint = 0;
 };
 
@@ -39,28 +42,33 @@ public:
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const;
 	FVoxelLandError GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
-	// Explicit experimental filter API; not connected to graph assets or world streaming.
+	// Explicit filter API. Compiled filter stages are also applied by GenerateChunk.
 	// Strength maps to uint16 by rounding Strength * 65535 to nearest; integer averages
 	// and blends round to nearest, ties away from zero. The source has a one-cell halo.
 	FVoxelLandError GenerateSmoothedChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		bool bEnabled, float Strength, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 		TFunctionRef<bool()> IsCancelled) const;
-	// Evaluate 1..256 arbitrary world-space positions using the same VM and quantization as chunks.
+	// Evaluate the pure VM stage at 1..256 positions; neighborhood filters apply only to chunks.
 	FVoxelLandError EvaluateSamples(
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const;
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 
 private:
+	FVoxelLandError GeneratePureChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandGenerator() = default;
 	FVoxelLandGenerator(const FVoxelLandGenerator&) = delete;
 	FVoxelLandGenerator& operator=(const FVoxelLandGenerator&) = delete;
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 	FVoxelLandZoneProfile Profile;
 	FVoxelLandBackendOptions Options;
+	bool bSmoothEnabled = false;
+	float SmoothStrength = 0.f;
 	TArray<float> FloatParameters;
 	TArray<int32> IntParameters;
 	TArray<int32> Seeds;
+	TArray<uint64> FullSeeds;
 	friend class FVoxelLandWorkerContext;
 	friend struct FVoxelLandWorkerContextImpl;
 };

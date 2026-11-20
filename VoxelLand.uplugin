@@ -23,6 +23,7 @@
 		{
 			"Name": "VoxelLandUncooked",
 			"Type": "UncookedOnly",
+			"TargetDenyList": ["Server"],
 			"LoadingPhase": "Default"
 		},
 		{
@@ -38,6 +39,7 @@
 		{
 			"Name": "VoxelLandRender",
 			"Type": "Runtime",
+			"TargetDenyList": ["Server"],
 			"LoadingPhase": "Default"
 		},
 		{

@@ -1,12 +1,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/Enums/VoxelLandNoiseFamily.h"
 
 namespace VoxelLandNative
 {
 struct FConfig
 {
-	bool bFbm = false;
+	EVoxelLandNoiseFamily Family = EVoxelLandNoiseFamily::Perlin;
 	int32 Octaves = 3;
 	float Gain = 0.5f;
 	float Lacunarity = 2.0f;

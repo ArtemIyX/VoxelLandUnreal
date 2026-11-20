@@ -1,14 +1,21 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Async/Future.h"
 #include "Data/Structs/VoxelLandChunkData.h"
 #include "VoxelLandWorld.generated.h"
 
 class FVoxelLandGenerator;
-class UVoxelLandChunkComponent;
+class UVoxelLandWorldSettings;
+class UPrimitiveComponent;
+class FVoxelLandInitializationJob;
+class FVoxelLandDemoJob;
+class FVoxelLandModule;
 class UMaterialInterface;
 struct FVoxelLandWorldState;
 struct FVoxelLandTestBarrier;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FVoxelLandInitializationFinished, bool, bSuccess);
 
 UCLASS(NotBlueprintable, Transient)
 class VOXELLAND_API AVoxelLandRegion : public AActor
@@ -27,7 +34,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;
 	UPROPERTY()
-	TMap<FIntVector, TObjectPtr<UVoxelLandChunkComponent>> Components;
+	TMap<FIntVector, TObjectPtr<UPrimitiveComponent>> Components;
 };
 
 UCLASS(BlueprintType)
@@ -44,6 +51,17 @@ public:
 	virtual void BeginDestroy() override;
 	// Generator snapshots must have been created on a worker thread. Replacing one invalidates prior jobs.
 	void Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator);
+	// Copies settings on the game thread and initializes asynchronously. No work starts in BeginPlay.
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
+	bool InitializeFromSettings(UVoxelLandWorldSettings* Settings);
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
+	void CancelInitialization();
+	UPROPERTY(BlueprintAssignable, Category = "VoxelLand|Initialization")
+	FVoxelLandInitializationFinished OnInitializationFinished;
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelLand|Initialization")
+	bool bInitializing = false;
+	UPROPERTY(BlueprintReadOnly, Category = "VoxelLand|Initialization")
+	FString LastInitializationError;
 	// Optional demonstration, started explicitly by a manager or test setup after BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Demo")
 	void StartDemo();
@@ -101,6 +119,15 @@ private:
 	void Dispatch();
 	void HandleWorldBeginTearDown(UWorld* World);
 	void ShutdownInternal(bool bDestroyRegionActors);
+	void StopPendingInitialization();
+	void PollInitialization();
+	void StopDemo();
+	void PollDemo();
+	friend class FVoxelLandModule;
+	TSharedPtr<FVoxelLandInitializationJob, ESPMode::ThreadSafe> PendingInitialization;
+	TFuture<void> InitializationTask;
+	TSharedPtr<FVoxelLandDemoJob, ESPMode::ThreadSafe> PendingDemo;
+	TFuture<void> DemoTask;
 	uint64 ConfigurationEpoch = 0;
 	bool bLifecycleEnded = false;
 	FDelegateHandle WorldTearDownHandle;

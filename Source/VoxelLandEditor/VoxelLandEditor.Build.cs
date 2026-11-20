@@ -10,16 +10,28 @@ public class VoxelLandEditor : ModuleRules
             new string[]
             {
                 "Core",
+                "CoreUObject",
+                "VoxelLandData",
             }
         );
 
         PrivateDependencyModuleNames.AddRange(
             new string[]
             {
-                "CoreUObject",
                 "Engine",
                 "Slate",
-                "SlateCore"
+                "SlateCore",
+                "VoxelLandAlgo",
+                "VoxelLandRender",
+                "UnrealEd",
+                "AssetTools",
+                "AssetRegistry",
+                "GraphEditor",
+                "PropertyEditor",
+                "ToolMenus",
+                "ApplicationCore",
+                "EditorFramework",
+                "AdvancedPreviewScene"
             }
         );
     }

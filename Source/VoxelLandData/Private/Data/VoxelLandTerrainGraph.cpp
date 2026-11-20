@@ -51,7 +51,7 @@ private:
 			{
 				if (!Pin.Id.IsValid() || Pins.Contains(Pin.Id) ||
 					(Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32 &&
-					 Pin.Type != EVoxelLandGraphValueType::Bool) || !FMath::IsFinite(Pin.FloatDefault))
+					 Pin.Type != EVoxelLandGraphValueType::Bool) || Pin.bInvalidDefault || !FMath::IsFinite(Pin.FloatDefault))
 				{
 					OutError = TEXT("Invalid or duplicate pin ID, type or default.");
 					return false;

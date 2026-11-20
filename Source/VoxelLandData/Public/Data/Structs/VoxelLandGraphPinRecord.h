@@ -29,4 +29,8 @@ struct VOXELLANDDATA_API FVoxelLandGraphPinRecord
 
 	UPROPERTY()
 	bool BoolDefault = false;
+
+	// Retains an invalid editor literal as an explicit compilation failure.
+	UPROPERTY()
+	bool bInvalidDefault = false;
 };

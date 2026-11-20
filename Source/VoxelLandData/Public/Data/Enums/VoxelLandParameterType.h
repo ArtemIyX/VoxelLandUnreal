@@ -5,5 +5,6 @@
 enum class EVoxelLandParameterType : uint8
 {
 	Float,
-	Int32
+	Int32,
+	Bool
 };

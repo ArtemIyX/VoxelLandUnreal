@@ -83,7 +83,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 	}
 	if (!bEnabled || Strength == 0.f)
 	{
-		return GenerateChunkCancellable(Key, Worker, OutChunk, IsCancelled);
+		return GeneratePureChunkCancellable(Key, Worker, OutChunk, IsCancelled);
 	}
 	if (IsInGameThread())
 	{

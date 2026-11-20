@@ -24,7 +24,7 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 	for (int32 Index = 0; Index < Configs.Num(); ++Index)
 	{
 		const FConfig& Config = Configs[Index];
-		if (Config.bFbm
+		if (Config.Family == EVoxelLandNoiseFamily::Fbm
 			&& (Config.Octaves < 1 || Config.Octaves > 16 || !FMath::IsFinite(Config.Gain) || Config.Gain < 0.f
 				|| Config.Gain > 1.f || !FMath::IsFinite(Config.Lacunarity) || Config.Lacunarity < 1.f))
 		{
@@ -32,7 +32,7 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 			return false;
 		}
 		double MaxScale = 1.0;
-		if (Config.bFbm)
+		if (Config.Family == EVoxelLandNoiseFamily::Fbm)
 		{
 			for (int32 Octave = 1; Octave < Config.Octaves; ++Octave)
 			{
@@ -46,9 +46,24 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 			}
 		}
 		TUniquePtr<FNode> Node = MakeUnique<FNode>();
-		Node->Generator = Config.bFbm
-							? FFastNoiseNative::CreateFbm(Config.Octaves, Config.Gain, Config.Lacunarity, OutError)
-							: FFastNoiseNative::CreatePerlin(OutError);
+		switch (Config.Family)
+		{
+			case EVoxelLandNoiseFamily::Perlin:
+				Node->Generator = FFastNoiseNative::CreatePerlin(OutError);
+				break;
+			case EVoxelLandNoiseFamily::Fbm:
+				Node->Generator = FFastNoiseNative::CreateFbm(Config.Octaves, Config.Gain, Config.Lacunarity, OutError);
+				break;
+			case EVoxelLandNoiseFamily::Value:
+				Node->Generator = FFastNoiseNative::CreateValue(OutError);
+				break;
+			case EVoxelLandNoiseFamily::Simplex:
+				Node->Generator = FFastNoiseNative::CreateSimplex(OutError);
+				break;
+			default:
+				OutError = TEXT("InvalidNoiseInput: unknown noise family");
+				return false;
+		}
 		if (!Node->Generator)
 		{
 			return false;

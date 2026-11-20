@@ -14,13 +14,5 @@ public class VoxelLandData : ModuleRules
                 "Engine",
             }
         );
-
-        PrivateDependencyModuleNames.AddRange(
-            new string[]
-            {
-                "Slate",
-                "SlateCore"
-            }
-        );
     }
 }

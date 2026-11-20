@@ -6,9 +6,12 @@
 #include "Data/Structs/VoxelLandGraphNodeRecord.h"
 #include "Data/Structs/VoxelLandGraphParameter.h"
 #include "Data/Structs/VoxelLandGraphSnapshot.h"
+#include "Data/Structs/VoxelLandSerializedProgram.h"
 #include "VoxelLandTerrainGraph.generated.h"
 
-// Source records are data only. There is currently no compiler or executable payload.
+class UEdGraph;
+
+// Source and last compiled payload are stored separately; callers must reject stale payloads.
 UCLASS(BlueprintType)
 class VOXELLANDDATA_API UVoxelLandTerrainGraph : public UDataAsset
 {
@@ -32,4 +35,13 @@ public:
 
 	UPROPERTY()
 	TArray<FVoxelLandGraphLinkRecord> Links;
+
+	UPROPERTY()
+	FVoxelLandSerializedProgram CompiledProgram;
+
+#if WITH_EDITORONLY_DATA
+	// Editor mirror and its layout are stripped from cooked runtime data.
+	UPROPERTY()
+	TObjectPtr<UEdGraph> EditorGraph;
+#endif
 };

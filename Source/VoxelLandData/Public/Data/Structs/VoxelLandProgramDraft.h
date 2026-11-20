@@ -2,9 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandInstruction.h"
+#include "Data/Structs/VoxelLandExternalOperator.h"
 #include "Data/Structs/VoxelLandNoiseConfig.h"
 #include "Data/Structs/VoxelLandParameterSlot.h"
 #include "Data/Structs/VoxelLandSeedSlot.h"
+#include "Data/Structs/VoxelLandSmoothFilter.h"
 
 struct FVoxelLandProgramDraft
 {
@@ -15,4 +17,6 @@ struct FVoxelLandProgramDraft
 	TArray<FVoxelLandParameterSlot> Parameters;
 	TArray<FVoxelLandSeedSlot> Seeds;
 	TArray<FVoxelLandNoiseConfig> Noise;
+	TArray<FVoxelLandExternalOperator> ExternalOperators;
+	FVoxelLandSmoothFilter SmoothFilter;
 };

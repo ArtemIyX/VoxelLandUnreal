@@ -1,5 +1,7 @@
 #include "World/VoxelLandWorld.h"
+#if !UE_SERVER
 #include "Rendering/VoxelLandChunkComponent.h"
+#endif
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
@@ -152,14 +154,21 @@ AVoxelLandRegion::AVoxelLandRegion()
 	SetActorEnableCollision(false);
 	PrimaryActorTick.bCanEverTick = false;
 }
+#if !UE_SERVER
 bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material)
 {
 	check(IsInGameThread());
-	TObjectPtr<UVoxelLandChunkComponent>& Component = Components.FindOrAdd(Key);
+	TObjectPtr<UPrimitiveComponent>& Slot = Components.FindOrAdd(Key);
+	UVoxelLandChunkComponent* Component = Cast<UVoxelLandChunkComponent>(Slot.Get());
+	if (Slot && !Component)
+	{
+		return false;
+	}
 	if (!Component)
 	{
 		Component = NewObject<UVoxelLandChunkComponent>(this);
+		Slot = Component;
 		AddInstanceComponent(Component);
 		Component->SetupAttachment(Root);
 		Component->RegisterComponent();
@@ -176,20 +185,20 @@ bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 }
 void AVoxelLandRegion::Remove(const FIntVector& Key)
 {
-	if (TObjectPtr<UVoxelLandChunkComponent>* Found = Components.Find(Key))
+	if (TObjectPtr<UPrimitiveComponent>* Found = Components.Find(Key))
 	{
-		if (*Found)
+		if (UVoxelLandChunkComponent* Component = Cast<UVoxelLandChunkComponent>(Found->Get()))
 		{
-			(*Found)->SetVisibility(false);
-			(*Found)->ClearMesh();
-			(*Found)->DestroyComponent();
+			Component->SetVisibility(false);
+			Component->ClearMesh();
+			Component->DestroyComponent();
 		}
 		Components.Remove(Key);
 	}
 }
 bool AVoxelLandRegion::IsChunkEffectivelyVisible(const FIntVector& Key) const
 {
-	const TObjectPtr<UVoxelLandChunkComponent>* Component = Components.Find(Key);
+	const TObjectPtr<UPrimitiveComponent>* Component = Components.Find(Key);
 	return !IsHidden() && Component && *Component && (*Component)->IsRegistered() && (*Component)->IsVisible();
 }
 void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface* Material)
@@ -202,6 +211,16 @@ void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface* Material)
 		}
 	}
 }
+#else
+bool AVoxelLandRegion::Publish(const FIntVector&, const FVector&,
+	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe>, UMaterialInterface*)
+{
+	return false;
+}
+void AVoxelLandRegion::Remove(const FIntVector&) {}
+bool AVoxelLandRegion::IsChunkEffectivelyVisible(const FIntVector&) const { return false; }
+void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface*) {}
+#endif
 
 AVoxelLandWorld::AVoxelLandWorld()
 {
@@ -289,6 +308,8 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 	check(IsInGameThread());
 	SetActorTickEnabled(false);
 	++ConfigurationEpoch;
+	StopDemo();
+	StopPendingInitialization();
 	if (WorldTearDownHandle.IsValid())
 	{
 		FWorldDelegates::OnWorldBeginTearDown.Remove(WorldTearDownHandle);
@@ -858,6 +879,8 @@ void AVoxelLandWorld::RetireChunk(const FVoxelLandChunkKey& Key)
 void AVoxelLandWorld::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	PollInitialization();
+	PollDemo();
 	if (!State)
 	{
 		return;
@@ -918,6 +941,14 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
 	TRACE_COUNTER_SET(VoxelMeshBytes, MeshBytes);
 }
 
+class FVoxelLandDemoJob
+{
+public:
+	TAtomic<bool> Cancelled{false};
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+	FVoxelLandError Error;
+};
+
 void AVoxelLandWorld::StartDemo()
 {
 	check(IsInGameThread());
@@ -927,14 +958,13 @@ void AVoxelLandWorld::StartDemo()
 	{
 		return;
 	}
-	// Supersede an existing world or pending demo before launching a new one.
 	Shutdown();
-	// The VM program creates a height field and subtracts 3D-noise cave pockets.
 	const int32 DemoSeed = Seed;
 	const float Size = VoxelSizeCm;
-	const uint64 DemoEpoch = ConfigurationEpoch;
-	TWeakObjectPtr<AVoxelLandWorld> WeakThis(this);
-	Async(EAsyncExecution::ThreadPool, [WeakThis, DemoSeed, Size, DemoEpoch]() {
+	const TSharedRef<FVoxelLandDemoJob, ESPMode::ThreadSafe> Job = MakeShared<FVoxelLandDemoJob, ESPMode::ThreadSafe>();
+	PendingDemo = Job;
+	SetActorTickEnabled(true);
+	DemoTask = Async(EAsyncExecution::ThreadPool, [Job, DemoSeed, Size]() {
 		FVoxelLandProgramDraft Draft;
 		Draft.RegisterCount = 10;
 		Draft.Constants = {0.001f, 3.f, 0.5f, 2.f, 1400.f, 0.0015f, 2000.f, 250.f};
@@ -970,7 +1000,7 @@ void AVoxelLandWorld::StartDemo()
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 		FVoxelLandError Error = FVoxelLandProgram::Validate(Draft, Program);
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
-		if (!Error)
+		if (!Error && !Job->Cancelled.Load())
 		{
 			FVoxelLandGeneratorSettings Settings;
 			Settings.Program = Program;
@@ -978,21 +1008,39 @@ void AVoxelLandWorld::StartDemo()
 			Settings.Profile.VoxelSizeCm = Size;
 			Error = FVoxelLandGenerator::Create(Settings, Generator);
 		}
-		AsyncTask(ENamedThreads::GameThread, [WeakThis, Generator, Error, DemoEpoch]() {
-			AVoxelLandWorld* World = WeakThis.Get();
-			if (!World || World->IsActorBeingDestroyed() || !World->HasActorBegunPlay()
-				|| World->ConfigurationEpoch != DemoEpoch)
-			{
-				return;
-			}
-			if (Error)
-			{
-				UE_LOG(LogTemp, Error, TEXT("VoxelLand demo initialization failed: %s"), *Error.Message);
-			}
-			else
-			{
-				World->Initialize(Generator);
-			}
-		});
+		Job->Generator = MoveTemp(Generator);
+		Job->Error = MoveTemp(Error);
 	});
+}
+
+void AVoxelLandWorld::StopDemo()
+{
+	if (PendingDemo)
+	{
+		PendingDemo->Cancelled.Store(true);
+	}
+	if (DemoTask.IsValid())
+	{
+		DemoTask.Wait();
+		DemoTask = TFuture<void>();
+	}
+	PendingDemo.Reset();
+}
+
+void AVoxelLandWorld::PollDemo()
+{
+	if (!PendingDemo || !DemoTask.IsValid() || !DemoTask.IsReady())
+	{
+		return;
+	}
+	DemoTask.Wait();
+	DemoTask = TFuture<void>();
+	TSharedPtr<FVoxelLandDemoJob, ESPMode::ThreadSafe> Finished = MoveTemp(PendingDemo);
+	if (Finished->Error)
+	{
+		UE_LOG(LogTemp, Error, TEXT("VoxelLand demo initialization failed: %s"), *Finished->Error.Message);
+		SetActorTickEnabled(false);
+		return;
+	}
+	Initialize(Finished->Generator);
 }

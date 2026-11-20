@@ -1,24 +1,29 @@
 # M3 verification handoff
 
-M3 acceptance is **not established** by this document. No build, automation, cook, dedicated-server run, real-RHI preview check, cross-host comparison or performance measurement was performed for this handoff. The M1 and M2 verification records remain separate and their outstanding checks still apply.
+M3 acceptance remains open. The M1 and M2 verification records remain separate and their pending checks still apply. Do not infer a pass from source changes alone. This handoff records authored coverage, not executed results. No build, automation, cook, dedicated-server run, real-RHI preview check, cross-host comparison or performance measurement has been performed for this M3 implementation.
 
-Record the plugin and dependency revisions, UE version, target and configuration, platform, CPU, GPU/RHI, seed and test data with each result. Record failures and missing capabilities rather than treating an unrun check as a pass.
+Record the plugin and FastNoise revisions, UE version, target and configuration, platform, CPU, GPU/RHI, selected VM and native backends, seed, input assets and actual results with each run. The native noise backend currently targets SSE2 on supported x64; the scalar VM does not imply a native scalar-noise backend.
+
+## Authored automation
+
+The `VoxelLand.M3` source fixtures cover:
+
+- Graph compilation with stable identity under node/link reordering and unrelated unreachable nodes, duplicate IDs, pin ownership/type errors and cycles; program serialization, stale source and fingerprint rejection; a separately serialized Smooth Density stage and invalid filtered-field fan-out.
+- Typed float/int/bool overrides and select, exact int-to-float conversion, a precision-loss error and division-by-zero error.
+- The Square provider's scalar result, a missing provider, a version mismatch and rejection of an incompatible provider during reload.
+- Scalar versus requested SIMD VM output for all eight delivered Perlin, fBm, Value and Simplex dimensional variants, batches of 1, 2, 3 and 256, negative coordinates and changed world seeds. Native SSE2 or VM SIMD unavailability is reported as a warning; a skipped comparison is not a parity pass.
+- Smooth Density against an independently computed integer neighborhood and canonical hash; disabled and zero-strength identity, nonuniform input, the three same-LOD overlap planes at negative chunk coordinates, mid-generation cancellation and concurrent versus serial output. The noise seam fixture checks the three X overlap planes for every delivered family at negative coordinates.
+
+These fixtures have not been built or run. They do not replace independent expected values for every node, cross-host captures, real renderer or server tests. In particular, the user-facing parameter UI, runtime initialization cancellation/stale races, smooth-filter mesh seams and custom-operator scalar/SIMD parity need further coverage. Custom operators now have an opt-in SSE2 interface with exact scalar comparison and fallback; the authored parity and mismatch cases remain unrun. Power now has an authored fixed-order scalar approximation and domain/reference cases, but its numerical accuracy and cross-host parity remain unverified.
 
 ## Acceptance checklist
 
-- Create graph, world-settings and material-setup assets; save, reopen, duplicate, rename and cook them. Exercise undo and redo for connections, parameters and variadic pins; check stable IDs, links and layout.
-- Verify typed pin and stage rules, duplicate and missing IDs, cycles, output count, invalid values, unsupported filters and missing providers. Confirm diagnostics identify the affected node or pin, invalid graphs cannot cook or start, and an old preview is visibly stale.
-- Compare every delivered math and typed-control operation against independent references, including conversion limits, variadic ordering, division by zero and power domains. Exercise float, int and bool defaults and overrides.
-- For each delivered noise family, check fixed seeds and 2D/3D positions, negative coordinates, independent node seeds and invalid configuration. Verify provider version and missing-provider failures, serialization and reload, and scalar/SIMD parity for full batches and tails where supported. Native FastNoise remains SSE2-based; a scalar VM does not establish a scalar noise backend.
-- Compare Smooth Density against an independent integer reference, including disabled and zero-strength identity, negative coordinates, halo, three overlap planes, mesh borders, cancellation and different generation orders and worker counts.
-- In a real RHI preview, check multiple chunks, material and normals. Confirm seed and semantic changes supersede old work, layout changes do not compile, material changes do not regenerate density, and completion after close, PIE or teardown cannot publish. Record compile, generation and upload times separately, along with cold shader compilation, hardware and p50/p95 latency.
-- Load cooked settings and graph in runtime and confirm generation begins only after explicit initialization. Check missing providers fail visibly. Run a dedicated-server target and inspect its loaded dependencies and behavior for editor, preview and GPU independence. Compare supported Win64 and Linux outputs before claiming cross-host determinism.
+- Create each asset, save, reopen, duplicate, rename and cook. Exercise undo/redo for links, parameters and variadic pins; check stable IDs, links and layout.
+- Verify pin and stage rules, duplicate/missing IDs, cycles, output count, invalid settings, unsupported filter chains and missing providers. Errors must identify the affected node/pin where available. Confirm cook failure is enforced and a previous preview remains labeled stale.
+- Compare every delivered math and typed-control operation to independent references, including conversion limits, variadic ordering, division and power domains. Exercise defaults and per-world overrides.
+- For each noise family, check fixed seeds and 2D/3D positions, negative coordinates, independent node seeds and invalid configuration. Verify provider serialization, version/missing-provider rejection, and scalar/SIMD full batches and tails on each supported backend. Compare Win64 and Linux captures.
+- Compare smoothing to an independent integer reference; verify identity, halo, all overlap planes and mesh borders, cancellation, order and concurrency on actual runs.
+- With a real RHI, check preview chunks, material and normals; seed/semantic supersession, UI-only and material-only edits, close, PIE and teardown. Record compile, generation, upload, cold shader compilation, p50/p95 and hardware.
+- Verify cooked graph/settings load only after explicit runtime initialization. Exercise cancellation and stale rejection, missing provider errors, and a real dedicated-server target without editor, render module, terrain components or GPU resources.
 
-The example graph and assets described in the [M3 plan](../../../Docs/VoxelLand_M3_Plan.md) must be exercised as delivered; their design in the plan alone does not establish that they exist or work. NullRHI automation does not prove rendering or dedicated-server behavior.
-
-
-## Current source-level entry points
-
-The preliminary graph asset stores versioned node, pin, link and typed parameter records. Node records include bounded operator-specific configuration bytes and seed salt; these are preliminary and no provider validates or canonicalizes them. The graph has no compiled payload or canonical source identity, cannot initialize terrain, and does not yet block cooking. CaptureSnapshot copies records and parameters for worker use after structural validation, but is not a compiler or semantic validation. World settings contain a seed, bounds, typed overrides and a soft material-setup reference; `ValidateSettings` checks IDs, ASCII parameter names, types, values and ranges. The material setup stores a soft material reference. These are source-data foundations, not a graph editor, compiler, preview or runtime initialization workflow.
-
-`FVoxelLandGenerator::GenerateSmoothedChunkCancellable` is an explicit C++ operation on an existing generator and worker. It is not connected to graph assets or world streaming. It samples the 37³ expanded global lattice, quantizes the source, averages 27 neighbors in Z/Y/X order and blends using a strength rounded to a 0–65535 fixed-point integer. Integer division rounds to nearest with ties away from zero, and results saturate to int16. Disabled or zero strength delegates to ordinary generation. Scratch is retained by the worker, and cancellation returns no chunk. This implementation has not been built or tested; seam, cancellation and identity checks remain required.
+Source-level server guards and module target exclusions are present, but a real server build, cook and process inspection are required to establish them. The settings API is `AVoxelLandWorld::InitializeFromSettings`, with `OnInitializationFinished`, `LastInitializationError`, and `CancelInitialization`; BeginPlay remains inert. The plan's example `.uasset` files are not yet present. NullRHI automation does not establish actual rendering or a dedicated-server path. See [M3_User_Guide.md](M3_User_Guide.md) for usage and limitations.

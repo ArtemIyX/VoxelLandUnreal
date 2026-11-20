@@ -109,6 +109,10 @@ public:
             Limited->ReleaseDataChunk(FIntVector(20,0,0));
             Limited->Tick(0.016f); Limited->Tick(0.016f);
             Test->TestTrue(TEXT("stationary camera retries after eviction"),Limited->GetDemandedChunkCount()>0);
+            Test->TestTrue(TEXT("camera chunk gets first slot"),Limited->IsChunkDemanded(FIntVector::ZeroValue));
+            Limited->SetTestViewLocation(FVector(3200,0,0)); Limited->Tick(0.016f);
+            Test->TestTrue(TEXT("new camera chunk displaces retained prefetch"),Limited->IsChunkDemanded(FIntVector(1,0,0)));
+            Test->TestFalse(TEXT("old camera chunk evicted"),Limited->IsChunkDemanded(FIntVector::ZeroValue));
             Limited->Shutdown(); Limited->Destroy();
         }
         FVoxelLandChunkKey Other; Other.Coordinate=FIntVector(-1,0,0);

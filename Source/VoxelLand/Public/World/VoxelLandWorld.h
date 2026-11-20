@@ -54,6 +54,7 @@ public:
     uint64 GetStaleCompletionCount() const;
     void SetTestViewLocation(FVector Location);
     int32 GetDemandedChunkCount() const;
+    bool IsChunkDemanded(FIntVector Coordinate) const;
 #endif
 
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") bool bStartDemo = true;
@@ -65,10 +66,13 @@ public:
     UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="4")) int32 VerticalRadius = 2;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="4")) int32 WorkerCount = 2;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="8192")) int32 MaxResidentChunks = 8192;
+    // Horizontal region extents and vertical depth in chunks; applied on Initialize.
+    UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming") FIntVector RegionSize = FIntVector(10,10,2);
     UPROPERTY(EditAnywhere, Category="VoxelLand|Rendering") TObjectPtr<UMaterialInterface> TerrainMaterial;
 private:
     void StartDemo();
     void UpdateDemand();
+    void RetireChunk(const FVoxelLandChunkKey& Key);
     void PumpCompletions();
     void Dispatch();
     uint64 ConfigurationEpoch = 0;

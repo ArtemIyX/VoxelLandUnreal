@@ -815,6 +815,198 @@ bool FVoxelLandM3ReferenceOperations::RunTest(const FString& Parameters)
     return true;
 }
 
+namespace
+{
+FVoxelLandGraphSnapshot ReferenceShapeGraph(EVoxelLandBuiltinNode Kind, bool bCorner)
+{
+    FVoxelLandGraphSnapshot Graph;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionX, 101, 0, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Divide, 102, 2, true));
+    Graph.Nodes[1].Pins[1].FloatDefault = 106.f;
+    const int32 Inputs = Kind == EVoxelLandBuiltinNode::Plane ? 7 : Kind == EVoxelLandBuiltinNode::Sphere ? 4 : 6;
+    Graph.Nodes.Add(Node(Kind, 103, Inputs, true));
+    if (Kind == EVoxelLandBuiltinNode::Plane)
+    {
+        Graph.Nodes[2].Pins[3].FloatDefault = 1.f;
+    }
+    else if (Kind == EVoxelLandBuiltinNode::Sphere)
+    {
+        Graph.Nodes[2].Pins[3].FloatDefault = 3.f;
+        if (bCorner) { Graph.Nodes[2].Pins[1].FloatDefault = 4.f; Graph.Nodes[2].Pins[2].FloatDefault = 6.f; }
+    }
+    else
+    {
+        Graph.Nodes[2].Pins[3].FloatDefault = 3.f; Graph.Nodes[2].Pins[4].FloatDefault = 2.f; Graph.Nodes[2].Pins[5].FloatDefault = 4.f;
+        if (bCorner) { Graph.Nodes[2].Pins[1].FloatDefault = 4.f; Graph.Nodes[2].Pins[2].FloatDefault = 6.f; }
+    }
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 104, 1, false));
+    Link(Graph, 0, 1, 0); Link(Graph, 1, 2, 0); Link(Graph, 2, 3, 0);
+    return Graph;
+}
+int16 ReferenceShapeValue(EVoxelLandBuiltinNode Kind, int32 X, bool bCorner)
+{
+    const double Position = double(X);
+    double Value = Position;
+    if (Kind == EVoxelLandBuiltinNode::Sphere)
+    {
+        const double Y = bCorner ? 4.0 : 0.0;
+        const double Z = bCorner ? 6.0 : 0.0;
+        Value = std::sqrt(Position * Position + Y * Y + Z * Z) - 3.0;
+    }
+    else if (Kind == EVoxelLandBuiltinNode::Box)
+    {
+        const double DX = std::abs(Position) - 3.0;
+        const double DY = bCorner ? 2.0 : -2.0;
+        const double DZ = bCorner ? 2.0 : -4.0;
+        const double PX = std::max(DX, 0.0), PY = std::max(DY, 0.0), PZ = std::max(DZ, 0.0);
+        Value = std::sqrt(PX * PX + PY * PY + PZ * PZ) + std::min(std::max(DX, std::max(DY, DZ)), 0.0);
+    }
+    return int16(std::round(Value));
+}
+FVoxelLandGraphSnapshot ReferenceCsgGraph(EVoxelLandBuiltinNode Kind)
+{
+    FVoxelLandGraphSnapshot Graph;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionX, 201, 0, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Divide, 202, 2, true));
+    Graph.Nodes[1].Pins[1].FloatDefault = 106.f;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Multiply, 203, 2, true));
+    Graph.Nodes[2].Pins[1].FloatDefault = -2.f;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Subtract, 204, 2, true));
+    Graph.Nodes[3].Pins[1].FloatDefault = 2.f;
+    Graph.Nodes.Add(Node(Kind, 205, 2, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 206, 1, false));
+    Link(Graph, 0, 1, 0); Link(Graph, 1, 2, 0); Link(Graph, 2, 3, 0);
+    Link(Graph, 1, 4, 0); Link(Graph, 3, 4, 1); Link(Graph, 4, 5, 0);
+    return Graph;
+}
+int16 ReferenceCsgValue(EVoxelLandBuiltinNode Kind, int32 X)
+{
+    const int32 A = X, B = -2 * X - 2;
+    if (Kind == EVoxelLandBuiltinNode::Union) { return int16(std::min(A, B)); }
+    if (Kind == EVoxelLandBuiltinNode::Intersect) { return int16(std::max(A, B)); }
+    return int16(std::max(A, -B));
+}
+void CheckReferenceShape(FAutomationTestBase& Test, EVoxelLandBuiltinNode Kind, bool bCorner,
+    const FVoxelLandZoneProfile& Profile)
+{
+    FVoxelLandProgramDraft Draft; FString Error;
+    if (!FVoxelLandGraphCompiler::Compile(ReferenceShapeGraph(Kind, bCorner), Draft, Error))
+    {
+        Test.AddError(FString::Printf(TEXT("Shape %d compilation: %s"), int32(Kind), *Error));
+        return;
+    }
+    for (int32 Count : {1, 2, 3, 256})
+    {
+        for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+        {
+            const FSampleResult Actual = Sample(Draft, Backend, Profile, Count);
+            if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable)
+            {
+                if (Kind == EVoxelLandBuiltinNode::Plane && Count == 256) { Test.AddWarning(TEXT("SIMD4 unavailable for shape reference cases")); }
+                continue;
+            }
+            if (Kind == EVoxelLandBuiltinNode::Plane && Count == 256)
+            {
+                Test.AddInfo(FString::Printf(TEXT("Shape reference requested backend %d, actual backend %d"), int32(Backend), int32(Actual.VM)));
+                if (Backend != EVoxelLandVMBackend::Auto)
+                {
+                    Test.TestEqual(TEXT("Explicit shape backend selected"), int32(Actual.VM), int32(Backend));
+                }
+            }
+            bool bMatch = !Actual.Error && Actual.Values.Num() == Count;
+            for (int32 I = 0; bMatch && I < Count; ++I)
+            {
+                bMatch = Actual.Values[I] == ReferenceShapeValue(Kind, I - 129, bCorner);
+            }
+            Test.TestTrue(FString::Printf(TEXT("Shape %d corner %d count %d backend %d matches reference"), int32(Kind), int32(bCorner), Count, int32(Backend)), bMatch);
+        }
+    }
+}
+void CheckReferenceCsg(FAutomationTestBase& Test, EVoxelLandBuiltinNode Kind, const FVoxelLandZoneProfile& Profile)
+{
+    bool bFirstWins = false, bSecondWins = false;
+    for (int32 X = -129; X <= 126; ++X)
+    {
+        const int32 A = X, B = -2 * X - 2;
+        const int32 Second = Kind == EVoxelLandBuiltinNode::SubtractShape ? -B : B;
+        const bool bFirst = Kind == EVoxelLandBuiltinNode::Union ? A < Second : A > Second;
+        const bool bSecond = Kind == EVoxelLandBuiltinNode::Union ? Second < A : Second > A;
+        bFirstWins |= bFirst;
+        bSecondWins |= bSecond;
+    }
+    Test.TestTrue(TEXT("Both CSG operands win across reference samples"), bFirstWins && bSecondWins);
+    FVoxelLandProgramDraft Draft; FString Error;
+    if (!FVoxelLandGraphCompiler::Compile(ReferenceCsgGraph(Kind), Draft, Error))
+    {
+        Test.AddError(FString::Printf(TEXT("CSG %d compilation: %s"), int32(Kind), *Error));
+        return;
+    }
+    for (int32 Count : {1, 2, 3, 256})
+    {
+        for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+        {
+            const FSampleResult Actual = Sample(Draft, Backend, Profile, Count);
+            if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable) { continue; }
+            bool bMatch = !Actual.Error && Actual.Values.Num() == Count;
+            for (int32 I = 0; bMatch && I < Count; ++I)
+            {
+                bMatch = Actual.Values[I] == ReferenceCsgValue(Kind, I - 129);
+            }
+            Test.TestTrue(FString::Printf(TEXT("CSG %d count %d backend %d matches reference"), int32(Kind), Count, int32(Backend)), bMatch);
+        }
+    }
+}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3ReferenceShapes, "VoxelLand.M3.ReferenceShapes", M3GraphFlags)
+bool FVoxelLandM3ReferenceShapes::RunTest(const FString& Parameters)
+{
+    FVoxelLandZoneProfile Profile; Profile.VoxelSizeCm = 1024.f;
+    for (EVoxelLandBuiltinNode Kind : {EVoxelLandBuiltinNode::Plane, EVoxelLandBuiltinNode::Sphere, EVoxelLandBuiltinNode::Box})
+    {
+        CheckReferenceShape(*this, Kind, false, Profile);
+        if (Kind != EVoxelLandBuiltinNode::Plane) { CheckReferenceShape(*this, Kind, true, Profile); }
+    }
+    for (EVoxelLandBuiltinNode Kind : {EVoxelLandBuiltinNode::Union, EVoxelLandBuiltinNode::SubtractShape, EVoxelLandBuiltinNode::Intersect})
+    {
+        CheckReferenceCsg(*this, Kind, Profile);
+    }
+    for (EVoxelLandBuiltinNode Kind : {EVoxelLandBuiltinNode::Sphere, EVoxelLandBuiltinNode::Box, EVoxelLandBuiltinNode::Plane})
+    {
+        FVoxelLandGraphSnapshot InvalidGraph = ReferenceShapeGraph(Kind, false);
+        InvalidGraph.Nodes[2].Pins[3].FloatDefault = 0.f;
+        FVoxelLandProgramDraft Draft; FString Error;
+        TestFalse(TEXT("Invalid constant shape parameter fails compilation"), FVoxelLandGraphCompiler::Compile(InvalidGraph, Draft, Error));
+        FVoxelLandGraphSnapshot Dynamic = ReferenceShapeGraph(Kind, false);
+        Dynamic.Nodes.Insert(Node(EVoxelLandBuiltinNode::Negate, 105, 1, true), 3);
+        Link(Dynamic, 1, 3, 0); Link(Dynamic, 3, 2, 3);
+        if (TestTrue(TEXT("Dynamic shape parameter compiles"), FVoxelLandGraphCompiler::Compile(Dynamic, Draft, Error)))
+        {
+            for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+            {
+                if (Kind != EVoxelLandBuiltinNode::Plane)
+                {
+                    const FSampleResult Valid = Sample(Draft, Backend, Profile, 129);
+                    if (Backend == EVoxelLandVMBackend::Simd4 && Valid.Error.Code == EVoxelLandErrorCode::BackendUnavailable) { continue; }
+                    TestTrue(TEXT("Positive dynamic radius or extent evaluates at the boundary"),
+                        !Valid.Error && Valid.Values.Num() == 129 && !Valid.Values.ContainsByPredicate([](int16 Value) { return Value != 0; }));
+                }
+                const FSampleResult Actual = Sample(Draft, Backend, Profile, Kind == EVoxelLandBuiltinNode::Plane ? 1 : 130);
+                if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable) { continue; }
+                TestEqual(TEXT("Invalid dynamic shape parameter returns math-domain error"), int32(Actual.Error.Code), int32(EVoxelLandErrorCode::InvalidMathDomain));
+                TestTrue(TEXT("Invalid shape publishes no partial samples"), Actual.Values.IsEmpty());
+            }
+        }
+    }
+    for (int32 ExtentPin : {4, 5})
+    {
+        FVoxelLandGraphSnapshot InvalidBox = ReferenceShapeGraph(EVoxelLandBuiltinNode::Box, false);
+        InvalidBox.Nodes[2].Pins[ExtentPin].FloatDefault = -1.f;
+        FVoxelLandProgramDraft Draft; FString Error;
+        TestFalse(TEXT("Negative box extent fails compilation on every axis"), FVoxelLandGraphCompiler::Compile(InvalidBox, Draft, Error));
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3Power, "VoxelLand.M3.Power", M3GraphFlags)
 bool FVoxelLandM3Power::RunTest(const FString& Parameters)
 {

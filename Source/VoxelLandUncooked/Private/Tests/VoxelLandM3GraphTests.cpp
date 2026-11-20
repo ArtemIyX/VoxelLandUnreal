@@ -590,6 +590,231 @@ bool FVoxelLandM3TypedDomains::RunTest(const FString& Parameters)
     return true;
 }
 
+namespace
+{
+FVoxelLandGraphSnapshot ReferenceMathGraph(EVoxelLandBuiltinNode Kind, float Alpha)
+{
+    FVoxelLandGraphSnapshot Graph;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionX, 1, 0, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Divide, 2, 2, true));
+    Graph.Nodes[1].Pins[1].FloatDefault = 106.f;
+    const bool bUnary = Kind == EVoxelLandBuiltinNode::Abs || Kind == EVoxelLandBuiltinNode::Negate || Kind == EVoxelLandBuiltinNode::Saturate;
+    const int32 Inputs = bUnary ? 1 : (Kind == EVoxelLandBuiltinNode::Clamp || Kind == EVoxelLandBuiltinNode::Lerp ? 3 : 2);
+    Graph.Nodes.Add(Node(Kind, 3, Inputs, true));
+    if (Inputs >= 2) { Graph.Nodes[2].Pins[1].FloatDefault = Kind == EVoxelLandBuiltinNode::Clamp ? -1.f : 2.f; }
+    if (Kind == EVoxelLandBuiltinNode::Clamp) { Graph.Nodes[2].Pins[2].FloatDefault = 1.f; }
+    if (Kind == EVoxelLandBuiltinNode::Lerp) { Graph.Nodes[2].Pins[2].FloatDefault = Alpha; }
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 4, 1, false));
+    Link(Graph, 0, 1, 0); Link(Graph, 1, 2, 0); Link(Graph, 2, 3, 0);
+    return Graph;
+}
+float ReferenceMath(EVoxelLandBuiltinNode Kind, float X, float Alpha)
+{
+    switch (Kind)
+    {
+        case EVoxelLandBuiltinNode::Add: return X + 2.f;
+        case EVoxelLandBuiltinNode::Subtract: return X - 2.f;
+        case EVoxelLandBuiltinNode::Multiply: return X * 2.f;
+        case EVoxelLandBuiltinNode::Divide: return X / 2.f;
+        case EVoxelLandBuiltinNode::Min: return X < 2.f ? X : 2.f;
+        case EVoxelLandBuiltinNode::Max: return X > 2.f ? X : 2.f;
+        case EVoxelLandBuiltinNode::Abs: return X < 0.f ? -X : X;
+        case EVoxelLandBuiltinNode::Negate: return -X;
+        case EVoxelLandBuiltinNode::Clamp: return X < -1.f ? -1.f : (X > 1.f ? 1.f : X);
+        case EVoxelLandBuiltinNode::Saturate: return X < 0.f ? 0.f : (X > 1.f ? 1.f : X);
+        case EVoxelLandBuiltinNode::Lerp: return X + (2.f - X) * Alpha;
+        default: return 0.f;
+    }
+}
+FVoxelLandGraphSnapshot ReferenceControlGraph(EVoxelLandBuiltinNode Kind, bool Other)
+{
+    FVoxelLandGraphSnapshot Graph;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionX, 1, 0, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Less, 2, 2, true));
+    Graph.Nodes[1].Pins[2].Type = EVoxelLandGraphValueType::Bool;
+    Link(Graph, 0, 1, 0);
+    const bool bUnary = Kind == EVoxelLandBuiltinNode::BoolNot;
+    const bool bLogic = bUnary || Kind == EVoxelLandBuiltinNode::BoolAnd || Kind == EVoxelLandBuiltinNode::BoolOr;
+    const bool bCompare = Kind == EVoxelLandBuiltinNode::Less || Kind == EVoxelLandBuiltinNode::LessEqual || Kind == EVoxelLandBuiltinNode::Equal;
+    if (bCompare)
+    {
+        Graph.Nodes[1].OperatorId = VoxelLandBuiltinNodeId(Kind);
+    }
+    else if (bLogic)
+    {
+        const int32 InputCount = bUnary ? 1 : 2;
+        Graph.Nodes.Add(Node(Kind, 3, InputCount, true));
+        for (FVoxelLandGraphPinRecord& Pin : Graph.Nodes.Last().Pins) { Pin.Type = EVoxelLandGraphValueType::Bool; }
+        if (!bUnary) { Graph.Nodes.Last().Pins[1].BoolDefault = Other; }
+        Link(Graph, 1, 2, 0);
+    }
+    const int32 Condition = Graph.Nodes.Num() - 1;
+    if (Kind == EVoxelLandBuiltinNode::SelectInt)
+    {
+        Graph.Nodes.Add(Node(Kind, 4, 3, true));
+        Graph.Nodes.Last().Pins[0].Type = EVoxelLandGraphValueType::Bool;
+        for (int32 I = 1; I < 4; ++I) { Graph.Nodes.Last().Pins[I].Type = EVoxelLandGraphValueType::Int32; }
+        Graph.Nodes.Last().Pins[1].IntDefault = 7; Graph.Nodes.Last().Pins[2].IntDefault = -5;
+        Link(Graph, Condition, Graph.Nodes.Num() - 1, 0);
+        Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::IntToFloat, 5, 1, true));
+        Graph.Nodes.Last().Pins[0].Type = EVoxelLandGraphValueType::Int32;
+        Link(Graph, Graph.Nodes.Num() - 2, Graph.Nodes.Num() - 1, 0);
+    }
+    else
+    {
+        if (Kind == EVoxelLandBuiltinNode::SelectBool)
+        {
+            Graph.Nodes.Add(Node(Kind, 4, 3, true));
+            for (FVoxelLandGraphPinRecord& Pin : Graph.Nodes.Last().Pins) { Pin.Type = EVoxelLandGraphValueType::Bool; }
+            Graph.Nodes.Last().Pins[1].BoolDefault = Other;
+            Graph.Nodes.Last().Pins[2].BoolDefault = !Other;
+            Link(Graph, Condition, Graph.Nodes.Num() - 1, 0);
+        }
+        Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::SelectFloat, 6, 3, true));
+        Graph.Nodes.Last().Pins[0].Type = EVoxelLandGraphValueType::Bool;
+        Graph.Nodes.Last().Pins[1].FloatDefault = 7.f; Graph.Nodes.Last().Pins[2].FloatDefault = -5.f;
+        Link(Graph, Graph.Nodes.Num() - 2, Graph.Nodes.Num() - 1, 0);
+    }
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 7, 1, false));
+    Link(Graph, Graph.Nodes.Num() - 2, Graph.Nodes.Num() - 1, 0);
+    return Graph;
+}
+}
+namespace
+{
+void CheckReferenceMath(FAutomationTestBase& Test, const FVoxelLandZoneProfile& ReferenceProfile)
+{
+    const EVoxelLandBuiltinNode MathKinds[] = {EVoxelLandBuiltinNode::Add, EVoxelLandBuiltinNode::Subtract,
+        EVoxelLandBuiltinNode::Multiply, EVoxelLandBuiltinNode::Divide, EVoxelLandBuiltinNode::Min,
+        EVoxelLandBuiltinNode::Max, EVoxelLandBuiltinNode::Abs, EVoxelLandBuiltinNode::Negate,
+        EVoxelLandBuiltinNode::Clamp, EVoxelLandBuiltinNode::Saturate, EVoxelLandBuiltinNode::Lerp};
+    for (EVoxelLandBuiltinNode Kind : MathKinds)
+    {
+        const TArray<float> Alphas = Kind == EVoxelLandBuiltinNode::Lerp ? TArray<float>{-1.f, 0.f, 0.5f, 1.f, 2.f} : TArray<float>{0.f};
+        for (float Alpha : Alphas)
+        {
+            FVoxelLandProgramDraft Draft; FString Error;
+            if (!FVoxelLandGraphCompiler::Compile(ReferenceMathGraph(Kind, Alpha), Draft, Error))
+            {
+                Test.AddError(FString::Printf(TEXT("Math kind %d compilation: %s"), int32(Kind), *Error));
+                continue;
+            }
+            for (int32 Count : {1, 2, 3, 256})
+            {
+                for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+                {
+                    const FSampleResult Actual = Sample(Draft, Backend, ReferenceProfile, Count);
+                    if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable)
+                    {
+                        if (Kind == EVoxelLandBuiltinNode::Add && Count == 256)
+                        {
+                            Test.AddWarning(TEXT("Forced VM SIMD4 unavailable; SIMD reference comparisons were not exercised"));
+                        }
+                        continue;
+                    }
+                    if (Kind == EVoxelLandBuiltinNode::Add && Count == 256)
+                    {
+                        Test.AddInfo(FString::Printf(TEXT("Reference math requested backend %d, actual backend %d"), int32(Backend), int32(Actual.VM)));
+                        if (Backend != EVoxelLandVMBackend::Auto)
+                        {
+                            Test.TestEqual(TEXT("Requested explicit backend selected"), int32(Actual.VM), int32(Backend));
+                        }
+                    }
+                    bool bMatch = !Actual.Error && Actual.Values.Num() == Count;
+                    for (int32 I = 0; bMatch && I < Count; ++I)
+                    {
+                        bMatch = Actual.Values[I] == int16(std::round(ReferenceMath(Kind, float(I - 129), Alpha)));
+                    }
+                    Test.TestTrue(FString::Printf(TEXT("Math kind %d alpha %.1f count %d backend %d matches reference"), int32(Kind), Alpha, Count, int32(Backend)), bMatch);
+                }
+            }
+        }
+    }
+}
+void CheckReferenceControl(FAutomationTestBase& Test, const FVoxelLandZoneProfile& ReferenceProfile)
+{
+    const EVoxelLandBuiltinNode ControlKinds[] = {EVoxelLandBuiltinNode::Less, EVoxelLandBuiltinNode::LessEqual,
+        EVoxelLandBuiltinNode::Equal, EVoxelLandBuiltinNode::BoolAnd, EVoxelLandBuiltinNode::BoolOr,
+        EVoxelLandBuiltinNode::BoolNot, EVoxelLandBuiltinNode::SelectFloat, EVoxelLandBuiltinNode::SelectInt,
+        EVoxelLandBuiltinNode::SelectBool};
+    for (EVoxelLandBuiltinNode Kind : ControlKinds)
+    {
+        for (bool Other : {false, true})
+        {
+            FVoxelLandProgramDraft Draft; FString Error;
+            if (!FVoxelLandGraphCompiler::Compile(ReferenceControlGraph(Kind, Other), Draft, Error))
+            {
+                Test.AddError(FString::Printf(TEXT("Control kind %d compilation: %s"), int32(Kind), *Error));
+                continue;
+            }
+            for (int32 Count : {1, 2, 3, 256})
+            {
+                for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+                {
+                    const FSampleResult Actual = Sample(Draft, Backend, ReferenceProfile, Count);
+                    if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable) { continue; }
+                    bool bMatch = !Actual.Error && Actual.Values.Num() == Count;
+                    for (int32 I = 0; bMatch && I < Count; ++I)
+                    {
+                        const int32 X = I - 129;
+                        bool Condition = X < 0;
+                        if (Kind == EVoxelLandBuiltinNode::LessEqual) { Condition = X <= 0; }
+                        if (Kind == EVoxelLandBuiltinNode::Equal) { Condition = X == 0; }
+                        if (Kind == EVoxelLandBuiltinNode::BoolAnd) { Condition = Condition && Other; }
+                        if (Kind == EVoxelLandBuiltinNode::BoolOr) { Condition = Condition || Other; }
+                        if (Kind == EVoxelLandBuiltinNode::BoolNot) { Condition = !Condition; }
+                        if (Kind == EVoxelLandBuiltinNode::SelectBool) { Condition = Condition ? Other : !Other; }
+                        bMatch = Actual.Values[I] == (Condition ? 7.f : -5.f);
+                    }
+                    Test.TestTrue(FString::Printf(TEXT("Control kind %d flag %d count %d backend %d matches reference"), int32(Kind), int32(Other), Count, int32(Backend)), bMatch);
+                }
+            }
+        }
+    }
+}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3ReferenceOperations, "VoxelLand.M3.ReferenceOperations", M3GraphFlags)
+bool FVoxelLandM3ReferenceOperations::RunTest(const FString& Parameters)
+{
+    FVoxelLandZoneProfile ReferenceProfile;
+    ReferenceProfile.VoxelSizeCm = 1024.f;
+    CheckReferenceMath(*this, ReferenceProfile);
+    CheckReferenceControl(*this, ReferenceProfile);
+    FVoxelLandGraphSnapshot BadClamp = ReferenceMathGraph(EVoxelLandBuiltinNode::Clamp, 0.f);
+    BadClamp.Nodes[2].Pins[1].FloatDefault = 2.f; BadClamp.Nodes[2].Pins[2].FloatDefault = -2.f;
+    FVoxelLandProgramDraft Invalid; FString Error;
+    TestFalse(TEXT("Inverted constant clamp fails compilation"), FVoxelLandGraphCompiler::Compile(BadClamp, Invalid, Error));
+    FVoxelLandGraphSnapshot DynamicClamp = ReferenceMathGraph(EVoxelLandBuiltinNode::Clamp, 0.f);
+    DynamicClamp.Nodes[2].Pins[2].FloatDefault = 0.f;
+    Link(DynamicClamp, 1, 2, 1);
+    if (TestTrue(TEXT("Dynamic clamp compiles"), FVoxelLandGraphCompiler::Compile(DynamicClamp, Invalid, Error)))
+    {
+        for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+        {
+            const FSampleResult Actual = Sample(Invalid, Backend, ReferenceProfile, 256);
+            if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable) { continue; }
+            TestEqual(TEXT("Inverted dynamic clamp returns math-domain error"), int32(Actual.Error.Code), int32(EVoxelLandErrorCode::InvalidMathDomain));
+            TestTrue(TEXT("Invalid clamp publishes no partial samples"), Actual.Values.IsEmpty());
+        }
+    }
+    FVoxelLandGraphSnapshot BadDivide = ReferenceMathGraph(EVoxelLandBuiltinNode::Divide, 0.f);
+    BadDivide.Nodes[2].Pins[1].FloatDefault = 0.f;
+    TestFalse(TEXT("Constant division by zero fails compilation"), FVoxelLandGraphCompiler::Compile(BadDivide, Invalid, Error));
+    FVoxelLandGraphSnapshot DynamicDivide = ReferenceMathGraph(EVoxelLandBuiltinNode::Divide, 0.f);
+    Link(DynamicDivide, 1, 2, 1);
+    if (TestTrue(TEXT("Dynamic divide compiles"), FVoxelLandGraphCompiler::Compile(DynamicDivide, Invalid, Error)))
+    {
+        for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+        {
+            const FSampleResult Actual = Sample(Invalid, Backend, ReferenceProfile, 256);
+            if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable) { continue; }
+            TestEqual(TEXT("Dynamic division by zero returns math-domain error"), int32(Actual.Error.Code), int32(EVoxelLandErrorCode::InvalidMathDomain));
+            TestTrue(TEXT("Invalid division publishes no partial samples"), Actual.Values.IsEmpty());
+        }
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3Power, "VoxelLand.M3.Power", M3GraphFlags)
 bool FVoxelLandM3Power::RunTest(const FString& Parameters)
 {

@@ -53,7 +53,7 @@ FSampleResult SampleAt(
 	if (R.Error)
 		return R;
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
-	R.Error = FVoxelLandGenerator::Create(Program, Seed, FVoxelLandZoneProfile(), Options, Generator);
+	R.Error = FVoxelLandGenerator::Create({Program, Seed, FVoxelLandZoneProfile(), Options}, Generator);
 	if (R.Error)
 		return R;
 	TUniquePtr<FVoxelLandWorkerContext> Worker;
@@ -192,17 +192,18 @@ bool FVoxelLandM1Validation::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("game-thread validation rejected"), int32(FVoxelLandProgram::Validate(Plane(), P).Code),
 			int32(EVoxelLandErrorCode::GameThreadNotAllowed));
-		const auto ValidProgram = Async(EAsyncExecution::ThreadPool, []() {
-			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Result;
-			FVoxelLandProgram::Validate(Plane(), Result);
-			return Result;
-		}).Get();
+		const TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> ValidProgram =
+			Async(EAsyncExecution::ThreadPool, []() {
+				TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Result;
+				FVoxelLandProgram::Validate(Plane(), Result);
+				return Result;
+			}).Get();
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 		TestEqual(TEXT("game-thread generator setup rejected"),
-			int32(FVoxelLandGenerator::Create(ValidProgram, 0, {}, {}, Generator).Code),
+			int32(FVoxelLandGenerator::Create({ValidProgram, 0, {}, {}}, Generator).Code),
 			int32(EVoxelLandErrorCode::GameThreadNotAllowed));
 	}
-	const auto Validate = [](FVoxelLandProgramDraft Draft) {
+	const TFunction<FVoxelLandError(FVoxelLandProgramDraft)> Validate = [](FVoxelLandProgramDraft Draft) {
 		return Async(EAsyncExecution::ThreadPool, [Draft]() {
 			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 			return FVoxelLandProgram::Validate(Draft, Program);
@@ -422,7 +423,7 @@ bool FVoxelLandM1GameThread::RunTest(const FString& Parameters)
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 		Probe.Setup = FVoxelLandProgram::Validate(Plane(), Program);
 		if (!Probe.Setup)
-			Probe.Setup = FVoxelLandGenerator::Create(Program, 0, {}, {}, Probe.Generator);
+			Probe.Setup = FVoxelLandGenerator::Create({Program, 0, {}, {}}, Probe.Generator);
 		TUniquePtr<FVoxelLandWorkerContext> Worker;
 		if (!Probe.Setup)
 			Probe.Setup = Probe.Generator->CreateWorker(Worker);
@@ -593,7 +594,7 @@ bool FVoxelLandM1Shapes::RunTest(const FString& Parameters)
 		AddError(Describe(R, TEXT("shape union/intersection"), 0, 100.f, {}));
 		return false;
 	}
-	const auto At = [&R](int32 X, int32 Y, int32 Z) {
+	const TFunction<int16(int32, int32, int32)> At = [&R](int32 X, int32 Y, int32 Z) {
 		return R.Chunk->Density[X + 35 * (Y + 35 * Z)];
 	};
 	TestEqual(TEXT("shape at origin intersects plane"), int32(At(1, 1, 1)), 0);
@@ -796,7 +797,7 @@ bool FVoxelLandM1Concurrency::RunTest(const FString& Parameters)
 	TArray<TFuture<FResult>> Futures;
 	for (int32 I = 0; I < 4; ++I)
 	{
-		const auto Shared = First.Generator;
+		const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Shared = First.Generator;
 		Futures.Add(Async(EAsyncExecution::ThreadPool, [Shared, Key]() { return GenerateShared(Shared, Key); }));
 	}
 	for (TFuture<FResult>& Future : Futures)
@@ -818,7 +819,7 @@ bool FVoxelLandM1Concurrency::RunTest(const FString& Parameters)
 	{
 		FVoxelLandChunkKey K;
 		K.Coordinate = Coordinate;
-		const auto Shared = First.Generator;
+		const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Shared = First.Generator;
 		Serial.Add(Async(EAsyncExecution::ThreadPool, [Shared, K]() { return GenerateShared(Shared, K); }).Get());
 	}
 	TArray<TFuture<FResult>> Shuffled;
@@ -826,7 +827,7 @@ bool FVoxelLandM1Concurrency::RunTest(const FString& Parameters)
 	{
 		FVoxelLandChunkKey K;
 		K.Coordinate = Keys[I];
-		const auto Shared = First.Generator;
+		const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Shared = First.Generator;
 		Shuffled.Add(Async(EAsyncExecution::ThreadPool, [Shared, K]() { return GenerateShared(Shared, K); }));
 	}
 	for (int32 I = 0; I < Shuffled.Num(); ++I)

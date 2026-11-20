@@ -70,7 +70,7 @@ uint64 Fingerprint(const FVoxelLandProgramDraft& D)
 	W.U32(D.FormatVersion);
 	W.U32(uint32(D.RegisterCount));
 	W.U32(D.Instructions.Num());
-	for (const auto& I : D.Instructions)
+	for (const FVoxelLandInstruction& I : D.Instructions)
 	{
 		W.U16(uint16(I.Op));
 		W.U16(I.Dst);
@@ -83,7 +83,7 @@ uint64 Fingerprint(const FVoxelLandProgramDraft& D)
 	for (float V : D.Constants)
 		W.Float(V);
 	W.U32(D.Parameters.Num());
-	for (const auto& P : D.Parameters)
+	for (const FVoxelLandParameterSlot& P : D.Parameters)
 	{
 		W.String(P.Name);
 		W.U8(uint8(P.Type));
@@ -91,7 +91,7 @@ uint64 Fingerprint(const FVoxelLandProgramDraft& D)
 		W.U32(uint32(P.IntDefault));
 	}
 	W.U32(D.Seeds.Num());
-	for (const auto& S : D.Seeds)
+	for (const FVoxelLandSeedSlot& S : D.Seeds)
 	{
 		W.U32(S.NodeId.A);
 		W.U32(S.NodeId.B);
@@ -100,7 +100,7 @@ uint64 Fingerprint(const FVoxelLandProgramDraft& D)
 		W.U32(S.Salt);
 	}
 	W.U32(D.Noise.Num());
-	for (const auto& N : D.Noise)
+	for (const FVoxelLandNoiseConfig& N : D.Noise)
 	{
 		W.U32(N.SeedSlot);
 		W.Source(N.Frequency);
@@ -133,12 +133,12 @@ FVoxelLandError FVoxelLandProgram::Validate(
 		return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported version or register count"));
 	TSharedPtr<FVoxelLandProgram, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandProgram);
 	Result->Data = Draft;
-	auto& D = Result->Data;
+	FVoxelLandProgramDraft& D = Result->Data;
 	for (float V : D.Constants)
 		if (!FMath::IsFinite(V))
 			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Non-finite constant"));
 	TSet<FString> Names;
-	for (auto& P : D.Parameters)
+	for (FVoxelLandParameterSlot& P : D.Parameters)
 	{
 		FString Name;
 		if (!NormalizeName(P.Name, Name) || Names.Contains(Name)
@@ -151,24 +151,24 @@ FVoxelLandError FVoxelLandProgram::Validate(
 	}
 	for (int32 I = 0; I < D.Seeds.Num(); ++I)
 	{
-		const auto& Seed = D.Seeds[I];
+		const FVoxelLandSeedSlot& Seed = D.Seeds[I];
 		if (!Seed.NodeId.IsValid())
 			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid seed GUID"));
 		for (int32 J = 0; J < I; ++J)
 			if (D.Seeds[J].NodeId == Seed.NodeId && D.Seeds[J].Salt == Seed.Salt)
 				return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Duplicate seed GUID and salt"));
 	}
-	for (const auto& N : D.Noise)
+	for (const FVoxelLandNoiseConfig& N : D.Noise)
 	{
 		if (N.SeedSlot >= uint32(D.Seeds.Num()) || !SourceValid(D, N.Frequency, EVoxelLandParameterType::Float)
 			|| !SourceValid(D, N.Octaves, EVoxelLandParameterType::Int32)
 			|| !SourceValid(D, N.Gain, EVoxelLandParameterType::Float)
 			|| !SourceValid(D, N.Lacunarity, EVoxelLandParameterType::Float))
 			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid noise configuration source"));
-		const auto FloatDefault = [&](const FVoxelLandValueSource& S) {
+		const TFunction<float(const FVoxelLandValueSource&)> FloatDefault = [&](const FVoxelLandValueSource& S) {
 			return S.bParameter ? D.Parameters[S.Index].FloatDefault : D.Constants[S.Index];
 		};
-		const auto IntDefault = [&](const FVoxelLandValueSource& S) {
+		const TFunction<int32(const FVoxelLandValueSource&)> IntDefault = [&](const FVoxelLandValueSource& S) {
 			return S.bParameter ? D.Parameters[S.Index].IntDefault : int32(D.Constants[S.Index]);
 		};
 		const float Frequency = FloatDefault(N.Frequency), Gain = FloatDefault(N.Gain),
@@ -182,7 +182,7 @@ FVoxelLandError FVoxelLandProgram::Validate(
 	int32 Stores = 0;
 	for (int32 Index = 0; Index < D.Instructions.Num(); ++Index)
 	{
-		const auto& I = D.Instructions[Index];
+		const FVoxelLandInstruction& I = D.Instructions[Index];
 		bool A = false, B = false, C = false, Writes = true;
 		switch (I.Op)
 		{

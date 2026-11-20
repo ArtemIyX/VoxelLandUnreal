@@ -1,7 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Data/Structs/VoxelLandM1Types.h"
+#include "Data/Structs/VoxelLandBackendOptions.h"
+#include "Data/Structs/VoxelLandChunkData.h"
+#include "Data/Structs/VoxelLandError.h"
+#include "Data/Structs/VoxelLandProgramDraft.h"
+#include "Data/Structs/VoxelLandZoneProfile.h"
+#include "Generation/VoxelLandGeneratorSettings.h"
 
 class FVoxelLandWorkerContext;
 
@@ -26,8 +31,7 @@ private:
 class VOXELLANDALGO_API FVoxelLandGenerator : public TSharedFromThis<FVoxelLandGenerator, ESPMode::ThreadSafe>
 {
 public:
-	static FVoxelLandError Create(TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program, uint64 WorldSeed,
-		const FVoxelLandZoneProfile& Profile, FVoxelLandBackendOptions Options,
+	static FVoxelLandError Create(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
 	FVoxelLandError GenerateChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,

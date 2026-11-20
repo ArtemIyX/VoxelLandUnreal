@@ -64,6 +64,14 @@ struct FVoxelLandWorkerContext::FImpl
 	TArray<float> Registers, X, Y, Z, Output, NoiseX, NoiseY, NoiseZ;
 	TArray<int16> Quantized;
 	TArray<uint8> HashBytes;
+
+	FVoxelLandError LoadPositions(TConstArrayView<FVector3f> Positions);
+	FVoxelLandError EvaluateNoise(const FVoxelLandInstruction& I, const FVoxelLandProgramDraft& D,
+		const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N, const float* A, const float* B,
+		const float* C, float* Dest);
+	FVoxelLandError ExecuteInstruction(const FVoxelLandInstruction& I, const FVoxelLandProgramDraft& D,
+		const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N);
+	FVoxelLandError QuantizeOutput(int32 N, float VoxelSizeCm, TArray<int16>& OutDensity);
 };
 
 FVoxelLandWorkerContext::FVoxelLandWorkerContext() = default;
@@ -82,13 +90,16 @@ EVoxelLandNoiseBackend FVoxelLandWorkerContext::GetNoiseBackend() const
 	return Impl->NoiseBackend;
 }
 
-FVoxelLandError FVoxelLandGenerator::Create(TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program,
-	uint64 WorldSeed, const FVoxelLandZoneProfile& Profile, FVoxelLandBackendOptions Options,
+FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& Settings,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
 	if (IsInGameThread())
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Generator setup requires a worker thread"));
 	OutGenerator.Reset();
+	const TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& Program = Settings.Program;
+	const FVoxelLandZoneProfile& Profile = Settings.Profile;
+	const FVoxelLandBackendOptions& Options = Settings.Backends;
+	const uint64 WorldSeed = Settings.WorldSeed;
 	if (!Program.IsValid())
 		return Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("Program is null"));
 	if (!FMath::IsFinite(Profile.VoxelSizeCm) || Profile.VoxelSizeCm <= 0)
@@ -97,19 +108,19 @@ FVoxelLandError FVoxelLandGenerator::Create(TSharedPtr<const FVoxelLandProgram, 
 	Result->Program = Program;
 	Result->Profile = Profile;
 	Result->Options = Options;
-	const auto& D = Program->GetData();
+	const FVoxelLandProgramDraft& D = Program->GetData();
 	TMap<FString, int32> Slots;
 	Result->FloatParameters.SetNumZeroed(D.Parameters.Num());
 	Result->IntParameters.SetNumZeroed(D.Parameters.Num());
 	for (int32 I = 0; I < D.Parameters.Num(); ++I)
 	{
-		const auto& P = D.Parameters[I];
+		const FVoxelLandParameterSlot& P = D.Parameters[I];
 		Slots.Add(P.Name, I);
 		Result->FloatParameters[I] = P.FloatDefault;
 		Result->IntParameters[I] = P.IntDefault;
 	}
 	TSet<FString> Seen;
-	for (const auto& Entry : Profile.FloatOverrides)
+	for (const TPair<FString, float>& Entry : Profile.FloatOverrides)
 	{
 		FString Name;
 		if (!NameOf(Entry.Key, Name) || Seen.Contains(Name))
@@ -121,7 +132,7 @@ FVoxelLandError FVoxelLandGenerator::Create(TSharedPtr<const FVoxelLandProgram, 
 				TEXT("Unknown, wrong type, or non-finite float override"), Entry.Key);
 		Result->FloatParameters[*Slot] = Entry.Value;
 	}
-	for (const auto& Entry : Profile.IntOverrides)
+	for (const TPair<FString, int32>& Entry : Profile.IntOverrides)
 	{
 		FString Name;
 		if (!NameOf(Entry.Key, Name) || Seen.Contains(Name))
@@ -132,19 +143,19 @@ FVoxelLandError FVoxelLandGenerator::Create(TSharedPtr<const FVoxelLandProgram, 
 			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type int override"), Entry.Key);
 		Result->IntParameters[*Slot] = Entry.Value;
 	}
-	for (const auto& Seed : D.Seeds)
+	for (const FVoxelLandSeedSlot& Seed : D.Seeds)
 	{
 		const uint32 Bits = uint32(VoxelLandDeterminism::DeriveNodeSeed(WorldSeed, Seed.NodeId, Seed.Salt));
 		Result->Seeds.Add(Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll));
 	}
 	// Validate resolved noise inputs at setup, before constructing any native nodes.
-	auto FloatValue = [&](const FVoxelLandValueSource& S) {
+	TFunction<float(const FVoxelLandValueSource&)> FloatValue = [&](const FVoxelLandValueSource& S) {
 		return S.bParameter ? Result->FloatParameters[S.Index] : D.Constants[S.Index];
 	};
-	auto IntValue = [&](const FVoxelLandValueSource& S) {
+	TFunction<int32(const FVoxelLandValueSource&)> IntValue = [&](const FVoxelLandValueSource& S) {
 		return S.bParameter ? Result->IntParameters[S.Index] : int32(D.Constants[S.Index]);
 	};
-	for (const auto& N : D.Noise)
+	for (const FVoxelLandNoiseConfig& N : D.Noise)
 	{
 		const float Frequency = FloatValue(N.Frequency), Gain = FloatValue(N.Gain),
 					Lacunarity = FloatValue(N.Lacunarity);
@@ -172,27 +183,27 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 #endif
 	TUniquePtr<FVoxelLandWorkerContext> Worker(new FVoxelLandWorkerContext);
 	Worker->Impl = MakeUnique<FVoxelLandWorkerContext::FImpl>();
-	auto& W = *Worker->Impl;
+	FVoxelLandWorkerContext::FImpl& W = *Worker->Impl;
 	W.Owner = AsShared();
 	W.Thread = FPlatformTLS::GetCurrentThreadId();
 #if VOXELLAND_HAS_VM_SIMD
 	W.VM = Options.VM == EVoxelLandVMBackend::Scalar ? EVoxelLandVMBackend::Scalar : EVoxelLandVMBackend::Simd4;
 #endif
-	const auto& D = Program->GetData();
+	const FVoxelLandProgramDraft& D = Program->GetData();
 	bool bUsesNoise = false;
-	for (const auto& I : D.Instructions)
+	for (const FVoxelLandInstruction& I : D.Instructions)
 		bUsesNoise |= I.Op == EVoxelLandOpcode::Perlin2 || I.Op == EVoxelLandOpcode::Perlin3
 				   || I.Op == EVoxelLandOpcode::Fbm2 || I.Op == EVoxelLandOpcode::Fbm3;
 	if (bUsesNoise)
 	{
-		auto FloatValue = [&](const FVoxelLandValueSource& S) {
+		TFunction<float(const FVoxelLandValueSource&)> FloatValue = [&](const FVoxelLandValueSource& S) {
 			return S.bParameter ? FloatParameters[S.Index] : D.Constants[S.Index];
 		};
-		auto IntValue = [&](const FVoxelLandValueSource& S) {
+		TFunction<int32(const FVoxelLandValueSource&)> IntValue = [&](const FVoxelLandValueSource& S) {
 			return S.bParameter ? IntParameters[S.Index] : int32(D.Constants[S.Index]);
 		};
 		TArray<VoxelLandNative::FConfig> Configs;
-		for (const auto& N : D.Noise)
+		for (const FVoxelLandNoiseConfig& N : D.Noise)
 			for (int32 Fbm = 0; Fbm < 2; ++Fbm)
 			{
 				VoxelLandNative::FConfig C;
@@ -228,17 +239,9 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	return {};
 }
 
-FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
-	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const
+FVoxelLandError FVoxelLandWorkerContext::FImpl::LoadPositions(TConstArrayView<FVector3f> Positions)
 {
-	if (IsInGameThread())
-		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
-	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
-		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
-	if (Positions.Num() < 1 || Positions.Num() > BatchSize)
-		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("A batch must contain 1..256 samples"));
-	auto& W = *Worker.Impl;
-	const auto& D = Program->GetData();
+	FImpl& W = *this;
 	const int32 N = Positions.Num();
 	for (int32 J = 0; J < N; ++J)
 	{
@@ -249,184 +252,222 @@ FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
 		W.Y[J] = P.Y;
 		W.Z[J] = P.Z;
 	}
-	for (const FVoxelLandInstruction& I : D.Instructions)
+	return {};
+}
+
+FVoxelLandError FVoxelLandWorkerContext::FImpl::EvaluateNoise(const FVoxelLandInstruction& I,
+	const FVoxelLandProgramDraft& D, const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N,
+	const float* A, const float* B, const float* C, float* Dest)
+{
+	FImpl& W = *this;
+	const FVoxelLandNoiseConfig& Config = D.Noise[I.Imm];
+	const float Frequency =
+		Config.Frequency.bParameter ? FloatParameters[Config.Frequency.Index] : D.Constants[Config.Frequency.Index];
+	const bool b3D = I.Op == EVoxelLandOpcode::Perlin3 || I.Op == EVoxelLandOpcode::Fbm3;
+	const bool bFbm = I.Op == EVoxelLandOpcode::Fbm2 || I.Op == EVoxelLandOpcode::Fbm3;
+	for (int32 J = 0; J < N; ++J)
 	{
-		float* Dest = I.Op == EVoxelLandOpcode::StoreDensity ? W.Output.GetData()
-															 : W.Registers.GetData() + int32(I.Dst) * BatchSize;
-		// Validation checks only operands read by each opcode. Do not form pointers from unused fields.
-		const auto Reg = [&](uint16 Index) {
-			return W.Registers.GetData() + int32(Index) * BatchSize;
-		};
-		const float* A = nullptr;
-		const float* B = nullptr;
-		const float* C = nullptr;
-		switch (I.Op)
-		{
-			case EVoxelLandOpcode::Abs:
-			case EVoxelLandOpcode::Negate:
-			case EVoxelLandOpcode::StoreDensity:
-				A = Reg(I.A);
-				break;
-			case EVoxelLandOpcode::Add:
-			case EVoxelLandOpcode::Subtract:
-			case EVoxelLandOpcode::Multiply:
-			case EVoxelLandOpcode::Divide:
-			case EVoxelLandOpcode::Min:
-			case EVoxelLandOpcode::Max:
-			case EVoxelLandOpcode::Union:
-			case EVoxelLandOpcode::SubtractShape:
-			case EVoxelLandOpcode::Intersect:
-			case EVoxelLandOpcode::Perlin2:
-			case EVoxelLandOpcode::Fbm2:
-				A = Reg(I.A);
-				B = Reg(I.B);
-				break;
-			case EVoxelLandOpcode::Plane:
-			case EVoxelLandOpcode::Sphere:
-			case EVoxelLandOpcode::Box:
-			case EVoxelLandOpcode::Perlin3:
-			case EVoxelLandOpcode::Fbm3:
-				A = Reg(I.A);
-				B = Reg(I.B);
-				C = Reg(I.C);
-				break;
-			default:
-				break;
-		}
-		if (I.Op == EVoxelLandOpcode::Perlin2 || I.Op == EVoxelLandOpcode::Perlin3 || I.Op == EVoxelLandOpcode::Fbm2
-			|| I.Op == EVoxelLandOpcode::Fbm3)
-		{
-			const auto& Config = D.Noise[I.Imm];
-			const float Frequency = Config.Frequency.bParameter ? FloatParameters[Config.Frequency.Index]
-																: D.Constants[Config.Frequency.Index];
-			const bool b3D = I.Op == EVoxelLandOpcode::Perlin3 || I.Op == EVoxelLandOpcode::Fbm3;
-			const bool bFbm = I.Op == EVoxelLandOpcode::Fbm2 || I.Op == EVoxelLandOpcode::Fbm3;
-			for (int32 J = 0; J < N; ++J)
-			{
-				W.NoiseX[J] = A[J] * Frequency;
-				W.NoiseY[J] = B[J] * Frequency;
-				W.NoiseZ[J] = b3D ? C[J] * Frequency : 0.f;
-			}
-			FString Error;
-			if (!W.Noise->Sample(int32(I.Imm) * 2 + (bFbm ? 1 : 0), b3D, Seeds[Config.SeedSlot], N, W.NoiseX.GetData(),
-					W.NoiseY.GetData(), W.NoiseZ.GetData(), Dest, Error))
-				return NativeError(Error);
-		}
-		else
-		{
-			int32 J = 0;
+		W.NoiseX[J] = A[J] * Frequency;
+		W.NoiseY[J] = B[J] * Frequency;
+		W.NoiseZ[J] = b3D ? C[J] * Frequency : 0.f;
+	}
+	FString Error;
+	if (!W.Noise->Sample(int32(I.Imm) * 2 + (bFbm ? 1 : 0), b3D, Seeds[Config.SeedSlot], N, W.NoiseX.GetData(),
+			W.NoiseY.GetData(), W.NoiseZ.GetData(), Dest, Error))
+		return NativeError(Error);
+	return {};
+}
+
+FVoxelLandError FVoxelLandWorkerContext::FImpl::ExecuteInstruction(const FVoxelLandInstruction& I,
+	const FVoxelLandProgramDraft& D, const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N)
+{
+	FImpl& W = *this;
+
+	float* Dest =
+		I.Op == EVoxelLandOpcode::StoreDensity ? W.Output.GetData() : W.Registers.GetData() + int32(I.Dst) * BatchSize;
+	// Validation checks only operands read by each opcode. Do not form pointers from unused fields.
+	const float* A = nullptr;
+	const float* B = nullptr;
+	const float* C = nullptr;
+	switch (I.Op)
+	{
+		case EVoxelLandOpcode::Abs:
+		case EVoxelLandOpcode::Negate:
+		case EVoxelLandOpcode::StoreDensity:
+			A = W.Registers.GetData() + int32(I.A) * BatchSize;
+			break;
+		case EVoxelLandOpcode::Add:
+		case EVoxelLandOpcode::Subtract:
+		case EVoxelLandOpcode::Multiply:
+		case EVoxelLandOpcode::Divide:
+		case EVoxelLandOpcode::Min:
+		case EVoxelLandOpcode::Max:
+		case EVoxelLandOpcode::Union:
+		case EVoxelLandOpcode::SubtractShape:
+		case EVoxelLandOpcode::Intersect:
+		case EVoxelLandOpcode::Perlin2:
+		case EVoxelLandOpcode::Fbm2:
+			A = W.Registers.GetData() + int32(I.A) * BatchSize;
+			B = W.Registers.GetData() + int32(I.B) * BatchSize;
+			break;
+		case EVoxelLandOpcode::Plane:
+		case EVoxelLandOpcode::Sphere:
+		case EVoxelLandOpcode::Box:
+		case EVoxelLandOpcode::Perlin3:
+		case EVoxelLandOpcode::Fbm3:
+			A = W.Registers.GetData() + int32(I.A) * BatchSize;
+			B = W.Registers.GetData() + int32(I.B) * BatchSize;
+			C = W.Registers.GetData() + int32(I.C) * BatchSize;
+			break;
+		default:
+			break;
+	}
+	if (I.Op == EVoxelLandOpcode::Perlin2 || I.Op == EVoxelLandOpcode::Perlin3 || I.Op == EVoxelLandOpcode::Fbm2
+		|| I.Op == EVoxelLandOpcode::Fbm3)
+	{
+		if (FVoxelLandError Error = EvaluateNoise(I, D, FloatParameters, Seeds, N, A, B, C, Dest))
+			return Error;
+	}
+	else
+	{
+		int32 J = 0;
 #if VOXELLAND_HAS_VM_SIMD
-			if (W.VM == EVoxelLandVMBackend::Simd4
-				&& (I.Op == EVoxelLandOpcode::Add || I.Op == EVoxelLandOpcode::Subtract
-					|| I.Op == EVoxelLandOpcode::Multiply || I.Op == EVoxelLandOpcode::Divide))
+		if (W.VM == EVoxelLandVMBackend::Simd4
+			&& (I.Op == EVoxelLandOpcode::Add || I.Op == EVoxelLandOpcode::Subtract
+				|| I.Op == EVoxelLandOpcode::Multiply || I.Op == EVoxelLandOpcode::Divide))
+		{
+			for (; J + 4 <= N; J += 4)
 			{
-				for (; J + 4 <= N; J += 4)
-				{
-					const VectorRegister4Float VA = VectorLoad(A + J), VB = VectorLoad(B + J);
-					VectorRegister4Float V;
-					switch (I.Op)
-					{
-						case EVoxelLandOpcode::Add:
-							V = VectorAdd(VA, VB);
-							break;
-						case EVoxelLandOpcode::Subtract:
-							V = VectorSubtract(VA, VB);
-							break;
-						case EVoxelLandOpcode::Multiply:
-							V = VectorMultiply(VA, VB);
-							break;
-						default:
-							V = VectorDivide(VA, VB);
-							break;
-					}
-					VectorStore(V, Dest + J);
-				}
-			}
-#endif
-			for (; J < N; ++J)
-			{
+				const VectorRegister4Float VA = VectorLoad(A + J), VB = VectorLoad(B + J);
+				VectorRegister4Float V;
 				switch (I.Op)
 				{
-					case EVoxelLandOpcode::LoadX:
-						Dest[J] = W.X[J];
-						break;
-					case EVoxelLandOpcode::LoadY:
-						Dest[J] = W.Y[J];
-						break;
-					case EVoxelLandOpcode::LoadZ:
-						Dest[J] = W.Z[J];
-						break;
-					case EVoxelLandOpcode::LoadConstant:
-						Dest[J] = D.Constants[I.Imm];
-						break;
-					case EVoxelLandOpcode::LoadFloatParameter:
-						Dest[J] = FloatParameters[I.Imm];
-						break;
 					case EVoxelLandOpcode::Add:
-						Dest[J] = A[J] + B[J];
+						V = VectorAdd(VA, VB);
 						break;
 					case EVoxelLandOpcode::Subtract:
-						Dest[J] = A[J] - B[J];
+						V = VectorSubtract(VA, VB);
 						break;
 					case EVoxelLandOpcode::Multiply:
-						Dest[J] = A[J] * B[J];
-						break;
-					case EVoxelLandOpcode::Divide:
-						Dest[J] = A[J] / B[J];
-						break;
-					case EVoxelLandOpcode::Min:
-					case EVoxelLandOpcode::Union:
-						Dest[J] = FMath::Min(A[J], B[J]);
-						break;
-					case EVoxelLandOpcode::Max:
-					case EVoxelLandOpcode::Intersect:
-						Dest[J] = FMath::Max(A[J], B[J]);
-						break;
-					case EVoxelLandOpcode::SubtractShape:
-						Dest[J] = FMath::Max(A[J], -B[J]);
-						break;
-					case EVoxelLandOpcode::Abs:
-						Dest[J] = FMath::Abs(A[J]);
-						break;
-					case EVoxelLandOpcode::Negate:
-						Dest[J] = -A[J];
-						break;
-					case EVoxelLandOpcode::Plane:
-						Dest[J] = ((A[J] * D.Constants[I.Imm] + B[J] * D.Constants[I.Imm + 1])
-									  + C[J] * D.Constants[I.Imm + 2])
-								+ D.Constants[I.Imm + 3];
-						break;
-					case EVoxelLandOpcode::Sphere:
-						Dest[J] = FMath::Sqrt((A[J] * A[J] + B[J] * B[J]) + C[J] * C[J]) - D.Constants[I.Imm];
-						break;
-					case EVoxelLandOpcode::Box:
-					{
-						const float X = FMath::Abs(A[J]) - D.Constants[I.Imm],
-									Y = FMath::Abs(B[J]) - D.Constants[I.Imm + 1],
-									Z = FMath::Abs(C[J]) - D.Constants[I.Imm + 2];
-						const float PX = FMath::Max(X, 0.f), PY = FMath::Max(Y, 0.f), PZ = FMath::Max(Z, 0.f);
-						Dest[J] = FMath::Sqrt((PX * PX + PY * PY) + PZ * PZ)
-								+ FMath::Min(FMath::Max(X, FMath::Max(Y, Z)), 0.f);
-						break;
-					}
-					case EVoxelLandOpcode::StoreDensity:
-						Dest[J] = A[J];
+						V = VectorMultiply(VA, VB);
 						break;
 					default:
-						return Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported opcode during evaluation"));
+						V = VectorDivide(VA, VB);
+						break;
 				}
+				VectorStore(V, Dest + J);
 			}
 		}
-		for (int32 J = 0; J < N; ++J)
-			if (!FMath::IsFinite(Dest[J]))
-				return Fail(EVoxelLandErrorCode::NonFiniteDensity, TEXT("Non-finite VM result"));
+#endif
+		for (; J < N; ++J)
+		{
+			switch (I.Op)
+			{
+				case EVoxelLandOpcode::LoadX:
+					Dest[J] = W.X[J];
+					break;
+				case EVoxelLandOpcode::LoadY:
+					Dest[J] = W.Y[J];
+					break;
+				case EVoxelLandOpcode::LoadZ:
+					Dest[J] = W.Z[J];
+					break;
+				case EVoxelLandOpcode::LoadConstant:
+					Dest[J] = D.Constants[I.Imm];
+					break;
+				case EVoxelLandOpcode::LoadFloatParameter:
+					Dest[J] = FloatParameters[I.Imm];
+					break;
+				case EVoxelLandOpcode::Add:
+					Dest[J] = A[J] + B[J];
+					break;
+				case EVoxelLandOpcode::Subtract:
+					Dest[J] = A[J] - B[J];
+					break;
+				case EVoxelLandOpcode::Multiply:
+					Dest[J] = A[J] * B[J];
+					break;
+				case EVoxelLandOpcode::Divide:
+					Dest[J] = A[J] / B[J];
+					break;
+				case EVoxelLandOpcode::Min:
+				case EVoxelLandOpcode::Union:
+					Dest[J] = FMath::Min(A[J], B[J]);
+					break;
+				case EVoxelLandOpcode::Max:
+				case EVoxelLandOpcode::Intersect:
+					Dest[J] = FMath::Max(A[J], B[J]);
+					break;
+				case EVoxelLandOpcode::SubtractShape:
+					Dest[J] = FMath::Max(A[J], -B[J]);
+					break;
+				case EVoxelLandOpcode::Abs:
+					Dest[J] = FMath::Abs(A[J]);
+					break;
+				case EVoxelLandOpcode::Negate:
+					Dest[J] = -A[J];
+					break;
+				case EVoxelLandOpcode::Plane:
+					Dest[J] =
+						((A[J] * D.Constants[I.Imm] + B[J] * D.Constants[I.Imm + 1]) + C[J] * D.Constants[I.Imm + 2])
+						+ D.Constants[I.Imm + 3];
+					break;
+				case EVoxelLandOpcode::Sphere:
+					Dest[J] = FMath::Sqrt((A[J] * A[J] + B[J] * B[J]) + C[J] * C[J]) - D.Constants[I.Imm];
+					break;
+				case EVoxelLandOpcode::Box:
+				{
+					const float X = FMath::Abs(A[J]) - D.Constants[I.Imm],
+								Y = FMath::Abs(B[J]) - D.Constants[I.Imm + 1],
+								Z = FMath::Abs(C[J]) - D.Constants[I.Imm + 2];
+					const float PX = FMath::Max(X, 0.f), PY = FMath::Max(Y, 0.f), PZ = FMath::Max(Z, 0.f);
+					Dest[J] =
+						FMath::Sqrt((PX * PX + PY * PY) + PZ * PZ) + FMath::Min(FMath::Max(X, FMath::Max(Y, Z)), 0.f);
+					break;
+				}
+				case EVoxelLandOpcode::StoreDensity:
+					Dest[J] = A[J];
+					break;
+				default:
+					return Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported opcode during evaluation"));
+			}
+		}
 	}
+	for (int32 J = 0; J < N; ++J)
+		if (!FMath::IsFinite(Dest[J]))
+			return Fail(EVoxelLandErrorCode::NonFiniteDensity, TEXT("Non-finite VM result"));
+	return {};
+}
+
+FVoxelLandError FVoxelLandWorkerContext::FImpl::QuantizeOutput(int32 N, float VoxelSizeCm, TArray<int16>& OutDensity)
+{
+	FImpl& W = *this;
 	W.Quantized.SetNumUninitialized(N);
 	for (int32 J = 0; J < N; ++J)
-		if (FVoxelLandError E = VoxelLandDeterminism::Quantize(W.Output[J], Profile.VoxelSizeCm, W.Quantized[J]))
+		if (FVoxelLandError E = VoxelLandDeterminism::Quantize(W.Output[J], VoxelSizeCm, W.Quantized[J]))
 			return E;
 	OutDensity = W.Quantized;
 	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
+	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const
+{
+	if (IsInGameThread())
+		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
+	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
+		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
+	if (Positions.Num() < 1 || Positions.Num() > BatchSize)
+		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("A batch must contain 1..256 samples"));
+
+	FVoxelLandWorkerContext::FImpl& W = *Worker.Impl;
+	if (FVoxelLandError Error = W.LoadPositions(Positions))
+		return Error;
+	const FVoxelLandProgramDraft& D = Program->GetData();
+	for (const FVoxelLandInstruction& I : D.Instructions)
+		if (FVoxelLandError Error = W.ExecuteInstruction(I, D, FloatParameters, Seeds, Positions.Num()))
+			return Error;
+	return W.QuantizeOutput(Positions.Num(), Profile.VoxelSizeCm, OutDensity);
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
@@ -466,7 +507,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunk(const FVoxelLandChunkKey& Key
 			return E;
 		Chunk->Density.Append(Batch);
 	}
-	auto& Bytes = Worker.Impl->HashBytes;
+	TArray<uint8>& Bytes = Worker.Impl->HashBytes;
 	Bytes.Reset();
 	Bytes.Reserve(Chunk->Density.Num() * 2);
 	for (int16 Value : Chunk->Density)

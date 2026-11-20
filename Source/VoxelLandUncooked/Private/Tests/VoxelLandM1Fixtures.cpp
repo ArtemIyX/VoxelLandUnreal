@@ -85,7 +85,7 @@ FResult Generate(FVoxelLandProgramDraft Draft, FVoxelLandZoneProfile Profile, FV
 	R.Error = FVoxelLandProgram::Validate(Draft, Program);
 	if (R.Error)
 		return R;
-	R.Error = FVoxelLandGenerator::Create(Program, Seed, Profile, Options, R.Generator);
+	R.Error = FVoxelLandGenerator::Create({Program, Seed, Profile, Options}, R.Generator);
 	if (R.Error)
 		return R;
 	return GenerateShared(R.Generator, Key);

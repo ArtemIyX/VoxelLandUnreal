@@ -31,6 +31,19 @@ bool FVoxelLandM2MeshTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("negative floor"), VoxelLandCoordinates::FloorDivide(-1,10), -1);
     TestEqual(TEXT("negative boundary"), VoxelLandCoordinates::FloorDivide(-10,10), -1);
     TestEqual(TEXT("negative past boundary"), VoxelLandCoordinates::FloorDivide(-11,10), -2);
+    // A minimal signed feature must survive quantization and produce nonzero faces.
+    for (float Scale : {50.f,100.f})
+    {
+        FVoxelLandChunkData Tiny; Tiny.Density.Init(32767,FVoxelLandChunkData::SampleCount);
+        Tiny.Density[(16+1)+35*((16+1)+35*(16+1))]=-1;
+        FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;
+        TestEqual(TEXT("tiny feature builds"), int32(VoxelLandMeshing::BuildSurfaceNets(Tiny,Scale,Scratch,Mesh,[] {return false;})), int32(EVoxelLandMeshResult::Success));
+        TestTrue(TEXT("tiny feature survives"), Mesh.Indices.Num()>0);
+    }
+    {
+        FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;
+        TestEqual(TEXT("unsupported meshing scale is rejected"), int32(VoxelLandMeshing::BuildSurfaceNets(Uniform,1.f,Scratch,Mesh,[] {return false;})), int32(EVoxelLandMeshResult::InvalidInput));
+    }
     for (int32 Axis=0; Axis<3; ++Axis)
     {
         FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;

@@ -28,7 +28,7 @@ public:
         : FPrimitiveSceneProxy(Component), Mesh(MoveTemp(InMesh)), Factory(GetScene().GetFeatureLevel(),"VoxelLandChunk")
     {
         UMaterialInterface* Material=Component->GetMaterial(0);
-        if (!Material || Material->GetMaterialDomain() != MD_Surface) Material=UMaterial::GetDefaultMaterial(MD_Surface);
+        if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface) Material=UMaterial::GetDefaultMaterial(MD_Surface);
         MaterialProxy=Material->GetRenderProxy();
         Relevance=Material->GetRelevance_Concurrent(GetScene().GetShaderPlatform());
     }
@@ -104,7 +104,7 @@ bool UVoxelLandChunkComponent::SetMesh(TSharedPtr<const FVoxelLandMeshData,ESPMo
     if (!InMesh || InMesh->Vertices.IsEmpty() || InMesh->Indices.IsEmpty() || InMesh->Indices.Num()%3 != 0 || !InMesh->Bounds.IsValid) return false;
     for (uint32 I : InMesh->Indices) if (I>=uint32(InMesh->Vertices.Num())) return false;
     for (const auto& V : InMesh->Vertices)
-        if (V.Position.ContainsNaN() || V.Normal.ContainsNaN() || V.Tangent.ContainsNaN()) return false;
+        if (V.Position.ContainsNaN() || V.Normal.ContainsNaN() || V.Tangent.ContainsNaN() || !InMesh->Bounds.IsInsideOrOn(V.Position)) return false;
     Mesh=MoveTemp(InMesh); UpdateBounds(); MarkRenderStateDirty(); return true;
 }
 void UVoxelLandChunkComponent::ClearMesh() { check(IsInGameThread()); Mesh.Reset(); UpdateBounds(); MarkRenderStateDirty(); }
@@ -125,5 +125,7 @@ void UVoxelLandChunkComponent::SetMaterial(int32 ElementIndex,UMaterialInterface
 }
 void UVoxelLandChunkComponent::GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials,bool bGetDebugMaterials) const
 {
-    OutMaterials.Add(TerrainMaterial ? TerrainMaterial.Get() : UMaterial::GetDefaultMaterial(MD_Surface));
+    UMaterialInterface* Material=TerrainMaterial.Get();
+    if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface) Material=UMaterial::GetDefaultMaterial(MD_Surface);
+    OutMaterials.Add(Material);
 }

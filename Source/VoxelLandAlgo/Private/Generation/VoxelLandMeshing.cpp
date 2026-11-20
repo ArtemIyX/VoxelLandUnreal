@@ -45,7 +45,7 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
     FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled)
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SurfaceNets);
-    if (Chunk.Key.LOD != 0 || Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || VoxelSizeCm <= 0)
+    if (Chunk.Key.LOD != 0 || Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || (VoxelSizeCm != 50.f && VoxelSizeCm != 100.f))
         return EVoxelLandMeshResult::InvalidInput;
     FVoxelLandMeshData Mesh;
     Scratch.CellVertices.Init(INDEX_NONE, CellCount*CellCount*CellCount);

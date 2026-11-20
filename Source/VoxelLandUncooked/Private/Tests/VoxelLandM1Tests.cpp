@@ -2,7 +2,12 @@
 
 #include "VoxelLandM1Fixtures.h"
 #include "Async/Async.h"
+#include "HAL/Event.h"
+#include "HAL/PlatformProcess.h"
 #include "HAL/PlatformProperties.h"
+#include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
 #include "Misc/AutomationTest.h"
 #include <limits>
 
@@ -150,12 +155,79 @@ bool FVoxelLandM1Validation::RunTest(const FString& Parameters)
     TestEqual(TEXT("missing store rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
     Bad = Plane(); Bad.Instructions.Add(Op(EVoxelLandOpcode::StoreDensity, 0, 2));
     TestEqual(TEXT("duplicate store rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Plane(); Bad.Instructions[1].Imm = 99;
+    TestEqual(TEXT("constant slot bounds rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Plane(); Bad.Instructions[0].Dst = 99;
+    TestEqual(TEXT("destination bounds rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Plane(); Bad.RegisterCount = 0;
+    TestEqual(TEXT("empty register file rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Shapes(); Bad.Constants[0] = 0.f;
+    TestEqual(TEXT("zero sphere radius rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Shapes(); Bad.Constants[1] = -1.f;
+    TestEqual(TEXT("negative box extent rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Shapes(); Bad.Constants[6] = 2.f;
+    TestEqual(TEXT("non-unit plane normal rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Noise[0].SeedSlot = 9;
+    TestEqual(TEXT("noise seed slot bounds rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Constants[1] = 2.5f;
+    TestEqual(TEXT("fractional octaves rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Constants[0] = 0.f;
+    TestEqual(TEXT("zero frequency rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Constants[2] = 1.1f;
+    TestEqual(TEXT("gain out of bounds rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Constants[3] = .5f;
+    TestEqual(TEXT("lacunarity out of bounds rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Plane(); FVoxelLandParameterSlot Duplicate; Duplicate.Name = TEXT("Level");
+    Bad.Parameters.Add(Duplicate); Duplicate.Name = TEXT("LEVEL"); Bad.Parameters.Add(Duplicate);
+    TestEqual(TEXT("duplicate normalized names rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidParameter));
     FVoxelLandZoneProfile Profile; Profile.VoxelSizeCm = 0.f;
     TestEqual(TEXT("zero profile rejected"), int32(Run(Plane(), Profile, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidProfile));
     Profile.VoxelSizeCm = 100.f; Profile.FloatOverrides.Add(TEXT("unknown"), 1.f);
     TestEqual(TEXT("unknown override rejected"), int32(Run(Plane(), Profile, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidParameter));
     Profile.FloatOverrides.Empty(); FVoxelLandChunkKey Key; Key.LOD = 1;
     TestEqual(TEXT("LOD rejected"), int32(Run(Plane(), Profile, Key).Error.Code), int32(EVoxelLandErrorCode::UnsupportedLod));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM1GameThread, "VoxelLand.M1.GameThreadRejection", Flags)
+bool FVoxelLandM1GameThread::RunTest(const FString& Parameters)
+{
+    if (!IsInGameThread()) { AddError(TEXT("This probe must execute on the game thread")); return false; }
+    struct FProbe
+    {
+        FVoxelLandError Setup;
+        TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+        FVoxelLandWorkerContext* Worker = nullptr;
+    };
+    FProbe Probe;
+    FEvent* Ready = FPlatformProcess::GetSynchEventFromPool(false);
+    FEvent* Release = FPlatformProcess::GetSynchEventFromPool(false);
+    TFuture<void> Future = Async(EAsyncExecution::Thread, [&Probe, Ready, Release]() {
+        TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+        Probe.Setup = FVoxelLandProgram::Validate(Plane(), Program);
+        if (!Probe.Setup) Probe.Setup = FVoxelLandGenerator::Create(Program, 0, {}, {}, Probe.Generator);
+        TUniquePtr<FVoxelLandWorkerContext> Worker;
+        if (!Probe.Setup) Probe.Setup = Probe.Generator->CreateWorker(Worker);
+        Probe.Worker = Worker.Get();
+        Ready->Trigger();
+        Release->Wait();
+        // Worker must be destroyed on this same thread.
+    });
+    Ready->Wait();
+    if (Probe.Setup || !Probe.Worker) AddError(FString::Printf(TEXT("worker setup failed: %s"), *Probe.Setup.Message));
+    else
+    {
+        TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
+        TestEqual(TEXT("game-thread chunk generation rejected"), int32(Probe.Generator->GenerateChunk({}, *Probe.Worker, Chunk).Code), int32(EVoxelLandErrorCode::GameThreadNotAllowed));
+        TestFalse(TEXT("rejected request publishes no chunk"), Chunk.IsValid());
+        TArray<int16> Out;
+        const FVector3f Position(0.f, 0.f, 0.f);
+        TestEqual(TEXT("game-thread sample evaluation rejected"), int32(Probe.Generator->EvaluateSamples(MakeArrayView(&Position, 1), *Probe.Worker, Out).Code), int32(EVoxelLandErrorCode::GameThreadNotAllowed));
+        TUniquePtr<FVoxelLandWorkerContext> WrongWorker;
+        TestEqual(TEXT("game-thread worker setup rejected"), int32(Probe.Generator->CreateWorker(WrongWorker).Code), int32(EVoxelLandErrorCode::GameThreadNotAllowed));
+    }
+    Release->Trigger(); Future.Get();
+    FPlatformProcess::ReturnSynchEventToPool(Ready); FPlatformProcess::ReturnSynchEventToPool(Release);
     return true;
 }
 
@@ -344,6 +416,113 @@ bool FVoxelLandM1ScalarNative::RunTest(const FString& Parameters)
         TestEqual(TEXT("native scalar selected"), int32(A.NoiseBackend), int32(EVoxelLandNoiseBackend::Scalar));
         TestEqual(TEXT("native SSE2 selected"), int32(B.NoiseBackend), int32(EVoxelLandNoiseBackend::SSE2));
         TestTrue(FString::Printf(TEXT("native quantized parity opcode=%d"), int32(OpCode)), A.Values == B.Values);
+        for (int32 Size : {50, 100})
+        {
+            FVoxelLandZoneProfile Profile; Profile.VoxelSizeCm = float(Size);
+            FVoxelLandChunkKey Key; Key.Coordinate = FIntVector(-1, 2, -1);
+            constexpr uint64 Seed = 0xffffffffffffffffull;
+            const FResult ScalarChunk = Run(Noise(OpCode), Profile, Key, Scalar, Seed);
+            const FResult SSEChunk = Run(Noise(OpCode), Profile, Key, SSE, Seed);
+            if (ScalarChunk.Error || SSEChunk.Error || !ScalarChunk.Chunk || !SSEChunk.Chunk)
+            {
+                AddError(FString::Printf(TEXT("scalar/SSE2 full chunk opcode=%d voxel=%d scalar=%s SSE2=%s"),
+                    int32(OpCode), Size, *ScalarChunk.Error.Message, *SSEChunk.Error.Message));
+                continue;
+            }
+            if (ScalarChunk.Chunk->Hash != SSEChunk.Chunk->Hash || ScalarChunk.Chunk->Density != SSEChunk.Chunk->Density)
+                AddError(FString::Printf(TEXT("scalar/SSE2 opcode=%d voxel=%d seed=%llu key=%s scalar hash=%llu SSE2 hash=%llu first=%s"),
+                    int32(OpCode), Size, Seed, *Key.Coordinate.ToString(), ScalarChunk.Chunk->Hash, SSEChunk.Chunk->Hash,
+                    *FirstDifference(ScalarChunk.Chunk->Density, SSEChunk.Chunk->Density, Key)));
+        }
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM1CrossHostCapture, "VoxelLand.M1.CrossHostCapture", Flags)
+bool FVoxelLandM1CrossHostCapture::RunTest(const FString& Parameters)
+{
+    FString CapturePath, ComparePath;
+    const bool bCapture = FParse::Value(FCommandLine::Get(), TEXT("VoxelLandM1Capture="), CapturePath);
+    const bool bCompare = FParse::Value(FCommandLine::Get(), TEXT("VoxelLandM1Compare="), ComparePath);
+    if (!bCapture && !bCompare)
+    {
+        AddWarning(TEXT("Cross-host noise comparison is pending; supply -VoxelLandM1Capture=<path> or -VoxelLandM1Compare=<path> as documented."));
+        return true;
+    }
+    struct FCapture { FString Text; FString Error; FString Backends; bool bOffGameThread = false; };
+    const FCapture Captured = Async(EAsyncExecution::ThreadPool, []() {
+        FCapture Result; Result.bOffGameThread = !IsInGameThread();
+        Result.Text.Reserve(6000000);
+        const EVoxelLandOpcode Ops[] = {EVoxelLandOpcode::Perlin2, EVoxelLandOpcode::Perlin3, EVoxelLandOpcode::Fbm2, EVoxelLandOpcode::Fbm3};
+        const int32 Sizes[] = {50, 100};
+        const FIntVector Keys[] = {FIntVector(0, 0, 0), FIntVector(-1, 2, -1)};
+        const uint64 Seeds[] = {0ull, 0xffffffffffffffffull};
+        for (EVoxelLandOpcode Code : Ops) for (int32 Size : Sizes) for (int32 K = 0; K < 2; ++K)
+        {
+            FVoxelLandChunkKey Key; Key.Coordinate = Keys[K];
+            FVoxelLandZoneProfile Profile; Profile.VoxelSizeCm = float(Size);
+            const FResult R = Generate(Noise(Code), Profile, Key, {}, Seeds[K]);
+            if (R.Error || !R.Chunk)
+            {
+                Result.Error = Describe(R, TEXT("cross-host capture"), Seeds[K], float(Size), Key);
+                return Result;
+            }
+            if (Result.Backends.IsEmpty()) Result.Backends = FString::Printf(TEXT("platform=%s VM=%d native=%d (0=auto, 1=scalar, 2=SIMD4/SSE2)"),
+                ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), int32(R.VM), int32(R.NoiseBackend));
+            // Stable line format: opcode;voxel size;seed;chunk X;Y;Z;hash|X-fastest densities.
+            Result.Text += FString::Printf(TEXT("%d;%d;%llu;%d;%d;%d;%llu|"), int32(Code), Size, Seeds[K],
+                Key.Coordinate.X, Key.Coordinate.Y, Key.Coordinate.Z, R.Chunk->Hash);
+            for (int32 I = 0; I < R.Chunk->Density.Num(); ++I)
+            {
+                if (I) Result.Text.AppendChar(TEXT(','));
+                Result.Text += FString::FromInt(int32(R.Chunk->Density[I]));
+            }
+            Result.Text.AppendChar(TEXT('\n'));
+        }
+        return Result;
+    }).Get();
+    TestTrue(TEXT("capture ran on worker"), Captured.bOffGameThread);
+    if (!Captured.Error.IsEmpty()) { AddError(Captured.Error); return false; }
+    AddInfo(Captured.Backends);
+    if (bCapture && !FFileHelper::SaveStringToFile(Captured.Text, *CapturePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+        AddError(FString::Printf(TEXT("Could not write capture %s"), *CapturePath));
+    if (bCompare)
+    {
+        FString ExpectedText;
+        if (!FFileHelper::LoadFileToString(ExpectedText, *ComparePath)) { AddError(FString::Printf(TEXT("Could not read capture %s"), *ComparePath)); return false; }
+        TArray<FString> ExpectedLines, ActualLines;
+        ExpectedText.ParseIntoArrayLines(ExpectedLines, true); Captured.Text.ParseIntoArrayLines(ActualLines, true);
+        if (ExpectedLines.Num() != ActualLines.Num())
+        { AddError(FString::Printf(TEXT("capture case count expected=%d actual=%d"), ExpectedLines.Num(), ActualLines.Num())); return false; }
+        for (int32 CaseIndex = 0; CaseIndex < ActualLines.Num(); ++CaseIndex)
+        {
+            FString ExpectedHeader, ExpectedValues, ActualHeader, ActualValues;
+            if (!ExpectedLines[CaseIndex].Split(TEXT("|"), &ExpectedHeader, &ExpectedValues) ||
+                !ActualLines[CaseIndex].Split(TEXT("|"), &ActualHeader, &ActualValues))
+            { AddError(FString::Printf(TEXT("invalid capture line %d"), CaseIndex)); return false; }
+            TArray<FString> EH, AH; ExpectedHeader.ParseIntoArray(EH, TEXT(";")); ActualHeader.ParseIntoArray(AH, TEXT(";"));
+            if (EH.Num() != 7 || AH.Num() != 7) { AddError(FString::Printf(TEXT("invalid capture header at case %d"), CaseIndex)); return false; }
+            for (int32 Field = 0; Field < 6; ++Field)
+                if (EH[Field] != AH[Field]) { AddError(FString::Printf(TEXT("capture case %d metadata mismatch expected=%s actual=%s"), CaseIndex, *ExpectedHeader, *ActualHeader)); return false; }
+            if (ExpectedValues != ActualValues || EH[6] != AH[6])
+            {
+                TArray<FString> EV, AV; ExpectedValues.ParseIntoArray(EV, TEXT(",")); ActualValues.ParseIntoArray(AV, TEXT(","));
+                if (EV.Num() != AV.Num()) { AddError(FString::Printf(TEXT("%s sample count expected=%d actual=%d"), *ActualHeader, EV.Num(), AV.Num())); return false; }
+                for (int32 I = 0; I < EV.Num(); ++I)
+                    if (EV[I] != AV[I])
+                    {
+                        const int64 X = int64(FCString::Atoi(*AH[3])) * 32 + I % 35 - 1;
+                        const int64 Y = int64(FCString::Atoi(*AH[4])) * 32 + (I / 35) % 35 - 1;
+                        const int64 Z = int64(FCString::Atoi(*AH[5])) * 32 + I / (35 * 35) - 1;
+                        AddError(FString::Printf(TEXT("opcode=%s voxel=%s seed=%s key=(%s,%s,%s) expected hash=%s actual hash=%s first lattice=(%lld,%lld,%lld) expected=%s actual=%s"),
+                            *AH[0], *AH[1], *AH[2], *AH[3], *AH[4], *AH[5], *EH[6], *AH[6], X, Y, Z, *EV[I], *AV[I]));
+                        return false;
+                    }
+                AddError(FString::Printf(TEXT("%s matching values but expected hash=%s actual hash=%s"), *ActualHeader, *EH[6], *AH[6]));
+                return false;
+            }
+        }
+        AddInfo(FString::Printf(TEXT("All %d cross-host arrays and hashes match %s"), ActualLines.Num(), *ComparePath));
     }
     return true;
 }

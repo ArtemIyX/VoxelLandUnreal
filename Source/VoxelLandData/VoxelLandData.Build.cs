@@ -1,4 +1,4 @@
-﻿using UnrealBuildTool;
+using UnrealBuildTool;
 
 public class VoxelLandData : ModuleRules
 {
@@ -11,13 +11,13 @@ public class VoxelLandData : ModuleRules
             {
                 "Core",
                 "CoreUObject",
+                "Engine",
             }
         );
 
         PrivateDependencyModuleNames.AddRange(
             new string[]
             {
-                "Engine",
                 "Slate",
                 "SlateCore"
             }

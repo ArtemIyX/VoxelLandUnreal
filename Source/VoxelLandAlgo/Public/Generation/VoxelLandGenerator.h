@@ -39,6 +39,12 @@ public:
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const;
 	FVoxelLandError GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
+	// Explicit experimental filter API; not connected to graph assets or world streaming.
+	// Strength maps to uint16 by rounding Strength * 65535 to nearest; integer averages
+	// and blends round to nearest, ties away from zero. The source has a one-cell halo.
+	FVoxelLandError GenerateSmoothedChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
+		bool bEnabled, float Strength, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
+		TFunctionRef<bool()> IsCancelled) const;
 	// Evaluate 1..256 arbitrary world-space positions using the same VM and quantization as chunks.
 	FVoxelLandError EvaluateSamples(
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const;
@@ -69,6 +75,7 @@ public:
 
 private:
 	TUniquePtr<FVoxelLandWorkerContextImpl> Impl;
+	TArray<int16> SmoothScratch;
 	FVoxelLandWorkerContext();
 	friend class FVoxelLandGenerator;
 };

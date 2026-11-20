@@ -632,6 +632,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
+	OutChunk.Reset();
 	if (IsInGameThread())
 	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Chunk generation requires a worker thread"));
@@ -640,7 +641,6 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	{
 		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
 	}
-	OutChunk.Reset();
 	if (Key.LOD != 0)
 	{
 		return Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M1 supports only LOD 0"));
@@ -669,7 +669,15 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 		}
 		Chunk->Density.Append(Batch);
 	}
+	if (IsCancelled())
+	{
+		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+	}
 	Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);
+	if (IsCancelled())
+	{
+		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+	}
 	OutChunk = Chunk;
 	return {};
 }

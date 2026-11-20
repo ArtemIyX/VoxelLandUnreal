@@ -267,6 +267,113 @@ bool FVoxelLandM3FilterReference::RunTest(const FString& Parameters)
     return true;
 }
 
+namespace
+{
+void CheckFilteredMeshSide(FAutomationTestBase& Test, const FVoxelLandMeshData& A, const FVector& OriginA,
+    const FVoxelLandMeshData& B, const FVector& OriginB, int32 Axis, double VoxelSize)
+{
+    int32 Checked = 0;
+    for (const FVoxelLandMeshVertex& Vertex : A.Vertices)
+    {
+        const FVector World = FVector(Vertex.Position) + OriginA;
+        if (World[Axis] < -VoxelSize || World[Axis] > VoxelSize)
+        {
+            continue;
+        }
+        bool bFound = false;
+        for (const FVoxelLandMeshVertex& Other : B.Vertices)
+        {
+            if (World.Equals(FVector(Other.Position) + OriginB, 0.001))
+            {
+                bFound = Vertex.Normal.Equals(Other.Normal, 1.e-6f);
+                if (bFound) { break; }
+            }
+        }
+        Test.TestTrue(TEXT("Filtered overlap vertex and normal match neighboring mesh"), bFound);
+        ++Checked;
+    }
+    Test.TestTrue(TEXT("Filtered mesh seam checks nonzero vertices"), Checked > 0);
+}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilteredMeshSeams, "VoxelLand.M3.FilteredMeshSeams", M3FilterFlags)
+bool FVoxelLandM3FilteredMeshSeams::RunTest(const FString& Parameters)
+{
+    constexpr float VoxelSize = 1024.f;
+    FVoxelLandChunkKey Base; Base.Coordinate = FIntVector(-1, -1, -1);
+    const FResult Filtered = RunFilter(FilterSource(true, 0.5f), Base);
+    if (Filtered.Error || !Filtered.Chunk)
+    {
+        AddError(TEXT("Could not generate base smoothed mesh fixture"));
+        return false;
+    }
+    FVoxelLandMeshingScratch BaseScratch;
+    FVoxelLandMeshData BaseMesh;
+    if (VoxelLandMeshing::BuildSurfaceNets(*Filtered.Chunk, VoxelSize, BaseScratch, BaseMesh, [] { return false; }) != EVoxelLandMeshResult::Success)
+    {
+        AddError(TEXT("Could not mesh base smoothed chunk"));
+        return false;
+    }
+    const FVector BaseOrigin = VoxelLandMeshCoordinates::RenderOrigin(Base.Coordinate, VoxelSize);
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+        FVoxelLandChunkKey Neighbor = Base;
+        ++Neighbor.Coordinate[Axis];
+        const FResult Adjacent = RunFilter(FilterSource(true, 0.5f), Neighbor);
+        if (Adjacent.Error || !Adjacent.Chunk)
+        {
+            AddError(FString::Printf(TEXT("Could not generate filtered neighbor on axis %d"), Axis));
+            continue;
+        }
+        FVoxelLandMeshingScratch Scratch;
+        FVoxelLandMeshData Mesh;
+        if (VoxelLandMeshing::BuildSurfaceNets(*Adjacent.Chunk, VoxelSize, Scratch, Mesh, [] { return false; }) != EVoxelLandMeshResult::Success)
+        {
+            AddError(FString::Printf(TEXT("Could not mesh filtered neighbor on axis %d"), Axis));
+            continue;
+        }
+        const FVector Origin = VoxelLandMeshCoordinates::RenderOrigin(Neighbor.Coordinate, VoxelSize);
+        CheckFilteredMeshSide(*this, BaseMesh, BaseOrigin, Mesh, Origin, Axis, VoxelSize);
+        CheckFilteredMeshSide(*this, Mesh, Origin, BaseMesh, BaseOrigin, Axis, VoxelSize);
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterSliceCancellation, "VoxelLand.M3.FilterSliceCancellation", M3FilterFlags)
+bool FVoxelLandM3FilterSliceCancellation::RunTest(const FString& Parameters)
+{
+    constexpr int32 ExpandedBatchPolls = (37 * 37 * 37 + 255) / 256;
+    constexpr int32 CancelPoll = ExpandedBatchPolls + 5;
+    int32 CancelCalls = 0;
+    int32 CompleteCalls = 0;
+    bool bReused = false;
+    const bool bCancelled = Async(EAsyncExecution::ThreadPool, [&CancelCalls, &CompleteCalls, &bReused]()
+    {
+        const FVoxelLandProgramDraft Draft = FilterSource(true, 0.5f);
+        TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+        if (FVoxelLandProgram::Validate(Draft, Program)) { return false; }
+        FVoxelLandGeneratorSettings Settings; Settings.Program = Program; Settings.Profile.VoxelSizeCm = 1024.f;
+        TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+        if (FVoxelLandGenerator::Create(Settings, Generator)) { return false; }
+        TUniquePtr<FVoxelLandWorkerContext> Worker;
+        if (Generator->CreateWorker(Worker)) { return false; }
+        FVoxelLandChunkKey Key; Key.Coordinate = FIntVector(-1, -1, -1);
+        TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
+        const FVoxelLandError Cancelled = Generator->GenerateChunkCancellable(Key, *Worker, Chunk,
+            [&CancelCalls]() { return ++CancelCalls == CancelPoll; });
+        const bool bDiscarded = Cancelled.Code == EVoxelLandErrorCode::Cancelled && !Chunk;
+        const FVoxelLandError Completed = Generator->GenerateChunkCancellable(Key, *Worker, Chunk,
+            [&CompleteCalls]() { ++CompleteCalls; return false; });
+        const TArray<int16> Expected = SmoothReference(Key, 32768);
+        bReused = !Completed && Chunk && Chunk->Density == Expected && Chunk->Hash == ReferenceHash(Expected);
+        return bDiscarded;
+    }).Get();
+    TestTrue(TEXT("Cancellation during smoothing discards partial output"), bCancelled);
+    TestEqual(TEXT("Cancellation reached a smoothing slice after expanded batches"), CancelCalls, CancelPoll);
+    TestEqual(TEXT("Completed run confirms expanded-batch and slice poll schedule"), CompleteCalls,
+        ExpandedBatchPolls + FVoxelLandChunkData::SamplesPerAxis + 2);
+    TestTrue(TEXT("Worker reuse after cancellation matches independent reference"), bReused);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterConcurrent, "VoxelLand.M3.FilterConcurrent", M3FilterFlags)
 bool FVoxelLandM3FilterConcurrent::RunTest(const FString& Parameters)
 {

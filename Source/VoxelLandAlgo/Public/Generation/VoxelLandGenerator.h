@@ -14,6 +14,9 @@ public:
     const FVoxelLandProgramDraft& GetData() const { return Data; }
     uint64 GetFingerprint() const { return Fingerprint; }
 private:
+    FVoxelLandProgram() = default;
+    FVoxelLandProgram(const FVoxelLandProgram&) = delete;
+    FVoxelLandProgram& operator=(const FVoxelLandProgram&) = delete;
     FVoxelLandProgramDraft Data;
     uint64 Fingerprint = 0;
 };
@@ -34,6 +37,9 @@ public:
     const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
     const FVoxelLandProgram& GetProgram() const { return *Program; }
 private:
+    FVoxelLandGenerator() = default;
+    FVoxelLandGenerator(const FVoxelLandGenerator&) = delete;
+    FVoxelLandGenerator& operator=(const FVoxelLandGenerator&) = delete;
     TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
     FVoxelLandZoneProfile Profile;
     FVoxelLandBackendOptions Options;

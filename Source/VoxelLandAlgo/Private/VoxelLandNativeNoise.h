@@ -1,25 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/Enums/VoxelLandNativeBackend.h"
+#include "Data/Structs/VoxelLandNativeConfig.h"
 
 // Private implementation interface: native FastNoise headers never escape VoxelLandAlgo.
 namespace VoxelLandNative
 {
-enum class EBackend : uint8
-{
-	Auto,
-	Scalar,
-	SSE2
-};
-
-struct FConfig
-{
-	bool bFbm = false;
-	int32 Octaves = 3;
-	float Gain = 0.5f;
-	float Lacunarity = 2.0f;
-};
-
 // The owner must create, use, and destroy a worker on the same non-game thread.
 class FWorker
 {

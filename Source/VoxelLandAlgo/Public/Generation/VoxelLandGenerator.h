@@ -9,6 +9,7 @@
 #include "Generation/VoxelLandGeneratorSettings.h"
 
 class FVoxelLandWorkerContext;
+struct FVoxelLandWorkerContextImpl;
 
 // Copies and validates the draft before publishing it. Safe to share across workers.
 class VOXELLANDALGO_API FVoxelLandProgram
@@ -55,6 +56,7 @@ private:
 	TArray<int32> IntParameters;
 	TArray<int32> Seeds;
 	friend class FVoxelLandWorkerContext;
+	friend struct FVoxelLandWorkerContextImpl;
 };
 
 // Exclusive to its creating worker, including destruction; buffers are reused across chunks.
@@ -66,8 +68,7 @@ public:
 	EVoxelLandNoiseBackend GetNoiseBackend() const;
 
 private:
-	struct FImpl;
-	TUniquePtr<FImpl> Impl;
+	TUniquePtr<FVoxelLandWorkerContextImpl> Impl;
 	FVoxelLandWorkerContext();
 	friend class FVoxelLandGenerator;
 };

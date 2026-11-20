@@ -8,14 +8,14 @@
 // waits without touching UObjects until released or world shutdown begins.
 struct FVoxelLandTestBarrier
 {
-    FEvent* Reached=FPlatformProcess::GetSynchEventFromPool(true);
-    FEvent* Release=FPlatformProcess::GetSynchEventFromPool(true);
-    bool bMarkHash=false;
-    uint64 MarkerHash=0;
-    ~FVoxelLandTestBarrier()
-    {
-        FPlatformProcess::ReturnSynchEventToPool(Reached);
-        FPlatformProcess::ReturnSynchEventToPool(Release);
-    }
+	FEvent* Reached = FPlatformProcess::GetSynchEventFromPool(true);
+	FEvent* Release = FPlatformProcess::GetSynchEventFromPool(true);
+	bool bMarkHash = false;
+	uint64 MarkerHash = 0;
+	~FVoxelLandTestBarrier()
+	{
+		FPlatformProcess::ReturnSynchEventToPool(Reached);
+		FPlatformProcess::ReturnSynchEventToPool(Release);
+	}
 };
 #endif

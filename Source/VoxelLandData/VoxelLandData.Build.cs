@@ -10,13 +10,13 @@ public class VoxelLandData : ModuleRules
             new string[]
             {
                 "Core",
+                "CoreUObject",
             }
         );
 
         PrivateDependencyModuleNames.AddRange(
             new string[]
             {
-                "CoreUObject",
                 "Engine",
                 "Slate",
                 "SlateCore"

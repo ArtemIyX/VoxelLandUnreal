@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Generation/VoxelLandGenerator.h"
+#include "Data/Structs/VoxelLandM1FixtureResult.h"
 
 namespace VoxelLandM1Fixtures
 {
@@ -10,15 +11,6 @@ FVoxelLandProgramDraft Plane();
 FVoxelLandProgramDraft Shapes();
 FVoxelLandProgramDraft Noise(EVoxelLandOpcode NoiseOp);
 
-struct FResult
-{
-	bool bOffGameThread = false;
-	FVoxelLandError Error;
-	EVoxelLandVMBackend VM = EVoxelLandVMBackend::Auto;
-	EVoxelLandNoiseBackend NoiseBackend = EVoxelLandNoiseBackend::Auto;
-	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
-	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
-};
 FResult Generate(FVoxelLandProgramDraft Draft, FVoxelLandZoneProfile Profile, FVoxelLandChunkKey Key,
 	FVoxelLandBackendOptions Options, uint64 Seed = 0);
 FResult GenerateShared(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator, FVoxelLandChunkKey Key);

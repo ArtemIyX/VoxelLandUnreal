@@ -1,4 +1,5 @@
 #include "Generation/VoxelLandGenerator.h"
+#include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "../VoxelLandNativeNoise.h"
 #include "HAL/PlatformTLS.h"
 #include "Math/VectorRegister.h"
@@ -30,14 +31,20 @@ FVoxelLandError Fail(EVoxelLandErrorCode Code, const TCHAR* Message, const FStri
 bool NameOf(const FString& In, FString& Out)
 {
 	if (In.IsEmpty())
+	{
 		return false;
+	}
 	Out.Reset();
 	for (TCHAR C : In)
 	{
 		if (C >= 'A' && C <= 'Z')
+		{
 			C += 'a' - 'A';
+		}
 		if (!((C >= 'a' && C <= 'z') || (C >= '0' && C <= '9') || C == '_'))
+		{
 			return false;
+		}
 		Out.AppendChar(C);
 	}
 	return true;
@@ -54,37 +61,8 @@ FVoxelLandError NativeError(const FString& Message)
 }
 }
 
-struct FVoxelLandWorkerContext::FImpl
-{
-	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Owner;
-	uint32 Thread = 0;
-	EVoxelLandVMBackend VM = EVoxelLandVMBackend::Scalar;
-	EVoxelLandNoiseBackend NoiseBackend = EVoxelLandNoiseBackend::Auto;
-	TUniquePtr<VoxelLandNative::FWorker> Noise;
-	TArray<float> Registers, X, Y, Z, Output, NoiseX, NoiseY, NoiseZ;
-	TArray<int16> Quantized;
-	TArray<uint8> HashBytes;
-
-	FVoxelLandError InitializeNoise(const FVoxelLandProgramDraft& Program, const FVoxelLandBackendOptions& Options,
-		const TArray<float>& FloatParameters, const TArray<int32>& IntParameters);
-	void AllocateScratch(int32 RegisterCount);
-	uint64 HashChunkDensity(const TArray<int16>& Density);
-
-	FVoxelLandError LoadPositions(TConstArrayView<FVector3f> Positions);
-	FVoxelLandError EvaluateNoise(const FVoxelLandInstruction& I, const FVoxelLandProgramDraft& D,
-		const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N, const float* A, const float* B,
-		const float* C, float* Dest);
-	void ResolveOperands(const FVoxelLandInstruction& I, const float*& A, const float*& B, const float*& C);
-#if VOXELLAND_HAS_VM_SIMD
-	int32 ExecuteSimd(EVoxelLandOpcode Op, int32 N, const float* A, const float* B, float* Dest) const;
-#endif
-	FVoxelLandError ExecuteScalar(const FVoxelLandInstruction& I, const FVoxelLandProgramDraft& D,
-		const TArray<float>& FloatParameters, int32 Start, int32 N, const float* A, const float* B, const float* C,
-		float* Dest);
-	FVoxelLandError ExecuteInstruction(const FVoxelLandInstruction& I, const FVoxelLandProgramDraft& D,
-		const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N);
-	FVoxelLandError QuantizeOutput(int32 N, float VoxelSizeCm, TArray<int16>& OutDensity);
-};
+FVoxelLandWorkerContextImpl::FVoxelLandWorkerContextImpl() = default;
+FVoxelLandWorkerContextImpl::~FVoxelLandWorkerContextImpl() = default;
 
 FVoxelLandWorkerContext::FVoxelLandWorkerContext() = default;
 
@@ -106,16 +84,22 @@ FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& S
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
 	if (IsInGameThread())
+	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Generator setup requires a worker thread"));
+	}
 	OutGenerator.Reset();
 	const TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& Program = Settings.Program;
 	const FVoxelLandZoneProfile& Profile = Settings.Profile;
 	const FVoxelLandBackendOptions& Options = Settings.Backends;
 	const uint64 WorldSeed = Settings.WorldSeed;
 	if (!Program.IsValid())
+	{
 		return Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("Program is null"));
+	}
 	if (!FMath::IsFinite(Profile.VoxelSizeCm) || Profile.VoxelSizeCm <= 0)
+	{
 		return Fail(EVoxelLandErrorCode::InvalidProfile, TEXT("Voxel size must be positive and finite"));
+	}
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandGenerator);
 	Result->Program = Program;
 	Result->Profile = Profile;
@@ -136,23 +120,31 @@ FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& S
 	{
 		FString Name;
 		if (!NameOf(Entry.Key, Name) || Seen.Contains(Name))
+		{
 			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
+		}
 		Seen.Add(Name);
 		const int32* Slot = Slots.Find(Name);
 		if (!Slot || D.Parameters[*Slot].Type != EVoxelLandParameterType::Float || !FMath::IsFinite(Entry.Value))
+		{
 			return Fail(EVoxelLandErrorCode::InvalidParameter,
 				TEXT("Unknown, wrong type, or non-finite float override"), Entry.Key);
+		}
 		Result->FloatParameters[*Slot] = Entry.Value;
 	}
 	for (const TPair<FString, int32>& Entry : Profile.IntOverrides)
 	{
 		FString Name;
 		if (!NameOf(Entry.Key, Name) || Seen.Contains(Name))
+		{
 			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
+		}
 		Seen.Add(Name);
 		const int32* Slot = Slots.Find(Name);
 		if (!Slot || D.Parameters[*Slot].Type != EVoxelLandParameterType::Int32)
+		{
 			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type int override"), Entry.Key);
+		}
 		Result->IntParameters[*Slot] = Entry.Value;
 	}
 	for (const FVoxelLandSeedSlot& Seed : D.Seeds)
@@ -174,8 +166,10 @@ FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& S
 		const int32 Octaves = IntValue(N.Octaves);
 		if (!FMath::IsFinite(Frequency) || Frequency <= 0 || !FMath::IsFinite(Gain) || Gain < 0 || Gain > 1
 			|| !FMath::IsFinite(Lacunarity) || Lacunarity < 1 || Octaves < 1 || Octaves > 16)
+		{
 			return Fail(EVoxelLandErrorCode::InvalidParameter,
 				TEXT("Noise frequency, octaves, gain or lacunarity out of range"));
+		}
 	}
 	OutGenerator = Result;
 	return {};
@@ -187,27 +181,35 @@ FVoxelLandError SelectVMBackend(EVoxelLandVMBackend Requested, EVoxelLandVMBacke
 {
 	if (Requested != EVoxelLandVMBackend::Auto && Requested != EVoxelLandVMBackend::Scalar
 		&& Requested != EVoxelLandVMBackend::Simd4)
+	{
 		return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown VM backend"));
+	}
 #if VOXELLAND_HAS_VM_SIMD
 	Selected = Requested == EVoxelLandVMBackend::Scalar ? EVoxelLandVMBackend::Scalar : EVoxelLandVMBackend::Simd4;
 #else
 	if (Requested == EVoxelLandVMBackend::Simd4)
+	{
 		return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("SIMD VM is unavailable"));
+	}
 	Selected = EVoxelLandVMBackend::Scalar;
 #endif
 	return {};
 }
 }
 
-FVoxelLandError FVoxelLandWorkerContext::FImpl::InitializeNoise(const FVoxelLandProgramDraft& Program,
+FVoxelLandError FVoxelLandWorkerContextImpl::InitializeNoise(const FVoxelLandProgramDraft& Program,
 	const FVoxelLandBackendOptions& Options, const TArray<float>& FloatParameters, const TArray<int32>& IntParameters)
 {
 	bool bUsesNoise = false;
 	for (const FVoxelLandInstruction& Instruction : Program.Instructions)
+	{
 		bUsesNoise |= Instruction.Op == EVoxelLandOpcode::Perlin2 || Instruction.Op == EVoxelLandOpcode::Perlin3
 				   || Instruction.Op == EVoxelLandOpcode::Fbm2 || Instruction.Op == EVoxelLandOpcode::Fbm3;
+	}
 	if (!bUsesNoise)
+	{
 		return {};
+	}
 
 	TArray<VoxelLandNative::FConfig> Configs;
 	for (const FVoxelLandNoiseConfig& NoiseConfig : Program.Noise)
@@ -228,21 +230,29 @@ FVoxelLandError FVoxelLandWorkerContext::FImpl::InitializeNoise(const FVoxelLand
 
 	VoxelLandNative::EBackend Backend = VoxelLandNative::EBackend::Auto;
 	if (Options.Noise == EVoxelLandNoiseBackend::Scalar)
+	{
 		Backend = VoxelLandNative::EBackend::Scalar;
+	}
 	else if (Options.Noise == EVoxelLandNoiseBackend::SSE2)
+	{
 		Backend = VoxelLandNative::EBackend::SSE2;
+	}
 	else if (Options.Noise != EVoxelLandNoiseBackend::Auto)
+	{
 		return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown noise backend"));
+	}
 	FString Error;
 	Noise = VoxelLandNative::FWorker::Create(Backend, Configs, Error);
 	if (!Noise)
+	{
 		return NativeError(Error);
+	}
 	NoiseBackend = Noise->GetBackend() == VoxelLandNative::EBackend::SSE2 ? EVoxelLandNoiseBackend::SSE2
 																		  : EVoxelLandNoiseBackend::Scalar;
 	return {};
 }
 
-void FVoxelLandWorkerContext::FImpl::AllocateScratch(int32 RegisterCount)
+void FVoxelLandWorkerContextImpl::AllocateScratch(int32 RegisterCount)
 {
 	Registers.SetNumUninitialized(RegisterCount * BatchSize);
 	X.SetNumUninitialized(BatchSize);
@@ -257,35 +267,43 @@ void FVoxelLandWorkerContext::FImpl::AllocateScratch(int32 RegisterCount)
 FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const
 {
 	if (IsInGameThread())
+	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Worker setup requires a worker thread"));
+	}
 	OutWorker.Reset();
 	EVoxelLandVMBackend SelectedVM = EVoxelLandVMBackend::Scalar;
 	if (FVoxelLandError Error = SelectVMBackend(Options.VM, SelectedVM))
+	{
 		return Error;
+	}
 
 	TUniquePtr<FVoxelLandWorkerContext> Worker(new FVoxelLandWorkerContext);
-	Worker->Impl = MakeUnique<FVoxelLandWorkerContext::FImpl>();
-	FVoxelLandWorkerContext::FImpl& W = *Worker->Impl;
+	Worker->Impl = MakeUnique<FVoxelLandWorkerContextImpl>();
+	FVoxelLandWorkerContextImpl& W = *Worker->Impl;
 	W.Owner = AsShared();
 	W.Thread = FPlatformTLS::GetCurrentThreadId();
 	W.VM = SelectedVM;
 	const FVoxelLandProgramDraft& ProgramData = Program->GetData();
 	if (FVoxelLandError Error = W.InitializeNoise(ProgramData, Options, FloatParameters, IntParameters))
+	{
 		return Error;
+	}
 	W.AllocateScratch(ProgramData.RegisterCount);
 	OutWorker = MoveTemp(Worker);
 	return {};
 }
 
-FVoxelLandError FVoxelLandWorkerContext::FImpl::LoadPositions(TConstArrayView<FVector3f> Positions)
+FVoxelLandError FVoxelLandWorkerContextImpl::LoadPositions(TConstArrayView<FVector3f> Positions)
 {
-	FImpl& W = *this;
+	FVoxelLandWorkerContextImpl& W = *this;
 	const int32 N = Positions.Num();
 	for (int32 SampleIndex = 0; SampleIndex < N; ++SampleIndex)
 	{
 		const FVector3f P = Positions[SampleIndex];
 		if (!FMath::IsFinite(P.X) || !FMath::IsFinite(P.Y) || !FMath::IsFinite(P.Z))
+		{
 			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Non-finite sample coordinate"));
+		}
 		W.X[SampleIndex] = P.X;
 		W.Y[SampleIndex] = P.Y;
 		W.Z[SampleIndex] = P.Z;
@@ -293,11 +311,11 @@ FVoxelLandError FVoxelLandWorkerContext::FImpl::LoadPositions(TConstArrayView<FV
 	return {};
 }
 
-FVoxelLandError FVoxelLandWorkerContext::FImpl::EvaluateNoise(const FVoxelLandInstruction& I,
+FVoxelLandError FVoxelLandWorkerContextImpl::EvaluateNoise(const FVoxelLandInstruction& I,
 	const FVoxelLandProgramDraft& D, const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N,
 	const float* A, const float* B, const float* C, float* Dest)
 {
-	FImpl& W = *this;
+	FVoxelLandWorkerContextImpl& W = *this;
 	const FVoxelLandNoiseConfig& Config = D.Noise[I.Imm];
 	const float Frequency =
 		Config.Frequency.bParameter ? FloatParameters[Config.Frequency.Index] : D.Constants[Config.Frequency.Index];
@@ -312,14 +330,16 @@ FVoxelLandError FVoxelLandWorkerContext::FImpl::EvaluateNoise(const FVoxelLandIn
 	FString Error;
 	if (!W.Noise->Sample(int32(I.Imm) * 2 + (bFbm ? 1 : 0), b3D, Seeds[Config.SeedSlot], N, W.NoiseX.GetData(),
 			W.NoiseY.GetData(), W.NoiseZ.GetData(), Dest, Error))
+	{
 		return NativeError(Error);
+	}
 	return {};
 }
 
-void FVoxelLandWorkerContext::FImpl::ResolveOperands(
+void FVoxelLandWorkerContextImpl::ResolveOperands(
 	const FVoxelLandInstruction& I, const float*& A, const float*& B, const float*& C)
 {
-	FImpl& W = *this;
+	FVoxelLandWorkerContextImpl& W = *this;
 	// Validation checks only operands read by each opcode. Do not form pointers from unused fields.
 	switch (I.Op)
 	{
@@ -357,7 +377,7 @@ void FVoxelLandWorkerContext::FImpl::ResolveOperands(
 }
 
 #if VOXELLAND_HAS_VM_SIMD
-int32 FVoxelLandWorkerContext::FImpl::ExecuteSimd(
+int32 FVoxelLandWorkerContextImpl::ExecuteSimd(
 	EVoxelLandOpcode Op, int32 N, const float* A, const float* B, float* Dest) const
 {
 	int32 SampleIndex = 0;
@@ -391,11 +411,11 @@ int32 FVoxelLandWorkerContext::FImpl::ExecuteSimd(
 }
 #endif
 
-FVoxelLandError FVoxelLandWorkerContext::FImpl::ExecuteScalar(const FVoxelLandInstruction& I,
+FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteScalar(const FVoxelLandInstruction& I,
 	const FVoxelLandProgramDraft& D, const TArray<float>& FloatParameters, int32 Start, int32 N, const float* A,
 	const float* B, const float* C, float* Dest)
 {
-	FImpl& W = *this;
+	FVoxelLandWorkerContextImpl& W = *this;
 	int32 SampleIndex = Start;
 	for (; SampleIndex < N; ++SampleIndex)
 	{
@@ -476,7 +496,7 @@ FVoxelLandError FVoxelLandWorkerContext::FImpl::ExecuteScalar(const FVoxelLandIn
 	return {};
 }
 
-FVoxelLandError FVoxelLandWorkerContext::FImpl::ExecuteInstruction(const FVoxelLandInstruction& I,
+FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteInstruction(const FVoxelLandInstruction& I,
 	const FVoxelLandProgramDraft& D, const TArray<float>& FloatParameters, const TArray<int32>& Seeds, int32 N)
 {
 	float* Dest =
@@ -489,7 +509,9 @@ FVoxelLandError FVoxelLandWorkerContext::FImpl::ExecuteInstruction(const FVoxelL
 		|| I.Op == EVoxelLandOpcode::Fbm3)
 	{
 		if (FVoxelLandError Error = EvaluateNoise(I, D, FloatParameters, Seeds, N, A, B, C, Dest))
+		{
 			return Error;
+		}
 	}
 	else
 	{
@@ -498,22 +520,32 @@ FVoxelLandError FVoxelLandWorkerContext::FImpl::ExecuteInstruction(const FVoxelL
 		Start = ExecuteSimd(I.Op, N, A, B, Dest);
 #endif
 		if (FVoxelLandError Error = ExecuteScalar(I, D, FloatParameters, Start, N, A, B, C, Dest))
+		{
 			return Error;
+		}
 	}
 	for (int32 SampleIndex = 0; SampleIndex < N; ++SampleIndex)
+	{
 		if (!FMath::IsFinite(Dest[SampleIndex]))
+		{
 			return Fail(EVoxelLandErrorCode::NonFiniteDensity, TEXT("Non-finite VM result"));
+		}
+	}
 	return {};
 }
 
-FVoxelLandError FVoxelLandWorkerContext::FImpl::QuantizeOutput(int32 N, float VoxelSizeCm, TArray<int16>& OutDensity)
+FVoxelLandError FVoxelLandWorkerContextImpl::QuantizeOutput(int32 N, float VoxelSizeCm, TArray<int16>& OutDensity)
 {
-	FImpl& W = *this;
+	FVoxelLandWorkerContextImpl& W = *this;
 	W.Quantized.SetNumUninitialized(N);
 	for (int32 SampleIndex = 0; SampleIndex < N; ++SampleIndex)
+	{
 		if (FVoxelLandError E =
 				VoxelLandDeterminism::Quantize(W.Output[SampleIndex], VoxelSizeCm, W.Quantized[SampleIndex]))
+		{
 			return E;
+		}
+	}
 	OutDensity = W.Quantized;
 	return {};
 }
@@ -522,19 +554,31 @@ FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
 	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const
 {
 	if (IsInGameThread())
+	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
+	}
 	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
+	{
 		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
+	}
 	if (Positions.Num() < 1 || Positions.Num() > BatchSize)
+	{
 		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("A batch must contain 1..256 samples"));
+	}
 
-	FVoxelLandWorkerContext::FImpl& W = *Worker.Impl;
+	FVoxelLandWorkerContextImpl& W = *Worker.Impl;
 	if (FVoxelLandError Error = W.LoadPositions(Positions))
+	{
 		return Error;
+	}
 	const FVoxelLandProgramDraft& D = Program->GetData();
 	for (const FVoxelLandInstruction& I : D.Instructions)
+	{
 		if (FVoxelLandError Error = W.ExecuteInstruction(I, D, FloatParameters, Seeds, Positions.Num()))
+		{
 			return Error;
+		}
+	}
 	return W.QuantizeOutput(Positions.Num(), Profile.VoxelSizeCm, OutDensity);
 }
 
@@ -550,17 +594,21 @@ FVoxelLandError FillChunkPositions(
 		const double PY = double(int64(Key.Coordinate.Y) * 32 + Y - 1) * double(VoxelSizeCm);
 		const double PZ = double(int64(Key.Coordinate.Z) * 32 + Z - 1) * double(VoxelSizeCm);
 		if (FMath::Abs(PX) > double(FLT_MAX) || FMath::Abs(PY) > double(FLT_MAX) || FMath::Abs(PZ) > double(FLT_MAX))
+		{
 			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Chunk coordinate cannot be represented"));
+		}
 		Positions[SampleIndex] = FVector3f(float(PX), float(PY), float(PZ));
 		if (!FMath::IsFinite(Positions[SampleIndex].X) || !FMath::IsFinite(Positions[SampleIndex].Y)
 			|| !FMath::IsFinite(Positions[SampleIndex].Z))
+		{
 			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Chunk coordinate cannot be represented"));
+		}
 	}
 	return {};
 }
 }
 
-uint64 FVoxelLandWorkerContext::FImpl::HashChunkDensity(const TArray<int16>& Density)
+uint64 FVoxelLandWorkerContextImpl::HashChunkDensity(const TArray<int16>& Density)
 {
 	TArray<uint8>& Bytes = HashBytes;
 	Bytes.Reset();
@@ -580,16 +628,23 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunk(const FVoxelLandChunkKey& Key
 	return GenerateChunkCancellable(Key, Worker, OutChunk, [] { return false; });
 }
 
-FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
-	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const
+FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandChunkKey& Key,
+	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
+	TFunctionRef<bool()> IsCancelled) const
 {
 	if (IsInGameThread())
+	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Chunk generation requires a worker thread"));
+	}
 	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
+	{
 		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
+	}
 	OutChunk.Reset();
 	if (Key.LOD != 0)
+	{
 		return Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M1 supports only LOD 0"));
+	}
 	TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
 	Chunk->Key = Key;
 	Chunk->Density.Reserve(FVoxelLandChunkData::SampleCount);
@@ -598,13 +653,20 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	Batch.Reserve(BatchSize);
 	for (int32 Start = 0; Start < FVoxelLandChunkData::SampleCount; Start += BatchSize)
 	{
-		if (IsCancelled()) return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+		if (IsCancelled())
+		{
+			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+		}
 		const int32 Count = FMath::Min(BatchSize, FVoxelLandChunkData::SampleCount - Start);
 		if (FVoxelLandError Error =
 				FillChunkPositions(Key, Profile.VoxelSizeCm, Start, MakeArrayView(Positions, Count)))
+		{
 			return Error;
+		}
 		if (FVoxelLandError E = EvaluateSamples(MakeArrayView(Positions, Count), Worker, Batch))
+		{
 			return E;
+		}
 		Chunk->Density.Append(Batch);
 	}
 	Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);

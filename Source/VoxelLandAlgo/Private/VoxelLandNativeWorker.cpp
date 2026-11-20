@@ -1,15 +1,13 @@
 #include "VoxelLandNativeWorker.h"
 #include "FastNoiseNative.h"
+#include "Data/Structs/VoxelLandNativeNode.h"
 #include "HAL/PlatformTLS.h"
 #include <limits>
 
 namespace VoxelLandNative
 {
-struct FNode
-{
-	TUniquePtr<FFastNoiseNative> Generator;
-	double MaximumPosition = 0.0;
-};
+FNode::FNode() = default;
+FNode::~FNode() = default;
 FNativeWorker::FNativeWorker(EBackend InBackend)
 	: Backend(InBackend)
 	, ThreadId(FPlatformTLS::GetCurrentThreadId())
@@ -52,7 +50,9 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 							? FFastNoiseNative::CreateFbm(Config.Octaves, Config.Gain, Config.Lacunarity, OutError)
 							: FFastNoiseNative::CreatePerlin(OutError);
 		if (!Node->Generator)
+		{
 			return false;
+		}
 		Node->MaximumPosition = 100000000.0 / MaxScale;
 		Nodes.Add(MoveTemp(Node));
 	}
@@ -90,13 +90,17 @@ bool FNativeWorker::Sample(int32 ConfigIndex, bool b3D, int32 Seed, int32 Count,
 	const bool bSuccess = b3D ? Node.Generator->Sample3D(Count, X, Y, Z, Seed, Output, OutError)
 							  : Node.Generator->Sample2D(Count, X, Y, Seed, Output, OutError);
 	if (!bSuccess)
+	{
 		return false;
+	}
 	for (int32 Index = 0; Index < Count; ++Index)
+	{
 		if (!FMath::IsFinite(Output[Index]))
 		{
 			OutError = FString::Printf(TEXT("InvalidNoiseInput: non-finite noise result at sample %d"), Index);
 			return false;
 		}
+	}
 	return true;
 }
 }

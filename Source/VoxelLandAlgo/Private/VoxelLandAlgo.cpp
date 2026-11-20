@@ -3,12 +3,12 @@
 
 void FVoxelLandAlgoModule::StartupModule()
 {
-    VoxelLandNative::Startup();
+	VoxelLandNative::Startup();
 }
 
 void FVoxelLandAlgoModule::ShutdownModule()
 {
-    VoxelLandNative::Shutdown();
+	VoxelLandNative::Shutdown();
 }
 
 IMPLEMENT_MODULE(FVoxelLandAlgoModule, VoxelLandAlgo)

@@ -2,16 +2,10 @@
 
 #define LOCTEXT_NAMESPACE "FVoxelLandDataModule"
 
-void FVoxelLandDataModule::StartupModule()
-{
-    
-}
+void FVoxelLandDataModule::StartupModule() {}
 
-void FVoxelLandDataModule::ShutdownModule()
-{
-    
-}
+void FVoxelLandDataModule::ShutdownModule() {}
 
 #undef LOCTEXT_NAMESPACE
-    
+
 IMPLEMENT_MODULE(FVoxelLandDataModule, VoxelLandData)

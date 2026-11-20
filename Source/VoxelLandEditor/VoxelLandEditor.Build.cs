@@ -22,6 +22,7 @@ public class VoxelLandEditor : ModuleRules
                 "Slate",
                 "SlateCore",
                 "VoxelLandAlgo",
+                "VoxelLand",
                 "VoxelLandRender",
                 "UnrealEd",
                 "AssetTools",

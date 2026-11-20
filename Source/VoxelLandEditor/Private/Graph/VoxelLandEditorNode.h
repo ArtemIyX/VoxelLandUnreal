@@ -43,6 +43,8 @@ public:
     virtual void PinConnectionListChanged(UEdGraphPin* Pin) override;
     virtual void GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const override;
     void AddVariadicInput();
-    void RemoveVariadicInput();
+    void RemoveVariadicInput(FGuid PinId);
+    void MoveVariadicInput(FGuid PinId, int32 Direction);
+    void RenumberVariadicInputs();
     static FText DisplayName(int32 InKind);
 };

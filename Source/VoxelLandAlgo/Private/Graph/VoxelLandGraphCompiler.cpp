@@ -136,7 +136,7 @@ private:
     bool IndexLinks()
     {
         TMap<FGuid, int32> Incoming;
-        TMap<FGuid, TArray<FGuid>> Edges;
+        TMap<FGuid, TArray<FGuid>> GraphEdges;
         for (const FVoxelLandGraphNodeRecord& Node : Source.Nodes)
         {
             Incoming.Add(Node.Id, 0);
@@ -154,7 +154,7 @@ private:
                 return Fail(TEXT("Invalid link or multiple sources for input"));
             }
             InputLinks.Add(Link.TargetPin, Link.SourceNode);
-            Edges.FindOrAdd(Link.SourceNode).Add(Link.TargetNode);
+            GraphEdges.FindOrAdd(Link.SourceNode).Add(Link.TargetNode);
             ++Incoming.FindChecked(Link.TargetNode);
         }
         TArray<FGuid> Ready;
@@ -167,7 +167,7 @@ private:
         }
         for (int32 Cursor = 0; Cursor < Ready.Num(); ++Cursor)
         {
-            if (const TArray<FGuid>* Targets = Edges.Find(Ready[Cursor]))
+            if (const TArray<FGuid>* Targets = GraphEdges.Find(Ready[Cursor]))
             {
                 for (const FGuid& Target : *Targets)
                 {

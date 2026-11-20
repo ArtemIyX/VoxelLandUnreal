@@ -6,7 +6,7 @@
 
 namespace
 {
-constexpr EAutomationTestFlags Flags = EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
+constexpr EAutomationTestFlags M3FilterFlags = EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
 using namespace VoxelLandM1Fixtures;
 
 FVoxelLandProgramDraft FilterSource(bool bFilter, float Strength)
@@ -110,7 +110,7 @@ bool MatchOverlap(const FVoxelLandChunkData& A, const FVoxelLandChunkData& B, in
 }
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterReference, "VoxelLand.M3.FilterReferenceAndSeams", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterReference, "VoxelLand.M3.FilterReferenceAndSeams", M3FilterFlags)
 bool FVoxelLandM3FilterReference::RunTest(const FString& Parameters)
 {
     FVoxelLandChunkKey Key;
@@ -147,7 +147,7 @@ bool FVoxelLandM3FilterReference::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterConcurrent, "VoxelLand.M3.FilterConcurrent", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterConcurrent, "VoxelLand.M3.FilterConcurrent", M3FilterFlags)
 bool FVoxelLandM3FilterConcurrent::RunTest(const FString& Parameters)
 {
     FVoxelLandChunkKey Left;
@@ -179,7 +179,7 @@ bool FVoxelLandM3FilterConcurrent::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NoiseSeams, "VoxelLand.M3.NoiseSeams", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NoiseSeams, "VoxelLand.M3.NoiseSeams", M3FilterFlags)
 bool FVoxelLandM3NoiseSeams::RunTest(const FString& Parameters)
 {
     const EVoxelLandOpcode Families[] = {EVoxelLandOpcode::Perlin2, EVoxelLandOpcode::Perlin3,
@@ -210,7 +210,7 @@ bool FVoxelLandM3NoiseSeams::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterCancellation, "VoxelLand.M3.FilterCancellation", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterCancellation, "VoxelLand.M3.FilterCancellation", M3FilterFlags)
 bool FVoxelLandM3FilterCancellation::RunTest(const FString& Parameters)
 {
     const bool bCancelled = Async(EAsyncExecution::ThreadPool, [] {

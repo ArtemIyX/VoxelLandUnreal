@@ -3,6 +3,7 @@
 #include "Graph/VoxelLandEditorSchema.h"
 #include "Graph/VoxelLandEditorOperator.h"
 #include "Graph/VoxelLandPreviewViewport.h"
+#include "Graph/VoxelLandPreviewScene.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Assets/VoxelLandMaterialSetup.h"
@@ -321,11 +322,21 @@ FText FVoxelLandGraphToolkit::GetBaseToolkitName() const
 {
     return LOCTEXT("Title", "VoxelLand Terrain Graph");
 }
+bool FVoxelLandGraphToolkit::StoreCompiledProgram(UVoxelLandTerrainGraph& Graph, FVoxelLandSerializedProgram&& Payload)
+{
+    if (FVoxelLandSerializedProgram::StaticStruct()->CompareScriptStruct(&Graph.CompiledProgram, &Payload, 0))
+    {
+        return false;
+    }
+    Graph.Modify();
+    Graph.CompiledProgram = MoveTemp(Payload);
+    Graph.MarkPackageDirty();
+    return true;
+}
 void FVoxelLandGraphToolkit::Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host)
 {
     Asset = InAsset;
-    PreviewScene = MakeShared<FAdvancedPreviewScene>(FPreviewScene::ConstructionValues());
-    PreviewScene->SetFloorVisibility(false, true);
+    PreviewScene = MakeShared<FVoxelLandPreviewScene>();
     PreviewViewport = SNew(SVoxelLandPreviewViewport).Scene(PreviewScene);
     PreviewSettings = NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient);
     PreviewSettings->Graph = Asset;
@@ -1047,9 +1058,7 @@ void FVoxelLandGraphToolkit::ProcessCompileWork()
         if (Finished->bSuccess)
         {
             ErrorNode.Invalidate();
-            Asset->Modify();
-            Asset->CompiledProgram = MoveTemp(Finished->Payload);
-            Asset->MarkPackageDirty();
+            StoreCompiledProgram(*Asset, MoveTemp(Finished->Payload));
             LastCompileMs = Finished->CompileMs;
             StartPreview();
         }

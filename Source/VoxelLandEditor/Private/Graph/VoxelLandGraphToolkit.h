@@ -5,6 +5,7 @@
 #include "UObject/GCObject.h"
 #include "Data/Enums/VoxelLandGraphValueType.h"
 #include "Async/Future.h"
+#include "Containers/Ticker.h"
 
 class UVoxelLandTerrainGraph;
 class UEdGraph;
@@ -18,12 +19,13 @@ class SGraphActionMenu;
 class UVoxelLandChunkComponent;
 class UMaterialInterface;
 class UVoxelLandWorldSettings;
-class FAssetData;
+struct FAssetData;
 class FVoxelLandCompileWork;
 class FVoxelLandPreviewWork;
 struct FEdGraphEditAction;
 struct FPropertyChangedEvent;
 struct FVoxelLandZoneProfile;
+struct FVoxelLandSerializedProgram;
 struct FGraphActionListBuilderBase;
 struct FEdGraphSchemaAction;
 
@@ -32,6 +34,7 @@ class FVoxelLandGraphToolkit : public FAssetEditorToolkit, public FGCObject
 public:
     virtual ~FVoxelLandGraphToolkit() override;
     void Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host);
+    static bool StoreCompiledProgram(UVoxelLandTerrainGraph& Graph, FVoxelLandSerializedProgram&& Payload);
     void Stop();
     virtual FName GetToolkitFName() const override { return TEXT("VoxelLandGraph"); }
     virtual FText GetBaseToolkitName() const override;
@@ -81,8 +84,8 @@ private:
     void ProcessCompileWork();
     void ProcessPreviewWork();
     bool PublishPreview(const FVoxelLandPreviewWork& Finished);
-    UVoxelLandTerrainGraph* Asset = nullptr;
-    UEdGraph* Graph = nullptr;
+    TObjectPtr<UVoxelLandTerrainGraph> Asset = nullptr;
+    TObjectPtr<UEdGraph> Graph = nullptr;
     TSharedPtr<SGraphEditor> GraphWidget;
     TSharedPtr<SGraphActionMenu> PaletteWidget;
     TSharedPtr<IDetailsView> Details;
@@ -90,9 +93,9 @@ private:
     TSharedPtr<FUICommandList> Commands;
     TSharedPtr<FAdvancedPreviewScene> PreviewScene;
     TSharedPtr<SVoxelLandPreviewViewport> PreviewViewport;
-    TArray<UVoxelLandChunkComponent*> PreviewComponents;
-    UMaterialInterface* PreviewMaterial = nullptr;
-    UVoxelLandWorldSettings* PreviewSettings = nullptr;
+    TArray<TObjectPtr<UVoxelLandChunkComponent>> PreviewComponents;
+    TObjectPtr<UMaterialInterface> PreviewMaterial = nullptr;
+    TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;
     TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> PreviewCancel;
     int64 PreviewSeed = 1234;
     int32 PreviewHorizontalRadius = 1;
@@ -101,7 +104,7 @@ private:
     FDelegateHandle GraphChangedHandle;
     FDelegateHandle BeginPIEHandle;
     FDelegateHandle EndPIEHandle;
-    FDelegateHandle PollHandle;
+    FTSTicker::FDelegateHandle PollHandle;
     TArray<TFuture<void>> WorkerTasks;
     TSharedPtr<FVoxelLandCompileWork, ESPMode::ThreadSafe> CompileWork;
     TSharedPtr<FVoxelLandPreviewWork, ESPMode::ThreadSafe> PreviewWork;

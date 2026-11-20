@@ -49,16 +49,16 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 		switch (Config.Family)
 		{
 			case EVoxelLandNoiseFamily::Perlin:
-				Node->Generator = FFastNoiseNative::CreatePerlin(OutError);
+				Node->Generator = FFastNoiseNative::CreatePerlin(OutError, Config.bUnitScale);
 				break;
 			case EVoxelLandNoiseFamily::Fbm:
-				Node->Generator = FFastNoiseNative::CreateFbm(Config.Octaves, Config.Gain, Config.Lacunarity, OutError);
+				Node->Generator = FFastNoiseNative::CreateFbm(Config.Octaves, Config.Gain, Config.Lacunarity, OutError, Config.bUnitScale);
 				break;
 			case EVoxelLandNoiseFamily::Value:
-				Node->Generator = FFastNoiseNative::CreateValue(OutError);
+				Node->Generator = FFastNoiseNative::CreateValue(OutError, Config.bUnitScale);
 				break;
 			case EVoxelLandNoiseFamily::Simplex:
-				Node->Generator = FFastNoiseNative::CreateSimplex(OutError);
+				Node->Generator = FFastNoiseNative::CreateSimplex(OutError, Config.bUnitScale);
 				break;
 			default:
 				OutError = TEXT("InvalidNoiseInput: unknown noise family");

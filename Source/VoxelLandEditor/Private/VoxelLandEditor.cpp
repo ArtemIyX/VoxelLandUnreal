@@ -1,5 +1,6 @@
 #include "VoxelLandEditor.h"
 #include "AssetToolsModule.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "AssetTypeActions_Base.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Graph/VoxelLandGraphToolkit.h"
@@ -41,7 +42,7 @@ public:
             if (TSharedPtr<FVoxelLandGraphToolkit> Editor = Weak.Pin())
             {
                 Editor->Stop();
-                if (!Editor->CloseWindow())
+                if (!Editor->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed))
                 {
                     UE_LOG(LogTemp, Warning, TEXT("VoxelLand graph editor declined to close during module shutdown"));
                 }

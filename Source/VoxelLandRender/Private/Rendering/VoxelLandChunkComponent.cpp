@@ -82,11 +82,14 @@ public:
 			FMeshBatch& Batch = Collector.AllocateMesh();
 			Batch.VertexFactory = &Factory;
 			Batch.MaterialRenderProxy = MaterialProxy;
-			Batch.ReverseCulling = IsLocalToWorldDeterminantNegative();
+			// Surface Nets triangles follow the outward density gradient. Unreal's
+			// rasterizer front-face convention requires the opposite cull mode.
+			Batch.ReverseCulling = !IsLocalToWorldDeterminantNegative();
 			Batch.CastShadow = IsShadowCast(Views[ViewIndex]);
 			Batch.Type = PT_TriangleList;
 			Batch.DepthPriorityGroup = SDPG_World;
 			FMeshBatchElement& Element = Batch.Elements[0];
+			Element.PrimitiveUniformBuffer = GetUniformBuffer();
 			Element.IndexBuffer = &IndexBuffer;
 			Element.FirstIndex = 0;
 			Element.MinVertexIndex = 0;

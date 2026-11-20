@@ -3,7 +3,7 @@
 
 namespace
 {
-constexpr int32 BatchSize = 256;
+constexpr int32 TypedBatchSize = 256;
 
 FVoxelLandError TypedError(const TCHAR* Message)
 {
@@ -17,11 +17,11 @@ FVoxelLandError TypedError(const TCHAR* Message)
 FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteTyped(
     const FVoxelLandInstruction& I, const TArray<int32>& IntParameters, int32 N)
 {
-    const int32 Dst = int32(I.Dst) * BatchSize;
+    const int32 Dst = int32(I.Dst) * TypedBatchSize;
     for (int32 Sample = 0; Sample < N; ++Sample)
     {
-        const auto Float = [this, Sample](uint16 Reg) { return Registers[int32(Reg) * BatchSize + Sample]; };
-        const auto Int = [this, Sample](uint16 Reg) { return IntRegisters[int32(Reg) * BatchSize + Sample]; };
+        const auto Float = [this, Sample](uint16 Reg) { return Registers[int32(Reg) * TypedBatchSize + Sample]; };
+        const auto Int = [this, Sample](uint16 Reg) { return IntRegisters[int32(Reg) * TypedBatchSize + Sample]; };
         float Value = 0.f;
         int32 Integer = 0;
         bool bFloat = false;
@@ -85,8 +85,8 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteTyped(
                 {
                     return TypedError(TEXT("Sphere radius must be positive"));
                 }
-                const float X = Float(I.A), Y = Float(I.B), Z = Float(I.C);
-                Value = FMath::Sqrt((X * X + Y * Y) + Z * Z) - Radius;
+                const float PosX = Float(I.A), PosY = Float(I.B), PosZ = Float(I.C);
+                Value = FMath::Sqrt((PosX * PosX + PosY * PosY) + PosZ * PosZ) - Radius;
                 bFloat = true;
                 break;
             }
@@ -97,10 +97,10 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteTyped(
                 {
                     return TypedError(TEXT("Box extents must be positive"));
                 }
-                const float X = FMath::Abs(Float(I.A)) - EX, Y = FMath::Abs(Float(I.B)) - EY,
-                    Z = FMath::Abs(Float(I.C)) - EZ;
-                const float PX = FMath::Max(X, 0.f), PY = FMath::Max(Y, 0.f), PZ = FMath::Max(Z, 0.f);
-                Value = FMath::Sqrt((PX * PX + PY * PY) + PZ * PZ) + FMath::Min(FMath::Max(X, FMath::Max(Y, Z)), 0.f);
+                const float DistX = FMath::Abs(Float(I.A)) - EX, DistY = FMath::Abs(Float(I.B)) - EY,
+                    DistZ = FMath::Abs(Float(I.C)) - EZ;
+                const float PX = FMath::Max(DistX, 0.f), PY = FMath::Max(DistY, 0.f), PZ = FMath::Max(DistZ, 0.f);
+                Value = FMath::Sqrt((PX * PX + PY * PY) + PZ * PZ) + FMath::Min(FMath::Max(DistX, FMath::Max(DistY, DistZ)), 0.f);
                 bFloat = true;
                 break;
             }

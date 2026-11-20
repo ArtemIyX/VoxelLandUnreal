@@ -266,6 +266,7 @@ FVoxelLandError FVoxelLandWorkerContextImpl::InitializeNoise(const FVoxelLandPro
 		const FVoxelLandNoiseConfig& NoiseConfig = Program.Noise[Instruction.Imm];
 		VoxelLandNative::FConfig Config;
 		Config.Family = EVoxelLandNoiseFamily(Variant);
+		Config.bUnitScale = Program.FormatVersion >= 2;
 		Config.Octaves = NoiseConfig.Octaves.bParameter ? IntParameters[NoiseConfig.Octaves.Index]
 			: int32(Program.Constants[NoiseConfig.Octaves.Index]);
 		Config.Gain = NoiseConfig.Gain.bParameter ? FloatParameters[NoiseConfig.Gain.Index]

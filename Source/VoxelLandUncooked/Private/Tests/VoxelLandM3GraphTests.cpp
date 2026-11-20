@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr EAutomationTestFlags Flags = EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
+constexpr EAutomationTestFlags M3GraphFlags = EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
 using namespace VoxelLandM1Fixtures;
 using VoxelLandM1TestData::FSampleResult;
 
@@ -132,7 +132,9 @@ FSampleResult Sample(FVoxelLandProgramDraft Draft, EVoxelLandVMBackend Backend,
         TArray<FVector3f> Points;
         for (int32 I = 0; I < Count; ++I)
         {
-            Points.Emplace(float(I - 129) * 13.25f, float((I * 31) % 257 - 128) * 7.f, float((I * 11) % 123 - 61) * 5.f);
+            // Cover many native lattice cells, including both signs, at ordinary graph frequencies.
+            Points.Emplace(float(I - 129) * 106.f, float((I * 31) % 257 - 128) * 56.f,
+                float((I * 11) % 123 - 61) * 40.f);
         }
         Result.Error = Generator->EvaluateSamples(Points, *Worker, Result.Values);
         return Result;
@@ -162,7 +164,7 @@ FVoxelLandProgramDraft TypedSelect()
 }
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3CompilerCodec, "VoxelLand.M3.CompilerAndSerialization", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3CompilerCodec, "VoxelLand.M3.CompilerAndSerialization", M3GraphFlags)
 bool FVoxelLandM3CompilerCodec::RunTest(const FString& Parameters)
 {
     const FVoxelLandGraphSnapshot Graph = SimpleGraph();
@@ -225,7 +227,7 @@ bool FVoxelLandM3CompilerCodec::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3TypedDomains, "VoxelLand.M3.TypedAndDomains", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3TypedDomains, "VoxelLand.M3.TypedAndDomains", M3GraphFlags)
 bool FVoxelLandM3TypedDomains::RunTest(const FString& Parameters)
 {
     FVoxelLandZoneProfile Profile;
@@ -248,7 +250,7 @@ bool FVoxelLandM3TypedDomains::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3Power, "VoxelLand.M3.Power", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3Power, "VoxelLand.M3.Power", M3GraphFlags)
 bool FVoxelLandM3Power::RunTest(const FString& Parameters)
 {
     uint32 SmallestBits = 1;
@@ -316,7 +318,7 @@ bool FVoxelLandM3Power::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3BoundsAndOutputs, "VoxelLand.M3.InputBoundsAndOutputs", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3BoundsAndOutputs, "VoxelLand.M3.InputBoundsAndOutputs", M3GraphFlags)
 bool FVoxelLandM3BoundsAndOutputs::RunTest(const FString& Parameters)
 {
     FVoxelLandProgramDraft Oversized = Plane();
@@ -369,7 +371,7 @@ bool FVoxelLandM3BoundsAndOutputs::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterCompilation, "VoxelLand.M3.FilterCompilation", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterCompilation, "VoxelLand.M3.FilterCompilation", M3GraphFlags)
 bool FVoxelLandM3FilterCompilation::RunTest(const FString& Parameters)
 {
     FVoxelLandGraphSnapshot Graph;
@@ -423,7 +425,7 @@ bool FVoxelLandM3FilterCompilation::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NoiseGraph, "VoxelLand.M3.NoiseGraphLowering", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NoiseGraph, "VoxelLand.M3.NoiseGraphLowering", M3GraphFlags)
 bool FVoxelLandM3NoiseGraph::RunTest(const FString& Parameters)
 {
     FVoxelLandGraphSnapshot Graph;
@@ -462,7 +464,7 @@ bool FVoxelLandM3NoiseGraph::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3MixedNoise, "VoxelLand.M3.MixedNoiseParameters", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3MixedNoise, "VoxelLand.M3.MixedNoiseParameters", M3GraphFlags)
 bool FVoxelLandM3MixedNoise::RunTest(const FString& Parameters)
 {
     FVoxelLandGraphSnapshot Graph;
@@ -533,7 +535,7 @@ bool FVoxelLandM3MixedNoise::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3ExternalProvider, "VoxelLand.M3.ExternalProvider", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3ExternalProvider, "VoxelLand.M3.ExternalProvider", M3GraphFlags)
 bool FVoxelLandM3ExternalProvider::RunTest(const FString& Parameters)
 {
     FVoxelLandGraphSnapshot Graph;
@@ -637,7 +639,7 @@ bool FVoxelLandM3ExternalProvider::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3MismatchedSimd, "VoxelLand.M3.ExternalSimdFallback", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3MismatchedSimd, "VoxelLand.M3.ExternalSimdFallback", M3GraphFlags)
 bool FVoxelLandM3MismatchedSimd::RunTest(const FString& Parameters)
 {
     FString Error;
@@ -716,12 +718,12 @@ bool FVoxelLandM3MismatchedSimd::RunTest(const FString& Parameters)
             TestEqual(TEXT("SIMD mismatch disables the kernel for subsequent batches on the same worker"), Result, 2);
         }
     }
-    TestTrue(TEXT("Mismatch provider unregisters after workers complete"),
-        FVoxelLandOperatorRegistry::Unregister(Provider->Id(), Provider->Version(), Error));
+    const bool bUnregistered = FVoxelLandOperatorRegistry::Unregister(Provider->Id(), Provider->Version(), Error);
+    TestTrue(TEXT("Mismatch provider unregisters after workers complete"), bUnregistered);
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NoiseParity, "VoxelLand.M3.NoiseScalarSimdParity", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NoiseParity, "VoxelLand.M3.NoiseScalarSimdParity", M3GraphFlags)
 bool FVoxelLandM3NoiseParity::RunTest(const FString& Parameters)
 {
     const EVoxelLandOpcode Families[] = {EVoxelLandOpcode::Perlin2, EVoxelLandOpcode::Perlin3,
@@ -743,7 +745,18 @@ bool FVoxelLandM3NoiseParity::RunTest(const FString& Parameters)
 #endif
             continue;
         }
-        TestTrue(FString::Printf(TEXT("Family %d changes with the world seed"), int32(Family)), FirstSeed.Values != SecondSeed.Values);
+        if (FirstSeed.Values == SecondSeed.Values)
+        {
+            int32 Minimum = 32767, Maximum = -32768;
+            for (int16 Value : FirstSeed.Values)
+            {
+                Minimum = FMath::Min(Minimum, int32(Value));
+                Maximum = FMath::Max(Maximum, int32(Value));
+            }
+            AddError(FString::Printf(TEXT("Family %d identical for distinct seeds: count=%d range=[%d,%d] first=%d"),
+                int32(Family), FirstSeed.Values.Num(), Minimum, Maximum,
+                FirstSeed.Values.IsEmpty() ? 0 : int32(FirstSeed.Values[0])));
+        }
         bool bWarnedSimd = false;
         for (int32 Count : {1, 2, 3, 256})
         {

@@ -9,19 +9,19 @@ void SVoxelLandPreviewViewport::Construct(const FArguments& Args)
 }
 TSharedRef<FEditorViewportClient> SVoxelLandPreviewViewport::MakeEditorViewportClient()
 {
-    TSharedRef<FEditorViewportClient> Client = MakeShared<FEditorViewportClient>(nullptr, PreviewScene.Get(), SharedThis(this));
-    Client->SetViewLocation(FVector(-7000.0, -7000.0, 5000.0));
-    Client->SetViewRotation(FRotator(-25.0, 45.0, 0.0));
-    Client->SetViewMode(VMI_Lit);
-    Client->SetRealtime(true);
-    return Client;
+    TSharedRef<FEditorViewportClient> ViewportClient = MakeShared<FEditorViewportClient>(nullptr, PreviewScene.Get(), SharedThis(this));
+    ViewportClient->SetViewLocation(FVector(-7000.0, -7000.0, 5000.0));
+    ViewportClient->SetViewRotation(FRotator(-25.0, 45.0, 0.0));
+    ViewportClient->SetViewMode(VMI_Lit);
+    ViewportClient->SetRealtime(true);
+    return ViewportClient;
 }
 void SVoxelLandPreviewViewport::ResetCamera()
 {
-    if (TSharedPtr<FEditorViewportClient> Client = GetViewportClient())
+    if (TSharedPtr<FEditorViewportClient> ViewportClient = GetViewportClient())
     {
-        Client->SetViewLocation(FVector(-7000.0, -7000.0, 5000.0));
-        Client->SetViewRotation(FRotator(-25.0, 45.0, 0.0));
+        ViewportClient->SetViewLocation(FVector(-7000.0, -7000.0, 5000.0));
+        ViewportClient->SetViewRotation(FRotator(-25.0, 45.0, 0.0));
         Invalidate();
     }
 }

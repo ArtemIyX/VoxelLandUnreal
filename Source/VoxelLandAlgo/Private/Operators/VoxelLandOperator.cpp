@@ -2,9 +2,31 @@
 #include "Misc/ScopeLock.h"
 #include "HAL/PlatformProcess.h"
 #include "Modules/ModuleManager.h"
+#include "Misc/Paths.h"
+#if PLATFORM_WINDOWS
+#include "Windows/WindowsHWrapper.h"
+#endif
 
 namespace
 {
+#if !IS_MONOLITHIC
+void* AcquireModuleReference(const FString& Filename)
+{
+#if PLATFORM_WINDOWS
+    // UE 5.7 GetDllHandle can return a borrowed GetModuleHandle result for
+    // already-loaded DLLs. LoadLibraryW takes a new OS reference instead.
+    const FString Absolute = FPaths::ConvertRelativePathToFull(Filename);
+    return reinterpret_cast<void*>(::LoadLibraryW(*Absolute));
+#elif PLATFORM_LINUX
+    // UnixPlatformProcess uses dlopen, which takes a reference balanced by dlclose.
+    return FPlatformProcess::GetDllHandle(*Filename);
+#else
+    // A platform without known owning-handle semantics must not fabricate a pin.
+    return nullptr;
+#endif
+}
+#endif
+
 class FProviderLease final : public IVoxelLandOperator
 {
 public:
@@ -85,7 +107,7 @@ bool FVoxelLandOperatorRegistry::Register(FName ModuleName, TSharedRef<const IVo
         return false;
     }
     const FString Filename = FModuleManager::Get().GetModuleFilename(ModuleName);
-    if (Filename.IsEmpty() || !(Handle = FPlatformProcess::GetDllHandle(*Filename)))
+    if (Filename.IsEmpty() || !(Handle = AcquireModuleReference(Filename)))
     {
         Error = TEXT("Cannot pin operator provider module binary");
         return false;
@@ -105,7 +127,7 @@ bool FVoxelLandOperatorRegistry::Register(FName ModuleName, TSharedRef<const IVo
             return false;
         }
         const FString FrameworkPath = FModuleManager::Get().GetModuleFilename(FrameworkName);
-        State.FrameworkHandle = FrameworkPath.IsEmpty() ? nullptr : FPlatformProcess::GetDllHandle(*FrameworkPath);
+        State.FrameworkHandle = FrameworkPath.IsEmpty() ? nullptr : AcquireModuleReference(FrameworkPath);
         if (!State.FrameworkHandle)
         {
             Error = TEXT("Cannot pin VoxelLand operator framework");

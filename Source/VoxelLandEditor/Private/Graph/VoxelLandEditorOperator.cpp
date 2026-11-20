@@ -3,8 +3,8 @@
 
 namespace
 {
-TMap<FGuid, TMap<int32, FVoxelLandEditorOperatorPresentation>> Presentations;
-constexpr int32 MaxPresentations = 4096;
+TMap<FGuid, TMap<int32, FVoxelLandEditorOperatorPresentation>> RegistryPresentations;
+constexpr int32 MaxRegistryPresentations = 4096;
 uint64 PresentationRevision = 0;
 
 bool IsValidType(EVoxelLandGraphValueType Type)
@@ -61,7 +61,7 @@ bool FVoxelLandEditorOperatorRegistry::Register(const FVoxelLandEditorOperatorPr
     {
         return false;
     }
-    if (const TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = Presentations.Find(Presentation.OperatorId))
+    if (const TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = RegistryPresentations.Find(Presentation.OperatorId))
     {
         if (Versions->Contains(Presentation.Version))
         {
@@ -70,16 +70,16 @@ bool FVoxelLandEditorOperatorRegistry::Register(const FVoxelLandEditorOperatorPr
         }
     }
     int32 Count = 0;
-    for (const auto& Entry : Presentations)
+    for (const auto& Entry : RegistryPresentations)
     {
         Count += Entry.Value.Num();
     }
-    if (Count >= MaxPresentations)
+    if (Count >= MaxRegistryPresentations)
     {
         OutError = TEXT("Editor presentation limit exceeded.");
         return false;
     }
-    Presentations.FindOrAdd(Presentation.OperatorId).Add(Presentation.Version, Presentation);
+    RegistryPresentations.FindOrAdd(Presentation.OperatorId).Add(Presentation.Version, Presentation);
     ++PresentationRevision;
     return true;
 }
@@ -89,14 +89,14 @@ bool FVoxelLandEditorOperatorRegistry::Unregister(const FGuid& OperatorId, int32
     {
         return false;
     }
-    TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = Presentations.Find(OperatorId);
+    TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = RegistryPresentations.Find(OperatorId);
     if (!Versions || Versions->Remove(Version) == 0)
     {
         return false;
     }
     if (Versions->IsEmpty())
     {
-        Presentations.Remove(OperatorId);
+        RegistryPresentations.Remove(OperatorId);
     }
     ++PresentationRevision;
     return true;
@@ -106,24 +106,24 @@ uint64 FVoxelLandEditorOperatorRegistry::GetRevision()
     check(IsInGameThread());
     return PresentationRevision;
 }
-void FVoxelLandEditorOperatorRegistry::GetPresentations(TArray<FVoxelLandEditorOperatorPresentation>& OutPresentations)
+void FVoxelLandEditorOperatorRegistry::GetPresentations(TArray<FVoxelLandEditorOperatorPresentation>& OutRegistryPresentations)
 {
-    OutPresentations.Reset();
+    OutRegistryPresentations.Reset();
     if (!IsInGameThread())
     {
         return;
     }
-    for (const auto& Entry : Presentations)
+    for (const auto& Entry : RegistryPresentations)
     {
         for (const auto& Version : Entry.Value)
         {
             if (FVoxelLandOperatorRegistry::Resolve(Entry.Key, Version.Key))
             {
-                OutPresentations.Add(Version.Value);
+                OutRegistryPresentations.Add(Version.Value);
             }
         }
     }
-    OutPresentations.Sort([](const FVoxelLandEditorOperatorPresentation& A, const FVoxelLandEditorOperatorPresentation& B)
+    OutRegistryPresentations.Sort([](const FVoxelLandEditorOperatorPresentation& A, const FVoxelLandEditorOperatorPresentation& B)
     {
         if (A.OperatorId.A != B.OperatorId.A) { return A.OperatorId.A < B.OperatorId.A; }
         if (A.OperatorId.B != B.OperatorId.B) { return A.OperatorId.B < B.OperatorId.B; }
@@ -135,6 +135,6 @@ void FVoxelLandEditorOperatorRegistry::GetPresentations(TArray<FVoxelLandEditorO
 void FVoxelLandEditorOperatorRegistry::Clear()
 {
     check(IsInGameThread());
-    Presentations.Reset();
+    RegistryPresentations.Reset();
     ++PresentationRevision;
 }

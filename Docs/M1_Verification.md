@@ -1,6 +1,6 @@
 # M1 verification handoff
 
-M1 is **open**. The source fixtures are authored but have not been built or executed. Acceptance requires successful runs on both Win64 and Linux x64 with matching SSE2 native-noise goldens from the same revisions. Native scalar noise is outside this milestone; the production VM scalar path remains supported.
+M1 is **open**. Windows editor automation has run in normal and VM-SIMD-disabled configurations; acceptance still requires Linux x64 runs and matching cross-host SSE2 native-noise captures from the same revisions. Native scalar noise is outside this milestone; the production VM scalar path remains supported.
 
 ## Revisions and environment
 
@@ -8,9 +8,9 @@ The FastNoise2 source revision is `c35d6041ce7efc05bc84e26d762f6a38d2dcc71e` and
 
 | Host / configuration | UE build | VoxelLand commit | FastNoise plugin commit and source revisions | VM / native backend | Result |
 | --- | --- | --- | --- | --- | --- |
-| Win64, normal | pending | pending | pending | pending | pending |
+| Win64, normal, Development Editor / NullRHI | 5.7 CL 51494982 | `8799a0c2b890522c5c8c9cce05304646b15dd7ab` | `0be510f3932dfa6b48927a342c3876f4232a2798`; vendored revisions above | automatic VM SIMD4 / native SSE2 | M1 13/13; same-host comparison against VM-SIMD-disabled capture passed |
 | Linux x64, normal | pending | pending | pending | pending | pending |
-| Win64, VM SIMD compiled out and native SSE2 | pending | pending | pending | pending | pending |
+| Win64, VM SIMD compiled out, Development Editor / NullRHI | 5.7 CL 51494982 | `8799a0c2b890522c5c8c9cce05304646b15dd7ab` | `0be510f3932dfa6b48927a342c3876f4232a2798`; vendored revisions above | automatic VM scalar / native SSE2 | M1 13/13, including scalar fallback and forced SIMD rejection |
 | Linux x64, VM SIMD compiled out and native SSE2 | pending | pending | pending | pending | pending |
 
 FastNoise2 and FastSIMD compile from the plugin's vendored source through UnrealBuildTool. No separate native library or DLL is staged. This integration pins SSE2 on Win64 and Linux x64. Migrating from the old native version may change noise output; do not reuse old goldens without verification.
@@ -57,4 +57,10 @@ The test generates Perlin and fBm in 2D and 3D, at both voxel sizes and two keys
 
 The checked-in plane cases use exact integer lattice recipes for expected density, then independently serialize little-endian `int16` bytes and hash them with UE's XXH3 implementation. They check two voxel sizes, positive and negative keys, all three padded overlap planes on each axis, and report the first different lattice coordinate and values. Other fixtures cover representative analytic shapes, quantization, invalid programs/profiles/LOD, worker-only execution, VM scalar/automatic parity on noise at sample counts 1, 2, 3 and 256, explicit native-scalar rejection, stable seed-slot behavior, and concurrent workers sharing a generator snapshot.
 
-The native-noise outputs have **not** been captured or compared between hosts; there is no observed shared noise golden table yet. Use the capture and compare procedure above, investigate any difference, and add an agreed fixed numeric table only after both hosts agree. The SIMD compile-out and fallback assertions are authored but have not been built or run. M2 readiness cannot be certified until the complete plan's verification matrix and cross-platform goldens pass.
+A Windows compile-out capture was compared successfully with a normal Windows build on the same host. It is not a cross-host comparison; no shared Windows/Linux noise golden table has been established. Use the capture and compare procedure above on Linux, investigate any difference, and add an agreed fixed numeric table only after both hosts agree. Linux SIMD compile-out and cross-platform acceptance remain open.
+
+## Windows VM-SIMD compile-out evidence
+
+On Windows 11 x64 with a Ryzen 9 9950X3D, UE 5.7 CL 51494982 Development Editor and MSVC 14.51.36243, a temporary `PrivateDefinitions.Add("VOXELLAND_ENABLE_VM_SIMD=0")` build succeeded. `VoxelLand.M1` ran with `-VoxelLandM1ExpectScalarVM` and passed 13/13; `VMFallback` required automatic scalar selection and `BackendUnavailable` for forced SIMD. The M1 cross-host capture test in that full run warned that no comparison path was supplied. A separate capture recorded `platform=WindowsEditor VM=1 native=2` (scalar VM, native SSE2), and the capture contains 16 cases. `VoxelLand.M3` passed 29/29 in the same compile-out configuration, with expected warnings that forced VM SIMD parity and the SIMD fallback path were not exercised.
+
+The original `VoxelLandAlgo.Build.cs` bytes were restored and the normal configuration rebuilt successfully. A restored normal-build `VoxelLand.M1` run passed 13/13, reported `VM=2 native=2` (SIMD4 VM, native SSE2), and matched all captured noise arrays and hashes against the compile-out build on this same Windows host. This does not verify Linux or cross-host parity. One initial restore rebuild was blocked by Rider's concurrent project-file generation holding the build-rules DLL; the retry succeeded. Logs in the host project's `Saved/Logs` are `M1_VMSimdDisabled_Build.txt`, `M1_VMSimdDisabled_Automation.log`, `M3_VMSimdDisabled_Automation.log`, `M1_VMSimdDisabled_Capture.log`, `M1_VMSimdRestored_RetryBuild.txt` and `M1_VMRestored_FullSameHostCompare.log`. The capture is `Saved/M1_VMSimdDisabled_Capture.txt`.

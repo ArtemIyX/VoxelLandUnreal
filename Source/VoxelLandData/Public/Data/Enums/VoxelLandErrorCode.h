@@ -14,5 +14,6 @@ enum class EVoxelLandErrorCode : uint8
 	NativeLibraryUnavailable,
 	InvalidContext,
 	NonFiniteCoordinate,
-	NonFiniteDensity
+	NonFiniteDensity,
+    Cancelled
 };

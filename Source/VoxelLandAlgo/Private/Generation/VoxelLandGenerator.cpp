@@ -577,6 +577,12 @@ uint64 FVoxelLandWorkerContext::FImpl::HashChunkDensity(const TArray<int16>& Den
 FVoxelLandError FVoxelLandGenerator::GenerateChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const
 {
+	return GenerateChunkCancellable(Key, Worker, OutChunk, [] { return false; });
+}
+
+FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const
+{
 	if (IsInGameThread())
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Chunk generation requires a worker thread"));
 	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
@@ -592,6 +598,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunk(const FVoxelLandChunkKey& Key
 	Batch.Reserve(BatchSize);
 	for (int32 Start = 0; Start < FVoxelLandChunkData::SampleCount; Start += BatchSize)
 	{
+		if (IsCancelled()) return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
 		const int32 Count = FMath::Min(BatchSize, FVoxelLandChunkData::SampleCount - Start);
 		if (FVoxelLandError Error =
 				FillChunkPositions(Key, Profile.VoxelSizeCm, Start, MakeArrayView(Positions, Count)))

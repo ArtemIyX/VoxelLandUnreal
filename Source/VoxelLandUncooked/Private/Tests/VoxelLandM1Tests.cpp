@@ -2,6 +2,7 @@
 
 #include "VoxelLandM1Fixtures.h"
 #include "Async/Async.h"
+#include "Hash/xxhash.h"
 #include "HAL/Event.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformProperties.h"
@@ -42,7 +43,8 @@ struct FSampleResult
     TArray<int16> Values;
 };
 
-FSampleResult Sample(FVoxelLandProgramDraft Draft, FVoxelLandBackendOptions Options, uint64 Seed, int32 Count)
+FSampleResult SampleAt(FVoxelLandProgramDraft Draft, FVoxelLandBackendOptions Options, uint64 Seed,
+    const TArray<FVector3f>& Positions)
 {
     FSampleResult R; R.bOffGameThread = !IsInGameThread();
     TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
@@ -52,11 +54,16 @@ FSampleResult Sample(FVoxelLandProgramDraft Draft, FVoxelLandBackendOptions Opti
     TUniquePtr<FVoxelLandWorkerContext> Worker;
     R.Error = Generator->CreateWorker(Worker); if (R.Error) return R;
     R.VM = Worker->GetVMBackend(); R.NoiseBackend = Worker->GetNoiseBackend();
+    R.Error = Generator->EvaluateSamples(Positions, *Worker, R.Values);
+    return R;
+}
+
+FSampleResult Sample(FVoxelLandProgramDraft Draft, FVoxelLandBackendOptions Options, uint64 Seed, int32 Count)
+{
     TArray<FVector3f> Positions; Positions.Reserve(Count);
     for (int32 I = 0; I < Count; ++I)
         Positions.Emplace(float(I - 129) * 13.25f, float((I * 31) % 257 - 128) * 7.f, float((I * 11) % 123 - 61) * 5.f);
-    R.Error = Generator->EvaluateSamples(Positions, *Worker, R.Values);
-    return R;
+    return SampleAt(Draft, Options, Seed, Positions);
 }
 }
 
@@ -180,12 +187,74 @@ bool FVoxelLandM1Validation::RunTest(const FString& Parameters)
     Bad = Plane(); FVoxelLandParameterSlot Duplicate; Duplicate.Name = TEXT("Level");
     Bad.Parameters.Add(Duplicate); Duplicate.Name = TEXT("LEVEL"); Bad.Parameters.Add(Duplicate);
     TestEqual(TEXT("duplicate normalized names rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidParameter));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); const FVoxelLandSeedSlot OriginalSeed = Bad.Seeds[0]; Bad.Seeds.Add(OriginalSeed);
+    TestEqual(TEXT("duplicate GUID and salt rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    ++Bad.Seeds[1].Salt;
+    TestFalse(TEXT("same GUID with distinct salt accepted"), bool(Validate(Bad)));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Seeds[0].NodeId = FGuid();
+    TestEqual(TEXT("invalid seed GUID rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Plane(); Duplicate.Name = TEXT("invalid name"); Bad.Parameters.Add(Duplicate);
+    TestEqual(TEXT("invalid parameter name rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidParameter));
+    Bad = Plane(); Duplicate.Name = TEXT("value"); Duplicate.FloatDefault = std::numeric_limits<float>::quiet_NaN(); Bad.Parameters.Add(Duplicate);
+    TestEqual(TEXT("non-finite parameter default rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidParameter));
+    Bad = Plane(); Bad.Instructions[1] = Op(EVoxelLandOpcode::LoadFloatParameter, 1, 0, 0, 0, 0);
+    TestEqual(TEXT("parameter slot bounds rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Duplicate.FloatDefault = 0.f; Duplicate.Type = EVoxelLandParameterType::Int32; Bad.Parameters.Add(Duplicate);
+    TestEqual(TEXT("wrong load parameter type rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Noise[0].Frequency.bParameter = true; Bad.Noise[0].Frequency.Index = 0;
+    Bad.Parameters.Add(Duplicate);
+    TestEqual(TEXT("wrong noise parameter type rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    Bad = Noise(EVoxelLandOpcode::Fbm3); Bad.Instructions[3].Imm = 20;
+    const FVoxelLandError InvalidInstruction = Validate(Bad);
+    TestEqual(TEXT("invalid noise config reports instruction"), InvalidInstruction.Instruction, 3);
+    TestEqual(TEXT("invalid noise config typed"), int32(InvalidInstruction.Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    struct FOperandCase { EVoxelLandOpcode Code; int32 Reads; uint32 Imm; };
+    const FOperandCase Operands[] = {
+        {EVoxelLandOpcode::Add,2,0}, {EVoxelLandOpcode::Subtract,2,0}, {EVoxelLandOpcode::Multiply,2,0},
+        {EVoxelLandOpcode::Divide,2,0}, {EVoxelLandOpcode::Min,2,0}, {EVoxelLandOpcode::Max,2,0},
+        {EVoxelLandOpcode::Abs,1,0}, {EVoxelLandOpcode::Negate,1,0},
+        {EVoxelLandOpcode::Plane,3,4}, {EVoxelLandOpcode::Sphere,3,0}, {EVoxelLandOpcode::Box,3,1},
+        {EVoxelLandOpcode::Union,2,0}, {EVoxelLandOpcode::SubtractShape,2,0}, {EVoxelLandOpcode::Intersect,2,0},
+        {EVoxelLandOpcode::Perlin2,2,0}, {EVoxelLandOpcode::Perlin3,3,0},
+        {EVoxelLandOpcode::Fbm2,2,0}, {EVoxelLandOpcode::Fbm3,3,0}};
+    for (const FOperandCase& C : Operands)
+    {
+        const bool bNoise = C.Code == EVoxelLandOpcode::Perlin2 || C.Code == EVoxelLandOpcode::Perlin3 || C.Code == EVoxelLandOpcode::Fbm2 || C.Code == EVoxelLandOpcode::Fbm3;
+        FVoxelLandProgramDraft Base = bNoise ? Noise(C.Code) : Shapes(); Base.RegisterCount = 4;
+        Base.Instructions = {Op(EVoxelLandOpcode::LoadX, 0), Op(EVoxelLandOpcode::LoadY, 1), Op(EVoxelLandOpcode::LoadZ, 2),
+            Op(C.Code, 3, 0, 1, 2, C.Imm), Op(EVoxelLandOpcode::StoreDensity, 0, 3)};
+        for (int32 Slot = 0; Slot < C.Reads; ++Slot)
+        {
+            Bad = Base;
+            if (Slot == 0) Bad.Instructions[3].A = 65535; else if (Slot == 1) Bad.Instructions[3].B = 65535; else Bad.Instructions[3].C = 65535;
+            const FVoxelLandError Error = Validate(Bad);
+            TestTrue(FString::Printf(TEXT("opcode %d source %d rejected at instruction"), int32(C.Code), Slot),
+                Error.Code == EVoxelLandErrorCode::InvalidProgram && Error.Instruction == 3);
+        }
+        Bad = Base; Bad.Instructions[3].Dst = 65535;
+        const FVoxelLandError Error = Validate(Bad);
+        TestTrue(FString::Printf(TEXT("opcode %d destination rejected at instruction"), int32(C.Code)),
+            Error.Code == EVoxelLandErrorCode::InvalidProgram && Error.Instruction == 3);
+    }
     FVoxelLandZoneProfile Profile; Profile.VoxelSizeCm = 0.f;
     TestEqual(TEXT("zero profile rejected"), int32(Run(Plane(), Profile, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidProfile));
     Profile.VoxelSizeCm = 100.f; Profile.FloatOverrides.Add(TEXT("unknown"), 1.f);
     TestEqual(TEXT("unknown override rejected"), int32(Run(Plane(), Profile, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidParameter));
     Profile.FloatOverrides.Empty(); FVoxelLandChunkKey Key; Key.LOD = 1;
     TestEqual(TEXT("LOD rejected"), int32(Run(Plane(), Profile, Key).Error.Code), int32(EVoxelLandErrorCode::UnsupportedLod));
+    Profile.VoxelSizeCm = std::numeric_limits<float>::infinity();
+    TestEqual(TEXT("infinite voxel size rejected"), int32(Run(Plane(), Profile, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidProfile));
+    Profile.VoxelSizeCm = std::numeric_limits<float>::quiet_NaN();
+    TestEqual(TEXT("NaN voxel size rejected"), int32(Run(Plane(), Profile, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidProfile));
+    const FSampleResult InvalidPosition = Async(EAsyncExecution::ThreadPool, []() {
+        const TArray<FVector3f> Positions = {FVector3f(std::numeric_limits<float>::infinity(), 0.f, 0.f)};
+        return SampleAt(Plane(), {}, 0, Positions);
+    }).Get();
+    TestEqual(TEXT("non-finite coordinate rejected"), int32(InvalidPosition.Error.Code), int32(EVoxelLandErrorCode::NonFiniteCoordinate));
+    Bad = Plane(); Bad.Constants[0] = 0.f; Bad.Instructions[2].Op = EVoxelLandOpcode::Divide;
+    const FSampleResult DivideByZero = Async(EAsyncExecution::ThreadPool, [Bad]() { return Sample(Bad, {}, 0, 1); }).Get();
+    TestEqual(TEXT("non-finite VM result rejected"), int32(DivideByZero.Error.Code), int32(EVoxelLandErrorCode::NonFiniteDensity));
+    TestTrue(TEXT("failed evaluation publishes no samples"), DivideByZero.Values.IsEmpty());
     return true;
 }
 
@@ -257,6 +326,32 @@ bool FVoxelLandM1Backends::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM1Fallback, "VoxelLand.M1.VMFallback", Flags)
+bool FVoxelLandM1Fallback::RunTest(const FString& Parameters)
+{
+    FVoxelLandBackendOptions Forced; Forced.VM = EVoxelLandVMBackend::Simd4;
+    const FSampleResult Auto = Async(EAsyncExecution::ThreadPool, []() { return Sample(Plane(), {}, 0, 256); }).Get();
+    const FSampleResult SIMD = Async(EAsyncExecution::ThreadPool, [Forced]() { return Sample(Plane(), Forced, 0, 256); }).Get();
+    if (Auto.Error) { AddError(FString::Printf(TEXT("automatic VM setup failed: %s"), *Auto.Error.Message)); return false; }
+    if (FParse::Param(FCommandLine::Get(), TEXT("VoxelLandM1ExpectScalarVM")))
+    {
+        TestEqual(TEXT("compiled-out automatic VM selects scalar"), int32(Auto.VM), int32(EVoxelLandVMBackend::Scalar));
+        TestEqual(TEXT("compiled-out forced SIMD is unavailable"), int32(SIMD.Error.Code), int32(EVoxelLandErrorCode::BackendUnavailable));
+    }
+    else if (SIMD.Error)
+    {
+        TestEqual(TEXT("unsupported forced SIMD is typed unavailable"), int32(SIMD.Error.Code), int32(EVoxelLandErrorCode::BackendUnavailable));
+        TestEqual(TEXT("unsupported automatic SIMD falls back"), int32(Auto.VM), int32(EVoxelLandVMBackend::Scalar));
+    }
+    else
+    {
+        TestEqual(TEXT("forced SIMD selected"), int32(SIMD.VM), int32(EVoxelLandVMBackend::Simd4));
+        TestEqual(TEXT("automatic SIMD selected"), int32(Auto.VM), int32(EVoxelLandVMBackend::Simd4));
+        TestTrue(TEXT("forced and automatic SIMD agree"), SIMD.Values == Auto.Values);
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM1Arithmetic, "VoxelLand.M1.AnalyticArithmetic", Flags)
 bool FVoxelLandM1Arithmetic::RunTest(const FString& Parameters)
 {
@@ -303,6 +398,24 @@ bool FVoxelLandM1Shapes::RunTest(const FString& Parameters)
     TestEqual(TEXT("shape at origin intersects plane"), int32(At(1, 1, 1)), 0);
     TestEqual(TEXT("interior at z=-100"), int32(At(1, 1, 0)), -1024);
     TestEqual(TEXT("plane cuts shape at z=100"), int32(At(1, 1, 2)), 1024);
+    FVoxelLandProgramDraft Sphere; Sphere.RegisterCount = 5; Sphere.Constants = {100.f, 250.f};
+    Sphere.Instructions = {Op(EVoxelLandOpcode::LoadX, 0), Op(EVoxelLandOpcode::LoadY, 1),
+        Op(EVoxelLandOpcode::LoadZ, 2), Op(EVoxelLandOpcode::LoadConstant, 3, 0, 0, 0, 0),
+        Op(EVoxelLandOpcode::Subtract, 0, 0, 3), Op(EVoxelLandOpcode::Sphere, 4, 0, 1, 2, 1),
+        Op(EVoxelLandOpcode::StoreDensity, 0, 4)};
+    FVoxelLandProgramDraft Box; Box.RegisterCount = 4; Box.Constants = {150.f, 200.f, 250.f};
+    Box.Instructions = {Op(EVoxelLandOpcode::LoadX, 0), Op(EVoxelLandOpcode::LoadY, 1),
+        Op(EVoxelLandOpcode::LoadZ, 2), Op(EVoxelLandOpcode::Box, 3, 0, 1, 2), Op(EVoxelLandOpcode::StoreDensity, 0, 3)};
+    const TArray<FVector3f> SpherePositions = {FVector3f(100.f, 0.f, 0.f), FVector3f(400.f, 0.f, 0.f), FVector3f(-150.f, 0.f, 0.f)};
+    const TArray<FVector3f> BoxPositions = {FVector3f(0.f, 0.f, 0.f), FVector3f(200.f, 0.f, 0.f), FVector3f(150.f, 200.f, 250.f)};
+    const FSampleResult SphereSamples = Async(EAsyncExecution::ThreadPool, [Sphere, SpherePositions]() { return SampleAt(Sphere, {}, 0, SpherePositions); }).Get();
+    const FSampleResult BoxSamples = Async(EAsyncExecution::ThreadPool, [Box, BoxPositions]() { return SampleAt(Box, {}, 0, BoxPositions); }).Get();
+    if (SphereSamples.Error || BoxSamples.Error) AddError(FString::Printf(TEXT("analytic shape samples: %s; %s"), *SphereSamples.Error.Message, *BoxSamples.Error.Message));
+    else
+    {
+        TestTrue(TEXT("translated sphere exact center, outside and surface"), SphereSamples.Values == TArray<int16>({-2560, 512, 0}));
+        TestTrue(TEXT("box exact interior, outside and corner"), BoxSamples.Values == TArray<int16>({-1536, 512, 0}));
+    }
     return true;
 }
 
@@ -340,6 +453,56 @@ bool FVoxelLandM1Parameters::RunTest(const FString& Parameters)
     else TestTrue(TEXT("int32 octave override changes fBm"), A.Chunk->Density != B.Chunk->Density);
     Four.IntOverrides[TEXT("octaves")] = 0;
     TestTrue(TEXT("invalid octave override rejected"), bool(Run(NoiseDraft, Four, {}).Error));
+    NoiseDraft = Noise(EVoxelLandOpcode::Fbm3);
+    FVoxelLandParameterSlot Frequency; Frequency.Name = TEXT("frequency"); Frequency.FloatDefault = .002f;
+    FVoxelLandParameterSlot Gain; Gain.Name = TEXT("gain"); Gain.FloatDefault = .5f;
+    FVoxelLandParameterSlot Lacunarity; Lacunarity.Name = TEXT("lacunarity"); Lacunarity.FloatDefault = 2.f;
+    NoiseDraft.Parameters = {Frequency, Gain, Lacunarity};
+    NoiseDraft.Noise[0].Frequency = {true, 0}; NoiseDraft.Noise[0].Gain = {true, 1}; NoiseDraft.Noise[0].Lacunarity = {true, 2};
+    FVoxelLandZoneProfile DefaultNoise, ChangedNoise; ChangedNoise.FloatOverrides.Add(TEXT("frequency"), .006f);
+    const FResult DefaultChunk = Run(NoiseDraft, DefaultNoise, {}, {}, 456), FrequencyChunk = Run(NoiseDraft, ChangedNoise, {}, {}, 456);
+    if (DefaultChunk.Error || FrequencyChunk.Error || !DefaultChunk.Chunk || !FrequencyChunk.Chunk)
+        AddError(FString::Printf(TEXT("frequency override setup: %s; %s"), *DefaultChunk.Error.Message, *FrequencyChunk.Error.Message));
+    else TestTrue(TEXT("float frequency override changes noise"), DefaultChunk.Chunk->Density != FrequencyChunk.Chunk->Density);
+    ChangedNoise.FloatOverrides.Empty(); ChangedNoise.FloatOverrides.Add(TEXT("frequency"), 0.f);
+    TestEqual(TEXT("non-positive frequency override rejected"), int32(Run(NoiseDraft, ChangedNoise, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidParameter));
+    ChangedNoise.FloatOverrides.Empty(); ChangedNoise.FloatOverrides.Add(TEXT("gain"), 1.1f);
+    TestEqual(TEXT("invalid gain override rejected"), int32(Run(NoiseDraft, ChangedNoise, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidParameter));
+    ChangedNoise.FloatOverrides.Empty(); ChangedNoise.FloatOverrides.Add(TEXT("lacunarity"), .5f);
+    TestEqual(TEXT("invalid lacunarity override rejected"), int32(Run(NoiseDraft, ChangedNoise, {}).Error.Code), int32(EVoxelLandErrorCode::InvalidParameter));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM1Canonical, "VoxelLand.M1.CanonicalHashes", Flags)
+bool FVoxelLandM1Canonical::RunTest(const FString& Parameters)
+{
+    const TArray<int16> Samples = {0, 1, -1, 32767, -32768};
+    const uint8 Bytes[] = {0x00, 0x00, 0x01, 0x00, 0xff, 0xff, 0xff, 0x7f, 0x00, 0x80};
+    const uint64 Expected = FXxHash64::HashBuffer(Bytes, sizeof(Bytes)).Hash;
+    TestEqual(TEXT("density hashes canonical little-endian bytes"), VoxelLandDeterminism::HashDensity(Samples), Expected);
+
+    FVoxelLandProgramDraft P = Plane();
+    FVoxelLandParameterSlot Height; Height.Name = TEXT("Height"); Height.FloatDefault = 500.f;
+    FVoxelLandParameterSlot Other; Other.Name = TEXT("Other"); Other.FloatDefault = 0.f;
+    P.Parameters = {Height, Other}; P.Instructions[1] = Op(EVoxelLandOpcode::LoadFloatParameter, 1);
+    FVoxelLandProgramDraft Same = P; Same.Parameters[0].Name = TEXT("hEIGHT"); Same.Parameters[1].FloatDefault = -0.f;
+    FVoxelLandZoneProfile One, Two;
+    One.FloatOverrides.Add(TEXT("height"), 100.f); One.FloatOverrides.Add(TEXT("other"), 5.f);
+    Two.FloatOverrides.Add(TEXT("OTHER"), 5.f); Two.FloatOverrides.Add(TEXT("HEIGHT"), 100.f);
+    const FResult A = Run(P, One, {}), B = Run(Same, Two, {});
+    if (A.Error || B.Error || !A.Generator || !B.Generator || !A.Chunk || !B.Chunk)
+    { AddError(FString::Printf(TEXT("canonical setup: %s; %s"), *A.Error.Message, *B.Error.Message)); return false; }
+    TestEqual(TEXT("case and signed zero normalize in fingerprint"), A.Generator->GetProgram().GetFingerprint(), B.Generator->GetProgram().GetFingerprint());
+    TestTrue(TEXT("override insertion order and case do not change density"), A.Chunk->Density == B.Chunk->Density && A.Chunk->Hash == B.Chunk->Hash);
+    Same.Parameters[0].FloatDefault = 501.f;
+    const FResult Changed = Run(Same, Two, {});
+    if (Changed.Error || !Changed.Generator) AddError(Changed.Error.Message);
+    else TestTrue(TEXT("parameter default contributes to program fingerprint"), A.Generator->GetProgram().GetFingerprint() != Changed.Generator->GetProgram().GetFingerprint());
+    FVoxelLandProgramDraft NoiseA = Noise(EVoxelLandOpcode::Fbm2), NoiseB = NoiseA; ++NoiseB.Seeds[0].Salt;
+    const FResult SeedA = Run(NoiseA, {}, {}), SeedB = Run(NoiseB, {}, {});
+    if (SeedA.Error || SeedB.Error || !SeedA.Generator || !SeedB.Generator)
+        AddError(FString::Printf(TEXT("seed fingerprint setup: %s; %s"), *SeedA.Error.Message, *SeedB.Error.Message));
+    else TestTrue(TEXT("seed salt contributes to fingerprint"), SeedA.Generator->GetProgram().GetFingerprint() != SeedB.Generator->GetProgram().GetFingerprint());
     return true;
 }
 
@@ -469,9 +632,9 @@ bool FVoxelLandM1CrossHostCapture::RunTest(const FString& Parameters)
             }
             if (Result.Backends.IsEmpty()) Result.Backends = FString::Printf(TEXT("platform=%s VM=%d native=%d (0=auto, 1=scalar, 2=SIMD4/SSE2)"),
                 ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), int32(R.VM), int32(R.NoiseBackend));
-            // Stable line format: opcode;voxel size;seed;chunk X;Y;Z;hash|X-fastest densities.
-            Result.Text += FString::Printf(TEXT("%d;%d;%llu;%d;%d;%d;%llu|"), int32(Code), Size, Seeds[K],
-                Key.Coordinate.X, Key.Coordinate.Y, Key.Coordinate.Z, R.Chunk->Hash);
+            // Stable line format: opcode;voxel size;seed;chunk X;Y;Z;program fingerprint;hash|densities.
+            Result.Text += FString::Printf(TEXT("%d;%d;%llu;%d;%d;%d;%llu;%llu|"), int32(Code), Size, Seeds[K],
+                Key.Coordinate.X, Key.Coordinate.Y, Key.Coordinate.Z, R.Generator->GetProgram().GetFingerprint(), R.Chunk->Hash);
             for (int32 I = 0; I < R.Chunk->Density.Num(); ++I)
             {
                 if (I) Result.Text.AppendChar(TEXT(','));
@@ -501,10 +664,10 @@ bool FVoxelLandM1CrossHostCapture::RunTest(const FString& Parameters)
                 !ActualLines[CaseIndex].Split(TEXT("|"), &ActualHeader, &ActualValues))
             { AddError(FString::Printf(TEXT("invalid capture line %d"), CaseIndex)); return false; }
             TArray<FString> EH, AH; ExpectedHeader.ParseIntoArray(EH, TEXT(";")); ActualHeader.ParseIntoArray(AH, TEXT(";"));
-            if (EH.Num() != 7 || AH.Num() != 7) { AddError(FString::Printf(TEXT("invalid capture header at case %d"), CaseIndex)); return false; }
-            for (int32 Field = 0; Field < 6; ++Field)
+            if (EH.Num() != 8 || AH.Num() != 8) { AddError(FString::Printf(TEXT("invalid capture header at case %d"), CaseIndex)); return false; }
+            for (int32 Field = 0; Field < 7; ++Field)
                 if (EH[Field] != AH[Field]) { AddError(FString::Printf(TEXT("capture case %d metadata mismatch expected=%s actual=%s"), CaseIndex, *ExpectedHeader, *ActualHeader)); return false; }
-            if (ExpectedValues != ActualValues || EH[6] != AH[6])
+            if (ExpectedValues != ActualValues || EH[7] != AH[7])
             {
                 TArray<FString> EV, AV; ExpectedValues.ParseIntoArray(EV, TEXT(",")); ActualValues.ParseIntoArray(AV, TEXT(","));
                 if (EV.Num() != AV.Num()) { AddError(FString::Printf(TEXT("%s sample count expected=%d actual=%d"), *ActualHeader, EV.Num(), AV.Num())); return false; }
@@ -514,11 +677,11 @@ bool FVoxelLandM1CrossHostCapture::RunTest(const FString& Parameters)
                         const int64 X = int64(FCString::Atoi(*AH[3])) * 32 + I % 35 - 1;
                         const int64 Y = int64(FCString::Atoi(*AH[4])) * 32 + (I / 35) % 35 - 1;
                         const int64 Z = int64(FCString::Atoi(*AH[5])) * 32 + I / (35 * 35) - 1;
-                        AddError(FString::Printf(TEXT("opcode=%s voxel=%s seed=%s key=(%s,%s,%s) expected hash=%s actual hash=%s first lattice=(%lld,%lld,%lld) expected=%s actual=%s"),
-                            *AH[0], *AH[1], *AH[2], *AH[3], *AH[4], *AH[5], *EH[6], *AH[6], X, Y, Z, *EV[I], *AV[I]));
+                        AddError(FString::Printf(TEXT("opcode=%s voxel=%s seed=%s key=(%s,%s,%s) fingerprint=%s expected hash=%s actual hash=%s first lattice=(%lld,%lld,%lld) expected=%s actual=%s"),
+                            *AH[0], *AH[1], *AH[2], *AH[3], *AH[4], *AH[5], *AH[6], *EH[7], *AH[7], X, Y, Z, *EV[I], *AV[I]));
                         return false;
                     }
-                AddError(FString::Printf(TEXT("%s matching values but expected hash=%s actual hash=%s"), *ActualHeader, *EH[6], *AH[6]));
+                AddError(FString::Printf(TEXT("%s matching values but expected hash=%s actual hash=%s"), *ActualHeader, *EH[7], *AH[7]));
                 return false;
             }
         }

@@ -29,6 +29,14 @@ Build the host project and plugin for the selected UE 5.7 configuration, then us
 
 Repeat with the scalar-enabled native dependency and VM SIMD compiled out. The `NativeScalarRequired` test is an explicit acceptance gate; when using the stock x64 dependency, its backend-unavailable failure is expected evidence that this gate is still pending, not a passing result. Record actual backend selections and all test results; investigate every mismatch instead of refreshing golden values to make the test pass.
 
+To explicitly compile the VM SIMD kernels out, temporarily add this line inside the `VoxelLandAlgo` constructor in `Source/VoxelLandAlgo/VoxelLandAlgo.Build.cs`, then rebuild that module and its host for the intended platform:
+
+```csharp
+PrivateDefinitions.Add("VOXELLAND_ENABLE_VM_SIMD=0");
+```
+
+Run the full suite above with the additional command-line argument `-VoxelLandM1ExpectScalarVM`. The `VoxelLand.M1.VMFallback` test then requires automatic VM selection to be scalar and a forced SIMD request to return `BackendUnavailable`; the remaining tests still exercise scalar batches. The flag checks the build and does not itself disable SIMD. Record this build configuration separately, then remove the temporary definition and rebuild before returning to normal SIMD-enabled builds. Compile-out of the VM does not enable FastNoise's independent native scalar backend.
+
 ## Capture and compare cross-host noise arrays
 
 On the first host, execute the capture test and choose an output path in a writable directory:
@@ -49,4 +57,4 @@ The test generates Perlin and fBm in 2D and 3D, at both voxel sizes and two keys
 
 The checked-in plane cases use exact integer lattice recipes for expected density, then independently serialize little-endian `int16` bytes and hash them with UE's XXH3 implementation. They check two voxel sizes, positive and negative keys, all three padded overlap planes on each axis, and report the first different lattice coordinate and values. Other fixtures cover representative analytic shapes, quantization, invalid programs/profiles/LOD, worker-only execution, VM scalar/automatic parity on noise at sample counts 1, 2, 3 and 256, native scalar/SSE2 comparisons, stable seed-slot behavior, and concurrent workers sharing a generator snapshot.
 
-The native-noise outputs have **not** been captured or compared between hosts; there is no observed shared noise golden table yet. Use the capture and compare procedure above, investigate any difference, and add an agreed fixed numeric table only after both hosts agree. Extend the acceptance fixtures where needed to cover every validation and override combination and verify scalar-disabled SIMD fallback. M2 readiness cannot be certified until the complete plan's verification matrix and cross-platform goldens pass.
+The native-noise outputs have **not** been captured or compared between hosts; there is no observed shared noise golden table yet. Use the capture and compare procedure above, investigate any difference, and add an agreed fixed numeric table only after both hosts agree. The SIMD compile-out and fallback assertions are authored but have not been built or run. M2 readiness cannot be certified until the complete plan's verification matrix and cross-platform goldens pass.

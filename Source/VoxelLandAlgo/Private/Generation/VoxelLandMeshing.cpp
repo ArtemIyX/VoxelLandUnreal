@@ -45,9 +45,11 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
     FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled)
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SurfaceNets);
-    if (Chunk.Key.LOD != 0 || Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || (VoxelSizeCm != 50.f && VoxelSizeCm != 100.f))
+    if (Chunk.Key.LOD != 0 || Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || VoxelSizeCm <= 0 || !FMath::IsFinite(VoxelSizeCm*34.f))
         return EVoxelLandMeshResult::InvalidInput;
     FVoxelLandMeshData Mesh;
+    const double Grid=VoxelLandMeshCoordinates::Grid(VoxelSizeCm);
+    const FVector Origin=VoxelLandMeshCoordinates::RenderOrigin(Chunk.Key.Coordinate,VoxelSizeCm);
     Scratch.CellVertices.Init(INDEX_NONE, CellCount*CellCount*CellCount);
     for (int32 Z=-1; Z<=32; ++Z)
     {
@@ -74,12 +76,15 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
             const FVector3f Abs= N.GetAbs();
             const FVector3f Reference = Abs.X <= Abs.Y && Abs.X <= Abs.Z ? Axis(0) : (Abs.Y <= Abs.Z ? Axis(1) : Axis(2));
             FVoxelLandMeshVertex V;
-            // Snap in physical units, not cell fractions: this preserves sub-1/1024-cell features
-            // while making the 50/100 cm profiles exactly translatable across chunk origins.
-            const FVector3f FractionCm=P*VoxelSizeCm;
-            const FVector3f Snapped(FMath::RoundToFloat(FractionCm.X*1024.f)/1024.f,
-                FMath::RoundToFloat(FractionCm.Y*1024.f)/1024.f, FMath::RoundToFloat(FractionCm.Z*1024.f)/1024.f);
-            V.Position=FVector3f(float(X),float(Y),float(Z))*VoxelSizeCm+Snapped;
+            // Construct shared cell vertices in global integer-cell space, then snap
+            // once to a scale-derived binary grid shared by all chunks.
+            const int64 GX=int64(Chunk.Key.Coordinate.X)*32+X;
+            const int64 GY=int64(Chunk.Key.Coordinate.Y)*32+Y;
+            const int64 GZ=int64(Chunk.Key.Coordinate.Z)*32+Z;
+            const FVector World(VoxelLandMeshCoordinates::Snap((double(GX)+P.X)*VoxelSizeCm,Grid),
+                VoxelLandMeshCoordinates::Snap((double(GY)+P.Y)*VoxelSizeCm,Grid),
+                VoxelLandMeshCoordinates::Snap((double(GZ)+P.Z)*VoxelSizeCm,Grid));
+            V.Position=FVector3f(World-Origin);
             V.Normal=N; V.Tangent=FVector3f::CrossProduct(Reference,N).GetSafeNormal();
             V.UV=FVector2f(V.Position.X,V.Position.Y)/100.f;
             Mesh.Bounds += V.Position;

@@ -32,7 +32,7 @@ bool FVoxelLandM2MeshTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("negative boundary"), VoxelLandCoordinates::FloorDivide(-10,10), -1);
     TestEqual(TEXT("negative past boundary"), VoxelLandCoordinates::FloorDivide(-11,10), -2);
     // A minimal signed feature must survive quantization and produce nonzero faces.
-    for (float Scale : {50.f,100.f})
+    for (float Scale : {1.f,50.f,75.3f,100.f})
     {
         FVoxelLandChunkData Tiny; Tiny.Density.Init(32767,FVoxelLandChunkData::SampleCount);
         Tiny.Density[(16+1)+35*((16+1)+35*(16+1))]=-1;
@@ -40,10 +40,7 @@ bool FVoxelLandM2MeshTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("tiny feature builds"), int32(VoxelLandMeshing::BuildSurfaceNets(Tiny,Scale,Scratch,Mesh,[] {return false;})), int32(EVoxelLandMeshResult::Success));
         TestTrue(TEXT("tiny feature survives"), Mesh.Indices.Num()>0);
     }
-    {
-        FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;
-        TestEqual(TEXT("unsupported meshing scale is rejected"), int32(VoxelLandMeshing::BuildSurfaceNets(Uniform,1.f,Scratch,Mesh,[] {return false;})), int32(EVoxelLandMeshResult::InvalidInput));
-    }
+
     for (int32 Axis=0; Axis<3; ++Axis)
     {
         FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;
@@ -79,7 +76,7 @@ bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("shared halo vertices"), Shared > 0);
     // An asymmetric crossing must agree exactly after translating the negative chunk.
-    for (float Scale : {50.f,100.f})
+    for (float Scale : {1.f,50.f,75.3f,100.f})
     {
         FVoxelLandChunkData Left=Plane(FIntVector(-1,0,0),2,1), Right=Plane(FIntVector(0,0,0),2,1);
         for (int32 Z=-1; Z<=33; ++Z) for (int32 Y=-1; Y<=33; ++Y) for (int32 X=-1; X<=33; ++X)
@@ -91,10 +88,18 @@ bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
         FVoxelLandMeshData L,R;
         VoxelLandMeshing::BuildSurfaceNets(Left,Scale,S1,L,NeverCancel);
         VoxelLandMeshing::BuildSurfaceNets(Right,Scale,S2,R,NeverCancel);
-        int32 Exact=0;
-        for (const auto& LV : L.Vertices) for (const auto& RV : R.Vertices)
-            if (LV.Position+FVector3f(-32.f*Scale,0,0)==RV.Position) ++Exact;
-        TestTrue(TEXT("asymmetric seam has exact shared coordinates"), Exact>0);
+        int32 Shared=0;
+        const FVector OriginL=VoxelLandMeshCoordinates::RenderOrigin(FIntVector(-1,0,0),Scale);
+        const FVector OriginR=VoxelLandMeshCoordinates::RenderOrigin(FIntVector(0,0,0),Scale);
+        for (const auto& LV : L.Vertices)
+        {
+            const FVector WorldL=FVector(LV.Position)+OriginL;
+            if (WorldL.X < -Scale || WorldL.X > Scale) continue;
+            bool bMatch=false;
+            for (const auto& RV : R.Vertices) if (WorldL==FVector(RV.Position)+OriginR) { bMatch=true; break; }
+            TestTrue(TEXT("every overlapping asymmetric vertex matches"),bMatch); ++Shared;
+        }
+        TestTrue(TEXT("overlapping vertices examined"),Shared>0);
     }
     return true;
 }

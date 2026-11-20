@@ -148,7 +148,6 @@ void AVoxelLandWorld::EndPlay(const EEndPlayReason::Type Reason) { Shutdown(); S
 void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator,ESPMode::ThreadSafe> Generator)
 {
     check(IsInGameThread()); Shutdown(); if (!Generator) return;
-    if (GetNetMode()!=NM_DedicatedServer && Generator->GetProfile().VoxelSizeCm!=50.f && Generator->GetProfile().VoxelSizeCm!=100.f) { UE_LOG(LogTemp,Error,TEXT("VoxelLand renderer supports 50 or 100 cm voxels")); return; }
     State=MakeUnique<FVoxelLandWorldState>(); State->Generator=Generator;
     State->bServer=GetNetMode()==NM_DedicatedServer;
     const int32 Count=FMath::Clamp(WorkerCount,1,MaxWorkers);
@@ -258,9 +257,8 @@ void AVoxelLandWorld::PumpCompletions()
             Regions.Add(Region); State->RegionMap.Add(RegionKey,Region);
             Region->SetActorHiddenInGame(State->HiddenRegions.Contains(RegionKey));
         }
-        const double ChunkWidth=double(State->Generator->GetProfile().VoxelSizeCm)*32.0;
         const FIntVector C=Done.Job.Key.Coordinate;
-        Region->Publish(C,FVector(double(C.X)*ChunkWidth,double(C.Y)*ChunkWidth,double(C.Z)*ChunkWidth),Done.Mesh,TerrainMaterial);
+        Region->Publish(C,VoxelLandMeshCoordinates::RenderOrigin(C,State->Generator->GetProfile().VoxelSizeCm),Done.Mesh,TerrainMaterial);
     }
 }
 void AVoxelLandWorld::Dispatch()

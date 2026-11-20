@@ -24,6 +24,7 @@ class UVoxelLandWorldSettings;
 struct FAssetData;
 class FVoxelLandCompileWork;
 class FVoxelLandPreviewWork;
+class FVoxelLandPreviewFence;
 class FPackageReloadedEvent;
 enum class EPackageReloadPhase : uint8;
 struct FEdGraphEditAction;
@@ -68,6 +69,10 @@ public:
     void PackageReloadForTests(EPackageReloadPhase Phase, FPackageReloadedEvent* Event) { PackageReloaded(Phase, Event); }
     void SetReloadDrainingForTests(TFunction<void()> Callback) { ReloadDrainingForTests = MoveTemp(Callback); }
     void SetPreviewReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { PreviewReloadBarrierForTests = MoveTemp(Barrier); }
+    void InitializePreviewForTests();
+    void PollJobsForTests() { PollJobs(0.0f); }
+    const FString& GetStatusForTests() const { return Status; }
+    bool HasPreviewFenceForTests() const { return PreviewFence.IsValid(); }
     void StartPreviewForTests() { StartPreview(); }
     void RequestCompileForTests() { RequestCompile(); }
     bool HasCompileWorkForTests() const { return CompileWork.IsValid(); }
@@ -134,6 +139,7 @@ private:
     bool PollJobs(float DeltaTime);
     void ProcessCompileWork();
     void ProcessPreviewWork();
+    void PollPreviewFence();
     bool PublishPreview(const FVoxelLandPreviewWork& Finished);
     TObjectPtr<UVoxelLandTerrainGraph> Asset = nullptr;
     TObjectPtr<UEdGraph> Graph = nullptr;
@@ -165,6 +171,8 @@ private:
     TArray<TFuture<void>> WorkerTasks;
     TSharedPtr<FVoxelLandCompileWork, ESPMode::ThreadSafe> CompileWork;
     TSharedPtr<FVoxelLandPreviewWork, ESPMode::ThreadSafe> PreviewWork;
+    TSharedPtr<FVoxelLandPreviewFence> PreviewFence;
+    double SemanticChangeTime = 0.0;
     double CompileDue = 0.0;
     bool bCompileRequested = false;
     bool bPreviewRequested = false;

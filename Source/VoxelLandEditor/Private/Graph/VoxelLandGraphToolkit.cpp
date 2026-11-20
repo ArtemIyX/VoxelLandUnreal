@@ -4,6 +4,7 @@
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/PackageReload.h"
+#include "RenderCommandFence.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Data/Structs/VoxelLandReloadTestBarrier.h"
 #endif
@@ -299,6 +300,21 @@ public:
     FVoxelLandPreviewJob::FResult Meshes;
 };
 
+class FVoxelLandPreviewFence
+{
+public:
+    FRenderCommandFence Fence;
+    uint64 PreviewRevision = 0;
+    uint64 SourceRevision = 0;
+    int32 NonemptyChunks = 0;
+    int32 ChunkCount = 0;
+    double SemanticStart = 0;
+    double SetupCompleted = 0;
+    double CompileMs = 0;
+    double GenerationMs = 0;
+    double SetupMs = 0;
+};
+
 FVoxelLandGraphToolkit::~FVoxelLandGraphToolkit()
 {
     Stop();
@@ -433,6 +449,12 @@ void FVoxelLandGraphToolkit::SetMaterialPickerForTests(UMaterialInterface* Mater
 void FVoxelLandGraphToolkit::SetSettingsPickerForTests(UVoxelLandWorldSettings* Settings)
 {
     SettingsChanged(Settings ? FAssetData(Settings) : FAssetData());
+}
+void FVoxelLandGraphToolkit::InitializePreviewForTests()
+{
+    PreviewScene = MakeShared<FVoxelLandPreviewScene>();
+    ApplyPreviewMaterial(nullptr);
+    PollHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateSP(this, &FVoxelLandGraphToolkit::PollJobs), 0.05f);
 }
 void FVoxelLandGraphToolkit::CreatePanelForTests()
 {
@@ -782,6 +804,7 @@ void FVoxelLandGraphToolkit::SynchronizeGraph()
     }
     if (Previous != Revision)
     {
+        SemanticChangeTime = FPlatformTime::Seconds();
         ErrorDiagnostic = FVoxelLandGraphDiagnostic();
         CancelPreview();
         CompileDue = FPlatformTime::Seconds() + 0.2;
@@ -813,6 +836,10 @@ void FVoxelLandGraphToolkit::RequestCompile()
         return;
     }
     CompileDue = 0.0;
+    if (SemanticChangeTime <= 0.0)
+    {
+        SemanticChangeTime = FPlatformTime::Seconds();
+    }
     CancelPreview();
     if (CompileWork)
     {
@@ -955,6 +982,7 @@ void FVoxelLandGraphToolkit::DuplicateSelected()
 
 void FVoxelLandGraphToolkit::CancelPreview()
 {
+    PreviewFence.Reset();
     ++PreviewRevision;
     bPreviewRequested = false;
     if (PreviewCancel)
@@ -1264,6 +1292,7 @@ void FVoxelLandGraphToolkit::SynchronizePreviewSettings(bool bApplyChanges)
     }
     if (bApplyChanges && bDensityChanged)
     {
+        SemanticChangeTime = FPlatformTime::Seconds();
         StartPreview();
     }
 }
@@ -1316,6 +1345,10 @@ void FVoxelLandGraphToolkit::StartPreview()
         return;
     }
     CancelPreview();
+    if (SemanticChangeTime <= 0.0)
+    {
+        SemanticChangeTime = FPlatformTime::Seconds();
+    }
     if (PreviewWork)
     {
         bPreviewRequested = true;
@@ -1391,14 +1424,41 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
         PreviewScene->AddComponent(Entry.Value, FTransform(VoxelLandMeshCoordinates::RenderOrigin(Entry.Key, Finished.VoxelSize)));
         PreviewComponents.Add(Entry.Value);
     }
-    const double UploadMs = (FPlatformTime::Seconds() - UploadStart) * 1000.0;
-    Status = FString::Printf(TEXT("Ready: %d nonempty / %d chunks; compile %.1f ms, generation %.1f ms, game-thread setup %.1f ms. %s"),
-        PreviewComponents.Num(), Finished.ChunkCount, LastCompileMs, Finished.GenerationMs, UploadMs, TEXT(""));
+    const double SetupCompleted = FPlatformTime::Seconds();
+    PreviewFence = MakeShared<FVoxelLandPreviewFence>();
+    PreviewFence->PreviewRevision = Finished.PreviewRevision;
+    PreviewFence->SourceRevision = Finished.SourceRevision;
+    PreviewFence->NonemptyChunks = PreviewComponents.Num();
+    PreviewFence->ChunkCount = Finished.ChunkCount;
+    PreviewFence->SemanticStart = SemanticChangeTime > 0.0 ? SemanticChangeTime : UploadStart;
+    PreviewFence->SetupCompleted = SetupCompleted;
+    PreviewFence->CompileMs = LastCompileMs;
+    PreviewFence->GenerationMs = Finished.GenerationMs;
+    PreviewFence->SetupMs = (SetupCompleted - UploadStart) * 1000.0;
+    PreviewFence->Fence.BeginFence(FRenderCommandFence::ESyncDepth::RenderThread);
+    Status = TEXT("Preview submitted; waiting for render-thread commands.");
     if (PreviewViewport)
     {
         PreviewViewport->Invalidate();
     }
     return true;
+}
+void FVoxelLandGraphToolkit::PollPreviewFence()
+{
+    if (!PreviewFence || !PreviewFence->Fence.IsFenceComplete())
+    {
+        return;
+    }
+    const TSharedPtr<FVoxelLandPreviewFence> Finished = MoveTemp(PreviewFence);
+    if (bStopped || bPIE || bReloadPaused || Finished->PreviewRevision != PreviewRevision || Finished->SourceRevision != Revision)
+    {
+        return;
+    }
+    const double Now = FPlatformTime::Seconds();
+    Status = FString::Printf(TEXT("Ready: render commands complete: %d nonempty / %d chunks; latest compile CPU %.1f ms, generation CPU %.1f ms, game-thread setup %.1f ms, render-thread fence observed after %.1f ms, change-to-fence observed %.1f ms. GPU completion not measured."),
+        Finished->NonemptyChunks, Finished->ChunkCount, Finished->CompileMs, Finished->GenerationMs, Finished->SetupMs,
+        (Now - Finished->SetupCompleted) * 1000.0, (Now - Finished->SemanticStart) * 1000.0);
+    SemanticChangeTime = 0.0;
 }
 void FVoxelLandGraphToolkit::ProcessCompileWork()
 {
@@ -1468,6 +1528,7 @@ bool FVoxelLandGraphToolkit::PollJobs(float)
     }
     ProcessCompileWork();
     ProcessPreviewWork();
+    PollPreviewFence();
     if (!bPIE && CompileDue > 0.0 && FPlatformTime::Seconds() >= CompileDue)
     {
         RequestCompile();

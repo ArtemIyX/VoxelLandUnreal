@@ -88,3 +88,21 @@ An earlier NullRHI attempt hit Unreal's native-window `FGenericWindow::GetRestor
 
 
 On the same final build, NullRHI editor automation completed M2 10/10 and reported M3 30/30 successful entries, with the real package reload entry explicitly skipped with a native-window warning; the other 29 M3 tests ran. The independent real-RHI reload run above exercised that entry. Both commandlets exited with code 0. Logs: `Saved/Logs/M2_ActiveReloadFinal.log` and `Saved/Logs/M3_ActiveReloadSuite.log`.
+
+
+## Preview render-command timing
+
+On Windows 11 x64, UE 5.7 CL 51494982 Development Editor, Ryzen 9 9950X3D and RTX 5080 with D3D12/SM6, the real-RHI `VoxelLand.M3.Editor.PreviewTiming` automation passed, including superseding and stopping while a render fence was pending. It measured 20 sequential seed changes on a transient copy of `DA_M3_Hills`, radius 1/1 (18 nonempty chunks), default material and no overrides. A preview scene was constructed without an interactive viewport; samples are warm, not cold-shader or first-frame measurements.
+
+| Timing (ms) | Median | p95, nearest rank |
+| --- | ---: | ---: |
+| CPU generation | 91.2 | 94.5 |
+| Game-thread component setup | 0.6 | 0.7 |
+| Setup to render-fence observation | 49.2 | 49.6 |
+| Seed change to render-fence observation | 141.9 | 191.9 |
+
+The latest compile CPU time displayed was 0.1 ms, from the initial compile rather than the subsequent seed-only changes. The 50 ms ticker quantizes fence observations; these are observation latencies, not exact render-thread execution durations. `FRenderCommandFence` at render-thread depth covers prior queued render commands but does not measure GPU completion, actual upload duration, displayed pixels or shader compilation. No GPU upload, frame presentation or cold-shader p50/p95 is claimed. `Saved/Logs/M3_PreviewTimingFinal.log` contains the samples and `Saved/Logs/M3_PreviewTimingBuildFinal.log` the build.
+
+The final build’s NullRHI M3 suite reported 31 successful entries, with `PreviewTiming` and `RealPackageReload` explicitly skipped due to their native-render/window requirement; the other 29 ran. Both skipped entries were exercised separately under real RHI as recorded above. Log: `Saved/Logs/M3_PreviewTimingNullRHI.log`.
+
+After adding the explicit Ready status, the editor rebuilt successfully (`Saved/Logs/M3_PreviewReadyBuild.log`). The real-RHI timing test passed again with 20 samples (`Saved/Logs/M3_PreviewReadyRealRHI.log`): generation median/p95 91.05/92.4 ms, setup 0.6/0.7 ms, fence observation 49.25/49.6 ms, seed change to fence observation 141.7/191.6 ms. The same caveats above apply. NullRHI editor tests reported 11 successful entries with PreviewTiming and RealPackageReload skipped; the other nine ran (`Saved/Logs/M3_PreviewReadyEditorNull.log`).

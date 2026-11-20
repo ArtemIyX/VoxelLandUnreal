@@ -640,6 +640,96 @@ bool FVoxelLandRealPackageReloadTest::RunTest(const FString& Parameters)
     }
     return true;
 }
+namespace
+{
+class FVoxelLandPreviewTimingCommand final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandPreviewTimingCommand(FAutomationTestBase* InTest, TSharedRef<FVoxelLandGraphToolkit> InToolkit)
+        : Test(InTest), Toolkit(MoveTemp(InToolkit)), Deadline(FPlatformTime::Seconds() + 60.0)
+    {
+    }
+    virtual bool Update() override
+    {
+        if (FPlatformTime::Seconds() > Deadline)
+        {
+            Test->AddError(FString::Printf(TEXT("Preview timing timed out at phase %d: %s"), Phase, *Toolkit->GetStatusForTests()));
+            Toolkit->Stop();
+            return true;
+        }
+        if (Phase == 1 || Phase == 3)
+        {
+            if (!Toolkit->HasPreviewFenceForTests())
+            {
+                return false;
+            }
+            if (Phase == 1)
+            {
+                Toolkit->SetPreviewSeedForTests(2901);
+                Test->TestFalse(TEXT("Superseding edit discards an outstanding timing fence"), Toolkit->HasPreviewFenceForTests());
+                Test->TestFalse(TEXT("Superseded result is not reported ready"), Toolkit->GetStatusForTests().StartsWith(TEXT("Ready: render commands complete:")));
+                Phase = 2;
+                return false;
+            }
+            Toolkit->Stop();
+            Test->TestFalse(TEXT("Stopping discards an outstanding timing fence"), Toolkit->HasPreviewFenceForTests());
+            return true;
+        }
+        if (!Toolkit->GetStatusForTests().StartsWith(TEXT("Ready: render commands complete:")))
+        {
+            return false;
+        }
+        if (Phase == 0)
+        {
+            Toolkit->SetPreviewSeedForTests(2900);
+            Phase = 1;
+            return false;
+        }
+        if (Sample > 0)
+        {
+            Test->AddInfo(FString::Printf(TEXT("Preview timing sample %d: %s"), Sample, *Toolkit->GetStatusForTests()));
+        }
+        if (Sample == 20)
+        {
+            Toolkit->SetPreviewSeedForTests(4000);
+            Phase = 3;
+            return false;
+        }
+        ++Sample;
+        Toolkit->SetPreviewSeedForTests(3000 + Sample);
+        return false;
+    }
+private:
+    FAutomationTestBase* Test;
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit;
+    double Deadline;
+    int32 Sample = 0;
+    int32 Phase = 0;
+};
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandPreviewTimingTest, "VoxelLand.M3.Editor.PreviewTiming",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandPreviewTimingTest::RunTest(const FString& Parameters)
+{
+    if (!FApp::CanEverRender())
+    {
+        AddWarning(TEXT("Preview timing requires a native render path and was not exercised with NullRHI"));
+        return true;
+    }
+    UVoxelLandTerrainGraph* Source = LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
+    if (!Source)
+    {
+        AddError(TEXT("Example graph unavailable for preview timing"));
+        return false;
+    }
+    UVoxelLandTerrainGraph* Graph = DuplicateObject<UVoxelLandTerrainGraph>(Source, GetTransientPackage());
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+    Toolkit->InitializeForTests(Graph);
+    Toolkit->InitializePreviewForTests();
+    Toolkit->RequestCompileForTests();
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandPreviewTimingCommand(this, Toolkit));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandInitializationReplacementTest, "VoxelLand.M3.Editor.InitializationReplacement",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandInitializationReplacementTest::RunTest(const FString& Parameters)

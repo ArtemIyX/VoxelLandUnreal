@@ -19,6 +19,7 @@ public class VoxelLandEditor : ModuleRules
             new string[]
             {
                 "Engine",
+                "RenderCore",
                 "Slate",
                 "SlateCore",
                 "InputCore",

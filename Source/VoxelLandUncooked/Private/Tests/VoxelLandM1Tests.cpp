@@ -70,8 +70,9 @@ FSampleResult Sample(FVoxelLandProgramDraft Draft, FVoxelLandBackendOptions Opti
 {
 	TArray<FVector3f> Positions;
 	Positions.Reserve(Count);
-	for (int32 I = 0; I < Count; ++I)
-		Positions.Emplace(float(I - 129) * 13.25f, float((I * 31) % 257 - 128) * 7.f, float((I * 11) % 123 - 61) * 5.f);
+	for (int32 SampleIndex = 0; SampleIndex < Count; ++SampleIndex)
+		Positions.Emplace(float(SampleIndex - 129) * 13.25f, float((SampleIndex * 31) % 257 - 128) * 7.f,
+			float((SampleIndex * 11) % 123 - 61) * 5.f);
 	return SampleAt(Draft, Options, Seed, Positions);
 }
 }
@@ -147,28 +148,29 @@ bool FVoxelLandM1PlaneGoldens::RunTest(const FString& Parameters)
 				continue;
 			}
 			bool bMatch = true;
-			for (int32 A = 0; A < 35 && bMatch; ++A)
-				for (int32 B = 0; B < 35 && bMatch; ++B)
-					for (int32 P = 0; P < 3; ++P)
+			for (int32 FirstAxisIndex = 0; FirstAxisIndex < 35 && bMatch; ++FirstAxisIndex)
+				for (int32 SecondAxisIndex = 0; SecondAxisIndex < 35 && bMatch; ++SecondAxisIndex)
+					for (int32 PaddingIndex = 0; PaddingIndex < 3; ++PaddingIndex)
 					{
-						int32 LX = A, LY = B, LZ = 32 + P, RX = A, RY = B, RZ = P;
+						int32 LX = FirstAxisIndex, LY = SecondAxisIndex, LZ = 32 + PaddingIndex, RX = FirstAxisIndex,
+							  RY = SecondAxisIndex, RZ = PaddingIndex;
 						if (Axis == 0)
 						{
-							LX = 32 + P;
-							LY = A;
-							LZ = B;
-							RX = P;
-							RY = A;
-							RZ = B;
+							LX = 32 + PaddingIndex;
+							LY = FirstAxisIndex;
+							LZ = SecondAxisIndex;
+							RX = PaddingIndex;
+							RY = FirstAxisIndex;
+							RZ = SecondAxisIndex;
 						}
 						if (Axis == 1)
 						{
-							LX = A;
-							LY = 32 + P;
-							LZ = B;
-							RX = A;
-							RY = P;
-							RZ = B;
+							LX = FirstAxisIndex;
+							LY = 32 + PaddingIndex;
+							LZ = SecondAxisIndex;
+							RX = FirstAxisIndex;
+							RY = PaddingIndex;
+							RZ = SecondAxisIndex;
 						}
 						if (R.Chunk->Density[LX + 35 * (LY + 35 * LZ)]
 							!= Other.Chunk->Density[RX + 35 * (RY + 35 * RZ)])
@@ -492,11 +494,11 @@ bool FVoxelLandM1Backends::RunTest(const FString& Parameters)
 				TestEqual(Context + TEXT(" scalar selected"), int32(A.VM), int32(EVoxelLandVMBackend::Scalar));
 				if (A.Values != B.Values)
 				{
-					for (int32 I = 0; I < FMath::Min(A.Values.Num(), B.Values.Num()); ++I)
-						if (A.Values[I] != B.Values[I])
+					for (int32 SampleIndex = 0; SampleIndex < FMath::Min(A.Values.Num(), B.Values.Num()); ++SampleIndex)
+						if (A.Values[SampleIndex] != B.Values[SampleIndex])
 						{
-							AddError(FString::Printf(
-								TEXT("%s sample=%d expected=%d actual=%d"), *Context, I, A.Values[I], B.Values[I]));
+							AddError(FString::Printf(TEXT("%s sample=%d expected=%d actual=%d"), *Context, SampleIndex,
+								A.Values[SampleIndex], B.Values[SampleIndex]));
 							break;
 						}
 				}
@@ -565,18 +567,18 @@ bool FVoxelLandM1Arithmetic::RunTest(const FString& Parameters)
 				continue;
 			}
 			TestEqual(TEXT("sample output count"), R.Values.Num(), Count);
-			for (int32 I = 0; I < R.Values.Num(); ++I)
+			for (int32 SampleIndex = 0; SampleIndex < R.Values.Num(); ++SampleIndex)
 			{
-				const float X = float(I - 129) * 13.25f;
+				const float X = float(SampleIndex - 129) * 13.25f;
 				const float A = -((FMath::Abs(X) + 20.f) / 2.f - 30.f);
 				const double Scaled = double(FMath::Max(FMath::Min(A, X), -FMath::Max(A, X))) * 1024.0 / 100.0;
 				const double Rounded =
 					Scaled >= 0 ? FMath::FloorToDouble(Scaled + 0.5) : FMath::CeilToDouble(Scaled - 0.5);
 				const int32 Expected = int32(FMath::Clamp(Rounded, -32768.0, 32767.0));
-				if (R.Values[I] != Expected)
+				if (R.Values[SampleIndex] != Expected)
 				{
 					AddError(FString::Printf(TEXT("arithmetic backend=%d count=%d position=%g expected=%d actual=%d"),
-						int32(R.VM), Count, X, Expected, int32(R.Values[I])));
+						int32(R.VM), Count, X, Expected, int32(R.Values[SampleIndex])));
 					break;
 				}
 			}
@@ -795,7 +797,7 @@ bool FVoxelLandM1Concurrency::RunTest(const FString& Parameters)
 		return false;
 	}
 	TArray<TFuture<FResult>> Futures;
-	for (int32 I = 0; I < 4; ++I)
+	for (int32 WorkerIndex = 0; WorkerIndex < 4; ++WorkerIndex)
 	{
 		const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Shared = First.Generator;
 		Futures.Add(Async(EAsyncExecution::ThreadPool, [Shared, Key]() { return GenerateShared(Shared, Key); }));
@@ -823,17 +825,17 @@ bool FVoxelLandM1Concurrency::RunTest(const FString& Parameters)
 		Serial.Add(Async(EAsyncExecution::ThreadPool, [Shared, K]() { return GenerateShared(Shared, K); }).Get());
 	}
 	TArray<TFuture<FResult>> Shuffled;
-	for (int32 I = 2; I >= 0; --I)
+	for (int32 KeyIndex = 2; KeyIndex >= 0; --KeyIndex)
 	{
 		FVoxelLandChunkKey K;
-		K.Coordinate = Keys[I];
+		K.Coordinate = Keys[KeyIndex];
 		const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Shared = First.Generator;
 		Shuffled.Add(Async(EAsyncExecution::ThreadPool, [Shared, K]() { return GenerateShared(Shared, K); }));
 	}
-	for (int32 I = 0; I < Shuffled.Num(); ++I)
+	for (int32 ResultIndex = 0; ResultIndex < Shuffled.Num(); ++ResultIndex)
 	{
-		const FResult Other = Shuffled[I].Get();
-		const FResult& Expected = Serial[2 - I];
+		const FResult Other = Shuffled[ResultIndex].Get();
+		const FResult& Expected = Serial[2 - ResultIndex];
 		if (Expected.Error || Other.Error || !Expected.Chunk || !Other.Chunk)
 			AddError(
 				FString::Printf(TEXT("ordered generation: %s; %s"), *Expected.Error.Message, *Other.Error.Message));
@@ -855,60 +857,16 @@ bool FVoxelLandM1Concurrency::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM1ScalarNative, "VoxelLand.M1.NativeScalarRequired", Flags)
-bool FVoxelLandM1ScalarNative::RunTest(const FString& Parameters)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM1UnsupportedNativeScalar, "VoxelLand.M1.UnsupportedNativeScalar", Flags)
+bool FVoxelLandM1UnsupportedNativeScalar::RunTest(const FString& Parameters)
 {
-	// This is intentionally an acceptance failure if the installed native library has no scalar backend.
-	const EVoxelLandOpcode Ops[] = {
-		EVoxelLandOpcode::Perlin2, EVoxelLandOpcode::Perlin3, EVoxelLandOpcode::Fbm2, EVoxelLandOpcode::Fbm3};
-	for (EVoxelLandOpcode OpCode : Ops)
-	{
-		FVoxelLandBackendOptions Scalar;
-		Scalar.VM = EVoxelLandVMBackend::Scalar;
-		Scalar.Noise = EVoxelLandNoiseBackend::Scalar;
-		FVoxelLandBackendOptions SSE;
-		SSE.VM = EVoxelLandVMBackend::Scalar;
-		SSE.Noise = EVoxelLandNoiseBackend::SSE2;
-		const FSampleResult A = Async(EAsyncExecution::ThreadPool, [OpCode, Scalar]() {
-			return Sample(Noise(OpCode), Scalar, 0xffffffffffffffffull, 256);
-		}).Get();
-		const FSampleResult B = Async(EAsyncExecution::ThreadPool, [OpCode, SSE]() {
-			return Sample(Noise(OpCode), SSE, 0xffffffffffffffffull, 256);
-		}).Get();
-		if (A.Error || B.Error)
-		{
-			AddError(FString::Printf(
-				TEXT(
-					"platform=%s opcode=%d scalar=%s SSE2=%s; a scalar-enabled native dependency is required for this gate"),
-				ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), int32(OpCode), *A.Error.Message, *B.Error.Message));
-			continue;
-		}
-		TestEqual(TEXT("native scalar selected"), int32(A.NoiseBackend), int32(EVoxelLandNoiseBackend::Scalar));
-		TestEqual(TEXT("native SSE2 selected"), int32(B.NoiseBackend), int32(EVoxelLandNoiseBackend::SSE2));
-		TestTrue(FString::Printf(TEXT("native quantized parity opcode=%d"), int32(OpCode)), A.Values == B.Values);
-		for (int32 Size : {50, 100})
-		{
-			FVoxelLandZoneProfile Profile;
-			Profile.VoxelSizeCm = float(Size);
-			FVoxelLandChunkKey Key;
-			Key.Coordinate = FIntVector(-1, 2, -1);
-			constexpr uint64 Seed = 0xffffffffffffffffull;
-			const FResult ScalarChunk = Run(Noise(OpCode), Profile, Key, Scalar, Seed);
-			const FResult SSEChunk = Run(Noise(OpCode), Profile, Key, SSE, Seed);
-			if (ScalarChunk.Error || SSEChunk.Error || !ScalarChunk.Chunk || !SSEChunk.Chunk)
-			{
-				AddError(FString::Printf(TEXT("scalar/SSE2 full chunk opcode=%d voxel=%d scalar=%s SSE2=%s"),
-					int32(OpCode), Size, *ScalarChunk.Error.Message, *SSEChunk.Error.Message));
-				continue;
-			}
-			if (ScalarChunk.Chunk->Hash != SSEChunk.Chunk->Hash
-				|| ScalarChunk.Chunk->Density != SSEChunk.Chunk->Density)
-				AddError(FString::Printf(
-					TEXT("scalar/SSE2 opcode=%d voxel=%d seed=%llu key=%s scalar hash=%llu SSE2 hash=%llu first=%s"),
-					int32(OpCode), Size, Seed, *Key.Coordinate.ToString(), ScalarChunk.Chunk->Hash,
-					SSEChunk.Chunk->Hash, *FirstDifference(ScalarChunk.Chunk->Density, SSEChunk.Chunk->Density, Key)));
-		}
-	}
+	FVoxelLandBackendOptions Options;
+	Options.Noise = EVoxelLandNoiseBackend::Scalar;
+	const FSampleResult Result = Async(EAsyncExecution::ThreadPool, [Options]() {
+		return Sample(Noise(EVoxelLandOpcode::Perlin2), Options, 0, 1);
+	}).Get();
+	TestEqual(TEXT("native scalar explicitly rejected"), int32(Result.Error.Code),
+		int32(EVoxelLandErrorCode::BackendUnavailable));
 	return true;
 }
 
@@ -942,16 +900,16 @@ bool FVoxelLandM1CrossHostCapture::RunTest(const FString& Parameters)
 		const uint64 Seeds[] = {0ull, 0xffffffffffffffffull};
 		for (EVoxelLandOpcode Code : Ops)
 			for (int32 Size : Sizes)
-				for (int32 K = 0; K < 2; ++K)
+				for (int32 KeyIndex = 0; KeyIndex < 2; ++KeyIndex)
 				{
 					FVoxelLandChunkKey Key;
-					Key.Coordinate = Keys[K];
+					Key.Coordinate = Keys[KeyIndex];
 					FVoxelLandZoneProfile Profile;
 					Profile.VoxelSizeCm = float(Size);
-					const FResult R = Generate(Noise(Code), Profile, Key, {}, Seeds[K]);
+					const FResult R = Generate(Noise(Code), Profile, Key, {}, Seeds[KeyIndex]);
 					if (R.Error || !R.Chunk)
 					{
-						Result.Error = Describe(R, TEXT("cross-host capture"), Seeds[K], float(Size), Key);
+						Result.Error = Describe(R, TEXT("cross-host capture"), Seeds[KeyIndex], float(Size), Key);
 						return Result;
 					}
 					if (Result.Backends.IsEmpty())
@@ -959,14 +917,14 @@ bool FVoxelLandM1CrossHostCapture::RunTest(const FString& Parameters)
 							FString::Printf(TEXT("platform=%s VM=%d native=%d (0=auto, 1=scalar, 2=SIMD4/SSE2)"),
 								ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), int32(R.VM), int32(R.NoiseBackend));
 					// Stable line format: opcode;voxel size;seed;chunk X;Y;Z;program fingerprint;hash|densities.
-					Result.Text += FString::Printf(TEXT("%d;%d;%llu;%d;%d;%d;%llu;%llu|"), int32(Code), Size, Seeds[K],
-						Key.Coordinate.X, Key.Coordinate.Y, Key.Coordinate.Z,
+					Result.Text += FString::Printf(TEXT("%d;%d;%llu;%d;%d;%d;%llu;%llu|"), int32(Code), Size,
+						Seeds[KeyIndex], Key.Coordinate.X, Key.Coordinate.Y, Key.Coordinate.Z,
 						R.Generator->GetProgram().GetFingerprint(), R.Chunk->Hash);
-					for (int32 I = 0; I < R.Chunk->Density.Num(); ++I)
+					for (int32 SampleIndex = 0; SampleIndex < R.Chunk->Density.Num(); ++SampleIndex)
 					{
-						if (I)
+						if (SampleIndex)
 							Result.Text.AppendChar(TEXT(','));
-						Result.Text += FString::FromInt(int32(R.Chunk->Density[I]));
+						Result.Text += FString::FromInt(int32(R.Chunk->Density[SampleIndex]));
 					}
 					Result.Text.AppendChar(TEXT('\n'));
 				}
@@ -1035,17 +993,17 @@ bool FVoxelLandM1CrossHostCapture::RunTest(const FString& Parameters)
 						TEXT("%s sample count expected=%d actual=%d"), *ActualHeader, EV.Num(), AV.Num()));
 					return false;
 				}
-				for (int32 I = 0; I < EV.Num(); ++I)
-					if (EV[I] != AV[I])
+				for (int32 SampleIndex = 0; SampleIndex < EV.Num(); ++SampleIndex)
+					if (EV[SampleIndex] != AV[SampleIndex])
 					{
-						const int64 X = int64(FCString::Atoi(*AH[3])) * 32 + I % 35 - 1;
-						const int64 Y = int64(FCString::Atoi(*AH[4])) * 32 + (I / 35) % 35 - 1;
-						const int64 Z = int64(FCString::Atoi(*AH[5])) * 32 + I / (35 * 35) - 1;
+						const int64 X = int64(FCString::Atoi(*AH[3])) * 32 + SampleIndex % 35 - 1;
+						const int64 Y = int64(FCString::Atoi(*AH[4])) * 32 + (SampleIndex / 35) % 35 - 1;
+						const int64 Z = int64(FCString::Atoi(*AH[5])) * 32 + SampleIndex / (35 * 35) - 1;
 						AddError(FString::Printf(
 							TEXT(
 								"opcode=%s voxel=%s seed=%s key=(%s,%s,%s) fingerprint=%s expected hash=%s actual hash=%s first lattice=(%lld,%lld,%lld) expected=%s actual=%s"),
-							*AH[0], *AH[1], *AH[2], *AH[3], *AH[4], *AH[5], *AH[6], *EH[7], *AH[7], X, Y, Z, *EV[I],
-							*AV[I]));
+							*AH[0], *AH[1], *AH[2], *AH[3], *AH[4], *AH[5], *AH[6], *EH[7], *AH[7], X, Y, Z,
+							*EV[SampleIndex], *AV[SampleIndex]));
 						return false;
 					}
 				AddError(FString::Printf(

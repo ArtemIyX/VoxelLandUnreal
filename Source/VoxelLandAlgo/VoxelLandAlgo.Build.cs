@@ -7,6 +7,6 @@ public class VoxelLandAlgo : ModuleRules
         PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
         FPSemantics = FPSemanticsMode.Precise;
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "VoxelLandData" });
-        PrivateDependencyModuleNames.AddRange(new string[] { "Projects", "UnrealFastNoise2" });
+        PrivateDependencyModuleNames.AddRange(new string[] { "FastNoiseRuntime" });
     }
 }

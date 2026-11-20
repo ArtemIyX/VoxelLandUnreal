@@ -13,7 +13,7 @@
 	"IsBetaVersion": false,
 	"IsExperimentalVersion": false,
 	"Installed": false,
-	"Plugins": [{ "Name": "UnrealFastNoise2", "Enabled": true }],
+	"Plugins": [{ "Name": "FastNoise", "Enabled": true }],
 	"Modules": [
 		{
 			"Name": "VoxelLand",

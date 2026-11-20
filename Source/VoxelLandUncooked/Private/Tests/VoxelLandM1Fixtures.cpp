@@ -95,12 +95,12 @@ TArray<int16> PlaneReference(const FVoxelLandChunkKey& Key, int32 VoxelSizeCm)
 {
 	TArray<int16> Result;
 	Result.Reserve(FVoxelLandChunkData::SampleCount);
-	for (int32 Z = 0; Z < 35; ++Z)
+	for (int32 ZIndex = 0; ZIndex < 35; ++ZIndex)
 	{
-		const int64 HeightVoxels = int64(Key.Coordinate.Z) * 32 + Z - 1 - 500 / VoxelSizeCm;
+		const int64 HeightVoxels = int64(Key.Coordinate.Z) * 32 + ZIndex - 1 - 500 / VoxelSizeCm;
 		const int16 Value = static_cast<int16>(FMath::Clamp<int64>(HeightVoxels * 1024, -32768, 32767));
-		for (int32 Y = 0; Y < 35; ++Y)
-			for (int32 X = 0; X < 35; ++X)
+		for (int32 YIndex = 0; YIndex < 35; ++YIndex)
+			for (int32 XIndex = 0; XIndex < 35; ++XIndex)
 				Result.Add(Value);
 	}
 	return Result;
@@ -123,14 +123,14 @@ FString FirstDifference(const TArray<int16>& Expected, const TArray<int16>& Actu
 {
 	if (Expected.Num() != Actual.Num())
 		return FString::Printf(TEXT("size expected=%d actual=%d"), Expected.Num(), Actual.Num());
-	for (int32 I = 0; I < Expected.Num(); ++I)
+	for (int32 SampleIndex = 0; SampleIndex < Expected.Num(); ++SampleIndex)
 	{
-		if (Expected[I] != Actual[I])
+		if (Expected[SampleIndex] != Actual[SampleIndex])
 		{
-			const int32 X = I % 35, Y = (I / 35) % 35, Z = I / (35 * 35);
+			const int32 X = SampleIndex % 35, Y = (SampleIndex / 35) % 35, Z = SampleIndex / (35 * 35);
 			return FString::Printf(TEXT("lattice=(%lld,%lld,%lld), expected=%d actual=%d"),
 				int64(Key.Coordinate.X) * 32 + X - 1, int64(Key.Coordinate.Y) * 32 + Y - 1,
-				int64(Key.Coordinate.Z) * 32 + Z - 1, int32(Expected[I]), int32(Actual[I]));
+				int64(Key.Coordinate.Z) * 32 + Z - 1, int32(Expected[SampleIndex]), int32(Actual[SampleIndex]));
 		}
 	}
 	return TEXT("none");

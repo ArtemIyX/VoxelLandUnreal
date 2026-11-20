@@ -41,8 +41,8 @@ struct FCanonicalWriter
 	}
 	void U32(uint32 V)
 	{
-		for (int32 I = 0; I < 4; ++I)
-			U8(uint8(V >> (I * 8)));
+		for (int32 ByteIndex = 0; ByteIndex < 4; ++ByteIndex)
+			U8(uint8(V >> (ByteIndex * 8)));
 	}
 	void Float(float V)
 	{
@@ -64,7 +64,7 @@ struct FCanonicalWriter
 	}
 };
 
-uint64 Fingerprint(const FVoxelLandProgramDraft& D)
+uint64 ComputeProgramFingerprint(const FVoxelLandProgramDraft& D)
 {
 	FCanonicalWriter W;
 	W.U32(D.FormatVersion);
@@ -149,13 +149,13 @@ FVoxelLandError FVoxelLandProgram::Validate(
 		P.Name = Name;
 		Names.Add(Name);
 	}
-	for (int32 I = 0; I < D.Seeds.Num(); ++I)
+	for (int32 SeedIndex = 0; SeedIndex < D.Seeds.Num(); ++SeedIndex)
 	{
-		const FVoxelLandSeedSlot& Seed = D.Seeds[I];
+		const FVoxelLandSeedSlot& Seed = D.Seeds[SeedIndex];
 		if (!Seed.NodeId.IsValid())
 			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid seed GUID"));
-		for (int32 J = 0; J < I; ++J)
-			if (D.Seeds[J].NodeId == Seed.NodeId && D.Seeds[J].Salt == Seed.Salt)
+		for (int32 PreviousSeedIndex = 0; PreviousSeedIndex < SeedIndex; ++PreviousSeedIndex)
+			if (D.Seeds[PreviousSeedIndex].NodeId == Seed.NodeId && D.Seeds[PreviousSeedIndex].Salt == Seed.Salt)
 				return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Duplicate seed GUID and salt"));
 	}
 	for (const FVoxelLandNoiseConfig& N : D.Noise)
@@ -270,7 +270,7 @@ FVoxelLandError FVoxelLandProgram::Validate(
 	}
 	if (Stores != 1)
 		return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Exactly one density store is required"));
-	Result->Fingerprint = Fingerprint(D);
+	Result->Fingerprint = ComputeProgramFingerprint(D);
 	OutProgram = Result;
 	return {};
 }

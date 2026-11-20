@@ -18,6 +18,8 @@ public class VoxelLandUncooked : ModuleRules
             {
                 "CoreUObject",
                 "Engine",
+                "VoxelLandData",
+                "VoxelLandAlgo",
                 "Slate",
                 "SlateCore"
             }

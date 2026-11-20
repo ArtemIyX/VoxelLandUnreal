@@ -73,8 +73,14 @@ FVoxelLandError FVoxelLandProgram::Validate(const FVoxelLandProgramDraft& Draft,
             return Error(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate parameter"), INDEX_NONE, P.Name);
         P.Name = Name; Names.Add(Name);
     }
-    TSet<FGuid> Ids;
-    for (const auto& S : D.Seeds) { if (!S.NodeId.IsValid() || Ids.Contains(S.NodeId)) return Error(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid or duplicate seed GUID")); Ids.Add(S.NodeId); }
+    for (int32 I = 0; I < D.Seeds.Num(); ++I)
+    {
+        const auto& Seed = D.Seeds[I];
+        if (!Seed.NodeId.IsValid()) return Error(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid seed GUID"));
+        for (int32 J = 0; J < I; ++J)
+            if (D.Seeds[J].NodeId == Seed.NodeId && D.Seeds[J].Salt == Seed.Salt)
+                return Error(EVoxelLandErrorCode::InvalidProgram, TEXT("Duplicate seed GUID and salt"));
+    }
     for (const auto& N : D.Noise)
     {
         if (N.SeedSlot >= uint32(D.Seeds.Num()) || !SourceValid(D, N.Frequency, EVoxelLandParameterType::Float) ||

@@ -1,6 +1,10 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "VoxelLandM1Fixtures.h"
 #include "World/VoxelLandWorld.h"
+#include "Rendering/VoxelLandChunkComponent.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "RenderingThread.h"
 #include "Async/Async.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -43,6 +47,31 @@ public:
         }
         const auto Data=Actor->FindChunk(Key); if (!Data) return false;
         Test->TestEqual(TEXT("replacement field"),Data->Hash,ExpectedHash);
+        // Exercise actor/component lifetime on a scene, including visibility and material changes.
+        AVoxelLandRegion* Region=World->SpawnActor<AVoxelLandRegion>();
+        Test->TestNotNull(TEXT("region actor"),Region);
+        if (Region)
+        {
+            auto Mesh=MakeShared<FVoxelLandMeshData,ESPMode::ThreadSafe>();
+            FVoxelLandMeshVertex A,B,C; B.Position=FVector3f(100,0,0); C.Position=FVector3f(0,100,0);
+            Mesh->Vertices={A,B,C}; Mesh->Indices={0,1,2};
+            Mesh->Bounds+=A.Position; Mesh->Bounds+=B.Position; Mesh->Bounds+=C.Position;
+            UMaterialInterface* Initial=UMaterial::GetDefaultMaterial(MD_Surface);
+            Test->TestTrue(TEXT("region publishes mesh"),Region->Publish(FIntVector::ZeroValue,FVector::ZeroVector,Mesh,Initial));
+            TInlineComponentArray<UVoxelLandChunkComponent*> Components; Region->GetComponents(Components);
+            Test->TestEqual(TEXT("one component per surface"),Components.Num(),1);
+            Region->SetActorHiddenInGame(true); Test->TestTrue(TEXT("region hidden"),Region->IsHidden());
+            Region->SetActorHiddenInGame(false); Test->TestFalse(TEXT("region restored"),Region->IsHidden());
+            UMaterialInstanceDynamic* Replacement=UMaterialInstanceDynamic::Create(Initial,Region);
+            Region->SetTerrainMaterial(Replacement);
+            if (Components.Num()==1) Test->TestEqual(TEXT("region updates chunk material"),Components[0]->GetMaterial(0),static_cast<UMaterialInterface*>(Replacement));
+            Region->Remove(FIntVector::ZeroValue);
+            Test->TestTrue(TEXT("removal clears region"),Region->IsEmpty());
+            Region->Destroy();
+            // Drain deferred create/release work before world destruction. This checks lifecycle,
+            // but visual output and GPU leak measurements still need a real RHI run.
+            FlushRenderingCommands();
+        }
         FVoxelLandChunkKey Other; Other.Coordinate=FIntVector(-1,0,0);
         Actor->RequestChunk(Other); Actor->Tick(0.016f);
         Cleanup(); return true;

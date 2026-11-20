@@ -221,6 +221,7 @@ void AVoxelLandWorld::DumpStats() const
 }
 void AVoxelLandWorld::UpdateDemand()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_UpdateDemand);
     if (!State || State->bServer) return;
     APlayerController* Controller=GetWorld()->GetFirstPlayerController();
     if (!Controller || !Controller->PlayerCameraManager) return;
@@ -288,6 +289,7 @@ void AVoxelLandWorld::PumpCompletions()
 }
 void AVoxelLandWorld::Dispatch()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_Dispatch);
     if (!State) return;
     // At most one outstanding job per worker, including undrained completions. This bounds
     // result memory by worker count times the maximum 34^3 vertices and 3*32^3 quads.

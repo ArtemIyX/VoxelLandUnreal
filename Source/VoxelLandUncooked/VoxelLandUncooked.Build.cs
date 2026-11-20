@@ -22,6 +22,7 @@ public class VoxelLandUncooked : ModuleRules
                 "VoxelLandAlgo",
                 "VoxelLandRender",
                 "VoxelLand",
+                "RenderCore",
                 "Slate",
                 "SlateCore"
             }

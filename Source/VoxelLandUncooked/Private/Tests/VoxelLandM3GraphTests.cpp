@@ -7,6 +7,7 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
+#include "FastNoiseNative.h"
 #include "Async/Async.h"
 #include "Algo/Reverse.h"
 #include "Operators/VoxelLandSquareOperator.h"
@@ -1487,6 +1488,155 @@ bool FVoxelLandM3MismatchedSimd::RunTest(const FString& Parameters)
     }
     const bool bUnregistered = FVoxelLandOperatorRegistry::Unregister(Provider->Id(), Provider->Version(), Error);
     TestTrue(TEXT("Mismatch provider unregisters after workers complete"), bUnregistered);
+    return true;
+}
+
+namespace
+{
+FVoxelLandGraphSnapshot NativeOracleGraph(EVoxelLandBuiltinNode Kind, bool b3D)
+{
+    FVoxelLandGraphSnapshot Graph;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionX, 301, 0, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionY, 302, 0, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionZ, 303, 0, true));
+    const int32 UniformStart = b3D ? 3 : 2;
+    for (int32 Index = 0; Index < 2; ++Index)
+    {
+        Graph.Nodes.Add(Node(Kind, 304 + Index, UniformStart + 4, true));
+        FVoxelLandGraphNodeRecord& NoiseNode = Graph.Nodes.Last();
+        NoiseNode.SeedSalt = Index == 0 ? 13 : 67;
+        NoiseNode.Pins[UniformStart].FloatDefault = Index == 0 ? 1.f / 128.f : 1.f / 256.f;
+        NoiseNode.Pins[UniformStart + 1].Type = EVoxelLandGraphValueType::Int32;
+        NoiseNode.Pins[UniformStart + 1].IntDefault = Index == 0 ? 4 : 2;
+        NoiseNode.Pins[UniformStart + 2].FloatDefault = Index == 0 ? 0.375f : 0.75f;
+        NoiseNode.Pins[UniformStart + 3].FloatDefault = Index == 0 ? 2.f : 3.f;
+        const int32 Target = Graph.Nodes.Num() - 1;
+        Link(Graph, 2, Target, 0); Link(Graph, 0, Target, 1);
+        if (b3D) { Link(Graph, 1, Target, 2); }
+    }
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Multiply, 306, 2, true));
+    Graph.Nodes[5].Pins[1].FloatDefault = 0.5f;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Add, 307, 2, true));
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Multiply, 308, 2, true));
+    Graph.Nodes[7].Pins[1].FloatDefault = 256.f;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 309, 1, false));
+    Link(Graph, 4, 5, 0); Link(Graph, 3, 6, 0); Link(Graph, 5, 6, 1);
+    Link(Graph, 6, 7, 0); Link(Graph, 7, 8, 0);
+    return Graph;
+}
+TUniquePtr<FFastNoiseNative> CreateNativeOracle(EVoxelLandBuiltinNode Kind, int32 Index, FString& Error)
+{
+    if (Kind == EVoxelLandBuiltinNode::Perlin2 || Kind == EVoxelLandBuiltinNode::Perlin3)
+    {
+        return FFastNoiseNative::CreatePerlin(Error, true);
+    }
+    if (Kind == EVoxelLandBuiltinNode::Fbm2 || Kind == EVoxelLandBuiltinNode::Fbm3)
+    {
+        return FFastNoiseNative::CreateFbm(Index == 0 ? 4 : 2, Index == 0 ? 0.375f : 0.75f, Index == 0 ? 2.f : 3.f, Error, true);
+    }
+    if (Kind == EVoxelLandBuiltinNode::Value2 || Kind == EVoxelLandBuiltinNode::Value3)
+    {
+        return FFastNoiseNative::CreateValue(Error, true);
+    }
+    return FFastNoiseNative::CreateSimplex(Error, true);
+}
+TArray<int16> SampleNativeOracle(EVoxelLandBuiltinNode Kind, bool b3D, int32 Count, uint64 WorldSeed, FString& Error)
+{
+    return Async(EAsyncExecution::ThreadPool, [Kind, b3D, Count, WorldSeed, &Error]()
+    {
+        TArray<int16> Result;
+        TUniquePtr<FFastNoiseNative> First = CreateNativeOracle(Kind, 0, Error);
+        if (!First) { return Result; }
+        TUniquePtr<FFastNoiseNative> Second = CreateNativeOracle(Kind, 1, Error);
+        if (!Second) { return Result; }
+        TArray<float> X0, Y0, Z0, X1, Y1, Z1, A, B;
+        X0.SetNumUninitialized(Count); Y0.SetNumUninitialized(Count); Z0.SetNumUninitialized(Count);
+        X1.SetNumUninitialized(Count); Y1.SetNumUninitialized(Count); Z1.SetNumUninitialized(Count);
+        A.SetNumUninitialized(Count); B.SetNumUninitialized(Count);
+        for (int32 I = 0; I < Count; ++I)
+        {
+            const float PX = float(I - 129) * 106.f;
+            const float PY = float((I * 31) % 257 - 128) * 56.f;
+            const float PZ = float((I * 11) % 123 - 61) * 40.f;
+            X0[I] = PZ / 128.f; Y0[I] = PX / 128.f; Z0[I] = PY / 128.f;
+            X1[I] = PZ / 256.f; Y1[I] = PX / 256.f; Z1[I] = PY / 256.f;
+        }
+        // Fixed seeds independently calculated from the documented SplitMix64 recipe for
+        // node GUIDs (0x1234,1,1,304/305), salts 13/67 and these two world seeds.
+        const int32 Seed0 = WorldSeed == 314159 ? -1882952887 : 2140967812;
+        const int32 Seed1 = WorldSeed == 314159 ? 291379200 : -444965003;
+        const bool bFirst = b3D ? First->Sample3D(Count, X0.GetData(), Y0.GetData(), Z0.GetData(), Seed0, A.GetData(), Error) :
+            First->Sample2D(Count, X0.GetData(), Y0.GetData(), Seed0, A.GetData(), Error);
+        if (!bFirst) { return Result; }
+        const bool bSecond = b3D ? Second->Sample3D(Count, X1.GetData(), Y1.GetData(), Z1.GetData(), Seed1, B.GetData(), Error) :
+            Second->Sample2D(Count, X1.GetData(), Y1.GetData(), Seed1, B.GetData(), Error);
+        if (!bSecond) { return Result; }
+        Result.Reserve(Count);
+        for (int32 I = 0; I < Count; ++I)
+        {
+            const float Density = (A[I] + B[I] * 0.5f) * 256.f;
+            Result.Add(int16(std::round(Density)));
+        }
+        return Result;
+    }).Get();
+}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NativeNoiseOracle, "VoxelLand.M3.NativeNoiseOracle", M3GraphFlags)
+bool FVoxelLandM3NativeNoiseOracle::RunTest(const FString& Parameters)
+{
+#if PLATFORM_CPU_X86_FAMILY && PLATFORM_64BITS
+    FVoxelLandZoneProfile Profile; Profile.VoxelSizeCm = 1024.f;
+    const EVoxelLandBuiltinNode Kinds[] = {EVoxelLandBuiltinNode::Perlin2, EVoxelLandBuiltinNode::Perlin3,
+        EVoxelLandBuiltinNode::Fbm2, EVoxelLandBuiltinNode::Fbm3, EVoxelLandBuiltinNode::Value2,
+        EVoxelLandBuiltinNode::Value3, EVoxelLandBuiltinNode::Simplex2, EVoxelLandBuiltinNode::Simplex3};
+    for (int32 KindIndex = 0; KindIndex < UE_ARRAY_COUNT(Kinds); ++KindIndex)
+    {
+        const EVoxelLandBuiltinNode Kind = Kinds[KindIndex];
+        const bool b3D = (KindIndex % 2) == 1;
+        FVoxelLandProgramDraft Draft; FString Error;
+        if (!FVoxelLandGraphCompiler::Compile(NativeOracleGraph(Kind, b3D), Draft, Error))
+        {
+            AddError(FString::Printf(TEXT("Noise oracle graph %d failed to compile: %s"), int32(Kind), *Error));
+            continue;
+        }
+        TestTrue(TEXT("Two independent native noise slots are compiled"), Draft.Noise.Num() == 2 && Draft.Seeds.Num() == 2);
+        for (uint64 WorldSeed : {uint64(314159), uint64(987654321)})
+        {
+            for (int32 Count : {1, 2, 3, 256})
+            {
+                FString NativeError;
+                const TArray<int16> Expected = SampleNativeOracle(Kind, b3D, Count, WorldSeed, NativeError);
+                if (Expected.Num() != Count)
+                {
+                    AddError(FString::Printf(TEXT("Native reference family %d failed: %s"), int32(Kind), *NativeError));
+                    continue;
+                }
+                for (EVoxelLandVMBackend Backend : {EVoxelLandVMBackend::Scalar, EVoxelLandVMBackend::Auto, EVoxelLandVMBackend::Simd4})
+                {
+                    const FSampleResult Actual = Sample(Draft, Backend, Profile, Count, WorldSeed);
+                    if (Backend == EVoxelLandVMBackend::Simd4 && Actual.Error.Code == EVoxelLandErrorCode::BackendUnavailable)
+                    {
+                        if (KindIndex == 0 && WorldSeed == 314159 && Count == 256) { AddWarning(TEXT("VM SIMD4 unavailable; native-oracle SIMD selection was not exercised")); }
+                        continue;
+                    }
+                    if (KindIndex == 0 && WorldSeed == 314159 && Count == 256)
+                    {
+                        AddInfo(FString::Printf(TEXT("Native oracle requested VM %d, selected VM %d, native backend %d"),
+                            int32(Backend), int32(Actual.VM), int32(Actual.NoiseBackend)));
+                        if (Backend != EVoxelLandVMBackend::Auto)
+                        {
+                            TestEqual(TEXT("Explicit oracle VM backend selected"), int32(Actual.VM), int32(Backend));
+                        }
+                    }
+                    TestTrue(FString::Printf(TEXT("Native oracle family %d seed %llu count %d backend %d"), int32(Kind), WorldSeed, Count, int32(Backend)),
+                        !Actual.Error && Actual.Values == Expected && Actual.NoiseBackend == EVoxelLandNoiseBackend::SSE2);
+                }
+            }
+        }
+    }
+#else
+    AddWarning(TEXT("Native noise oracle requires the supported x64 SSE2 backend; not exercised on this platform"));
+#endif
     return true;
 }
 

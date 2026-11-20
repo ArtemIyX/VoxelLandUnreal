@@ -20,6 +20,7 @@ public class VoxelLandUncooked : ModuleRules
                 "Engine",
                 "VoxelLandData",
                 "VoxelLandAlgo",
+                "FastNoiseRuntime",
                 "VoxelLandRender",
                 "VoxelLand",
                 "RenderCore",

@@ -8,6 +8,8 @@
 #include "Misc/ScopeLock.h"
 #include "Modules/ModuleManager.h"
 
+#include <limits>
+
 namespace VoxelLandNative
 {
 namespace
@@ -76,6 +78,11 @@ namespace
                     for (int32 Octave = 1; Octave < Config.Octaves; ++Octave)
                     {
                         MaxScale *= double(Config.Lacunarity);
+                        if (!FMath::IsFinite(MaxScale) || MaxScale > double(std::numeric_limits<float>::max()))
+                        {
+                            OutError = FString::Printf(TEXT("InvalidNoiseInput: fBm configuration %d exceeds the finite octave scale"), Index);
+                            return false;
+                        }
                     }
                 }
                 // Keep every octave well within the vendor's signed lattice range.

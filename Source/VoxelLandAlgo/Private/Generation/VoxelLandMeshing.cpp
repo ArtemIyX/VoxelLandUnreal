@@ -68,15 +68,18 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
                 Sum += PA+(PB-PA)*T; ++Crossings;
                 Fallback += (PB-PA) * (Q[B] > Q[A] ? 1.f : -1.f);
             }
-            const FVector3f Average=Sum/float(Crossings);
-            // A 1/1024-cell binary grid keeps the 50/100 cm profiles exact after chunk-origin translation.
-            const FVector3f P(FMath::RoundToFloat(Average.X*1024.f)/1024.f, FMath::RoundToFloat(Average.Y*1024.f)/1024.f, FMath::RoundToFloat(Average.Z*1024.f)/1024.f);
+            const FVector3f P=Sum/float(Crossings);
             FVector3f N=Gradient(Q,P).GetSafeNormal();
             if (N.IsNearlyZero()) { ++Mesh.NormalFallbacks; N=Fallback.GetSafeNormal(); if (N.IsNearlyZero()) N=FVector3f::UpVector; }
             const FVector3f Abs= N.GetAbs();
             const FVector3f Reference = Abs.X <= Abs.Y && Abs.X <= Abs.Z ? Axis(0) : (Abs.Y <= Abs.Z ? Axis(1) : Axis(2));
             FVoxelLandMeshVertex V;
-            V.Position=(FVector3f(float(X),float(Y),float(Z))+P)*VoxelSizeCm;
+            // Snap in physical units, not cell fractions: this preserves sub-1/1024-cell features
+            // while making the 50/100 cm profiles exactly translatable across chunk origins.
+            const FVector3f FractionCm=P*VoxelSizeCm;
+            const FVector3f Snapped(FMath::RoundToFloat(FractionCm.X*1024.f)/1024.f,
+                FMath::RoundToFloat(FractionCm.Y*1024.f)/1024.f, FMath::RoundToFloat(FractionCm.Z*1024.f)/1024.f);
+            V.Position=FVector3f(float(X),float(Y),float(Z))*VoxelSizeCm+Snapped;
             V.Normal=N; V.Tangent=FVector3f::CrossProduct(Reference,N).GetSafeNormal();
             V.UV=FVector2f(V.Position.X,V.Position.Y)/100.f;
             Mesh.Bounds += V.Position;

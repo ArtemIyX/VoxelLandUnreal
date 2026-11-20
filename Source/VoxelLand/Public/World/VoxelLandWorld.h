@@ -46,6 +46,8 @@ public:
     UFUNCTION(BlueprintCallable, Category="VoxelLand") void DumpStats() const;
 
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") bool bStartDemo = true;
+    // Optional data-only mode for a headless consumer or automation; dedicated servers always use it.
+    UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming") bool bDataOnly = false;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") int32 Seed = 1234;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo", meta=(ClampMin="1")) float VoxelSizeCm = 100.f;
     UPROPERTY(EditAnywhere, Category="VoxelLand|Streaming", meta=(ClampMin="1",ClampMax="8")) int32 HorizontalRadius = 4;

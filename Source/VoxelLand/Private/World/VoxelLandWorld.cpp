@@ -152,7 +152,7 @@ void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator,ESPMode::T
 {
     check(IsInGameThread()); Shutdown(); if (!Generator) return;
     State=MakeUnique<FVoxelLandWorldState>(); State->Generator=Generator;
-    State->bServer=GetNetMode()==NM_DedicatedServer;
+    State->bServer=bDataOnly || GetNetMode()==NM_DedicatedServer;
     const int32 Count=FMath::Clamp(WorkerCount,1,MaxWorkers);
     for (int32 I=0; I<Count; ++I)
     {
@@ -264,8 +264,6 @@ void AVoxelLandWorld::PumpCompletions()
         }
         Record->Data=Done.Data;
         if (!Done.Mesh || State->bServer) continue;
-        Record->Vertices=Done.Mesh->Vertices.Num(); Record->Triangles=Done.Mesh->Indices.Num()/3;
-        Record->MeshBytes=Done.Mesh->Vertices.GetAllocatedSize()+Done.Mesh->Indices.GetAllocatedSize();
         const FIntVector RegionKey=VoxelLandCoordinates::RegionOf(Done.Job.Key.Coordinate,RegionDimensions);
         AVoxelLandRegion* Region=State->RegionMap.FindRef(RegionKey).Get();
         if (!Region)
@@ -281,6 +279,10 @@ void AVoxelLandWorld::PumpCompletions()
         {
             Record->Data.Reset(); Record->bFailed=true; ++State->Failed;
             UE_LOG(LogTemp,Error,TEXT("VoxelLand component rejected mesh for (%d,%d,%d)"),C.X,C.Y,C.Z);
+        }        else
+        {
+            Record->Vertices=Done.Mesh->Vertices.Num(); Record->Triangles=Done.Mesh->Indices.Num()/3;
+            Record->MeshBytes=Done.Mesh->Vertices.GetAllocatedSize()+Done.Mesh->Indices.GetAllocatedSize();
         }
     }
 }

@@ -116,6 +116,33 @@ bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
         }
         TestTrue(TEXT("overlapping vertices examined"),Shared>0);
     }
+    // Exercise both ends of the conservative world-coordinate envelope.
+    for (int32 LeftKey : {-32766,32765}) for (float Scale : {1.f,75.3f,100.f})
+    {
+        const FIntVector LeftCoord(LeftKey,0,0), RightCoord(LeftKey+1,0,0);
+        FVoxelLandChunkData Left=Plane(LeftCoord,2,1), Right=Plane(RightCoord,2,1);
+        for (int32 Z=-1; Z<=33; ++Z) for (int32 Y=-1; Y<=33; ++Y) for (int32 X=-1; X<=33; ++X)
+        {
+            const int32 I=(X+1)+35*((Y+1)+35*(Z+1));
+            Left.Density[I]=int16(FMath::Clamp((2*Z-1)*341+(X-32)*3,-32768,32767));
+            Right.Density[I]=int16(FMath::Clamp((2*Z-1)*341+X*3,-32768,32767));
+        }
+        FVoxelLandMeshData L,R;
+        VoxelLandMeshing::BuildSurfaceNets(Left,Scale,S1,L,NeverCancel);
+        VoxelLandMeshing::BuildSurfaceNets(Right,Scale,S2,R,NeverCancel);
+        const FVector OL=VoxelLandMeshCoordinates::RenderOrigin(LeftCoord,Scale), OR=VoxelLandMeshCoordinates::RenderOrigin(RightCoord,Scale);
+        const double Boundary=double(LeftKey+1)*32.0*Scale;
+        int32 Checked=0;
+        for (const auto& V : L.Vertices)
+        {
+            const FVector W=FVector(V.Position)+OL;
+            if (FMath::Abs(W.X-Boundary)>Scale) continue;
+            bool bFound=false;
+            for (const auto& Other : R.Vertices) if (W==FVector(Other.Position)+OR) { bFound=true; break; }
+            TestTrue(TEXT("far seam shared vertex"),bFound); ++Checked;
+        }
+        TestTrue(TEXT("far seam tested"),Checked>0);
+    }
     return true;
 }
 #endif

@@ -222,6 +222,18 @@ bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
     if (!Record.Data && !Record.bRunning) Record.bQueued=true;
     return true;
 }
+bool AVoxelLandWorld::RequestDataChunk(FIntVector Coordinate)
+{
+    FVoxelLandChunkKey Key; Key.Coordinate=Coordinate; return RequestChunk(Key);
+}
+void AVoxelLandWorld::ReleaseDataChunk(FIntVector Coordinate)
+{
+    FVoxelLandChunkKey Key; Key.Coordinate=Coordinate; ReleaseChunk(Key);
+}
+bool AVoxelLandWorld::HasDataChunk(FIntVector Coordinate) const
+{
+    FVoxelLandChunkKey Key; Key.Coordinate=Coordinate; return FindChunk(Key).IsValid();
+}
 void AVoxelLandWorld::ReleaseChunk(const FVoxelLandChunkKey& Key)
 {
     check(IsInGameThread()); if (!State) return;

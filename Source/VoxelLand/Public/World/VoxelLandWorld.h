@@ -42,6 +42,9 @@ public:
     // Data-only explicit demand is useful on dedicated servers. Keep it until ReleaseChunk.
     bool RequestChunk(const FVoxelLandChunkKey& Key);
     void ReleaseChunk(const FVoxelLandChunkKey& Key);
+    UFUNCTION(BlueprintCallable, Category="VoxelLand|Data") bool RequestDataChunk(FIntVector Coordinate);
+    UFUNCTION(BlueprintCallable, Category="VoxelLand|Data") void ReleaseDataChunk(FIntVector Coordinate);
+    UFUNCTION(BlueprintPure, Category="VoxelLand|Data") bool HasDataChunk(FIntVector Coordinate) const;
     TSharedPtr<const FVoxelLandChunkData,ESPMode::ThreadSafe> FindChunk(const FVoxelLandChunkKey& Key) const;
     void SetRegionHidden(FIntVector Region, bool bHidden);
     void SetTerrainMaterial(UMaterialInterface* Material);

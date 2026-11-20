@@ -113,6 +113,11 @@ public:
             Limited->SetTestViewLocation(FVector(3200,0,0)); Limited->Tick(0.016f);
             Test->TestTrue(TEXT("new camera chunk displaces retained prefetch"),Limited->IsChunkDemanded(FIntVector(1,0,0)));
             Test->TestFalse(TEXT("old camera chunk evicted"),Limited->IsChunkDemanded(FIntVector::ZeroValue));
+            Limited->MaxResidentChunks=2; Limited->SetTestViewLocation(FVector::ZeroVector); Limited->SetTestViewVelocity(FVector(100,0,0)); Limited->Tick(0.016f);
+            Test->TestTrue(TEXT("positive velocity favors forward neighbor"),Limited->IsChunkDemanded(FIntVector(1,0,0)));
+            Limited->SetTestViewVelocity(FVector(-100,0,0)); Limited->Tick(0.016f);
+            Test->TestTrue(TEXT("stationary camera reprioritizes when velocity reverses"),Limited->IsChunkDemanded(FIntVector(-1,0,0)));
+            Test->TestFalse(TEXT("old velocity neighbor evicted"),Limited->IsChunkDemanded(FIntVector(1,0,0)));
             Limited->Shutdown(); Limited->Destroy();
         }
         FVoxelLandChunkKey Other; Other.Coordinate=FIntVector(-1,0,0);

@@ -53,6 +53,7 @@ public:
     void SetNextTestBarrier(TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> Barrier);
     uint64 GetStaleCompletionCount() const;
     void SetTestViewLocation(FVector Location);
+    void SetTestViewVelocity(FVector Velocity);
     int32 GetDemandedChunkCount() const;
     bool IsChunkDemanded(FIntVector Coordinate) const;
 #endif

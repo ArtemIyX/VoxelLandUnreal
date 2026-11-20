@@ -145,6 +145,7 @@ struct FVoxelLandWorldState
     FIntVector RegionDimensions=FIntVector(10,10,2);
     FVector ViewVelocity=FVector::ZeroVector;
     int32 LastHorizontal=-1, LastVertical=-1, LastLimit=-1;
+    FIntVector LastVelocitySector=FIntVector::ZeroValue;
     bool bDemandComplete=false;
 #if WITH_DEV_AUTOMATION_TESTS
     TOptional<FVector> TestView;
@@ -276,6 +277,7 @@ void AVoxelLandWorld::SetNextTestBarrier(TSharedPtr<FVoxelLandTestBarrier,ESPMod
 }
 uint64 AVoxelLandWorld::GetStaleCompletionCount() const { return State ? State->Stale : 0; }
 void AVoxelLandWorld::SetTestViewLocation(FVector Location) { if (State) State->TestView=Location; }
+void AVoxelLandWorld::SetTestViewVelocity(FVector Velocity) { if (State) State->ViewVelocity=Velocity; }
 int32 AVoxelLandWorld::GetDemandedChunkCount() const
 {
     int32 Count=0; if (State) for (const auto& Pair : State->Records) Count+=Pair.Value.bDemand ? 1 : 0; return Count;
@@ -322,7 +324,11 @@ void AVoxelLandWorld::UpdateDemand()
     const FIntVector NewChunk(FMath::FloorToInt(Position.X),FMath::FloorToInt(Position.Y),FMath::FloorToInt(Position.Z));
     const int32 H=FMath::Clamp(HorizontalRadius,1,8)+1, V=FMath::Clamp(VerticalRadius,1,4)+1;
     const int32 Limit=FMath::Clamp(MaxResidentChunks,1,MaxRecords);
-    if (State->bDemandComplete && State->bHasCamera && State->CameraChunk==NewChunk && State->LastHorizontal==H && State->LastVertical==V && State->LastLimit==Limit) return;
+    const FVector Direction=State->ViewVelocity.GetSafeNormal();
+    auto SectorAxis=[](double Value) { return Value>0.25 ? 1 : Value < -0.25 ? -1 : 0; };
+    const FIntVector VelocitySector(SectorAxis(Direction.X),SectorAxis(Direction.Y),SectorAxis(Direction.Z));
+    if (State->bDemandComplete && State->bHasCamera && State->CameraChunk==NewChunk && State->LastHorizontal==H && State->LastVertical==V && State->LastLimit==Limit && State->LastVelocitySector==VelocitySector) return;
+    State->LastVelocitySector=VelocitySector;
     State->CameraChunk=NewChunk; State->bHasCamera=true; State->LastHorizontal=H; State->LastVertical=V; State->LastLimit=Limit;
     TArray<FVoxelLandChunkKey> Candidates;
     for (int32 Z=-V; Z<=V; ++Z) for (int32 Y=-H; Y<=H; ++Y) for (int32 X=-H; X<=H; ++X)
@@ -430,7 +436,7 @@ void AVoxelLandWorld::Dispatch()
         const FVector Forward=State->ViewVelocity.GetSafeNormal();
         for (auto& Pair : State->Records)
         {
-            FRecord& R=Pair.Value; if (!R.bQueued || R.bRunning || R.bFailed) continue;
+            FRecord& R=Pair.Value; if (!R.bQueued || R.bRunning || R.bFailed || (!R.bDemand && !R.bExplicit)) continue;
             const FIntVector C=Pair.Key.Coordinate;
             const int64 DX=int64(C.X)-State->CameraChunk.X, DY=int64(C.Y)-State->CameraChunk.Y, DZ=int64(C.Z)-State->CameraChunk.Z;
             // Clamp to avoid overflow for explicit far-away requests.

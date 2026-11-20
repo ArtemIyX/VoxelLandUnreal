@@ -140,8 +140,21 @@ bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
 				for (int32 X = -1; X <= 33; ++X)
 				{
 					const int32 I = (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
-					Left.Density[I] = int16(FMath::Clamp((2 * Z - 1) * 341 + (X + 32) * 3, -32768, 32767));
+					Left.Density[I] = int16(FMath::Clamp((2 * Z - 1) * 341 + (X - 32) * 3, -32768, 32767));
 					Right.Density[I] = int16(FMath::Clamp((2 * Z - 1) * 341 + X * 3, -32768, 32767));
+				}
+			}
+		}
+		for (int32 Z = -1; Z <= 33; ++Z)
+		{
+			for (int32 Y = -1; Y <= 33; ++Y)
+			{
+				for (int32 X = -1; X <= 1; ++X)
+				{
+					const int32 LeftIndex = (X + 33) + 35 * ((Y + 1) + 35 * (Z + 1));
+					const int32 RightIndex = (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
+					TestEqual(
+						TEXT("adjacent padded samples agree"), Left.Density[LeftIndex], Right.Density[RightIndex]);
 				}
 			}
 		}

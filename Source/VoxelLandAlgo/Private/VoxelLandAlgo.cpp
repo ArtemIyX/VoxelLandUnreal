@@ -1,17 +1,14 @@
-﻿#include "VoxelLandAlgo.h"
-
-#define LOCTEXT_NAMESPACE "FVoxelLandAlgoModule"
+#include "VoxelLandAlgo.h"
+#include "VoxelLandNativeNoise.h"
 
 void FVoxelLandAlgoModule::StartupModule()
 {
-    
+    VoxelLandNative::Startup();
 }
 
 void FVoxelLandAlgoModule::ShutdownModule()
 {
-    
+    VoxelLandNative::Shutdown();
 }
 
-#undef LOCTEXT_NAMESPACE
-    
 IMPLEMENT_MODULE(FVoxelLandAlgoModule, VoxelLandAlgo)

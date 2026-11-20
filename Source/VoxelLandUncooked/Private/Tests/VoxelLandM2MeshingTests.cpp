@@ -206,4 +206,33 @@ bool FVoxelLandM2SphereTest::RunTest(const FString& Parameters)
     }
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2CsgTest, "VoxelLand.M2.SphereWithTunnel", Flags)
+bool FVoxelLandM2CsgTest::RunTest(const FString& Parameters)
+{
+    FVoxelLandChunkData Chunk; Chunk.Density.SetNumUninitialized(FVoxelLandChunkData::SampleCount);
+    for (int32 Z=-1; Z<=33; ++Z) for (int32 Y=-1; Y<=33; ++Y) for (int32 X=-1; X<=33; ++X)
+    {
+        const FVector3f P(float(X-16),float(Y-16),float(Z-16));
+        const float Sphere=P.Size()-10.f;
+        const float Box=FMath::Max3(FMath::Abs(P.X)-12.f,FMath::Abs(P.Y)-2.f,FMath::Abs(P.Z)-2.f);
+        const int32 Q=FMath::RoundToInt(FMath::Max(Sphere,-Box)*1024.f);
+        Chunk.Density[(X+1)+35*((Y+1)+35*(Z+1))]=int16(FMath::Clamp(Q,-32768,32767));
+    }
+    FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;
+    TestEqual(TEXT("CSG mesh builds"),int32(VoxelLandMeshing::BuildSurfaceNets(Chunk,100.f,Scratch,Mesh,[] {return false;})),int32(EVoxelLandMeshResult::Success));
+    TestTrue(TEXT("CSG emits triangles"),Mesh.Indices.Num()>0);
+    int32 TunnelWallVertices=0;
+    for (const auto& V : Mesh.Vertices)
+    {
+        if (FMath::Abs(V.Position.X-1600.f)<400.f && FMath::Abs(V.Position.Y-1800.f)<1.f && FMath::Abs(V.Position.Z-1600.f)<100.f)
+        {
+            TestTrue(TEXT("tunnel wall normal points into air"),V.Normal.Y < -0.85f);
+            ++TunnelWallVertices;
+        }
+    }
+    TestTrue(TEXT("tunnel wall sampled"),TunnelWallVertices>0);
+    for (uint32 Index : Mesh.Indices) TestTrue(TEXT("CSG index valid"),Index<uint32(Mesh.Vertices.Num()));
+    return true;
+}
 #endif

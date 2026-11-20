@@ -40,6 +40,7 @@ public:
             FPlatformProcess::FreeDllHandle(Handle);
         }
     }
+    EVoxelLandOperatorStage Stage() const override { return Provider->Stage(); }
     FGuid Id() const override { return Provider->Id(); }
     int32 Version() const override { return Provider->Version(); }
     TArray<EVoxelLandGraphValueType> InputTypes() const override { return Provider->InputTypes(); }
@@ -71,12 +72,19 @@ FRegistryState& Registry()
 }
 }
 
-bool FVoxelLandOperatorRegistry::Register(FName ModuleName, TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider, FString& Error)
+bool FVoxelLandOperatorRegistry::RegisterV2(FName ModuleName, TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider, uint32 CallerAbiVersion, FString& Error)
 {
     Error.Reset();
+    if (CallerAbiVersion != ProviderAbiVersion)
+    {
+        Error = TEXT("Incompatible VoxelLand C++ provider ABI; rebuild the provider against this plugin version");
+        return false;
+    }
     const TArray<EVoxelLandGraphValueType> Inputs = Provider->InputTypes();
     const EVoxelLandOperatorSimdRequirement Simd = Provider->SimdRequirement();
     if (!Provider->Id().IsValid() || Provider->Version() < 1 || Inputs.Num() < 1 || Inputs.Num() > 3 ||
+        (Provider->Stage() != EVoxelLandOperatorStage::Sample && Provider->Stage() != EVoxelLandOperatorStage::OneCellFilter) ||
+        (Provider->Stage() == EVoxelLandOperatorStage::OneCellFilter && (Inputs.Num() != 1 || Inputs[0] != EVoxelLandGraphValueType::Float || Provider->OutputType() != EVoxelLandGraphValueType::Float || Simd != EVoxelLandOperatorSimdRequirement::None)) ||
         (Simd != EVoxelLandOperatorSimdRequirement::None && Simd != EVoxelLandOperatorSimdRequirement::SSE2))
     {
         Error = TEXT("Invalid operator ID, version or signature");
@@ -179,6 +187,23 @@ TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegi
         {
             return Provider;
         }
+    }
+    return nullptr;
+}
+
+FVoxelLandOperatorRegistrySnapshot FVoxelLandOperatorRegistry::Snapshot()
+{
+    FRegistryState& State = Registry();
+    FScopeLock Lock(&State.Lock);
+    FVoxelLandOperatorRegistrySnapshot Result;
+    Result.Providers = State.Providers;
+    return Result;
+}
+TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegistrySnapshot::Resolve(const FGuid& Id, int32 Version) const
+{
+    for (const auto& Provider : Providers)
+    {
+        if (Provider->Id() == Id && Provider->Version() == Version) { return Provider; }
     }
     return nullptr;
 }

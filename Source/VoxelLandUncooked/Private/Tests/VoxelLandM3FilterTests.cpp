@@ -2,6 +2,8 @@
 
 #include "VoxelLandM1Fixtures.h"
 #include "Async/Async.h"
+#include "Operators/VoxelLandExampleFilterOperator.h"
+#include "Generation/VoxelLandMeshing.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -108,6 +110,124 @@ bool MatchOverlap(const FVoxelLandChunkData& A, const FVoxelLandChunkData& B, in
     }
     return true;
 }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3IntervalClassification, "VoxelLand.M3.IntervalClassification", M3FilterFlags)
+bool FVoxelLandM3IntervalClassification::RunTest(const FString& Parameters)
+{
+    for (bool bSmooth : {false, true})
+    {
+        FVoxelLandProgramDraft Draft; Draft.FormatVersion = 2; Draft.RegisterCount = 1;
+        Draft.Instructions = {Op(EVoxelLandOpcode::LoadZ, 0), Op(EVoxelLandOpcode::StoreDensity, 0, 0)};
+        Draft.Constants = {1.f, 1.f};
+        Draft.SmoothFilter.bPresent = bSmooth; Draft.SmoothFilter.Enabled.Index = 0; Draft.SmoothFilter.Strength.Index = 1;
+        for (int32 Z : {-2, 0, 2})
+        {
+            FVoxelLandChunkKey Key; Key.Coordinate.Z = Z;
+            const FResult Result = RunFilter(Draft, Key);
+            if (Result.Error || !Result.Chunk || !Result.Generator) { AddError(TEXT("Interval fixture generation failed")); return false; }
+            const EVoxelLandChunkClassification Proof = Result.Generator->ClassifyChunkBeforeSampling(Key);
+            const EVoxelLandChunkClassification Actual = VoxelLandMeshing::Classify(*Result.Chunk);
+            if (Z == 0)
+            {
+                TestEqual(TEXT("Crossing interval remains unknown"), int32(Proof), int32(EVoxelLandChunkClassification::NeedsSamples));
+            }
+            else
+            {
+                TestEqual(TEXT("Proven interval matches quantized sampling"), int32(Proof), int32(Actual));
+                TestEqual(TEXT("Proven side has expected sign"), int32(Proof), int32(Z < 0 ? EVoxelLandChunkClassification::Solid : EVoxelLandChunkClassification::Empty));
+            }
+        }
+    }
+    FVoxelLandProgramDraft Tiny; Tiny.FormatVersion = 2; Tiny.RegisterCount = 1; Tiny.Constants = {-0.1f};
+    Tiny.Instructions = {Op(EVoxelLandOpcode::LoadConstant, 0, 0, 0, 0, 0), Op(EVoxelLandOpcode::StoreDensity, 0, 0)};
+    FVoxelLandChunkKey Key;
+    const FResult TinyResult = RunFilter(Tiny, Key);
+    TestTrue(TEXT("Tiny negative quantizes to air"), TinyResult.Chunk && VoxelLandMeshing::Classify(*TinyResult.Chunk) == EVoxelLandChunkClassification::Empty);
+    TestTrue(TEXT("Tiny negative is not falsely proved solid"), TinyResult.Generator && TinyResult.Generator->ClassifyChunkBeforeSampling(Key) == EVoxelLandChunkClassification::NeedsSamples);
+    FVoxelLandProgramDraft Unknown = Tiny;
+    Unknown.RegisterCount = 2;
+    Unknown.Instructions = {Op(EVoxelLandOpcode::LoadZ, 0), Op(EVoxelLandOpcode::LoadConstant, 1, 0, 0, 0, 0),
+        Op(EVoxelLandOpcode::Power, 0, 0, 1), Op(EVoxelLandOpcode::StoreDensity, 0, 0)};
+    const FResult UnknownResult = RunFilter(Unknown, Key);
+    TestTrue(TEXT("Unsupported interval operation remains unknown"), UnknownResult.Generator &&
+        UnknownResult.Generator->ClassifyChunkBeforeSampling(Key) == EVoxelLandChunkClassification::NeedsSamples);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3ExternalFilter, "VoxelLand.M3.ExternalFilter", M3FilterFlags)
+bool FVoxelLandM3ExternalFilter::RunTest(const FString& Parameters)
+{
+    FVoxelLandProgramDraft Draft = FilterSource(false, 0.f);
+    FVoxelLandSeedSlot Seed; Seed.NodeId = FGuid(1, 2, 3, 4); Seed.Salt = 17;
+    Draft.Seeds.Add(Seed);
+    FVoxelLandExternalOperator Operator;
+    Operator.Id = VoxelLandExampleFilterOperatorId(); Operator.Version = 1; Operator.Stage = EVoxelLandOperatorStage::OneCellFilter;
+    Operator.Inputs = {EVoxelLandGraphValueType::Float}; Operator.Output = EVoxelLandGraphValueType::Float; Operator.SeedSlot = 0;
+    Draft.ExternalFilterIndex = Draft.ExternalOperators.Add(Operator);
+    FVoxelLandChunkKey Key; Key.Coordinate = FIntVector(-1, -1, -1);
+    const FResult Result = RunFilter(Draft, Key);
+    if (Result.Error || !Result.Chunk || !Result.Generator)
+    {
+        AddError(FString::Printf(TEXT("External filter generation failed: %s"), *Result.Error.Message));
+        return false;
+    }
+    TArray<int16> Expected;
+    for (int32 Z = -1; Z <= 33; ++Z)
+    {
+        for (int32 Y = -1; Y <= 33; ++Y)
+        {
+            for (int32 X = -1; X <= 33; ++X)
+            {
+                const int32 GX = 32 * Key.Coordinate.X + X, GY = 32 * Key.Coordinate.Y + Y, GZ = 32 * Key.Coordinate.Z + Z;
+                const int32 Sum = SourceReference(GX - 1, GY, GZ) + SourceReference(GX, GY, GZ) + SourceReference(GX + 1, GY, GZ);
+                Expected.Add(int16(RoundReference(Sum, 3)));
+            }
+        }
+    }
+    TestTrue(TEXT("External filter matches independent integer reference"), Result.Chunk->Density == Expected);
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+        FVoxelLandChunkKey Neighbor = Key;
+        if (Axis == 0) { ++Neighbor.Coordinate.X; }
+        else if (Axis == 1) { ++Neighbor.Coordinate.Y; }
+        else { ++Neighbor.Coordinate.Z; }
+        const FResult Other = RunFilter(Draft, Neighbor);
+        TestTrue(FString::Printf(TEXT("External filter seam on axis %d"), Axis), !Other.Error && Other.Chunk && MatchOverlap(*Result.Chunk, *Other.Chunk, Axis));
+    }
+    FVoxelLandChunkKey Neighbor = Key;
+    ++Neighbor.Coordinate.X;
+    const FResult SerialNeighbor = Async(EAsyncExecution::ThreadPool, [Generator = Result.Generator, Neighbor]()
+    {
+        return GenerateShared(Generator, Neighbor);
+    }).Get();
+    TFuture<FResult> ConcurrentNeighbor = Async(EAsyncExecution::ThreadPool, [Generator = Result.Generator, Neighbor]()
+    {
+        return GenerateShared(Generator, Neighbor);
+    });
+    TFuture<FResult> ConcurrentOriginal = Async(EAsyncExecution::ThreadPool, [Generator = Result.Generator, Key]()
+    {
+        return GenerateShared(Generator, Key);
+    });
+    const FResult ParallelNeighbor = ConcurrentNeighbor.Get();
+    const FResult ParallelOriginal = ConcurrentOriginal.Get();
+    TestTrue(TEXT("External filter is independent of concurrent generation order"), SerialNeighbor.Chunk &&
+        ParallelNeighbor.Chunk && ParallelOriginal.Chunk && SerialNeighbor.Chunk->Density == ParallelNeighbor.Chunk->Density &&
+        Result.Chunk->Density == ParallelOriginal.Chunk->Density);
+    const bool bCancelled = Async(EAsyncExecution::ThreadPool, [Generator = Result.Generator, Key]()
+    {
+        TUniquePtr<FVoxelLandWorkerContext> Worker;
+        if (Generator->CreateWorker(Worker)) { return false; }
+        TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
+        int32 Polls = 0;
+        const FVoxelLandError Error = Generator->GenerateChunkCancellable(Key, *Worker, Chunk, [&Polls]() { return ++Polls > 210; });
+        return Error.Code == EVoxelLandErrorCode::Cancelled && !Chunk;
+    }).Get();
+    TestTrue(TEXT("Filter cancellation never publishes partial chunk"), bCancelled);
+    FVoxelLandProgramDraft Missing = Draft; Missing.ExternalOperators[0].Version = 999;
+    const FResult Rejected = RunFilter(Missing, Key);
+    TestEqual(TEXT("Missing filter version rejected"), int32(Rejected.Error.Code), int32(EVoxelLandErrorCode::InvalidProgram));
+    return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3FilterReference, "VoxelLand.M3.FilterReferenceAndSeams", M3FilterFlags)

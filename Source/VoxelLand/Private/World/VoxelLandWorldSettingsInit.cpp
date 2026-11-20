@@ -8,6 +8,9 @@
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Graph/VoxelLandProgramCodec.h"
+#if WITH_EDITOR
+#include "UObject/PackageReload.h"
+#endif
 #if !UE_SERVER
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
@@ -66,7 +69,7 @@ class FSettingsInitializationRequest
 public:
     FSettingsInitializationRequest(UVoxelLandWorldSettings& Settings, FVoxelLandGraphSnapshot&& InSnapshot,
         const FVoxelLandSerializedProgram& InPayload, FVoxelLandZoneProfile&& InProfile)
-        : WeakSettings(&Settings), Snapshot(MoveTemp(InSnapshot)), Payload(InPayload), Profile(MoveTemp(InProfile)),
+        : WeakSettings(&Settings), WeakGraph(Settings.Graph), Snapshot(MoveTemp(InSnapshot)), Payload(InPayload), Profile(MoveTemp(InProfile)),
           Overrides(Settings.Overrides), Seed(uint64(Settings.Seed)),
           SourceIdentity(FVoxelLandProgramCodec::SourceFingerprint(Snapshot)),
           HorizontalRadius(Settings.HorizontalRadius), VerticalRadius(Settings.VerticalRadius)
@@ -87,6 +90,15 @@ public:
             Current->Graph->CompiledProgram.SourceFingerprint == Payload.SourceFingerprint;
     }
 
+#if WITH_EDITOR
+    bool References(const UObject* Object) const { return WeakSettings.Get() == Object || WeakGraph.Get() == Object; }
+    bool ReferencesPackage(const UPackage* Package) const
+    {
+        const UObject* Settings = WeakSettings.Get();
+        const UObject* Graph = WeakGraph.Get();
+        return (Settings && Settings->GetOutermost() == Package) || (Graph && Graph->GetOutermost() == Package);
+    }
+#endif
     void Run(const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
         TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError) const
     {
@@ -107,6 +119,7 @@ public:
 
 private:
     TWeakObjectPtr<UVoxelLandWorldSettings> WeakSettings;
+    TWeakObjectPtr<UVoxelLandTerrainGraph> WeakGraph;
     FVoxelLandGraphSnapshot Snapshot;
     FVoxelLandSerializedProgram Payload;
     FVoxelLandZoneProfile Profile;
@@ -186,6 +199,10 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
     const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
         MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
     PendingInitialization = Job;
+#if WITH_EDITOR
+    InitPackageReloadHandle = FCoreUObjectDelegates::OnPackageReloaded.AddUObject(this, &AVoxelLandWorld::HandleInitPackageReload);
+    InitObjectsReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddUObject(this, &AVoxelLandWorld::HandleInitObjectsReplaced);
+#endif
     bInitializing = true;
     SetActorTickEnabled(true);
     InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
@@ -197,6 +214,9 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
 
 void AVoxelLandWorld::StopPendingInitialization()
 {
+#if WITH_EDITOR
+    UnbindInitReloadHandlers();
+#endif
     if (PendingInitialization)
     {
         PendingInitialization->Cancel->Store(true);
@@ -222,6 +242,9 @@ void AVoxelLandWorld::PollInitialization()
     }
     InitializationTask.Wait();
     InitializationTask = TFuture<void>();
+#if WITH_EDITOR
+    UnbindInitReloadHandlers();
+#endif
     TSharedPtr<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job = MoveTemp(PendingInitialization);
     bInitializing = false;
     if (!Job->Request->IsCurrent())
@@ -262,3 +285,32 @@ void AVoxelLandWorld::CancelInitialization()
     LastInitializationError = TEXT("Initialization cancelled");
     OnInitializationFinished.Broadcast(false);
 }
+
+#if WITH_EDITOR
+void AVoxelLandWorld::UnbindInitReloadHandlers()
+{
+    FCoreUObjectDelegates::OnPackageReloaded.Remove(InitPackageReloadHandle);
+    FCoreUObjectDelegates::OnObjectsReplaced.Remove(InitObjectsReplacedHandle);
+    InitPackageReloadHandle.Reset(); InitObjectsReplacedHandle.Reset();
+}
+void AVoxelLandWorld::HandleInitPackageReload(EPackageReloadPhase Phase, FPackageReloadedEvent* Event)
+{
+    if (Phase == EPackageReloadPhase::PrePackageLoad && Event && PendingInitialization &&
+        PendingInitialization->Request->ReferencesPackage(Event->GetOldPackage()))
+    {
+        CancelInitialization();
+    }
+}
+void AVoxelLandWorld::HandleInitObjectsReplaced(const TMap<UObject*, UObject*>& Map)
+{
+    if (!PendingInitialization) { return; }
+    for (const TPair<UObject*, UObject*>& Replacement : Map)
+    {
+        if (PendingInitialization->Request->References(Replacement.Key))
+        {
+            CancelInitialization();
+            return;
+        }
+    }
+}
+#endif

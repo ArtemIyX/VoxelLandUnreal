@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandBackendOptions.h"
+#include "Data/Enums/VoxelLandChunkClassification.h"
 #include "Data/Structs/VoxelLandChunkData.h"
 #include "Data/Structs/VoxelLandError.h"
 #include "Data/Structs/VoxelLandProgramDraft.h"
@@ -9,6 +10,7 @@
 #include "Generation/VoxelLandGeneratorSettings.h"
 
 class IVoxelLandOperator;
+class FVoxelLandOperatorRegistrySnapshot;
 class FVoxelLandWorkerContext;
 struct FVoxelLandWorkerContextImpl;
 
@@ -18,6 +20,8 @@ class VOXELLANDALGO_API FVoxelLandProgram
 public:
 	static FVoxelLandError Validate(
 		const FVoxelLandProgramDraft& Draft, TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
+	static FVoxelLandError Validate(const FVoxelLandProgramDraft& Draft, const FVoxelLandOperatorRegistrySnapshot& Providers,
+        TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
 	const FVoxelLandProgramDraft& GetData() const { return Data; }
 	uint64 GetFingerprint() const { return Fingerprint; }
 	const TArray<TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe>>& GetOperators() const { return Operators; }
@@ -38,6 +42,8 @@ public:
 	static FVoxelLandError Create(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
+    // Proof-only hint; chunk sampling still runs and remains authoritative.
+    EVoxelLandChunkClassification ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const;
 	FVoxelLandError GenerateChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const;
 	FVoxelLandError GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
@@ -55,6 +61,9 @@ public:
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 
 private:
+	FVoxelLandError GenerateExpandedDensity(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
+        TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GeneratePureChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandGenerator() = default;

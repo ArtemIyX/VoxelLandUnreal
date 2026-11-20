@@ -2,8 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "Toolkits/AssetEditorToolkit.h"
+#include "EditorUndoClient.h"
 #include "UObject/GCObject.h"
 #include "Data/Enums/VoxelLandGraphValueType.h"
+#include "Data/Structs/VoxelLandGraphDiagnostic.h"
 #include "Async/Future.h"
 #include "Containers/Ticker.h"
 
@@ -22,6 +24,8 @@ class UVoxelLandWorldSettings;
 struct FAssetData;
 class FVoxelLandCompileWork;
 class FVoxelLandPreviewWork;
+class FPackageReloadedEvent;
+enum class EPackageReloadPhase : uint8;
 struct FEdGraphEditAction;
 struct FPropertyChangedEvent;
 struct FVoxelLandZoneProfile;
@@ -29,13 +33,41 @@ struct FVoxelLandSerializedProgram;
 struct FGraphActionListBuilderBase;
 struct FEdGraphSchemaAction;
 
-class FVoxelLandGraphToolkit : public FAssetEditorToolkit, public FGCObject
+class FVoxelLandGraphToolkit : public FAssetEditorToolkit, public FGCObject, public FEditorUndoClient
 {
 public:
     virtual ~FVoxelLandGraphToolkit() override;
     void Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host);
     static bool StoreCompiledProgram(UVoxelLandTerrainGraph& Graph, FVoxelLandSerializedProgram&& Payload);
     void Stop();
+    virtual void PostUndo(bool bSuccess) override;
+    virtual void PostRedo(bool bSuccess) override;
+#if WITH_DEV_AUTOMATION_TESTS
+    void InitializeForTests(UVoxelLandTerrainGraph* InAsset);
+    uint64 GetRevisionForTests() const { return Revision; }
+    int32 GetPanelRefreshCountForTests() const { return PanelRefreshCountForTests; }
+    void CreatePanelForTests();
+    UVoxelLandWorldSettings* GetPreviewSettingsForTests() const { return PreviewSettings; }
+    uint64 GetPreviewRevisionForTests() const { return PreviewRevision; }
+    int32 GetMaterialApplyCountForTests() const { return MaterialApplyCountForTests; }
+    void SynchronizePreviewForTests() { SynchronizePreviewSettings(true); }
+    void SetPreviewRadiusForTests(int32 Value, bool bHorizontal) { CommitPreviewRadius(Value, bHorizontal); }
+    void SetPreviewSeedForTests(int64 Value) { SeedCommitted(FText::AsCultureInvariant(LexToString(Value)), ETextCommit::OnEnter); }
+    int32 GetPreviewHorizontalRadiusForTests() const { return PreviewHorizontalRadius; }
+    void SetMaterialPickerForTests(UMaterialInterface* Material);
+    void SetSettingsPickerForTests(UVoxelLandWorldSettings* Settings);
+    FString GetMaterialPickerPathForTests() const { return MaterialPickerPath(); }
+    UMaterialInterface* GetEffectiveMaterialForTests() const { return PreviewMaterial; }
+    FString GetSettingsPickerPathForTests() const { return SettingsPickerPath(); }
+    void SetDiagnosticForTests(const FVoxelLandGraphDiagnostic& InDiagnostic) { ErrorDiagnostic = InDiagnostic; }
+    const FVoxelLandGraphDiagnostic& GetDiagnosticForTests() const { return ErrorDiagnostic; }
+    bool ResolveDiagnosticForTests(UEdGraphNode*& Node, UEdGraphPin*& Pin) const { return ResolveDiagnosticTarget(Node, Pin); }
+    void OnReplacedForTests(const TMap<UObject*, UObject*>& Map) { ObjectsReplaced(Map); }
+    void PackageReloadForTests(EPackageReloadPhase Phase, FPackageReloadedEvent* Event) { PackageReloaded(Phase, Event); }
+    void AddWorkerForTests(TFuture<void>&& Task) { WorkerTasks.Add(MoveTemp(Task)); }
+    bool IsStoppedForTests() const { return bStopped; }
+    bool IsReloadPausedForTests() const { return bReloadPaused; }
+#endif
     virtual FName GetToolkitFName() const override { return TEXT("VoxelLandGraph"); }
     virtual FText GetBaseToolkitName() const override;
     virtual FString GetWorldCentricTabPrefix() const override { return TEXT("VoxelLand"); }
@@ -53,8 +85,9 @@ private:
     void CollectPalette(FGraphActionListBuilderBase& OutActions);
     void ActivatePalette(const TArray<TSharedPtr<FEdGraphSchemaAction>>& Actions);
     void CreateMirror();
-    bool CaptureMirror(FString& Error);
+    bool CaptureMirror(FString& Error, FVoxelLandGraphDiagnostic* Diagnostic = nullptr);
     void GraphChanged(const FEdGraphEditAction& Action);
+    void SynchronizeGraph();
     void PropertiesChanged(const FPropertyChangedEvent& Event);
     void SelectionChanged(const TSet<UObject*>& Selection);
     void RequestCompile();
@@ -70,15 +103,26 @@ private:
     void CancelPreview();
     void ClearPreview();
     void SeedCommitted(const FText& Text, ETextCommit::Type CommitType);
+    void CommitPreviewRadius(int32 Value, bool bHorizontal);
+    void MaterialSetupPropertyChanged(UObject* Object, FPropertyChangedEvent& Event);
+    void PackageReloaded(EPackageReloadPhase Phase, FPackageReloadedEvent* Event);
+    void ObjectsReplaced(const TMap<UObject*, UObject*>& Replacements);
+    void ObjectsReinstanced(const TMap<UObject*, UObject*>& Replacements);
+    void PauseForReload(bool bGraphAffected);
+    void ResumeAfterReload();
     void MaterialChanged(const FAssetData& Material);
+    FString MaterialPickerPath() const;
+    FString SettingsPickerPath() const;
     void ApplyPreviewMaterial(UMaterialInterface* Material);
     void ApplyMaterialSetup();
     void SettingsChanged(const FAssetData& Settings);
     void PreviewPropertiesChanged(const FPropertyChangedEvent& Event);
+    void SynchronizePreviewSettings(bool bApplyChanges);
     void BeginPIE(bool bSimulating);
     void EndPIE(bool bSimulating);
     FReply ResetPreviewCamera();
     FReply FocusError();
+    bool ResolveDiagnosticTarget(UEdGraphNode*& OutNode, UEdGraphPin*& OutPin) const;
     FReply AddParameter(EVoxelLandGraphValueType Type);
     bool PollJobs(float DeltaTime);
     void ProcessCompileWork();
@@ -95,6 +139,8 @@ private:
     TSharedPtr<SVoxelLandPreviewViewport> PreviewViewport;
     TArray<TObjectPtr<UVoxelLandChunkComponent>> PreviewComponents;
     TObjectPtr<UMaterialInterface> PreviewMaterial = nullptr;
+    TSoftObjectPtr<UMaterialInterface> SelectedPreviewMaterial;
+    TSoftObjectPtr<UVoxelLandWorldSettings> SelectedPreviewSettings;
     TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;
     TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> PreviewCancel;
     int64 PreviewSeed = 1234;
@@ -104,6 +150,10 @@ private:
     FDelegateHandle GraphChangedHandle;
     FDelegateHandle BeginPIEHandle;
     FDelegateHandle EndPIEHandle;
+    FDelegateHandle MaterialSetupChangedHandle;
+    FDelegateHandle PackageReloadHandle;
+    FDelegateHandle ObjectsReplacedHandle;
+    FDelegateHandle ObjectsReinstancedHandle;
     FTSTicker::FDelegateHandle PollHandle;
     TArray<TFuture<void>> WorkerTasks;
     TSharedPtr<FVoxelLandCompileWork, ESPMode::ThreadSafe> CompileWork;
@@ -112,13 +162,27 @@ private:
     bool bCompileRequested = false;
     bool bPreviewRequested = false;
     bool bStopped = false;
+    bool bReloadPaused = false;
+    bool bPackageReloadInProgress = false;
+    bool bReloadGraphAffected = false;
+    bool bResumePreviewAfterReload = false;
+    FString StatusBeforeReload;
+    bool bHasEditorWindow = false;
+    bool bRegisteredForUndo = false;
     bool bPIE = false;
     FString Status = TEXT("Stale: compile graph before use.");
     FString MaterialDiagnostic;
+    TArray<uint8> PreviewDensitySnapshot;
+    TArray<uint8> PreviewMaterialSnapshot;
+    bool bHasPreviewSettingsSnapshot = false;
     uint64 Revision = 0;
     uint64 LastSourceHash = 0;
     uint64 PresentationRevision = 0;
-    FGuid ErrorNode;
+    FVoxelLandGraphDiagnostic ErrorDiagnostic;
     double LastCompileMs = 0.0;
     bool bLoading = false;
+#if WITH_DEV_AUTOMATION_TESTS
+    int32 PanelRefreshCountForTests = 0;
+    int32 MaterialApplyCountForTests = 0;
+#endif
 };

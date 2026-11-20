@@ -1,4 +1,8 @@
 #include "Graph/VoxelLandEditorSchema.h"
+#include "Graph/VoxelLandEditorFloat.h"
+#include "Operators/VoxelLandOperator.h"
+#include "Misc/DefaultValueHelper.h"
+#include "ScopedTransaction.h"
 #include "Graph/VoxelLandEditorNode.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Graph/VoxelLandEditorOperator.h"
@@ -151,11 +155,17 @@ const FPinConnectionResponse UVoxelLandEditorSchema::CanCreateConnection(const U
     const UEdGraphPin* Input = A->Direction == EGPD_Input ? A : B;
     const UVoxelLandEditorNode* FromNode = Cast<UVoxelLandEditorNode>(Output->GetOwningNode());
     const UVoxelLandEditorNode* ToNode = Cast<UVoxelLandEditorNode>(Input->GetOwningNode());
-    if (FromNode && FromNode->Kind == int32(EVoxelLandBuiltinNode::SmoothDensity) &&
+    bool bFromFilter = FromNode && FromNode->Kind == int32(EVoxelLandBuiltinNode::SmoothDensity);
+    if (FromNode && FromNode->Kind == 0)
+    {
+        const auto Provider = FVoxelLandOperatorRegistry::Resolve(FromNode->ExternalOperatorId, FromNode->OperatorVersion);
+        bFromFilter = Provider && Provider->Stage() == EVoxelLandOperatorStage::OneCellFilter;
+    }
+    if (bFromFilter &&
         (!ToNode || ToNode->Kind != int32(EVoxelLandBuiltinNode::DensityOutput) ||
          (!Output->LinkedTo.IsEmpty() && !Output->LinkedTo.Contains(Input))))
     {
-        return FPinConnectionResponse(CONNECT_RESPONSE_DISALLOW, LOCTEXT("SmoothOutput", "Smooth Density must feed only Density Output."));
+        return FPinConnectionResponse(CONNECT_RESPONSE_DISALLOW, LOCTEXT("SmoothOutput", "A filter must feed only Density Output."));
     }
     if (ToNode && ToNode->Kind == int32(EVoxelLandBuiltinNode::SmoothDensity) && Input->PinName != FName(TEXT("Density")))
     {
@@ -203,3 +213,56 @@ FLinearColor UVoxelLandEditorSchema::GetPinTypeColor(const FEdGraphPinType& Type
     return FLinearColor(0.3f, 0.8f, 0.3f);
 }
 #undef LOCTEXT_NAMESPACE
+
+void UVoxelLandEditorSchema::TrySetDefaultValue(UEdGraphPin& Pin, const FString& NewDefaultValue, bool bMarkAsModified) const
+{
+    if (Pin.Direction != EGPD_Input || !Pin.LinkedTo.IsEmpty() || Pin.bDefaultValueIsReadOnly)
+    {
+        return;
+    }
+    FString Value;
+    if (Pin.PinType.PinCategory == TEXT("float"))
+    {
+        float Parsed = 0.0f;
+        if (!FDefaultValueHelper::ParseFloat(NewDefaultValue, Parsed) || !FMath::IsFinite(Parsed))
+        {
+            return;
+        }
+        Value = FVoxelLandEditorFloat::Format(Parsed);
+    }
+    else if (Pin.PinType.PinCategory == TEXT("int"))
+    {
+        int32 Parsed = 0;
+        if (!LexTryParseString(Parsed, *NewDefaultValue))
+        {
+            return;
+        }
+        Value = LexToString(Parsed);
+    }
+    else if (Pin.PinType.PinCategory == TEXT("bool"))
+    {
+        if (!NewDefaultValue.Equals(TEXT("true"), ESearchCase::IgnoreCase) && !NewDefaultValue.Equals(TEXT("false"), ESearchCase::IgnoreCase))
+        {
+            return;
+        }
+        Value = NewDefaultValue.ToLower();
+    }
+    else
+    {
+        return;
+    }
+    if (Pin.DefaultValue == Value)
+    {
+        return;
+    }
+    UEdGraphNode* Node = Pin.GetOwningNode();
+    if (!Node || !Node->GetGraph())
+    {
+        return;
+    }
+    const FScopedTransaction Transaction(NSLOCTEXT("VoxelLand", "EditPinDefault", "Edit terrain graph input"));
+    Node->GetGraph()->Modify();
+    Node->Modify();
+    Pin.Modify();
+    Super::TrySetDefaultValue(Pin, Value, bMarkAsModified);
+}

@@ -17,19 +17,18 @@ namespace
 class FSquareWorker final : public IVoxelLandOperatorWorker
 {
 public:
-    bool Evaluate(TConstArrayView<const void*> Inputs, void* Output, int32 Count, FString& Error) override
+    bool Evaluate(TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
     {
-        if (Inputs.Num() != 1 || !Inputs[0] || !Output || Count < 1 || Count > 256)
+        if (Inputs.Num() != 1 || !Inputs[0] || Output.Num() != Count || Count < 1 || Count > 256)
         {
             Error = TEXT("Invalid square batch");
             return false;
         }
         const float* Input = static_cast<const float*>(Inputs[0]);
-        float* Result = static_cast<float*>(Output);
         for (int32 Index = 0; Index < Count; ++Index)
         {
-            Result[Index] = Input[Index] * Input[Index];
-            if (!FMath::IsFinite(Result[Index]))
+            const float Result = Input[Index] * Input[Index];
+            if (!Output.WriteFloat(Index, Result))
             {
                 Error = TEXT("Square result is non-finite");
                 return false;
@@ -38,25 +37,22 @@ public:
         return true;
     }
 #if VOXELLAND_SQUARE_HAS_SSE2
-    bool EvaluateSimd(TConstArrayView<const void*> Inputs, void* Output, int32 Count, FString& Error) override
+    bool EvaluateSimd(TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
     {
-        if (Inputs.Num() != 1 || !Inputs[0] || !Output || Count < 4 || Count > 256 || Count % 4 != 0)
+        if (Inputs.Num() != 1 || !Inputs[0] || Output.Num() != Count || Count < 4 || Count > 256 || Count % 4 != 0)
         {
             Error = TEXT("Invalid square SIMD batch");
             return false;
         }
         const float* Input = static_cast<const float*>(Inputs[0]);
-        float* Result = static_cast<float*>(Output);
         for (int32 Index = 0; Index < Count; Index += 4)
         {
             const VectorRegister4Float Value = VectorLoad(Input + Index);
-            VectorStore(VectorMultiply(Value, Value), Result + Index);
-        }
-        for (int32 Index = 0; Index < Count; ++Index)
-        {
-            if (!FMath::IsFinite(Result[Index]))
+            float Results[4];
+            VectorStore(VectorMultiply(Value, Value), Results);
+            if (!Output.WriteFloat4(Index, Results))
             {
-                Error = TEXT("Square SIMD result is non-finite");
+                Error = TEXT("Square SIMD result is invalid");
                 return false;
             }
         }
@@ -102,8 +98,8 @@ public:
 
 bool RegisterVoxelLandSquareOperator(FString& Error)
 {
-    return FVoxelLandOperatorRegistry::Register(FName(TEXT("VoxelLandAlgo")),
-        MakeShared<FSquareOperator, ESPMode::ThreadSafe>(), Error);
+    return FVoxelLandOperatorRegistry::RegisterV2(FName(TEXT("VoxelLandAlgo")),
+        MakeShared<FSquareOperator, ESPMode::ThreadSafe>(), FVoxelLandOperatorRegistry::ProviderAbiVersion, Error);
 }
 bool UnregisterVoxelLandSquareOperator(FString& Error)
 {

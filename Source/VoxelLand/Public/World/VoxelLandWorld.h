@@ -12,6 +12,10 @@ class FVoxelLandInitializationJob;
 class FVoxelLandDemoJob;
 class FVoxelLandModule;
 class UMaterialInterface;
+#if WITH_EDITOR
+class FPackageReloadedEvent;
+enum class EPackageReloadPhase : uint8;
+#endif
 struct FVoxelLandWorldState;
 struct FVoxelLandTestBarrier;
 
@@ -89,6 +93,9 @@ public:
 	int32 GetDemandedChunkCount() const;
 	bool IsChunkDemanded(FIntVector Coordinate) const;
 	bool HasWorldStateForTests() const { return State.IsValid(); }
+#if WITH_EDITOR
+    void OnInitObjectsReplacedForTests(const TMap<UObject*, UObject*>& Map) { HandleInitObjectsReplaced(Map); }
+#endif
 #endif
 
 	// Optional data-only mode for a headless consumer or automation; dedicated servers always use it.
@@ -120,6 +127,13 @@ private:
 	void HandleWorldBeginTearDown(UWorld* World);
 	void ShutdownInternal(bool bDestroyRegionActors);
 	void StopPendingInitialization();
+#if WITH_EDITOR
+    void HandleInitPackageReload(EPackageReloadPhase Phase, FPackageReloadedEvent* Event);
+    void HandleInitObjectsReplaced(const TMap<UObject*, UObject*>& Map);
+    void UnbindInitReloadHandlers();
+    FDelegateHandle InitPackageReloadHandle;
+    FDelegateHandle InitObjectsReplacedHandle;
+#endif
 	void PollInitialization();
 	void StopDemo();
 	void PollDemo();

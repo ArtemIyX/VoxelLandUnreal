@@ -84,6 +84,8 @@ public:
 				{
 					Done.Error.Code = EVoxelLandErrorCode::InvalidContext;
 				}
+                const EVoxelLandChunkClassification Proof = !Done.Error && Job.bRender ?
+                    Current->ClassifyChunkBeforeSampling(Job.Key) : EVoxelLandChunkClassification::NeedsSamples;
 				if (!Done.Error)
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_Generate);
@@ -91,7 +93,7 @@ public:
 						[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); });
 				}
 				Done.bCancelled = Job.Cancel->bCancelled.Load() || Work->bStop.Load();
-				if (!Done.Error && !Done.bCancelled && Job.bRender
+				if (!Done.Error && !Done.bCancelled && Job.bRender && Proof == EVoxelLandChunkClassification::NeedsSamples
 					&& VoxelLandMeshing::Classify(*Done.Data) == EVoxelLandChunkClassification::Surface)
 				{
 					auto Mesh = MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>();

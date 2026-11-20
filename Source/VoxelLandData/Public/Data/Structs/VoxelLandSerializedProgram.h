@@ -20,6 +20,10 @@ struct VOXELLANDDATA_API FVoxelLandSerializedProgram
     UPROPERTY()
     int32 ProgramVersion = 0;
     UPROPERTY()
+    int32 CompilerSemanticVersion = 0;
+    UPROPERTY()
+    int32 ExternalFilterIndex = INDEX_NONE;
+    UPROPERTY()
     int32 RegisterCount = 0;
     UPROPERTY()
     int64 SourceFingerprint = 0;

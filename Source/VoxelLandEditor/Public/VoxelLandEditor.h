@@ -13,5 +13,6 @@ public:
 private:
 	void OnObjectPreSave(UObject* Object, class FObjectPreSaveContext Context);
 	FDelegateHandle PreSaveHandle;
+	TSharedPtr<class FVoxelLandGraphPinFactory> PinFactory;
 	TSharedPtr<class IAssetTypeActions> GraphAssetActions;
 };

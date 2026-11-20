@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "Data/Structs/VoxelLandGraphLinkRecord.h"
+#include "Data/Structs/VoxelLandGraphDiagnostic.h"
 #include "Data/Structs/VoxelLandGraphNodeRecord.h"
 #include "Data/Structs/VoxelLandGraphParameter.h"
 #include "Data/Structs/VoxelLandGraphSnapshot.h"
@@ -20,9 +21,11 @@ class VOXELLANDDATA_API UVoxelLandTerrainGraph : public UDataAsset
 public:
 	// Checks record integrity only; this does not establish that the graph can compile.
 	bool ValidateStructure(FString& OutError) const;
+	bool ValidateStructure(FVoxelLandGraphDiagnostic& OutDiagnostic) const;
 
 	// Copies validated records on the game thread for subsequent worker use.
 	bool CaptureSnapshot(FVoxelLandGraphSnapshot& OutSnapshot, FString& OutError) const;
+	bool CaptureSnapshot(FVoxelLandGraphSnapshot& OutSnapshot, FVoxelLandGraphDiagnostic& OutDiagnostic) const;
 
 	UPROPERTY(VisibleAnywhere, Category = "VoxelLand")
 	int32 SourceVersion = 1;

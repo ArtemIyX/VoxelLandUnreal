@@ -4,16 +4,19 @@
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Data/Structs/VoxelLandM1SampleResult.h"
 #include "Data/Structs/VoxelLandGraphSnapshot.h"
+#include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Async/Async.h"
 #include "Algo/Reverse.h"
 #include "Operators/VoxelLandSquareOperator.h"
+#include "Operators/VoxelLandExampleFilterOperator.h"
 #include "Operators/VoxelLandOperator.h"
 #include <cfloat>
 #include "Misc/AutomationTest.h"
 #include "Generation/VoxelLandPower.h"
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -22,33 +25,35 @@ using namespace VoxelLandM1Fixtures;
 using VoxelLandM1TestData::FSampleResult;
 
 TAtomic<int32> MismatchedSimdCalls(0);
+TAtomic<bool> ShortSimdOutput(false);
+TAtomic<int32> ShortProviderVirtualCalls(0);
 
 class FMismatchedSimdWorker final : public IVoxelLandOperatorWorker
 {
 public:
-    bool Evaluate(TConstArrayView<const void*> Inputs, void* Output, int32 Count, FString& Error) override
+    bool Evaluate(TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
     {
-        if (Inputs.Num() != 1 || !Inputs[0] || !Output || Count < 1 || Count > 256)
+        if (Inputs.Num() != 1 || !Inputs[0] || Output.Num() != Count || Count < 1 || Count > 256)
         {
             Error = TEXT("Invalid mismatch-provider batch");
             return false;
         }
         const float* Input = static_cast<const float*>(Inputs[0]);
-        float* Result = static_cast<float*>(Output);
         for (int32 Index = 0; Index < Count; ++Index)
         {
-            Result[Index] = Input[Index];
+            if (!Output.WriteFloat(Index, Input[Index])) { return false; }
         }
         return true;
     }
-    bool EvaluateSimd(TConstArrayView<const void*> Inputs, void* Output, int32 Count, FString& Error) override
+    bool EvaluateSimd(TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
     {
         ++MismatchedSimdCalls;
-        if (!Evaluate(Inputs, Output, Count, Error))
+        if (Inputs.Num() != 1 || !Inputs[0]) { return false; }
+        const float* Input = static_cast<const float*>(Inputs[0]);
+        for (int32 Index = 0; Index < Count - (ShortSimdOutput.Load() ? 1 : 0); ++Index)
         {
-            return false;
+            if (!Output.WriteFloat(Index, Input[Index] + (!ShortSimdOutput.Load() && Index == 0 ? 1.f : 0.f))) { return false; }
         }
-        static_cast<float*>(Output)[0] += 1.f;
         return true;
     }
 };
@@ -67,6 +72,46 @@ public:
     {
         return MakeUnique<FMismatchedSimdWorker>();
     }
+};
+
+class FShortWriteWorker final : public IVoxelLandOperatorWorker
+{
+public:
+    explicit FShortWriteWorker(EVoxelLandGraphValueType InType) : Type(InType) {}
+    bool Evaluate(TConstArrayView<const void*>, FVoxelLandOperatorOutput& Output, int32 Count, FString&) override
+    {
+        for (int32 Index = 0; Index < Count - 1; ++Index)
+        {
+            if (Type == EVoxelLandGraphValueType::Float) { Output.WriteFloat(Index, 1.f); }
+            else if (Type == EVoxelLandGraphValueType::Int32) { Output.WriteInt(Index, MIN_int32); }
+            else { Output.WriteBool(Index, 1); }
+        }
+        return true;
+    }
+    bool EvaluateFilter(TConstArrayView<int16>, int32, FVoxelLandOperatorOutput& Output, TFunctionRef<bool()>, FString&) override
+    {
+        const int32 WrittenCount = Output.Num() - (Output.Num() < 256 ? 1 : 0);
+        for (int32 Index = 0; Index < WrittenCount; ++Index) { Output.WriteDensity(Index, MIN_int16); }
+        return true;
+    }
+private:
+    EVoxelLandGraphValueType Type;
+};
+class FShortWriteProvider final : public IVoxelLandOperator
+{
+public:
+    FShortWriteProvider(EVoxelLandGraphValueType InType, EVoxelLandOperatorStage InStage) : Type(InType), OperatorStage(InStage) {}
+    EVoxelLandOperatorStage Stage() const override { return OperatorStage; }
+    FGuid Id() const override { return FGuid(0xf9033231, 0x823043a8, uint32(Type) + 1, uint32(OperatorStage) + 1); }
+    int32 Version() const override { return 1; }
+    TArray<EVoxelLandGraphValueType> InputTypes() const override { ++ShortProviderVirtualCalls; return {EVoxelLandGraphValueType::Float}; }
+    EVoxelLandGraphValueType OutputType() const override { return Type; }
+    uint32 MaximumWorkerBytes() const override { return sizeof(FShortWriteWorker); }
+    bool ValidateConfiguration(TConstArrayView<uint8> Config, FString&) const override { return Config.IsEmpty(); }
+    TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(TConstArrayView<uint8>, uint64, FString&) const override { return MakeUnique<FShortWriteWorker>(Type); }
+private:
+    EVoxelLandGraphValueType Type;
+    EVoxelLandOperatorStage OperatorStage;
 };
 
 FVoxelLandGraphNodeRecord Node(EVoxelLandBuiltinNode Kind, int32 Id, int32 Inputs, bool bOutput)
@@ -203,6 +248,12 @@ bool FVoxelLandM3CompilerCodec::RunTest(const FString& Parameters)
         {
             return false;
         }
+        FVoxelLandSerializedProgram StaleSemantic = Payload;
+        StaleSemantic.CompilerSemanticVersion = 0;
+        if (FVoxelLandProgramCodec::Load(Graph, StaleSemantic, Loaded, Failure) || !Failure.Contains(TEXT("semantic version")))
+        {
+            return false;
+        }
         Payload.ProgramFingerprint ^= 1;
         return !FVoxelLandProgramCodec::Load(Graph, Payload, Loaded, Failure);
     }).Get();
@@ -224,6 +275,295 @@ bool FVoxelLandM3CompilerCodec::RunTest(const FString& Parameters)
     Invalid = Graph;
     Invalid.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 100, 1, false));
     TestFalse(TEXT("Duplicate density output rejected"), FVoxelLandGraphCompiler::Compile(Invalid, B, Error));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3CheckedOperatorOutput, "VoxelLand.M3.CheckedOperatorOutput", M3GraphFlags)
+bool FVoxelLandM3CheckedOperatorOutput::RunTest(const FString& Parameters)
+{
+    FString Error;
+    for (int32 Start = MIN_int16; Start <= MAX_int16; Start += 256)
+    {
+        int16 Values[256];
+        FVoxelLandOperatorOutput Writer(MakeArrayView(Values, 256));
+        for (int32 I = 0; I < 256; ++I) { Writer.WriteDensity(I, int16(Start + I)); }
+        TestTrue(TEXT("Every int16 value can be written"), Writer.IsComplete(Error));
+        TestEqual(TEXT("Density endpoints are preserved"), int32(Values[0]), Start);
+    }
+    int32 Integers[4] = {};
+    FVoxelLandOperatorOutput IntWriter(EVoxelLandGraphValueType::Int32, Integers, 4);
+    const int32 Ints[] = {MIN_int32, MAX_int32, 0, -1};
+    TestTrue(TEXT("Int32 block accepts extremes"), IntWriter.WriteInt4(0, Ints) && IntWriter.IsComplete(Error));
+    TestTrue(TEXT("Int32 values preserved"), FMemory::Memcmp(Ints, Integers, sizeof(Ints)) == 0);
+    float Floats[4] = {};
+    FVoxelLandOperatorOutput FloatWriter(EVoxelLandGraphValueType::Float, Floats, 4);
+    const float FloatValues[] = {-FLT_MAX, FLT_MAX, 0.f, -0.f};
+    TestTrue(TEXT("Finite float block accepts extremes and signed zero"), FloatWriter.WriteFloat4(0, FloatValues) && FloatWriter.IsComplete(Error));
+    TestTrue(TEXT("Float bits preserved"), FMemory::Memcmp(Floats, FloatValues, sizeof(FloatValues)) == 0);
+    int32 Booleans[2] = {};
+    FVoxelLandOperatorOutput BoolWriter(EVoxelLandGraphValueType::Bool, Booleans, 2);
+    TestTrue(TEXT("Both bool values accepted"), BoolWriter.WriteBool(0, 0) && BoolWriter.WriteBool(1, 1) && BoolWriter.IsComplete(Error));
+    FVoxelLandOperatorOutput Invalid(EVoxelLandGraphValueType::Bool, Booleans, 2);
+    TestFalse(TEXT("Invalid bool rejected"), Invalid.WriteBool(0, 2));
+    TestFalse(TEXT("Invalid writer cannot complete"), Invalid.IsComplete(Error));
+    FVoxelLandOperatorOutput Duplicate(EVoxelLandGraphValueType::Int32, Integers, 4);
+    TestTrue(TEXT("Initial int write succeeds"), Duplicate.WriteInt(0, 1));
+    TestFalse(TEXT("Duplicate write rejected"), Duplicate.WriteInt(0, 1));
+    FVoxelLandOperatorOutput Bounds(EVoxelLandGraphValueType::Int32, Integers, 4);
+    TestFalse(TEXT("Out-of-range write rejected"), Bounds.WriteInt(4, 1));
+    FVoxelLandOperatorOutput BlockBounds(EVoxelLandGraphValueType::Int32, Integers, 4);
+    TestFalse(TEXT("Overflowing block index rejected"), BlockBounds.WriteInt4(MAX_int32, Ints));
+    FVoxelLandOperatorOutput WrongType(EVoxelLandGraphValueType::Int32, Integers, 4);
+    TestFalse(TEXT("Wrong-type write rejected"), WrongType.WriteFloat(0, 1.f));
+    FVoxelLandOperatorOutput NonFinite(EVoxelLandGraphValueType::Float, Floats, 4);
+    TestFalse(TEXT("Nonfinite output rejected"), NonFinite.WriteFloat(0, std::numeric_limits<float>::infinity()));
+
+    for (EVoxelLandGraphValueType Type : {EVoxelLandGraphValueType::Float, EVoxelLandGraphValueType::Int32, EVoxelLandGraphValueType::Bool})
+    {
+        TSharedRef<FShortWriteProvider, ESPMode::ThreadSafe> Provider = MakeShared<FShortWriteProvider, ESPMode::ThreadSafe>(Type, EVoxelLandOperatorStage::Sample);
+        const int32 CallsBeforeAbiCheck = ShortProviderVirtualCalls.Load();
+        TestFalse(TEXT("Mismatched provider ABI is rejected"), FVoxelLandOperatorRegistry::RegisterV2(TEXT("VoxelLandUncooked"), Provider, 1, Error));
+        TestEqual(TEXT("ABI mismatch does not invoke provider methods"), ShortProviderVirtualCalls.Load(), CallsBeforeAbiCheck);
+        TestTrue(TEXT("ABI error gives rebuild guidance"), Error.Contains(TEXT("ABI")) && Error.Contains(TEXT("rebuild")));
+        if (!FVoxelLandOperatorRegistry::RegisterV2(TEXT("VoxelLandUncooked"), Provider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error)) { AddError(Error); return false; }
+        FVoxelLandProgramDraft Draft; Draft.FormatVersion = 2; Draft.RegisterCount = 4; Draft.Constants = {1.f};
+        FVoxelLandSeedSlot Seed; Seed.NodeId = FGuid(11, 22, 33, 44); Draft.Seeds.Add(Seed);
+        FVoxelLandExternalOperator Operator; Operator.Id = Provider->Id(); Operator.Version = 1; Operator.Inputs = {EVoxelLandGraphValueType::Float}; Operator.Output = Type; Operator.SeedSlot = 0;
+        Draft.ExternalOperators.Add(Operator);
+        Draft.Instructions = {Op(EVoxelLandOpcode::LoadX, 0), Op(EVoxelLandOpcode::ExternalOperator, 1, 0, 0, 0, 0)};
+        uint16 OutputRegister = 1;
+        if (Type == EVoxelLandGraphValueType::Int32)
+        {
+            Draft.Instructions.Add(Op(EVoxelLandOpcode::IntToFloat, 2, 1)); OutputRegister = 2;
+        }
+        else if (Type == EVoxelLandGraphValueType::Bool)
+        {
+            Draft.Instructions.Add(Op(EVoxelLandOpcode::LoadConstant, 2, 0, 0, 0, 0));
+            Draft.Instructions.Add(Op(EVoxelLandOpcode::SelectFloat, 3, 1, 2, 2)); OutputRegister = 3;
+        }
+        Draft.Instructions.Add(Op(EVoxelLandOpcode::StoreDensity, 0, OutputRegister));
+        for (int32 Count : {1, 2, 3, 4, 255, 256})
+        {
+            const FSampleResult Result = Sample(Draft, EVoxelLandVMBackend::Scalar, FVoxelLandZoneProfile(), Count);
+            TestTrue(FString::Printf(TEXT("Short write rejected for type %d count %d"), int32(Type), Count),
+                Result.Error.Code == EVoxelLandErrorCode::InvalidMathDomain && Result.Values.IsEmpty() && Result.Error.Parameter.Contains(TEXT("did not write")));
+        }
+        TFuture<FSampleResult> First = Async(EAsyncExecution::ThreadPool, [Draft]() { return Sample(Draft, EVoxelLandVMBackend::Scalar, FVoxelLandZoneProfile(), 256); });
+        TFuture<FSampleResult> Second = Async(EAsyncExecution::ThreadPool, [Draft]() { return Sample(Draft, EVoxelLandVMBackend::Scalar, FVoxelLandZoneProfile(), 3); });
+        TestTrue(TEXT("Concurrent incomplete writes both fail"), First.Get().Error.Code == EVoxelLandErrorCode::InvalidMathDomain && Second.Get().Error.Code == EVoxelLandErrorCode::InvalidMathDomain);
+        TestTrue(TEXT("Short-write provider unregisters"), FVoxelLandOperatorRegistry::Unregister(Provider->Id(), 1, Error));
+    }
+    TSharedRef<FShortWriteProvider, ESPMode::ThreadSafe> FilterProvider = MakeShared<FShortWriteProvider, ESPMode::ThreadSafe>(EVoxelLandGraphValueType::Float, EVoxelLandOperatorStage::OneCellFilter);
+    if (!FVoxelLandOperatorRegistry::RegisterV2(TEXT("VoxelLandUncooked"), FilterProvider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error)) { AddError(Error); return false; }
+    FVoxelLandProgramDraft FilterDraft; FilterDraft.FormatVersion = 2; FilterDraft.RegisterCount = 1;
+    FVoxelLandSeedSlot FilterSeed; FilterSeed.NodeId = FGuid(11, 22, 33, 45); FilterDraft.Seeds.Add(FilterSeed);
+    FVoxelLandExternalOperator FilterOperator; FilterOperator.Id = FilterProvider->Id(); FilterOperator.Version = 1;
+    FilterOperator.Stage = EVoxelLandOperatorStage::OneCellFilter; FilterOperator.Inputs = {EVoxelLandGraphValueType::Float};
+    FilterOperator.Output = EVoxelLandGraphValueType::Float; FilterOperator.SeedSlot = 0;
+    FilterDraft.ExternalFilterIndex = FilterDraft.ExternalOperators.Add(FilterOperator);
+    FilterDraft.Instructions = {Op(EVoxelLandOpcode::LoadX, 0), Op(EVoxelLandOpcode::StoreDensity, 0, 0)};
+    auto GenerateIncomplete = [FilterDraft]()
+    {
+        FVoxelLandChunkKey Key;
+        return Generate(FilterDraft, FVoxelLandZoneProfile(), Key, FVoxelLandBackendOptions());
+    };
+    {
+    TFuture<FResult> FilterFirst = Async(EAsyncExecution::ThreadPool, GenerateIncomplete);
+    TFuture<FResult> FilterSecond = Async(EAsyncExecution::ThreadPool, GenerateIncomplete);
+    const FResult FilterA = FilterFirst.Get();
+    const FResult FilterB = FilterSecond.Get();
+    TestTrue(TEXT("Concurrent partial filters fail without publishing chunks"),
+        FilterA.Error.Code == EVoxelLandErrorCode::InvalidProgram && FilterB.Error.Code == EVoxelLandErrorCode::InvalidProgram &&
+        !FilterA.Chunk && !FilterB.Chunk && FilterA.Error.Parameter.Contains(TEXT("did not write")));
+    }
+    TestTrue(TEXT("Short filter provider unregisters"), FVoxelLandOperatorRegistry::Unregister(FilterProvider->Id(), 1, Error));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3ExternalFilterGraph, "VoxelLand.M3.ExternalFilterGraph", M3GraphFlags)
+bool FVoxelLandM3ExternalFilterGraph::RunTest(const FString& Parameters)
+{
+    FVoxelLandGraphSnapshot Graph = SimpleGraph();
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::FloatConstant, 50, 1, true));
+    Graph.Nodes.Last().OperatorId = VoxelLandExampleFilterOperatorId();
+    Graph.Links.RemoveAt(Graph.Links.Num() - 1);
+    Link(Graph, 2, 4, 0); Link(Graph, 4, 3, 0);
+    FVoxelLandProgramDraft Draft; FString Error;
+    if (!FVoxelLandGraphCompiler::Compile(Graph, Draft, Error))
+    {
+        AddError(FString::Printf(TEXT("Filter graph compile failed: %s"), *Error));
+        return false;
+    }
+    {
+        const FVoxelLandOperatorRegistrySnapshot Frozen = FVoxelLandOperatorRegistry::Snapshot();
+        FString UnregisterError;
+        TestFalse(TEXT("Captured snapshot pins filter provider"), FVoxelLandOperatorRegistry::Unregister(VoxelLandExampleFilterOperatorId(), 1, UnregisterError));
+        FVoxelLandProgramDraft FrozenDraft;
+        TestTrue(TEXT("Frozen registry compiles filter"), FVoxelLandGraphCompiler::Compile(Graph, Frozen, FrozenDraft, Error));
+        const bool bFrozenValid = Async(EAsyncExecution::ThreadPool, [&Frozen, FrozenDraft]()
+        {
+            TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+            return !FVoxelLandProgram::Validate(FrozenDraft, Frozen, Program);
+        }).Get();
+        TestTrue(TEXT("Same frozen registry validates filter"), bFrozenValid);
+    }
+    TestTrue(TEXT("Filter is represented by a stage"), Draft.ExternalFilterIndex != INDEX_NONE && Draft.ExternalOperators[Draft.ExternalFilterIndex].Stage == EVoxelLandOperatorStage::OneCellFilter);
+    const bool bRoundTrip = Async(EAsyncExecution::ThreadPool, [Graph, Draft]()
+    {
+        TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program, Loaded;
+        FVoxelLandSerializedProgram Payload; FString Failure;
+        if (FVoxelLandProgram::Validate(Draft, Program) || !FVoxelLandProgramCodec::Pack(Graph, *Program, Payload, Failure) ||
+            !FVoxelLandProgramCodec::Load(Graph, Payload, Loaded, Failure) || Loaded->GetFingerprint() != Program->GetFingerprint())
+        {
+            return false;
+        }
+        Payload.ExternalOperators[Payload.ExternalFilterIndex].Stage = EVoxelLandOperatorStage::Sample;
+        return !FVoxelLandProgramCodec::Load(Graph, Payload, Loaded, Failure);
+    }).Get();
+    TestTrue(TEXT("Filter program serializes and reloads"), bRoundTrip);
+    FVoxelLandGraphSnapshot Fanout = Graph;
+    Fanout.Nodes.Add(Node(EVoxelLandBuiltinNode::Abs, 51, 1, true));
+    Link(Fanout, 4, 5, 0);
+    TestFalse(TEXT("Filter fanout is rejected"), FVoxelLandGraphCompiler::Compile(Fanout, Draft, Error));
+    FVoxelLandGraphSnapshot Chain = Graph;
+    Chain.Nodes.Add(Node(EVoxelLandBuiltinNode::FloatConstant, 52, 1, true));
+    Chain.Nodes.Last().OperatorId = VoxelLandExampleFilterOperatorId();
+    Chain.Links.RemoveAt(Chain.Links.Num() - 1);
+    Link(Chain, 4, 5, 0); Link(Chain, 5, 3, 0);
+    TestFalse(TEXT("Filter chains are rejected"), FVoxelLandGraphCompiler::Compile(Chain, Draft, Error));
+    Graph.Nodes[4].OperatorVersion = 999;
+    TestFalse(TEXT("Missing filter provider version is rejected"), FVoxelLandGraphCompiler::Compile(Graph, Draft, Error));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3GraphDiagnostics, "VoxelLand.M3.GraphDiagnostics",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandM3GraphDiagnostics::RunTest(const FString& Parameters)
+{
+    FVoxelLandGraphSnapshot Source = SimpleGraph();
+    FVoxelLandProgramDraft Draft;
+    FVoxelLandGraphDiagnostic Diagnostic;
+    UVoxelLandTerrainGraph* Asset = NewObject<UVoxelLandTerrainGraph>();
+    Asset->Nodes = Source.Nodes; Asset->Links = Source.Links;
+    Asset->Nodes[1].Pins[0].bInvalidDefault = true;
+    TestFalse(TEXT("Invalid source pin rejected"), Asset->CaptureSnapshot(Source, Diagnostic));
+    TestTrue(TEXT("Structural pin diagnostic identifies its owner and pin"), Diagnostic.NodeId == Asset->Nodes[1].Id && Diagnostic.PinId == Asset->Nodes[1].Pins[0].Id);
+    Asset->Nodes[1].Pins[0].bInvalidDefault = false;
+    Asset->Links[0].SourcePin = FGuid::NewGuid();
+    TestFalse(TEXT("Invalid link rejected"), Asset->CaptureSnapshot(Source, Diagnostic));
+    TestTrue(TEXT("Missing source pin identifies source node without inventing a pin"), Diagnostic.NodeId == Asset->Links[0].SourceNode && !Diagnostic.PinId.IsValid());
+    Source = SimpleGraph();
+    Source.Nodes[2].Pins[0].Type = EVoxelLandGraphValueType::Bool;
+    TestFalse(TEXT("Compiler rejects mismatched link"), FVoxelLandGraphCompiler::Compile(Source, Draft, Diagnostic));
+    TestTrue(TEXT("Compiler identifies mismatched target pin"), Diagnostic.NodeId == Source.Nodes[2].Id && Diagnostic.PinId == Source.Nodes[2].Pins[0].Id);
+    Source = SimpleGraph();
+    Source.Nodes[2].OperatorId = FGuid(0x8181, 1, 2, 3);
+    TestFalse(TEXT("Missing provider rejected"), FVoxelLandGraphCompiler::Compile(Source, Draft, Diagnostic));
+    TestTrue(TEXT("Missing provider identifies node only"), Diagnostic.NodeId == Source.Nodes[2].Id && !Diagnostic.PinId.IsValid() && Diagnostic.Message.Contains(TEXT("provider")));
+    Source = SimpleGraph();
+    Source.Nodes.Add(Node(EVoxelLandBuiltinNode::FloatConstant, 50, 1, true));
+    Source.Nodes.Last().OperatorId = VoxelLandExampleFilterOperatorId();
+    Source.Links.RemoveAt(Source.Links.Num() - 1);
+    Link(Source, 2, 4, 0); Link(Source, 4, 3, 0);
+    Source.Nodes.Add(Node(EVoxelLandBuiltinNode::Abs, 51, 1, true));
+    Link(Source, 4, 5, 0);
+    TestFalse(TEXT("Filter fanout rejected"), FVoxelLandGraphCompiler::Compile(Source, Draft, Diagnostic));
+    TestTrue(TEXT("Root filter diagnostic identifies output pin"), Diagnostic.NodeId == Source.Nodes[4].Id && Diagnostic.PinId == Source.Nodes[4].Pins.Last().Id);
+    Source = SimpleGraph();
+    Source.Nodes.Add(Node(EVoxelLandBuiltinNode::SmoothDensity, 60, 3, true));
+    Source.Nodes[4].Pins[1].Type = EVoxelLandGraphValueType::Bool;
+    Source.Nodes[4].Pins[2].FloatDefault = 2.f;
+    Source.Links.RemoveAt(Source.Links.Num() - 1);
+    Link(Source, 2, 4, 0); Link(Source, 4, 3, 0);
+    TestFalse(TEXT("Invalid root filter strength rejected"), FVoxelLandGraphCompiler::Compile(Source, Draft, Diagnostic));
+    TestTrue(TEXT("Root filter diagnostic identifies strength pin"), Diagnostic.NodeId == Source.Nodes[4].Id && Diagnostic.PinId == Source.Nodes[4].Pins[2].Id);
+    Source = SimpleGraph();
+    Source.Nodes[2].OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::Divide);
+    Source.Links.RemoveAt(1);
+    Source.Nodes[2].Pins[1].FloatDefault = 0.f;
+    TestFalse(TEXT("Division by zero rejected"), FVoxelLandGraphCompiler::Compile(Source, Draft, Diagnostic));
+    TestTrue(TEXT("Division diagnostic identifies denominator"), Diagnostic.NodeId == Source.Nodes[2].Id && Diagnostic.PinId == Source.Nodes[2].Pins[1].Id);
+    FVoxelLandGraphSnapshot Cycle;
+    Cycle.Nodes.Add(Node(EVoxelLandBuiltinNode::Abs, 101, 1, true));
+    Cycle.Nodes.Add(Node(EVoxelLandBuiltinNode::Abs, 102, 1, true));
+    Cycle.Nodes.Add(Node(EVoxelLandBuiltinNode::Abs, 1, 1, true));
+    Cycle.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 2, 1, false));
+    Link(Cycle, 0, 1, 0); Link(Cycle, 1, 0, 0); Link(Cycle, 1, 2, 0); Link(Cycle, 2, 3, 0);
+    TestFalse(TEXT("Cycle rejected by compiler"), FVoxelLandGraphCompiler::Compile(Cycle, Draft, Diagnostic));
+    const FGuid CycleNode = Diagnostic.NodeId, CyclePin = Diagnostic.PinId;
+    TestTrue(TEXT("Cycle diagnostic identifies a cycle edge, not a blocked descendant"),
+        (CycleNode == Cycle.Nodes[0].Id && CyclePin == Cycle.Nodes[0].Pins[0].Id) ||
+        (CycleNode == Cycle.Nodes[1].Id && CyclePin == Cycle.Nodes[1].Pins[0].Id));
+    Asset->Nodes = Cycle.Nodes; Asset->Links = Cycle.Links;
+    FVoxelLandGraphDiagnostic StructuralCycle;
+    TestFalse(TEXT("Cycle rejected by structural validator"), Asset->ValidateStructure(StructuralCycle));
+    TestTrue(TEXT("Structural and compiler diagnostics choose same cycle edge"), StructuralCycle.NodeId == CycleNode && StructuralCycle.PinId == CyclePin);
+    Algo::Reverse(Cycle.Nodes); Algo::Reverse(Cycle.Links);
+    TestFalse(TEXT("Reordered cycle rejected"), FVoxelLandGraphCompiler::Compile(Cycle, Draft, Diagnostic));
+    TestTrue(TEXT("Cycle edge choice independent of record order"), Diagnostic.NodeId == CycleNode && Diagnostic.PinId == CyclePin);
+    Source.Nodes[0].Id = Source.Nodes[1].Id;
+    TestFalse(TEXT("Duplicate node IDs rejected"), FVoxelLandGraphCompiler::Compile(Source, Draft, Diagnostic));
+    TestFalse(TEXT("Ambiguous duplicate node ID is not presented as a focus target"), Diagnostic.NodeId.IsValid());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3RegisterOptimization, "VoxelLand.M3.RegisterOptimization", M3GraphFlags)
+bool FVoxelLandM3RegisterOptimization::RunTest(const FString& Parameters)
+{
+    FVoxelLandGraphSnapshot Graph;
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionX, 1, 0, true));
+    for (int32 Index = 0; Index < 600; ++Index)
+    {
+        Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::Add, Index + 2, 2, true));
+        Graph.Nodes.Last().Pins[1].FloatDefault = 1.f;
+        Link(Graph, Index, Index + 1, 0);
+    }
+    Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 603, 1, false));
+    Link(Graph, 600, 601, 0);
+    FVoxelLandProgramDraft Draft;
+    FString Error;
+    if (!FVoxelLandGraphCompiler::Compile(Graph, Draft, Error))
+    {
+        AddError(FString::Printf(TEXT("Long graph compile failed: %s"), *Error));
+        return false;
+    }
+    TestTrue(TEXT("More than 1024 virtual registers reuse bounded physical registers"), Draft.RegisterCount <= 4);
+    FVoxelLandZoneProfile Profile;
+    Profile.VoxelSizeCm = 1024.f;
+    const FSampleResult Result = Sample(Draft, EVoxelLandVMBackend::Scalar, Profile, 1);
+    TestTrue(TEXT("Long optimized graph evaluates in original order"), !Result.Error && Result.Values.Num() == 1 && Result.Values[0] == -129.f * 106.f + 600.f);
+
+    Graph.Nodes[0] = Node(EVoxelLandBuiltinNode::FloatConstant, 1, 1, true);
+    Graph.Nodes[0].Pins[0].FloatDefault = 5.f;
+    Graph.Links[0].SourcePin = Graph.Nodes[0].Pins.Last().Id;
+    if (!FVoxelLandGraphCompiler::Compile(Graph, Draft, Error))
+    {
+        AddError(FString::Printf(TEXT("Folded graph compile failed: %s"), *Error));
+        return false;
+    }
+    TestEqual(TEXT("Folded graph retains one constant"), Draft.Constants.Num(), 1);
+    TestEqual(TEXT("Folded graph removes dead operand loads"), Draft.Instructions.Num(), 2);
+    const FSampleResult Folded = Sample(Draft, EVoxelLandVMBackend::Scalar, Profile, 1);
+    TestTrue(TEXT("Folded graph evaluates correctly"), !Folded.Error && Folded.Values.Num() == 1 && Folded.Values[0] == 605.f);
+
+    FVoxelLandGraphSnapshot Domain;
+    Domain.Nodes.Add(Node(EVoxelLandBuiltinNode::FloatConstant, 1001, 1, true));
+    Domain.Nodes[0].Pins[0].FloatDefault = 1.f;
+    Domain.Nodes.Add(Node(EVoxelLandBuiltinNode::PositionX, 1002, 0, true));
+    Domain.Nodes.Add(Node(EVoxelLandBuiltinNode::Divide, 1003, 2, true));
+    Domain.Nodes.Add(Node(EVoxelLandBuiltinNode::FloatConstant, 1004, 1, true));
+    Domain.Nodes.Add(Node(EVoxelLandBuiltinNode::Multiply, 1005, 2, true));
+    Domain.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 1006, 1, false));
+    Link(Domain, 0, 2, 0); Link(Domain, 1, 2, 1);
+    Link(Domain, 2, 4, 0); Link(Domain, 3, 4, 1); Link(Domain, 4, 5, 0);
+    if (!FVoxelLandGraphCompiler::Compile(Domain, Draft, Error))
+    {
+        AddError(FString::Printf(TEXT("Domain graph compile failed: %s"), *Error));
+        return false;
+    }
+    const FSampleResult DomainResult = Sample(Draft, EVoxelLandVMBackend::Scalar, Profile, 130);
+    TestEqual(TEXT("Multiplying by zero does not erase an earlier domain failure"),
+        int32(DomainResult.Error.Code), int32(EVoxelLandErrorCode::InvalidMathDomain));
     return true;
 }
 
@@ -644,7 +984,7 @@ bool FVoxelLandM3MismatchedSimd::RunTest(const FString& Parameters)
 {
     FString Error;
     TSharedRef<FMismatchedSimdProvider, ESPMode::ThreadSafe> Provider = MakeShared<FMismatchedSimdProvider, ESPMode::ThreadSafe>();
-    if (!FVoxelLandOperatorRegistry::Register(FName(TEXT("VoxelLandUncooked")), Provider, Error))
+    if (!FVoxelLandOperatorRegistry::RegisterV2(FName(TEXT("VoxelLandUncooked")), Provider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error))
     {
         AddError(FString::Printf(TEXT("Mismatch provider registration failed: %s"), *Error));
         return false;
@@ -709,6 +1049,16 @@ bool FVoxelLandM3MismatchedSimd::RunTest(const FString& Parameters)
             // The mismatching SIMD path must be disabled for this worker after its first batch.
             return MismatchedSimdCalls.Load() == 1 ? 2 : 0;
         }).Get();
+        const int32 SimdCallsBeforeShort = MismatchedSimdCalls.Load();
+        ShortSimdOutput.Store(true);
+        const FSampleResult ShortSimd = Sample(Draft, EVoxelLandVMBackend::Auto, Profile, 7);
+        ShortSimdOutput.Store(false);
+        TestTrue(TEXT("Short SIMD writes fall back to complete scalar output"), !ShortSimd.Error &&
+            ShortSimd.Values.Num() == 7 && ShortSimd.Values[0] == 3);
+        if (ShortSimd.VM == EVoxelLandVMBackend::Simd4)
+        {
+            TestTrue(TEXT("Incomplete SIMD candidate was exercised"), MismatchedSimdCalls.Load() > SimdCallsBeforeShort);
+        }
         if (Result == 1)
         {
             AddWarning(TEXT("VM SIMD is unavailable; persistent fallback was not exercised"));

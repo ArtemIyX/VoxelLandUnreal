@@ -1,19 +1,20 @@
 #include "Graph/VoxelLandGraphCompiler.h"
+#include "Graph/VoxelLandProgramOptimizer.h"
 
 #include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/VoxelLandGraphCycle.h"
 #include "Data/Enums/VoxelLandParameterType.h"
 #include "Operators/VoxelLandOperator.h"
 #include "Generation/VoxelLandPower.h"
 
 namespace
 {
-constexpr int32 MaxRegisters = 1024;
 constexpr int32 MaxInstructions = 8192;
 
 class FCompiler
 {
 public:
-    FCompiler(const FVoxelLandGraphSnapshot& InSource, FString& InError) : Source(InSource), Error(InError)
+    FCompiler(const FVoxelLandGraphSnapshot& InSource, const FVoxelLandOperatorRegistrySnapshot& InProviders, FVoxelLandGraphDiagnostic& InDiagnostic) : Source(InSource), Providers(InProviders), Diagnostic(InDiagnostic), Error(InDiagnostic.Message)
     {
         Draft.FormatVersion = 2;
     }
@@ -37,6 +38,10 @@ public:
         {
             return Fail(TEXT("Graph exceeds instruction limit"));
         }
+        if (!FVoxelLandProgramOptimizer::Optimize(Draft, Error))
+        {
+            return false;
+        }
         Out = MoveTemp(Draft);
         return true;
     }
@@ -45,6 +50,15 @@ private:
     bool Fail(const TCHAR* Message)
     {
         Error = Message;
+        Diagnostic.NodeId = CurrentNode ? CurrentNode->Id : FGuid();
+        Diagnostic.PinId = ActivePin;
+        return false;
+    }
+    bool FailAt(const TCHAR* Message, const FGuid& NodeId, const FGuid& PinId = FGuid())
+    {
+        Error = Message;
+        Diagnostic.NodeId = NodeId;
+        Diagnostic.PinId = PinId;
         return false;
     }
 
@@ -115,7 +129,7 @@ private:
             if (!Node.OperatorId.IsValid() || Node.OperatorVersion < 1 || Node.Configuration.Num() > 65536 ||
                 ConfigurationBytes > 1048576 || !Node.Id.IsValid() || Nodes.Contains(Node.Id) || Node.Pins.Num() > 64)
             {
-                return Fail(TEXT("Invalid or duplicate node ID or pin count"));
+                return FailAt(TEXT("Invalid or duplicate node ID or pin count"), Node.Id.IsValid() && !Nodes.Contains(Node.Id) ? Node.Id : FGuid());
             }
             Nodes.Add(Node.Id, &Node);
             for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
@@ -124,7 +138,7 @@ private:
                     (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32 &&
                      Pin.Type != EVoxelLandGraphValueType::Bool))
                 {
-                    return Fail(TEXT("Invalid or duplicate pin ID or default"));
+                    return FailAt(TEXT("Invalid or duplicate pin ID or default"), Node.Id, Pin.Id.IsValid() && !Pins.Contains(Pin.Id) ? Pin.Id : FGuid());
                 }
                 Pins.Add(Pin.Id, &Pin);
                 Owners.Add(Pin.Id, Node.Id);
@@ -151,7 +165,17 @@ private:
                 *ToOwner != Link.TargetNode || !(*From)->bOutput || (*To)->bOutput ||
                 (*From)->Type != (*To)->Type || InputLinks.Contains(Link.TargetPin))
             {
-                return Fail(TEXT("Invalid link or multiple sources for input"));
+                if (!From || !FromOwner || *FromOwner != Link.SourceNode || !(*From)->bOutput)
+                {
+                    if (From && FromOwner) { return FailAt(TEXT("Invalid source pin or ownership"), *FromOwner, Link.SourcePin); }
+                    return FailAt(TEXT("Missing source pin"), Nodes.Contains(Link.SourceNode) ? Link.SourceNode : FGuid());
+                }
+                if (!To || !ToOwner || *ToOwner != Link.TargetNode || (*To)->bOutput)
+                {
+                    if (To && ToOwner) { return FailAt(TEXT("Invalid target pin or ownership"), *ToOwner, Link.TargetPin); }
+                    return FailAt(TEXT("Missing target pin"), Nodes.Contains(Link.TargetNode) ? Link.TargetNode : FGuid());
+                }
+                return FailAt(TEXT("Invalid link type or multiple sources for input"), Link.TargetNode, Link.TargetPin);
             }
             InputLinks.Add(Link.TargetPin, Link.SourceNode);
             GraphEdges.FindOrAdd(Link.SourceNode).Add(Link.TargetNode);
@@ -178,18 +202,35 @@ private:
                 }
             }
         }
-        return Ready.Num() == Source.Nodes.Num() || Fail(TEXT("Graph contains a cycle"));
+        if (Ready.Num() != Source.Nodes.Num())
+        {
+            FGuid Node, Pin;
+            FVoxelLandGraphCycle::Find(Source.Nodes, Source.Links, Node, Pin);
+            return FailAt(TEXT("Graph contains a cycle"), Node, Pin);
+        }
+        return true;
     }
 
     bool CompileRoot(uint16& Result)
     {
+        TGuardValue<const FVoxelLandGraphNodeRecord*> OutputContext(CurrentNode, Output);
         const FGuid* UpstreamId = InputLinks.Find(Output->Pins[0].Id);
         const FVoxelLandGraphNodeRecord* const* Upstream = UpstreamId ? Nodes.Find(*UpstreamId) : nullptr;
+        if (Upstream && (*Upstream)->OperatorId != VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::SmoothDensity))
+        {
+            const auto Provider = Providers.Resolve((*Upstream)->OperatorId, (*Upstream)->OperatorVersion);
+            if (Provider && Provider->Stage() == EVoxelLandOperatorStage::OneCellFilter)
+            {
+                TGuardValue<const FVoxelLandGraphNodeRecord*> FilterContext(CurrentNode, *Upstream);
+                return CompileExternalFilter(**Upstream, *Provider, Result);
+            }
+        }
         if (!Upstream || (*Upstream)->OperatorId != VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::SmoothDensity))
         {
             return CompileInput(*Output, 0, Result);
         }
         const FVoxelLandGraphNodeRecord& Filter = **Upstream;
+        TGuardValue<const FVoxelLandGraphNodeRecord*> FilterContext(CurrentNode, &Filter);
         const EVoxelLandGraphValueType Types[] = {EVoxelLandGraphValueType::Float, EVoxelLandGraphValueType::Bool,
             EVoxelLandGraphValueType::Float, EVoxelLandGraphValueType::Float};
         if (!CheckTypedPins(Filter, MakeArrayView(Types)))
@@ -206,15 +247,58 @@ private:
         }
         if (Consumers != 1)
         {
-            return Fail(TEXT("Smooth Density output must feed only Density Output"));
+            return FailAt(TEXT("Smooth Density output must feed only Density Output"), Filter.Id, Filter.Pins.Last().Id);
         }
         if (!NoiseSource(Filter, 1, EVoxelLandGraphValueType::Bool, Draft.SmoothFilter.Enabled) ||
             !NoiseSource(Filter, 2, EVoxelLandGraphValueType::Float, Draft.SmoothFilter.Strength))
         {
             return false;
         }
+        const FVoxelLandValueSource& Strength = Draft.SmoothFilter.Strength;
+        const float DefaultStrength = Strength.bParameter ? Draft.Parameters[Strength.Index].FloatDefault : Draft.Constants[Strength.Index];
+        if (DefaultStrength < 0.f || DefaultStrength > 1.f)
+        {
+            return FailAt(TEXT("Smooth strength must be in [0,1]"), Filter.Id, Filter.Pins[2].Id);
+        }
         Draft.SmoothFilter.bPresent = true;
         return CompileInput(Filter, 0, Result);
+    }
+
+    bool CompileExternalFilter(const FVoxelLandGraphNodeRecord& Node, const IVoxelLandOperator& Provider, uint16& Result)
+    {
+        if (Provider.InputTypes() != TArray<EVoxelLandGraphValueType>{EVoxelLandGraphValueType::Float} ||
+            Provider.OutputType() != EVoxelLandGraphValueType::Float || Node.Pins.Num() != 2 || Node.Configuration.Num() > 65536 ||
+            Provider.MaximumWorkerBytes() > 1048576)
+        {
+            return Fail(TEXT("Invalid filter signature or limits"));
+        }
+        for (int32 Index = 0; Index < 2; ++Index)
+        {
+            if (Node.Pins[Index].bOutput != (Index == 1) || Node.Pins[Index].Type != EVoxelLandGraphValueType::Float)
+            {
+                return FailAt(TEXT("Invalid filter pin direction or type"), Node.Id, Node.Pins[Index].Id);
+            }
+        }
+        int32 Consumers = 0;
+        for (const FVoxelLandGraphLinkRecord& Link : Source.Links)
+        {
+            if (Link.SourcePin == Node.Pins[1].Id) { ++Consumers; }
+        }
+        if (Consumers != 1) { return FailAt(TEXT("Filter output must feed only Density Output"), Node.Id, Node.Pins[1].Id); }
+        FString ProviderError;
+        if (!Provider.ValidateConfiguration(Node.Configuration, ProviderError))
+        {
+            const FString Message = FString::Printf(TEXT("Filter configuration invalid: %s"), *ProviderError);
+            return FailAt(*Message, Node.Id);
+        }
+        if (!CompileInput(Node, 0, Result)) { return false; }
+        FVoxelLandSeedSlot Seed; Seed.NodeId = Node.Id; Seed.Salt = uint32(Node.SeedSalt);
+        FVoxelLandExternalOperator Operator;
+        Operator.Id = Node.OperatorId; Operator.Version = Node.OperatorVersion; Operator.Stage = EVoxelLandOperatorStage::OneCellFilter;
+        Operator.Inputs = Provider.InputTypes(); Operator.Output = Provider.OutputType(); Operator.Configuration = Node.Configuration;
+        Operator.SeedSlot = Draft.Seeds.Add(Seed);
+        Draft.ExternalFilterIndex = Draft.ExternalOperators.Add(MoveTemp(Operator));
+        return true;
     }
 
     bool FindOutput()
@@ -223,10 +307,11 @@ private:
         {
             if (Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput))
             {
-                if (Output || !CheckPins(Node, 1, false))
+                if (Output)
                 {
-                    return Fail(TEXT("Exactly one valid density output is required"));
+                    return FailAt(TEXT("Exactly one valid density output is required"), Node.Id);
                 }
+                if (!CheckPins(Node, 1, false)) { return false; }
                 Output = &Node;
             }
         }
@@ -237,13 +322,13 @@ private:
     {
         if (Node.OperatorVersion != 1 || Node.Configuration.Num() != 0 || Node.Pins.Num() != Inputs + int32(HasOutput))
         {
-            return Fail(TEXT("Invalid builtin version, configuration or pin count"));
+            return FailAt(TEXT("Invalid builtin version, configuration or pin count"), Node.Id);
         }
         for (int32 Index = 0; Index < Node.Pins.Num(); ++Index)
         {
             if (Node.Pins[Index].Type != EVoxelLandGraphValueType::Float || Node.Pins[Index].bOutput != (Index == Inputs && HasOutput))
             {
-                return Fail(TEXT("Invalid builtin pin direction or type"));
+                return FailAt(TEXT("Invalid builtin pin direction or type"), Node.Id, Node.Pins[Index].Id);
             }
         }
         return true;
@@ -253,13 +338,13 @@ private:
     {
         if (Node.OperatorVersion != 1 || Node.Configuration.Num() != 0 || Node.Pins.Num() != Types.Num())
         {
-            return Fail(TEXT("Invalid builtin version, configuration or pin count"));
+            return FailAt(TEXT("Invalid builtin version, configuration or pin count"), Node.Id);
         }
         for (int32 Index = 0; Index < Types.Num(); ++Index)
         {
             if (Node.Pins[Index].Type != Types[Index] || Node.Pins[Index].bOutput != (Index == Types.Num() - 1))
             {
-                return Fail(TEXT("Invalid builtin pin direction or type"));
+                return FailAt(TEXT("Invalid builtin pin direction or type"), Node.Id, Node.Pins[Index].Id);
             }
         }
         return true;
@@ -267,7 +352,7 @@ private:
 
     bool Emit(EVoxelLandOpcode Op, uint16 A, uint16 B, uint16 C, uint32 Imm, uint16& Result)
     {
-        if (Draft.RegisterCount >= MaxRegisters || Draft.Instructions.Num() >= MaxInstructions)
+        if (Draft.RegisterCount >= MaxInstructions || Draft.Instructions.Num() >= MaxInstructions)
         {
             return Fail(TEXT("Graph exceeds VM register or instruction limit"));
         }
@@ -276,7 +361,8 @@ private:
         const float* KC = KnownConstants.Find(C);
         if (Op == EVoxelLandOpcode::Divide && KB && *KB == 0.f)
         {
-            return Fail(TEXT("Division by a constant zero"));
+            return FailAt(TEXT("Division by a constant zero"), CurrentNode ? CurrentNode->Id : FGuid(),
+                CurrentNode && CurrentNode->Pins.Num() > 1 ? CurrentNode->Pins[1].Id : FGuid());
         }
         if (Op == EVoxelLandOpcode::Clamp && KB && KC && *KB > *KC)
         {
@@ -345,6 +431,7 @@ private:
     bool CompileInput(const FVoxelLandGraphNodeRecord& Node, int32 Index, uint16& Result)
     {
         const FVoxelLandGraphPinRecord& Pin = Node.Pins[Index];
+        TGuardValue<FGuid> PinContext(ActivePin, Pin.Id);
         if (const FGuid* NodeId = InputLinks.Find(Pin.Id))
         {
             const FVoxelLandGraphNodeRecord* const* Upstream = Nodes.Find(*NodeId);
@@ -402,6 +489,8 @@ private:
 
     bool CompileNode(const FVoxelLandGraphNodeRecord& Node, uint16& Result)
     {
+        TGuardValue<const FVoxelLandGraphNodeRecord*> NodeContext(CurrentNode, &Node);
+        TGuardValue<FGuid> PinContext(ActivePin, FGuid());
         if (const uint16* Existing = Results.Find(Node.Id))
         {
             Result = *Existing;
@@ -414,9 +503,9 @@ private:
         Visiting.Add(Node.Id);
         if (!CompileBuiltin(Node, Result))
         {
-            if (!Error.StartsWith(TEXT("[node=")))
+            if (!Diagnostic.NodeId.IsValid())
             {
-                Error = FString::Printf(TEXT("[node=%s] %s"), *Node.Id.ToString(), *Error);
+                Diagnostic.NodeId = Node.Id;
             }
             return false;
         }
@@ -435,7 +524,11 @@ private:
         FVoxelLandValueSource& Out);
 
     const FVoxelLandGraphSnapshot& Source;
+    const FVoxelLandOperatorRegistrySnapshot& Providers;
+    FVoxelLandGraphDiagnostic& Diagnostic;
     FString& Error;
+    const FVoxelLandGraphNodeRecord* CurrentNode = nullptr;
+    FGuid ActivePin;
     FVoxelLandProgramDraft Draft;
     const FVoxelLandGraphNodeRecord* Output = nullptr;
     TMap<FGuid, const FVoxelLandGraphNodeRecord*> Nodes;
@@ -503,10 +596,14 @@ bool FCompiler::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Re
 bool FCompiler::CompileExternal(const FVoxelLandGraphNodeRecord& Node, uint16& Result)
 {
     TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider =
-        FVoxelLandOperatorRegistry::Resolve(Node.OperatorId, Node.OperatorVersion);
+        Providers.Resolve(Node.OperatorId, Node.OperatorVersion);
     if (!Provider)
     {
         return Fail(TEXT("Missing external operator provider or incompatible version"));
+    }
+    if (Provider->Stage() != EVoxelLandOperatorStage::Sample)
+    {
+        return Fail(TEXT("Filter must be directly before Density Output and cannot be chained"));
     }
     const TArray<EVoxelLandGraphValueType> Inputs = Provider->InputTypes();
     if (Inputs.Num() < 1 || Inputs.Num() > 3 || Provider->MaximumWorkerBytes() > 1048576 ||
@@ -523,14 +620,15 @@ bool FCompiler::CompileExternal(const FVoxelLandGraphNodeRecord& Node, uint16& R
     uint16 R[3] = {};
     for (int32 Index = 0; Index < Inputs.Num(); ++Index)
     {
-        if (Node.Pins[Index].bOutput || Node.Pins[Index].Type != Inputs[Index] || !CompileInput(Node, Index, R[Index]))
+        if (Node.Pins[Index].bOutput || Node.Pins[Index].Type != Inputs[Index])
         {
-            return Fail(TEXT("External operator input signature mismatch"));
+            return FailAt(TEXT("External operator input signature mismatch"), Node.Id, Node.Pins[Index].Id);
         }
+        if (!CompileInput(Node, Index, R[Index])) { return false; }
     }
     if (!Node.Pins.Last().bOutput || Node.Pins.Last().Type != Provider->OutputType())
     {
-        return Fail(TEXT("External operator output signature mismatch"));
+        return FailAt(TEXT("External operator output signature mismatch"), Node.Id, Node.Pins.Last().Id);
     }
     FVoxelLandSeedSlot Seed;
     Seed.NodeId = Node.Id;
@@ -550,6 +648,7 @@ bool FCompiler::NoiseSource(const FVoxelLandGraphNodeRecord& Node, int32 Index,
     EVoxelLandGraphValueType Type, FVoxelLandValueSource& Out)
 {
     const FVoxelLandGraphPinRecord& Pin = Node.Pins[Index];
+    TGuardValue<FGuid> PinContext(ActivePin, Pin.Id);
     if (const FGuid* UpstreamId = InputLinks.Find(Pin.Id))
     {
         const FVoxelLandGraphNodeRecord* const* Upstream = Nodes.Find(*UpstreamId);
@@ -562,9 +661,11 @@ bool FCompiler::NoiseSource(const FVoxelLandGraphNodeRecord& Node, int32 Index,
         }
         const EVoxelLandGraphValueType Types[] = {Type};
         int32 Slot = INDEX_NONE;
-        if (!CheckTypedPins(**Upstream, MakeArrayView(Types)) || !FindOrAddParameter(**Upstream, Type, Slot))
+        if (!CheckTypedPins(**Upstream, MakeArrayView(Types))) { return false; }
         {
-            return false;
+            TGuardValue<const FVoxelLandGraphNodeRecord*> NodeContext(CurrentNode, *Upstream);
+            TGuardValue<FGuid> ParameterPinContext(ActivePin, FGuid());
+            if (!FindOrAddParameter(**Upstream, Type, Slot)) { return false; }
         }
         Out.bParameter = true;
         Out.Index = uint32(Slot);
@@ -657,9 +758,9 @@ bool FCompiler::CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
     }
     if (Kind == EVoxelLandBuiltinNode::Clamp)
     {
-        if (!CheckPins(Node, 3, true) ||
-            (!InputLinks.Contains(Node.Pins[1].Id) && !InputLinks.Contains(Node.Pins[2].Id) &&
-             Node.Pins[1].FloatDefault > Node.Pins[2].FloatDefault))
+        if (!CheckPins(Node, 3, true)) { return false; }
+        if (!InputLinks.Contains(Node.Pins[1].Id) && !InputLinks.Contains(Node.Pins[2].Id) &&
+            Node.Pins[1].FloatDefault > Node.Pins[2].FloatDefault)
         {
             return Fail(TEXT("Clamp minimum exceeds maximum"));
         }
@@ -691,13 +792,14 @@ bool FCompiler::CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
     }
     const bool bVariadic = Kind == EVoxelLandBuiltinNode::Add || Kind == EVoxelLandBuiltinNode::Multiply;
     const int32 InputCount = Node.Pins.Num() - 1;
-    if (InputCount < 2 || InputCount > (bVariadic ? 32 : 2) || !CheckPins(Node, InputCount, true))
+    if (InputCount < 2 || InputCount > (bVariadic ? 32 : 2))
     {
         return Fail(TEXT("Invalid arithmetic input count"));
     }
+    if (!CheckPins(Node, InputCount, true)) { return false; }
     if (Kind == EVoxelLandBuiltinNode::Divide && !InputLinks.Contains(Node.Pins[1].Id) && Node.Pins[1].FloatDefault == 0.f)
     {
-        return Fail(TEXT("Division by zero"));
+        return FailAt(TEXT("Division by zero"), Node.Id, Node.Pins[1].Id);
     }
     uint16 Accumulator = 0;
     if (!CompileInput(Node, 0, Accumulator))
@@ -723,9 +825,10 @@ bool FCompiler::CompileTypedBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
         const EVoxelLandGraphValueType Type = Kind == EVoxelLandBuiltinNode::IntConstant ?
             EVoxelLandGraphValueType::Int32 : EVoxelLandGraphValueType::Bool;
         const EVoxelLandGraphValueType Types[] = {Type, Type};
-        if (!CheckTypedPins(Node, MakeArrayView(Types)) || InputLinks.Contains(Node.Pins[0].Id))
+        if (!CheckTypedPins(Node, MakeArrayView(Types))) { return false; }
+        if (InputLinks.Contains(Node.Pins[0].Id))
         {
-            return Fail(TEXT("Typed constant requires an unconnected value"));
+            return FailAt(TEXT("Typed constant requires an unconnected value"), Node.Id, Node.Pins[0].Id);
         }
         return CompileInput(Node, 0, Result);
     }
@@ -800,7 +903,7 @@ bool FCompiler::CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
         }
         if (Kind == EVoxelLandBuiltinNode::Sphere && !InputLinks.Contains(Node.Pins[3].Id) && Node.Pins[3].FloatDefault <= 0.f)
         {
-            return Fail(TEXT("Sphere radius must be positive"));
+            return FailAt(TEXT("Sphere radius must be positive"), Node.Id, Node.Pins[3].Id);
         }
         if (Kind == EVoxelLandBuiltinNode::Box)
         {
@@ -808,7 +911,7 @@ bool FCompiler::CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
             {
                 if (!InputLinks.Contains(Node.Pins[Index].Id) && Node.Pins[Index].FloatDefault <= 0.f)
                 {
-                    return Fail(TEXT("Box extents must be positive"));
+                    return FailAt(TEXT("Box extents must be positive"), Node.Id, Node.Pins[Index].Id);
                 }
             }
         }
@@ -836,7 +939,7 @@ bool FCompiler::CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
                 const float* Extent = KnownConstants.Find(R[Index]);
                 if (Extent && *Extent <= 0.f)
                 {
-                    return Fail(TEXT("Shape radius or extent must be positive"));
+                    return FailAt(TEXT("Shape radius or extent must be positive"), Node.Id, Node.Pins[Index].Id);
                 }
             }
         }
@@ -867,8 +970,27 @@ bool FCompiler::CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
 
 bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot, FVoxelLandProgramDraft& OutDraft, FString& OutError)
 {
+    const FVoxelLandOperatorRegistrySnapshot Providers = FVoxelLandOperatorRegistry::Snapshot();
+    return Compile(Snapshot, Providers, OutDraft, OutError);
+}
+bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandOperatorRegistrySnapshot& Providers,
+    FVoxelLandProgramDraft& OutDraft, FString& OutError)
+{
+    FVoxelLandGraphDiagnostic Diagnostic;
+    const bool bSuccess = Compile(Snapshot, Providers, OutDraft, Diagnostic);
+    OutError = Diagnostic.NodeId.IsValid() ? FString::Printf(TEXT("[node=%s] %s"), *Diagnostic.NodeId.ToString(), *Diagnostic.Message) : Diagnostic.Message;
+    return bSuccess;
+}
+bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot, FVoxelLandProgramDraft& OutDraft, FVoxelLandGraphDiagnostic& OutDiagnostic)
+{
+    const FVoxelLandOperatorRegistrySnapshot Providers = FVoxelLandOperatorRegistry::Snapshot();
+    return Compile(Snapshot, Providers, OutDraft, OutDiagnostic);
+}
+bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandOperatorRegistrySnapshot& Providers,
+    FVoxelLandProgramDraft& OutDraft, FVoxelLandGraphDiagnostic& OutDiagnostic)
+{
     OutDraft = FVoxelLandProgramDraft();
-    OutError.Reset();
-    FCompiler Compiler(Snapshot, OutError);
+    OutDiagnostic = FVoxelLandGraphDiagnostic();
+    FCompiler Compiler(Snapshot, Providers, OutDiagnostic);
     return Compiler.Run(OutDraft);
 }

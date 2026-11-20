@@ -607,22 +607,11 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteExternal(const FVoxelLandIns
 	void* OutputData = Operator.Output == EVoxelLandGraphValueType::Float ?
 		static_cast<void*>(Registers.GetData() + Offset) : static_cast<void*>(IntRegisters.GetData() + Offset);
 	FString Error;
-	if (!OperatorWorkers[I.Imm]->Evaluate(Inputs, OutputData, N, Error))
-	{
-		return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("External operator evaluation failed"), Error);
-	}
-	for (int32 Index = 0; Index < N; ++Index)
-	{
-		if (Operator.Output == EVoxelLandGraphValueType::Float && !FMath::IsFinite(Registers[Offset + Index]))
-		{
-			return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("External operator returned non-finite output"));
-		}
-		if (Operator.Output == EVoxelLandGraphValueType::Bool && IntRegisters[Offset + Index] != 0 &&
-			IntRegisters[Offset + Index] != 1)
-		{
-			return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("External operator returned invalid boolean"));
-		}
-	}
+    FVoxelLandOperatorOutput Writer(Operator.Output, OutputData, N);
+    if (!OperatorWorkers[I.Imm]->Evaluate(Inputs, Writer, N, Error) || !Writer.IsComplete(Error))
+    {
+        return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("External operator evaluation failed or output was incomplete"), Error);
+    }
 	CheckOperatorSimd(I.Imm, Operator.Output, Inputs, OutputData, N);
 	return {};
 }
@@ -644,7 +633,8 @@ void FVoxelLandWorkerContextImpl::CheckOperatorSimd(uint32 OperatorIndex, EVoxel
 			FMemory::Memcpy(static_cast<uint8*>(SimdOutput) + Index * sizeof(uint32), &Bits, sizeof(Bits));
 		}
 		FString SimdError;
-		if (!OperatorSimdWorkers[OperatorIndex]->EvaluateSimd(Inputs, SimdOutput, SimdCount, SimdError) ||
+        FVoxelLandOperatorOutput Writer(OutputType, SimdOutput, SimdCount);
+		if (!OperatorSimdWorkers[OperatorIndex]->EvaluateSimd(Inputs, Writer, SimdCount, SimdError) || !Writer.IsComplete(SimdError) ||
 			FMemory::Memcmp(ScalarOutput, SimdOutput, SIZE_T(SimdCount) * sizeof(uint32)) != 0)
 		{
 			OperatorSimdEnabled[OperatorIndex] = false;
@@ -732,6 +722,7 @@ FVoxelLandError FVoxelLandWorkerContextImpl::QuantizeOutput(int32 N, float Voxel
 FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
 	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const
 {
+    OutDensity.Reset();
 	if (IsInGameThread())
 	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
@@ -811,6 +802,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
+    if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
+    {
+        return GenerateExternalFilteredChunkCancellable(Key, Worker, OutChunk, IsCancelled);
+    }
 	if (bSmoothEnabled && SmoothStrength > 0.f)
 	{
 		return GenerateSmoothedChunkCancellable(Key, Worker, true, SmoothStrength, OutChunk, IsCancelled);

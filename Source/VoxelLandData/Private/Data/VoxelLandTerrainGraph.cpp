@@ -1,4 +1,5 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/VoxelLandGraphCycle.h"
 
 namespace
 {
@@ -14,14 +15,14 @@ namespace
 class FGraphStructureValidator
 {
 public:
-	FGraphStructureValidator(const UVoxelLandTerrainGraph& InGraph, FString& InError)
-		: Graph(InGraph), OutError(InError) {}
+	FGraphStructureValidator(const UVoxelLandTerrainGraph& InGraph, FVoxelLandGraphDiagnostic& InDiagnostic)
+		: Graph(InGraph), Diagnostic(InDiagnostic) {}
 
 	bool Validate()
 	{
 		if (Graph.SourceVersion != 1 || Graph.Nodes.Num() > MaxNodes || Graph.Links.Num() > MaxLinks)
 		{
-			OutError = TEXT("Unsupported graph version or graph exceeds record limits.");
+			Diagnostic.Message = TEXT("Unsupported graph version or graph exceeds record limits.");
 			return false;
 		}
 		return BuildIndex() && ValidateLinks() && ValidateAcyclic();
@@ -37,13 +38,15 @@ private:
 			if (!Node.Id.IsValid() || !Node.OperatorId.IsValid() || Node.OperatorVersion < 1 ||
 				NodeIndices.Contains(Node.Id) || Node.Pins.Num() > MaxPinsPerNode)
 			{
-				OutError = TEXT("Invalid or duplicate node ID, operator, version or pin count.");
+                if (Node.Id.IsValid() && !NodeIndices.Contains(Node.Id)) { Diagnostic.NodeId = Node.Id; }
+				Diagnostic.Message = TEXT("Invalid or duplicate node ID, operator, version or pin count.");
 				return false;
 			}
 			TotalConfigBytes += Node.Configuration.Num();
 			if (Node.Configuration.Num() > MaxNodeConfigBytes || TotalConfigBytes > MaxGraphConfigBytes)
 			{
-				OutError = TEXT("Graph operator configuration exceeds its size limit.");
+                Diagnostic.NodeId = Node.Id;
+				Diagnostic.Message = TEXT("Graph operator configuration exceeds its size limit.");
 				return false;
 			}
 			NodeIndices.Add(Node.Id, Index);
@@ -53,7 +56,9 @@ private:
 					(Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32 &&
 					 Pin.Type != EVoxelLandGraphValueType::Bool) || Pin.bInvalidDefault || !FMath::IsFinite(Pin.FloatDefault))
 				{
-					OutError = TEXT("Invalid or duplicate pin ID, type or default.");
+                    Diagnostic.NodeId = Node.Id;
+                    if (Pin.Id.IsValid() && !Pins.Contains(Pin.Id)) { Diagnostic.PinId = Pin.Id; }
+					Diagnostic.Message = TEXT("Invalid or duplicate pin ID, type or default.");
 					return false;
 				}
 				Pins.Add(Pin.Id, &Pin);
@@ -80,7 +85,21 @@ private:
 				*SourceOwner != Link.SourceNode || *TargetOwner != Link.TargetNode || !(*Source)->bOutput ||
 				(*Target)->bOutput || (*Source)->Type != (*Target)->Type || ConnectedInputs.Contains(Link.TargetPin))
 			{
-				OutError = TEXT("Invalid link: check pin ownership, direction, type and single input source.");
+                if (!Source || !SourceOwner || *SourceOwner != Link.SourceNode || !(*Source)->bOutput)
+                {
+                    if (Source && SourceOwner) { Diagnostic.NodeId = *SourceOwner; Diagnostic.PinId = Link.SourcePin; }
+                    else if (SourceIndex) { Diagnostic.NodeId = Link.SourceNode; }
+                }
+                else if (!Target || !TargetOwner || *TargetOwner != Link.TargetNode || (*Target)->bOutput)
+                {
+                    if (Target && TargetOwner) { Diagnostic.NodeId = *TargetOwner; Diagnostic.PinId = Link.TargetPin; }
+                    else if (TargetIndex) { Diagnostic.NodeId = Link.TargetNode; }
+                }
+                else
+                {
+                    Diagnostic.NodeId = Link.TargetNode; Diagnostic.PinId = Link.TargetPin;
+                }
+				Diagnostic.Message = TEXT("Invalid link: check pin ownership, direction, type and single input source.");
 				return false;
 			}
 			ConnectedInputs.Add(Link.TargetPin);
@@ -113,14 +132,15 @@ private:
 		}
 		if (Ready.Num() != Graph.Nodes.Num())
 		{
-			OutError = TEXT("Graph contains a cycle.");
+            FVoxelLandGraphCycle::Find(Graph.Nodes, Graph.Links, Diagnostic.NodeId, Diagnostic.PinId);
+			Diagnostic.Message = TEXT("Graph contains a cycle.");
 			return false;
 		}
 		return true;
 	}
 
 	const UVoxelLandTerrainGraph& Graph;
-	FString& OutError;
+	FVoxelLandGraphDiagnostic& Diagnostic;
 	TMap<FGuid, int32> NodeIndices;
 	TMap<FGuid, const FVoxelLandGraphPinRecord*> Pins;
 	TMap<FGuid, FGuid> PinOwners;
@@ -131,25 +151,39 @@ private:
 
 bool UVoxelLandTerrainGraph::ValidateStructure(FString& OutError) const
 {
-	OutError.Reset();
-	return FGraphStructureValidator(*this, OutError).Validate();
+    FVoxelLandGraphDiagnostic Diagnostic;
+    const bool bValid = ValidateStructure(Diagnostic);
+    OutError = Diagnostic.Message;
+    return bValid;
 }
-
+bool UVoxelLandTerrainGraph::ValidateStructure(FVoxelLandGraphDiagnostic& OutDiagnostic) const
+{
+    OutDiagnostic = FVoxelLandGraphDiagnostic();
+    return FGraphStructureValidator(*this, OutDiagnostic).Validate();
+}
 bool UVoxelLandTerrainGraph::CaptureSnapshot(FVoxelLandGraphSnapshot& OutSnapshot, FString& OutError) const
 {
-	OutSnapshot = FVoxelLandGraphSnapshot();
-	if (!IsInGameThread())
-	{
-		OutError = TEXT("Graph snapshot must be captured on the game thread.");
-		return false;
-	}
-	if (!ValidateStructure(OutError))
-	{
-		return false;
-	}
-	OutSnapshot.SourceVersion = SourceVersion;
-	OutSnapshot.Parameters = Parameters;
-	OutSnapshot.Nodes = Nodes;
-	OutSnapshot.Links = Links;
-	return true;
+    FVoxelLandGraphDiagnostic Diagnostic;
+    const bool bValid = CaptureSnapshot(OutSnapshot, Diagnostic);
+    OutError = Diagnostic.Message;
+    return bValid;
+}
+bool UVoxelLandTerrainGraph::CaptureSnapshot(FVoxelLandGraphSnapshot& OutSnapshot, FVoxelLandGraphDiagnostic& OutDiagnostic) const
+{
+    OutSnapshot = FVoxelLandGraphSnapshot();
+    OutDiagnostic = FVoxelLandGraphDiagnostic();
+    if (!IsInGameThread())
+    {
+        OutDiagnostic.Message = TEXT("Graph snapshot must be captured on the game thread.");
+        return false;
+    }
+    if (!ValidateStructure(OutDiagnostic))
+    {
+        return false;
+    }
+    OutSnapshot.SourceVersion = SourceVersion;
+    OutSnapshot.Parameters = Parameters;
+    OutSnapshot.Nodes = Nodes;
+    OutSnapshot.Links = Links;
+    return true;
 }

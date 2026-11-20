@@ -1,4 +1,9 @@
 #include "Graph/VoxelLandGraphToolkit.h"
+#include "Operators/VoxelLandOperator.h"
+#include "Graph/VoxelLandEditorFloat.h"
+#include "Data/Structs/VoxelLandCanonicalWriter.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "UObject/PackageReload.h"
 #include "Graph/VoxelLandEditorNode.h"
 #include "Graph/VoxelLandEditorSchema.h"
 #include "Graph/VoxelLandEditorOperator.h"
@@ -110,7 +115,7 @@ void RestorePin(UVoxelLandEditorNode& Node, const FVoxelLandGraphPinRecord& Reco
     Pin->PinId = Record.Id;
     if (Record.Type == EVoxelLandGraphValueType::Float)
     {
-        Pin->DefaultValue = FString::SanitizeFloat(Record.FloatDefault);
+        Pin->DefaultValue = FVoxelLandEditorFloat::Format(Record.FloatDefault);
     }
     else if (Record.Type == EVoxelLandGraphValueType::Int32)
     {
@@ -122,7 +127,7 @@ void RestorePin(UVoxelLandEditorNode& Node, const FVoxelLandGraphPinRecord& Reco
     }
 }
 bool CaptureNode(const UVoxelLandEditorNode& Node, TArray<FVoxelLandGraphNodeRecord>& Nodes,
-    TArray<FVoxelLandGraphLinkRecord>& Links, bool& bValidDefaults, FString& Error)
+    TArray<FVoxelLandGraphLinkRecord>& Links, bool& bValidDefaults, FString& Error, FVoxelLandGraphDiagnostic* Diagnostic)
 {
     FVoxelLandGraphNodeRecord Record;
     Record.Id = Node.NodeGuid;
@@ -140,7 +145,14 @@ bool CaptureNode(const UVoxelLandEditorNode& Node, TArray<FVoxelLandGraphNodeRec
         FVoxelLandGraphPinRecord PinRecord;
         if (!CopyPin(*Pin, PinRecord))
         {
-            Error = FString::Printf(TEXT("Invalid default for pin %s."), *Pin->PinName.ToString());
+            if (bValidDefaults)
+            {
+                Error = FString::Printf(TEXT("Invalid default for pin %s."), *Pin->PinName.ToString());
+                if (Diagnostic)
+                {
+                    Diagnostic->Message = Error; Diagnostic->NodeId = Node.NodeGuid; Diagnostic->PinId = Pin->PinId;
+                }
+            }
             PinRecord.bInvalidDefault = true;
             bValidDefaults = false;
         }
@@ -153,6 +165,7 @@ bool CaptureNode(const UVoxelLandEditorNode& Node, TArray<FVoxelLandGraphNodeRec
                 if (!Source)
                 {
                     Error = TEXT("Only terrain graph node pins may be connected.");
+                    if (Diagnostic) { Diagnostic->Message = Error; Diagnostic->NodeId = Node.NodeGuid; Diagnostic->PinId = Pin->PinId; }
                     return false;
                 }
                 FVoxelLandGraphLinkRecord Link;
@@ -254,6 +267,7 @@ public:
     uint64 Revision = 0;
     bool bSuccess = false;
     FString Error;
+    FVoxelLandGraphDiagnostic Diagnostic;
     FVoxelLandSerializedProgram Payload;
     double CompileMs = 0;
 };
@@ -282,6 +296,16 @@ void FVoxelLandGraphToolkit::Stop()
         return;
     }
     bStopped = true;
+    if (bRegisteredForUndo && GEditor)
+    {
+        GEditor->UnregisterForUndo(this);
+        bRegisteredForUndo = false;
+    }
+    FCoreUObjectDelegates::OnPackageReloaded.Remove(PackageReloadHandle);
+    FCoreUObjectDelegates::OnObjectsReplaced.Remove(ObjectsReplacedHandle);
+    FCoreUObjectDelegates::OnObjectsReinstanced.Remove(ObjectsReinstancedHandle);
+    FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(MaterialSetupChangedHandle);
+    MaterialSetupChangedHandle.Reset();
     FEditorDelegates::PreBeginPIE.Remove(BeginPIEHandle);
     FEditorDelegates::EndPIE.Remove(EndPIEHandle);
     BeginPIEHandle.Reset();
@@ -336,10 +360,20 @@ bool FVoxelLandGraphToolkit::StoreCompiledProgram(UVoxelLandTerrainGraph& Graph,
 void FVoxelLandGraphToolkit::Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host)
 {
     Asset = InAsset;
+    MaterialSetupChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FVoxelLandGraphToolkit::MaterialSetupPropertyChanged);
+    PackageReloadHandle = FCoreUObjectDelegates::OnPackageReloaded.AddRaw(this, &FVoxelLandGraphToolkit::PackageReloaded);
+    ObjectsReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddRaw(this, &FVoxelLandGraphToolkit::ObjectsReplaced);
+    ObjectsReinstancedHandle = FCoreUObjectDelegates::OnObjectsReinstanced.AddRaw(this, &FVoxelLandGraphToolkit::ObjectsReinstanced);
+    if (GEditor)
+    {
+        GEditor->RegisterForUndo(this);
+        bRegisteredForUndo = true;
+    }
     PreviewScene = MakeShared<FVoxelLandPreviewScene>();
     PreviewViewport = SNew(SVoxelLandPreviewViewport).Scene(PreviewScene);
-    PreviewSettings = NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient);
+    PreviewSettings = NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
     PreviewSettings->Graph = Asset;
+    SynchronizePreviewSettings(false);
     ApplyPreviewMaterial(nullptr);
     CreateMirror();
     FVoxelLandGraphSnapshot InitialSource;
@@ -373,9 +407,42 @@ void FVoxelLandGraphToolkit::Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode:
                 ->Split(FTabManager::NewStack()->SetSizeCoefficient(0.20f)->AddTab(DetailsTab, ETabState::OpenedTab)->AddTab(PaletteTab, ETabState::OpenedTab)))
             ->Split(FTabManager::NewStack()->SetSizeCoefficient(0.2f)->AddTab(DiagnosticsTab, ETabState::OpenedTab)));
     InitAssetEditor(Mode, Host, TEXT("VoxelLandGraphEditor"), Layout, true, true, Asset);
+    bHasEditorWindow = true;
     RegenerateMenusAndToolbars();
     RequestCompile();
 }
+#if WITH_DEV_AUTOMATION_TESTS
+void FVoxelLandGraphToolkit::SetMaterialPickerForTests(UMaterialInterface* Material)
+{
+    MaterialChanged(Material ? FAssetData(Material) : FAssetData());
+}
+void FVoxelLandGraphToolkit::SetSettingsPickerForTests(UVoxelLandWorldSettings* Settings)
+{
+    SettingsChanged(Settings ? FAssetData(Settings) : FAssetData());
+}
+void FVoxelLandGraphToolkit::CreatePanelForTests()
+{
+    GraphWidget = SNew(SGraphEditor).GraphToEdit(Graph).IsEditable(true);
+}
+void FVoxelLandGraphToolkit::InitializeForTests(UVoxelLandTerrainGraph* InAsset)
+{
+    Asset = InAsset;
+    MaterialSetupChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FVoxelLandGraphToolkit::MaterialSetupPropertyChanged);
+    PackageReloadHandle = FCoreUObjectDelegates::OnPackageReloaded.AddRaw(this, &FVoxelLandGraphToolkit::PackageReloaded);
+    ObjectsReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddRaw(this, &FVoxelLandGraphToolkit::ObjectsReplaced);
+    ObjectsReinstancedHandle = FCoreUObjectDelegates::OnObjectsReinstanced.AddRaw(this, &FVoxelLandGraphToolkit::ObjectsReinstanced);
+    PreviewSettings = NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+    PreviewSettings->Graph = Asset;
+    SynchronizePreviewSettings(false);
+    GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->NotifyAssetOpened(Asset, this);
+    CreateMirror();
+    FString Error;
+    CaptureMirror(Error);
+    GraphChangedHandle = Graph->AddOnGraphChangedHandler(FOnGraphChanged::FDelegate::CreateRaw(this, &FVoxelLandGraphToolkit::GraphChanged));
+    GEditor->RegisterForUndo(this);
+    bRegisteredForUndo = true;
+}
+#endif
 void FVoxelLandGraphToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& Manager)
 {
     FAssetEditorToolkit::RegisterTabSpawners(Manager);
@@ -470,18 +537,36 @@ FText FVoxelLandGraphToolkit::StatusText() const
     return FText::FromString(MaterialDiagnostic.IsEmpty() ? Status : Status + TEXT(" ") + MaterialDiagnostic);
 }
 FReply FVoxelLandGraphToolkit::CompileClicked() { RequestCompile(); return FReply::Handled(); }
+bool FVoxelLandGraphToolkit::ResolveDiagnosticTarget(UEdGraphNode*& OutNode, UEdGraphPin*& OutPin) const
+{
+    OutNode = nullptr;
+    OutPin = nullptr;
+    if (!Graph || !ErrorDiagnostic.NodeId.IsValid()) { return false; }
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (Node && Node->NodeGuid == ErrorDiagnostic.NodeId)
+        {
+            OutNode = Node;
+            if (ErrorDiagnostic.PinId.IsValid())
+            {
+                for (UEdGraphPin* Pin : Node->Pins)
+                {
+                    if (Pin && Pin->PinId == ErrorDiagnostic.PinId) { OutPin = Pin; break; }
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
 FReply FVoxelLandGraphToolkit::FocusError()
 {
-    if (GraphWidget && ErrorNode.IsValid())
+    UEdGraphNode* Node = nullptr;
+    UEdGraphPin* Pin = nullptr;
+    if (GraphWidget && ResolveDiagnosticTarget(Node, Pin))
     {
-        for (const UEdGraphNode* Node : Graph->Nodes)
-        {
-            if (Node && Node->NodeGuid == ErrorNode)
-            {
-                GraphWidget->JumpToNode(Node);
-                break;
-            }
-        }
+        if (Pin) { GraphWidget->JumpToPin(Pin); }
+        else { GraphWidget->JumpToNode(Node); }
     }
     return FReply::Handled();
 }
@@ -493,12 +578,12 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Seed", "Seed"))]
             + SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox).Text_Lambda([this] { return FText::AsCultureInvariant(LexToString(PreviewSeed)); }).OnTextCommitted_Raw(this, &FVoxelLandGraphToolkit::SeedCommitted)]
             + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("ResetCamera", "Reset camera")).OnClicked_Raw(this, &FVoxelLandGraphToolkit::ResetPreviewCamera)]]
-        + SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox).AllowedClass(UMaterialInterface::StaticClass()).OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::MaterialChanged)]
-        + SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox).AllowedClass(UVoxelLandWorldSettings::StaticClass()).OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::SettingsChanged)]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox).AllowedClass(UMaterialInterface::StaticClass()).ObjectPath_Raw(this, &FVoxelLandGraphToolkit::MaterialPickerPath).OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::MaterialChanged)]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox).AllowedClass(UVoxelLandWorldSettings::StaticClass()).ObjectPath_Raw(this, &FVoxelLandGraphToolkit::SettingsPickerPath).OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::SettingsChanged)]
         + SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Radius", "Preview radius (XY / Z)"))]
-            + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).MinValue(1).MaxValue(2).Value_Lambda([this] { return PreviewHorizontalRadius; }).OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { PreviewHorizontalRadius = FMath::Clamp(Value, 1, 2); StartPreview(); })]
-            + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).MinValue(1).MaxValue(2).Value_Lambda([this] { return PreviewVerticalRadius; }).OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { PreviewVerticalRadius = FMath::Clamp(Value, 1, 2); StartPreview(); })]]
+            + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).MinValue(1).MaxValue(2).Value_Lambda([this] { return PreviewHorizontalRadius; }).OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { CommitPreviewRadius(Value, true); })]
+            + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).MinValue(1).MaxValue(2).Value_Lambda([this] { return PreviewVerticalRadius; }).OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { CommitPreviewRadius(Value, false); })]]
         + SVerticalBox::Slot().AutoHeight()[SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[SNew(STextBlock).Text(LOCTEXT("PreviewSettings", "Transient preview settings and overrides"))].BodyContent()[SNew(SBox).MaxDesiredHeight(250)[PreviewDetails.ToSharedRef()]]]
         + SVerticalBox::Slot().FillHeight(1)[PreviewViewport.ToSharedRef()]];
 }
@@ -574,8 +659,9 @@ void FVoxelLandGraphToolkit::CreateMirror()
     bLoading = false;
 }
 
-bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error)
+bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagnostic* Diagnostic)
 {
+    if (Diagnostic) { *Diagnostic = FVoxelLandGraphDiagnostic(); }
     if (!Asset || !Graph)
     {
         Error = TEXT("Missing graph asset or editor mirror.");
@@ -591,7 +677,7 @@ bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error)
         {
             continue;
         }
-        if (!CaptureNode(*Node, Nodes, Links, bValidDefaults, Error))
+        if (!CaptureNode(*Node, Nodes, Links, bValidDefaults, Error, Diagnostic))
         {
             return false;
         }
@@ -602,41 +688,97 @@ bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error)
     Snapshot.Nodes = Nodes;
     Snapshot.Links = Links;
     const uint64 NewHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
-    if (NewHash != LastSourceHash)
+    FVoxelLandGraphSnapshot Stored;
+    Stored.SourceVersion = Asset->SourceVersion;
+    Stored.Parameters = Asset->Parameters;
+    Stored.Nodes = Asset->Nodes;
+    Stored.Links = Asset->Links;
+    if (FVoxelLandProgramCodec::SourceFingerprint(Stored) != NewHash)
     {
-        Asset->Modify();
+        if (!GIsTransacting)
+        {
+            Asset->Modify();
+        }
         Asset->Nodes = MoveTemp(Nodes);
         Asset->Links = MoveTemp(Links);
         Asset->MarkPackageDirty();
+    }
+    if (NewHash != LastSourceHash)
+    {
         LastSourceHash = NewHash;
         ++Revision;
         Status = TEXT("Stale: graph changed.");
     }
     return bValidDefaults;
 }
+void FVoxelLandGraphToolkit::PostUndo(bool bSuccess)
+{
+    if (bSuccess && !bStopped)
+    {
+        SynchronizeGraph();
+        SynchronizePreviewSettings(true);
+        if (PreviewDetails)
+        {
+            PreviewDetails->ForceRefresh();
+        }
+        if (GraphWidget && Graph)
+        {
+            const TSet<UObject*> Selection = GraphWidget->GetSelectedNodes();
+            for (UObject* Object : Selection)
+            {
+                UEdGraphNode* Node = Cast<UEdGraphNode>(Object);
+                if (Node && !Graph->Nodes.Contains(Node))
+                {
+                    GraphWidget->SetNodeSelection(Node, false);
+                }
+            }
+            TGuardValue<bool> Guard(bLoading, true);
+            GraphWidget->NotifyGraphChanged();
+#if WITH_DEV_AUTOMATION_TESTS
+            ++PanelRefreshCountForTests;
+#endif
+        }
+    }
+}
+void FVoxelLandGraphToolkit::PostRedo(bool bSuccess)
+{
+    PostUndo(bSuccess);
+}
 void FVoxelLandGraphToolkit::GraphChanged(const FEdGraphEditAction&)
 {
-    if (bLoading)
+    if (bLoading || GIsTransacting)
     {
         return;
     }
+    SynchronizeGraph();
+}
+void FVoxelLandGraphToolkit::SynchronizeGraph()
+{
     const uint64 Previous = Revision;
     FString Error;
-    if (!CaptureMirror(Error))
+    FVoxelLandGraphDiagnostic Diagnostic;
+    if (!CaptureMirror(Error, &Diagnostic))
     {
+        ErrorDiagnostic = MoveTemp(Diagnostic);
         CancelPreview();
+        CompileDue = 0.0;
         ++Revision;
         Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
         return;
     }
     if (Previous != Revision)
     {
+        ErrorDiagnostic = FVoxelLandGraphDiagnostic();
         CancelPreview();
         CompileDue = FPlatformTime::Seconds() + 0.2;
     }
 }
 void FVoxelLandGraphToolkit::PropertiesChanged(const FPropertyChangedEvent&)
 {
+    if (PreviewDetails)
+    {
+        PreviewDetails->ForceRefresh();
+    }
     GraphChanged(FEdGraphEditAction());
 }
 void FVoxelLandGraphToolkit::SelectionChanged(const TSet<UObject*>& Selection)
@@ -652,7 +794,7 @@ void FVoxelLandGraphToolkit::SelectionChanged(const TSet<UObject*>& Selection)
 }
 void FVoxelLandGraphToolkit::RequestCompile()
 {
-    if (bStopped || bPIE)
+    if (bStopped || bPIE || bReloadPaused)
     {
         return;
     }
@@ -665,17 +807,21 @@ void FVoxelLandGraphToolkit::RequestCompile()
         return;
     }
     FString Error;
-    if (!CaptureMirror(Error))
+    FVoxelLandGraphDiagnostic Diagnostic;
+    if (!CaptureMirror(Error, &Diagnostic))
     {
+        ErrorDiagnostic = MoveTemp(Diagnostic);
         Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
         return;
     }
     FVoxelLandGraphSnapshot Snapshot;
-    if (!Asset->CaptureSnapshot(Snapshot, Error))
+    if (!Asset->CaptureSnapshot(Snapshot, Diagnostic))
     {
-        Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
+        ErrorDiagnostic = MoveTemp(Diagnostic);
+        Status = FString::Printf(TEXT("Error; preview stale: %s"), *ErrorDiagnostic.Message);
         return;
     }
+    ErrorDiagnostic = FVoxelLandGraphDiagnostic();
     Status = TEXT("Compiling; prior preview is stale.");
     const TSharedRef<FVoxelLandCompileWork, ESPMode::ThreadSafe> Work = MakeShared<FVoxelLandCompileWork, ESPMode::ThreadSafe>();
     Work->Revision = Revision;
@@ -683,12 +829,17 @@ void FVoxelLandGraphToolkit::RequestCompile()
     WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Work]() mutable
     {
         const double StartTime = FPlatformTime::Seconds();
+        const FVoxelLandOperatorRegistrySnapshot Providers = FVoxelLandOperatorRegistry::Snapshot();
         FVoxelLandProgramDraft Draft;
-        Work->bSuccess = FVoxelLandGraphCompiler::Compile(Snapshot, Draft, Work->Error);
+        Work->bSuccess = FVoxelLandGraphCompiler::Compile(Snapshot, Providers, Draft, Work->Diagnostic);
+        if (!Work->bSuccess)
+        {
+            Work->Error = Work->Diagnostic.Message;
+        }
         if (Work->bSuccess)
         {
             TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
-            const FVoxelLandError Validation = FVoxelLandProgram::Validate(Draft, Program);
+            const FVoxelLandError Validation = FVoxelLandProgram::Validate(Draft, Providers, Program);
             if (Validation)
             {
                 Work->Error = Validation.Message;
@@ -844,13 +995,135 @@ void FVoxelLandGraphToolkit::SeedCommitted(const FText& Text, ETextCommit::Type)
     }
     if (NewSeed != PreviewSeed)
     {
-        PreviewSeed = NewSeed;
+        const FScopedTransaction Transaction(LOCTEXT("SetPreviewSeed", "Set preview seed"));
+        PreviewSettings->Modify();
         PreviewSettings->Seed = NewSeed;
-        StartPreview();
+        SynchronizePreviewSettings(true);
+    }
+}
+void FVoxelLandGraphToolkit::CommitPreviewRadius(int32 Value, bool bHorizontal)
+{
+    if (!PreviewSettings)
+    {
+        return;
+    }
+    const int32 Radius = FMath::Clamp(Value, 1, 2);
+    int32& Target = bHorizontal ? PreviewSettings->HorizontalRadius : PreviewSettings->VerticalRadius;
+    if (Target == Radius)
+    {
+        return;
+    }
+    const FScopedTransaction Transaction(LOCTEXT("SetPreviewRadius", "Set preview radius"));
+    PreviewSettings->Modify();
+    Target = Radius;
+    SynchronizePreviewSettings(true);
+}
+void FVoxelLandGraphToolkit::PauseForReload(bool bGraphAffected)
+{
+    if (bStopped) { return; }
+    bReloadGraphAffected |= bGraphAffected;
+    if (bReloadPaused) { return; }
+    bReloadPaused = true;
+    StatusBeforeReload = Status;
+    bReloadGraphAffected |= CompileWork.IsValid() || bCompileRequested || CompileDue > 0.0;
+    bResumePreviewAfterReload = PreviewWork.IsValid() || bPreviewRequested;
+    ++Revision;
+    CancelPreview();
+    CompileDue = 0.0;
+    bCompileRequested = false;
+    for (const TFuture<void>& Task : WorkerTasks) { Task.Wait(); }
+    WorkerTasks.Reset();
+    CompileWork.Reset();
+    PreviewWork.Reset();
+    Status = TEXT("Stale: asset reload in progress.");
+}
+void FVoxelLandGraphToolkit::ResumeAfterReload()
+{
+    if (bStopped || !bReloadPaused) { return; }
+    bReloadPaused = false;
+    const bool bCompile = bReloadGraphAffected;
+    const bool bPreview = bResumePreviewAfterReload;
+    bReloadGraphAffected = false;
+    bResumePreviewAfterReload = false;
+    SynchronizePreviewSettings(true);
+    if (bCompile) { RequestCompile(); }
+    else if (bPreview) { StartPreview(); }
+    else { Status = StatusBeforeReload; }
+    StatusBeforeReload.Reset();
+}
+void FVoxelLandGraphToolkit::PackageReloaded(EPackageReloadPhase Phase, FPackageReloadedEvent* Event)
+{
+    if (bStopped) { return; }
+    if (Phase == EPackageReloadPhase::PrePackageLoad && Event && Event->GetOldPackage())
+    {
+        const UPackage* Package = Event->GetOldPackage();
+        const bool bGraphAffected = Asset && Asset->GetOutermost() == Package;
+        const UObject* Setup = PreviewSettings ? PreviewSettings->MaterialSetup.Get() : nullptr;
+        const UObject* Selected = SelectedPreviewSettings.Get();
+        if (bGraphAffected || (Setup && Setup->GetOutermost() == Package) ||
+            (Selected && Selected->GetOutermost() == Package) || (PreviewMaterial && PreviewMaterial->GetOutermost() == Package))
+        {
+            bPackageReloadInProgress = true;
+            PauseForReload(bGraphAffected);
+        }
+    }
+    else if (Phase == EPackageReloadPhase::PrePackageFixup && Event && Asset && Event->GetOldPackage() == Asset->GetOutermost())
+    {
+        PauseForReload(true);
+        Stop();
+        if (bHasEditorWindow) { CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed); }
+    }
+    else if (Phase == EPackageReloadPhase::PostBatchPostGC && bPackageReloadInProgress)
+    {
+        bPackageReloadInProgress = false;
+        ResumeAfterReload();
+    }
+}
+void FVoxelLandGraphToolkit::ObjectsReplaced(const TMap<UObject*, UObject*>& Replacements)
+{
+    if (bStopped) { return; }
+    bool bGraphAffected = Replacements.Contains(Asset) || Replacements.Contains(Graph);
+    if (!bGraphAffected && Graph)
+    {
+        for (const UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (Replacements.Contains(const_cast<UEdGraphNode*>(Node))) { bGraphAffected = true; break; }
+        }
+    }
+    if (bGraphAffected || Replacements.Contains(PreviewSettings))
+    {
+        PauseForReload(true);
+        Stop();
+        if (bHasEditorWindow) { CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed); }
+        return;
+    }
+    const UObject* Setup = PreviewSettings ? PreviewSettings->MaterialSetup.Get() : nullptr;
+    if ((Setup && Replacements.Contains(const_cast<UObject*>(Setup))) || Replacements.Contains(PreviewMaterial) ||
+        (SelectedPreviewSettings.IsValid() && Replacements.Contains(SelectedPreviewSettings.Get())))
+    {
+        PauseForReload(false);
+    }
+}
+void FVoxelLandGraphToolkit::ObjectsReinstanced(const TMap<UObject*, UObject*>&)
+{
+    if (!bPackageReloadInProgress)
+    {
+        ResumeAfterReload();
+    }
+}
+void FVoxelLandGraphToolkit::MaterialSetupPropertyChanged(UObject* Object, FPropertyChangedEvent&)
+{
+    if (!bStopped && !GIsTransacting && PreviewSettings && PreviewSettings->MaterialSetup.Get() == Object)
+    {
+        SynchronizePreviewSettings(true);
     }
 }
 void FVoxelLandGraphToolkit::ApplyPreviewMaterial(UMaterialInterface* Material)
 {
+    SelectedPreviewMaterial = Material;
+#if WITH_DEV_AUTOMATION_TESTS
+    ++MaterialApplyCountForTests;
+#endif
     if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
     {
         PreviewMaterial = UMaterial::GetDefaultMaterial(MD_Surface);
@@ -878,52 +1151,101 @@ void FVoxelLandGraphToolkit::MaterialChanged(const FAssetData& Material)
 {
     ApplyPreviewMaterial(Cast<UMaterialInterface>(Material.GetAsset()));
 }
+FString FVoxelLandGraphToolkit::MaterialPickerPath() const
+{
+    return SelectedPreviewMaterial.ToSoftObjectPath().ToString();
+}
+FString FVoxelLandGraphToolkit::SettingsPickerPath() const
+{
+    return SelectedPreviewSettings.ToSoftObjectPath().ToString();
+}
 void FVoxelLandGraphToolkit::SettingsChanged(const FAssetData& Settings)
 {
-    const UVoxelLandWorldSettings* Source = Cast<UVoxelLandWorldSettings>(Settings.GetAsset());
-    if (!Source)
+    UVoxelLandWorldSettings* Source = Cast<UVoxelLandWorldSettings>(Settings.GetAsset());
+    if (Settings.IsValid() && !Source)
     {
         return;
     }
-    bool bDensityChanged = !PreviewSettings || PreviewSettings->Graph != Source->Graph ||
-        PreviewSettings->Seed != Source->Seed || PreviewSettings->VoxelSizeCm != Source->VoxelSizeCm ||
-        PreviewSettings->HorizontalRadius != Source->HorizontalRadius || PreviewSettings->VerticalRadius != Source->VerticalRadius ||
-        PreviewSettings->Overrides.Num() != Source->Overrides.Num();
-    if (!bDensityChanged)
+    SelectedPreviewSettings = Source;
+    if (Source)
     {
-        for (int32 Index = 0; Index < Source->Overrides.Num(); ++Index)
-        {
-            const FVoxelLandParameterOverride& A = PreviewSettings->Overrides[Index];
-            const FVoxelLandParameterOverride& B = Source->Overrides[Index];
-            if (A.ParameterId != B.ParameterId || A.Type != B.Type || A.FloatValue != B.FloatValue ||
-                A.IntValue != B.IntValue || A.BoolValue != B.BoolValue)
-            {
-                bDensityChanged = true;
-                break;
-            }
-        }
+        PreviewSettings = DuplicateObject<UVoxelLandWorldSettings>(Source, GetTransientPackage());
+        PreviewSettings->SetFlags(RF_Transient | RF_Transactional);
     }
-    PreviewSettings = DuplicateObject<UVoxelLandWorldSettings>(Source, GetTransientPackage());
-    PreviewSettings->SetFlags(RF_Transient);
+    else
+    {
+        PreviewSettings = NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+        PreviewSettings->Graph = Asset;
+    }
+    if (PreviewDetails)
+    {
+        PreviewDetails->SetObject(PreviewSettings, true);
+    }
+    SynchronizePreviewSettings(true);
+    // Picking settings is an explicit material selection even if its setup path
+    // matches the prior one (the user may have selected a direct material).
+    ApplyMaterialSetup();
+}
+void FVoxelLandGraphToolkit::PreviewPropertiesChanged(const FPropertyChangedEvent&)
+{
+    SynchronizePreviewSettings(true);
+}
+void FVoxelLandGraphToolkit::SynchronizePreviewSettings(bool bApplyChanges)
+{
+    if (!PreviewSettings)
+    {
+        return;
+    }
+    FCanonicalWriter Writer;
+    Writer.String(GetPathNameSafe(PreviewSettings->Graph));
+    Writer.U32(uint32(PreviewSettings->FormatVersion));
+    Writer.U32(uint32(uint64(PreviewSettings->Seed)));
+    Writer.U32(uint32(uint64(PreviewSettings->Seed) >> 32));
+    Writer.Float(PreviewSettings->VoxelSizeCm);
+    Writer.U32(uint32(PreviewSettings->HorizontalRadius));
+    Writer.U32(uint32(PreviewSettings->VerticalRadius));
+    TArray<FVoxelLandParameterOverride> Sorted = PreviewSettings->Overrides;
+    Sorted.Sort([](const FVoxelLandParameterOverride& A, const FVoxelLandParameterOverride& B)
+    {
+        if (A.ParameterId.A != B.ParameterId.A) { return A.ParameterId.A < B.ParameterId.A; }
+        if (A.ParameterId.B != B.ParameterId.B) { return A.ParameterId.B < B.ParameterId.B; }
+        if (A.ParameterId.C != B.ParameterId.C) { return A.ParameterId.C < B.ParameterId.C; }
+        return A.ParameterId.D < B.ParameterId.D;
+    });
+    Writer.U32(Sorted.Num());
+    for (const FVoxelLandParameterOverride& O : Sorted)
+    {
+        Writer.U32(O.ParameterId.A); Writer.U32(O.ParameterId.B); Writer.U32(O.ParameterId.C); Writer.U32(O.ParameterId.D);
+        Writer.U8(uint8(O.Type));
+        if (O.Type == EVoxelLandGraphValueType::Float) { Writer.Float(O.FloatValue); }
+        else if (O.Type == EVoxelLandGraphValueType::Int32) { Writer.U32(uint32(O.IntValue)); }
+        else { Writer.U8(O.BoolValue ? 1 : 0); }
+    }
+    FCanonicalWriter MaterialWriter;
+    MaterialWriter.String(PreviewSettings->MaterialSetup.ToSoftObjectPath().ToString());
+    const UVoxelLandMaterialSetup* Setup = PreviewSettings->MaterialSetup.LoadSynchronous();
+    MaterialWriter.U8(Setup ? 1 : 0);
+    if (Setup)
+    {
+        MaterialWriter.U32(uint32(Setup->FormatVersion));
+        MaterialWriter.String(Setup->Material.ToSoftObjectPath().ToString());
+    }
+    const bool bDensityChanged = bHasPreviewSettingsSnapshot && PreviewDensitySnapshot != Writer.Bytes;
+    const bool bMaterialChanged = bHasPreviewSettingsSnapshot && PreviewMaterialSnapshot != MaterialWriter.Bytes;
+    PreviewDensitySnapshot = MoveTemp(Writer.Bytes);
+    PreviewMaterialSnapshot = MoveTemp(MaterialWriter.Bytes);
+    bHasPreviewSettingsSnapshot = true;
     PreviewSeed = PreviewSettings->Seed;
     PreviewHorizontalRadius = FMath::Clamp(PreviewSettings->HorizontalRadius, 1, 2);
     PreviewVerticalRadius = FMath::Clamp(PreviewSettings->VerticalRadius, 1, 2);
-    PreviewDetails->SetObject(PreviewSettings, true);
-    ApplyMaterialSetup();
-    if (bDensityChanged)
+    if (bApplyChanges && bMaterialChanged)
+    {
+        ApplyMaterialSetup();
+    }
+    if (bApplyChanges && bDensityChanged)
     {
         StartPreview();
     }
-}
-void FVoxelLandGraphToolkit::PreviewPropertiesChanged(const FPropertyChangedEvent& Event)
-{
-    if (Event.MemberProperty && Event.MemberProperty->GetFName() == GET_MEMBER_NAME_CHECKED(UVoxelLandWorldSettings, MaterialSetup))
-    {
-        ApplyMaterialSetup();
-        return;
-    }
-    PreviewSeed = PreviewSettings->Seed;
-    StartPreview();
 }
 FReply FVoxelLandGraphToolkit::ResetPreviewCamera()
 {
@@ -969,7 +1291,7 @@ bool FVoxelLandGraphToolkit::BuildPreviewProfile(FVoxelLandZoneProfile& Profile,
 }
 void FVoxelLandGraphToolkit::StartPreview()
 {
-    if (bStopped || bPIE)
+    if (bStopped || bPIE || bReloadPaused)
     {
         return;
     }
@@ -1057,22 +1379,14 @@ void FVoxelLandGraphToolkit::ProcessCompileWork()
     {
         if (Finished->bSuccess)
         {
-            ErrorNode.Invalidate();
+            ErrorDiagnostic = FVoxelLandGraphDiagnostic();
             StoreCompiledProgram(*Asset, MoveTemp(Finished->Payload));
             LastCompileMs = Finished->CompileMs;
             StartPreview();
         }
         else
         {
-            ErrorNode.Invalidate();
-            if (Finished->Error.StartsWith(TEXT("[node=")))
-            {
-                const int32 End = Finished->Error.Find(TEXT("]"));
-                if (End > 6)
-                {
-                    FGuid::Parse(Finished->Error.Mid(6, End - 6), ErrorNode);
-                }
-            }
+            ErrorDiagnostic = Finished->Diagnostic;
             Status = FString::Printf(TEXT("Error; preview stale: %s"), *Finished->Error);
         }
     }

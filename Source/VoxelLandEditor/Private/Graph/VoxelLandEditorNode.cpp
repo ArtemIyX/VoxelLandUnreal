@@ -1,4 +1,5 @@
 #include "Graph/VoxelLandEditorNode.h"
+#include "Graph/VoxelLandEditorFloat.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "EdGraph/EdGraph.h"
@@ -91,7 +92,7 @@ void UVoxelLandEditorNode::AllocateDefaultPins()
             {
                 if (Spec.Type == EVoxelLandGraphValueType::Float)
                 {
-                    Pin->DefaultValue = FString::SanitizeFloat(Spec.FloatDefault);
+                    Pin->DefaultValue = FVoxelLandEditorFloat::Format(Spec.FloatDefault);
                 }
                 else if (Spec.Type == EVoxelLandGraphValueType::Int32)
                 {

@@ -10,6 +10,9 @@
 
 struct FVoxelLandProgramDraft
 {
+    // Increment whenever graph compiler or v2 execution semantics change.
+    static constexpr uint32 CompilerSemanticVersion = 4;
+    int32 ExternalFilterIndex = INDEX_NONE;
 	uint32 FormatVersion = 1;
 	int32 RegisterCount = 0;
 	TArray<FVoxelLandInstruction> Instructions;

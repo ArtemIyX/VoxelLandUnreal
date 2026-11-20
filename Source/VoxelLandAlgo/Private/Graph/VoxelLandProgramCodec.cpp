@@ -1,5 +1,6 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Graph/VoxelLandGraphCompiler.h"
+#include "Operators/VoxelLandOperator.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Hash/xxhash.h"
@@ -96,13 +97,14 @@ bool FVoxelLandProgramCodec::Pack(const FVoxelLandGraphSnapshot& Source, const F
 {
     OutPayload = FVoxelLandSerializedProgram();
     OutError.Reset();
+    const FVoxelLandOperatorRegistrySnapshot Providers = FVoxelLandOperatorRegistry::Snapshot();
     FVoxelLandProgramDraft Recompiled;
-    if (!FVoxelLandGraphCompiler::Compile(Source, Recompiled, OutError))
+    if (!FVoxelLandGraphCompiler::Compile(Source, Providers, Recompiled, OutError))
     {
         return false;
     }
     TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Checked;
-    if (FVoxelLandError Error = FVoxelLandProgram::Validate(Recompiled, Checked))
+    if (FVoxelLandError Error = FVoxelLandProgram::Validate(Recompiled, Providers, Checked))
     {
         OutError = Error.Message;
         return false;
@@ -115,6 +117,8 @@ bool FVoxelLandProgramCodec::Pack(const FVoxelLandGraphSnapshot& Source, const F
     const FVoxelLandProgramDraft& Draft = Program.GetData();
     FVoxelLandSerializedProgram Payload;
     Payload.ProgramVersion = int32(Draft.FormatVersion);
+    Payload.ExternalFilterIndex = Draft.ExternalFilterIndex;
+    Payload.CompilerSemanticVersion = Draft.FormatVersion >= 2 ? int32(FVoxelLandProgramDraft::CompilerSemanticVersion) : 0;
     Payload.RegisterCount = Draft.RegisterCount;
     Payload.SourceFingerprint = SignedBits(SourceFingerprint(Source));
     Payload.ProgramFingerprint = SignedBits(Program.GetFingerprint());
@@ -223,8 +227,20 @@ bool DecodeParameters(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSer
 bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSerializedProgram& Payload,
     TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram, FString& OutError)
 {
+    const FVoxelLandOperatorRegistrySnapshot Providers = FVoxelLandOperatorRegistry::Snapshot();
+    return Load(Source, Payload, Providers, OutProgram, OutError);
+}
+bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSerializedProgram& Payload,
+    const FVoxelLandOperatorRegistrySnapshot& Providers,
+    TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram, FString& OutError)
+{
     OutProgram.Reset();
     OutError.Reset();
+    if (Payload.ProgramVersion >= 2 && Payload.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion))
+    {
+        OutError = TEXT("Compiled graph has an incompatible compiler semantic version; recompile and save the graph");
+        return false;
+    }
     if (Payload.EnvelopeVersion != 1 || Payload.ProgramVersion < 1 || Payload.ProgramVersion > 2 ||
         Payload.RegisterCount < 1 || Payload.RegisterCount > 1024 || Payload.Instructions.Num() > 8192 ||
         Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096 ||
@@ -236,6 +252,7 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
     FVoxelLandProgramDraft Draft;
     Draft.FormatVersion = uint32(Payload.ProgramVersion);
     Draft.RegisterCount = Payload.RegisterCount;
+    Draft.ExternalFilterIndex = Payload.ExternalFilterIndex;
     Draft.ExternalOperators = Payload.ExternalOperators;
     Draft.SmoothFilter.bPresent = Payload.SmoothFilter.bPresent;
     Draft.SmoothFilter.Enabled = LoadSource(Payload.SmoothFilter.Enabled);
@@ -259,7 +276,7 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
         Draft.Noise.Add(Noise);
     }
     TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
-    if (FVoxelLandError Error = FVoxelLandProgram::Validate(Draft, Program))
+    if (FVoxelLandError Error = FVoxelLandProgram::Validate(Draft, Providers, Program))
     {
         OutError = Error.Message;
         return false;

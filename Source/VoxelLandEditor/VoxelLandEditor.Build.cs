@@ -21,6 +21,7 @@ public class VoxelLandEditor : ModuleRules
                 "Engine",
                 "Slate",
                 "SlateCore",
+                "InputCore",
                 "VoxelLandAlgo",
                 "VoxelLand",
                 "VoxelLandRender",

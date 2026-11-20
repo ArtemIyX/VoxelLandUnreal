@@ -20,6 +20,7 @@ public:
     void Remove(const FIntVector& Key);
     void SetTerrainMaterial(UMaterialInterface* Material);
     bool IsEmpty() const { return Components.IsEmpty(); }
+    bool IsChunkEffectivelyVisible(const FIntVector& Key) const;
 private:
     UPROPERTY() TObjectPtr<USceneComponent> Root;
     UPROPERTY() TMap<FIntVector,TObjectPtr<UVoxelLandChunkComponent>> Components;

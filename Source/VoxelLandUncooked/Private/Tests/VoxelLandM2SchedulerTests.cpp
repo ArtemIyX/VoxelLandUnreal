@@ -76,16 +76,20 @@ public:
             Mesh->Vertices={A,B,C}; Mesh->Indices={0,1,2};
             Mesh->Bounds+=A.Position; Mesh->Bounds+=B.Position; Mesh->Bounds+=C.Position;
             UMaterialInterface* Initial=UMaterial::GetDefaultMaterial(MD_Surface);
-            Test->TestTrue(TEXT("region publishes mesh"),Region->Publish(FIntVector::ZeroValue,FVector::ZeroVector,Mesh,Initial));
+            Region->SetActorHiddenInGame(true);
+            Test->TestTrue(TEXT("region publishes mesh while hidden"),Region->Publish(FIntVector::ZeroValue,FVector::ZeroVector,Mesh,Initial));
+            Test->TestFalse(TEXT("new hidden chunk not effectively visible"),Region->IsChunkEffectivelyVisible(FIntVector::ZeroValue));
             TInlineComponentArray<UVoxelLandChunkComponent*> Components; Region->GetComponents(Components);
             Test->TestEqual(TEXT("one component per surface"),Components.Num(),1);
             Region->SetActorHiddenInGame(true); Test->TestTrue(TEXT("region hidden"),Region->IsHidden());
             Region->SetActorHiddenInGame(false); Test->TestFalse(TEXT("region restored"),Region->IsHidden());
+            Test->TestTrue(TEXT("current chunk visible after region restore"),Region->IsChunkEffectivelyVisible(FIntVector::ZeroValue));
             UMaterialInstanceDynamic* Replacement=UMaterialInstanceDynamic::Create(Initial,Region);
             Region->SetTerrainMaterial(Replacement);
             if (Components.Num()==1) Test->TestEqual(TEXT("region updates chunk material"),Components[0]->GetMaterial(0),static_cast<UMaterialInterface*>(Replacement));
             Region->Remove(FIntVector::ZeroValue);
             Test->TestTrue(TEXT("removal clears region"),Region->IsEmpty());
+            Test->TestFalse(TEXT("removed chunk cannot become visible"),Region->IsChunkEffectivelyVisible(FIntVector::ZeroValue));
             Region->Destroy();
             // Drain deferred create/release work before world destruction. This checks lifecycle,
             // but visual output and GPU leak measurements still need a real RHI run.

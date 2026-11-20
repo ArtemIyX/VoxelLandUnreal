@@ -16,11 +16,24 @@
 #include "HAL/RunnableThread.h"
 #include "Misc/ScopeLock.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "ProfilingDebugging/CountersTrace.h"
+
+TRACE_DECLARE_INT_COUNTER(VoxelQueued, TEXT("VoxelLand/Queued"));
+TRACE_DECLARE_INT_COUNTER(VoxelOutstanding, TEXT("VoxelLand/Outstanding"));
+TRACE_DECLARE_INT_COUNTER(VoxelReady, TEXT("VoxelLand/DataReady"));
+TRACE_DECLARE_INT_COUNTER(VoxelPrimitives, TEXT("VoxelLand/VisiblePrimitives"));
+TRACE_DECLARE_INT_COUNTER(VoxelRegions, TEXT("VoxelLand/Regions"));
+TRACE_DECLARE_INT_COUNTER(VoxelVertices, TEXT("VoxelLand/Vertices"));
+TRACE_DECLARE_INT_COUNTER(VoxelTriangles, TEXT("VoxelLand/Triangles"));
+TRACE_DECLARE_INT_COUNTER(VoxelStale, TEXT("VoxelLand/Stale"));
+TRACE_DECLARE_INT_COUNTER(VoxelCancelled, TEXT("VoxelLand/Cancelled"));
+TRACE_DECLARE_MEMORY_COUNTER(VoxelFieldBytes, TEXT("VoxelLand/FieldBytes"));
+TRACE_DECLARE_MEMORY_COUNTER(VoxelMeshBytes, TEXT("VoxelLand/MeshBytes"));
 
 namespace
 {
 constexpr int32 MaxWorkers=4;
-constexpr int32 MaxRecords=4096;
+constexpr int32 MaxRecords=8192;
 const FIntVector RegionDimensions(10,10,2);
 struct FCancel { TAtomic<bool> bCancelled{false}; };
 struct FJob
@@ -128,6 +141,7 @@ struct FVoxelLandWorldState
     TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> NextBarrier;
 #endif
     FIntVector CameraChunk=FIntVector::ZeroValue;
+    int32 LastHorizontal=-1, LastVertical=-1;
     bool bHasCamera=false, bServer=false;
 };
 
@@ -157,6 +171,11 @@ void AVoxelLandRegion::Remove(const FIntVector& Key)
         if (*Found) { (*Found)->SetVisibility(false); (*Found)->ClearMesh(); (*Found)->DestroyComponent(); }
         Components.Remove(Key);
     }
+}
+bool AVoxelLandRegion::IsChunkEffectivelyVisible(const FIntVector& Key) const
+{
+    const TObjectPtr<UVoxelLandChunkComponent>* Component=Components.Find(Key);
+    return !IsHidden() && Component && *Component && (*Component)->IsRegistered() && (*Component)->IsVisible();
 }
 void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface* Material)
 {
@@ -217,7 +236,12 @@ TSharedPtr<const FVoxelLandChunkData,ESPMode::ThreadSafe> AVoxelLandWorld::FindC
 void AVoxelLandWorld::SetRegionHidden(FIntVector Region,bool bHidden)
 {
     check(IsInGameThread()); if (!State) return;
-    if (bHidden) State->HiddenRegions.Add(Region); else State->HiddenRegions.Remove(Region);
+    if (bHidden)
+    {
+        if (State->HiddenRegions.Num()>=MaxRecords && !State->HiddenRegions.Contains(Region)) return;
+        State->HiddenRegions.Add(Region);
+    }
+    else State->HiddenRegions.Remove(Region);
     if (const TWeakObjectPtr<AVoxelLandRegion>* Found=State->RegionMap.Find(Region)) if (Found->IsValid()) Found->Get()->SetActorHiddenInGame(bHidden);
 }
 void AVoxelLandWorld::SetTerrainMaterial(UMaterialInterface* Material)
@@ -257,10 +281,11 @@ void AVoxelLandWorld::UpdateDemand()
     constexpr double Limit=double(MAX_int32)-32.0;
     if (!FMath::IsFinite(Position.X) || !FMath::IsFinite(Position.Y) || !FMath::IsFinite(Position.Z) ||
         FMath::Abs(Position.X)>Limit || FMath::Abs(Position.Y)>Limit || FMath::Abs(Position.Z)>Limit) return;
-    State->CameraChunk=FIntVector(FMath::FloorToInt(Position.X),FMath::FloorToInt(Position.Y),FMath::FloorToInt(Position.Z));
-    State->bHasCamera=true;
-    for (auto& Pair : State->Records) Pair.Value.bDemand=false;
+    const FIntVector NewChunk(FMath::FloorToInt(Position.X),FMath::FloorToInt(Position.Y),FMath::FloorToInt(Position.Z));
     const int32 H=FMath::Clamp(HorizontalRadius,1,8)+1, V=FMath::Clamp(VerticalRadius,1,4)+1;
+    if (State->bHasCamera && State->CameraChunk==NewChunk && State->LastHorizontal==H && State->LastVertical==V) return;
+    State->CameraChunk=NewChunk; State->bHasCamera=true; State->LastHorizontal=H; State->LastVertical=V;
+    for (auto& Pair : State->Records) Pair.Value.bDemand=false;
     for (int32 Z=-V; Z<=V; ++Z) for (int32 Y=-H; Y<=H; ++Y) for (int32 X=-H; X<=H; ++X)
     {
         FVoxelLandChunkKey Key; Key.Coordinate=State->CameraChunk+FIntVector(X,Y,Z);
@@ -349,10 +374,15 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds); if (!State) return;
     UpdateDemand();
     TArray<FVoxelLandChunkKey> Retire;
+    int32 Queued=0, Ready=0, Visible=0, Vertices=0, Triangles=0; int64 FieldBytes=0, MeshBytes=0;
     const int32 H=FMath::Clamp(HorizontalRadius,1,8)+2, V=FMath::Clamp(VerticalRadius,1,4)+2;
     for (const auto& Pair : State->Records)
     {
         const FRecord& R=Pair.Value;
+        Queued+=R.bQueued ? 1 : 0; Ready+=R.Data ? 1 : 0;
+        if (R.Data) FieldBytes+=R.Data->Density.GetAllocatedSize();
+        MeshBytes+=R.MeshBytes; Vertices+=R.Vertices; Triangles+=R.Triangles;
+        if (R.MeshBytes>0 && !State->HiddenRegions.Contains(VoxelLandCoordinates::RegionOf(Pair.Key.Coordinate,RegionDimensions))) ++Visible;
         if (R.bExplicit || R.bDemand) continue;
         const FIntVector C=Pair.Key.Coordinate, Camera=State->CameraChunk;
         const bool bRetain=!State->bServer && State->bHasCamera && FMath::Abs(int64(C.X)-Camera.X)<=H && FMath::Abs(int64(C.Y)-Camera.Y)<=H && FMath::Abs(int64(C.Z)-Camera.Z)<=V;
@@ -374,6 +404,13 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
         State->Records.Remove(Key);
     }
     PumpCompletions(); Dispatch();
+    // Counters report the latest ticked VoxelLand world; GPU allocations and deferred
+    // releases require Unreal's renderer/RHI memory tools.
+    TRACE_COUNTER_SET(VoxelQueued,Queued); TRACE_COUNTER_SET(VoxelOutstanding,State->Active);
+    TRACE_COUNTER_SET(VoxelReady,Ready); TRACE_COUNTER_SET(VoxelPrimitives,Visible);
+    TRACE_COUNTER_SET(VoxelRegions,Regions.Num()); TRACE_COUNTER_SET(VoxelVertices,Vertices); TRACE_COUNTER_SET(VoxelTriangles,Triangles);
+    TRACE_COUNTER_SET(VoxelStale,State->Stale); TRACE_COUNTER_SET(VoxelCancelled,State->Cancelled);
+    TRACE_COUNTER_SET(VoxelFieldBytes,FieldBytes); TRACE_COUNTER_SET(VoxelMeshBytes,MeshBytes);
 }
 
 void AVoxelLandWorld::StartDemo()
@@ -383,7 +420,7 @@ void AVoxelLandWorld::StartDemo()
     TWeakObjectPtr<AVoxelLandWorld> WeakThis(this);
     Async(EAsyncExecution::ThreadPool,[WeakThis,DemoSeed,Size,DemoEpoch]() {
         FVoxelLandProgramDraft Draft; Draft.RegisterCount=10;
-        Draft.Constants={0.001f,3.f,0.5f,2.f,1400.f,0.0015f,2000.f,700.f};
+        Draft.Constants={0.001f,3.f,0.5f,2.f,1400.f,0.0015f,2000.f,250.f};
         FVoxelLandSeedSlot SeedSlot; SeedSlot.NodeId=FGuid(0x12589abc,0x34127890,0xabcdef01,0x10203040); Draft.Seeds.Add(SeedSlot);
         FVoxelLandNoiseConfig Height; Height.Frequency.Index=0; Height.Octaves.Index=1; Height.Gain.Index=2; Height.Lacunarity.Index=3;
         FVoxelLandNoiseConfig Caves=Height; Caves.Frequency.Index=5; Draft.Noise={Height,Caves};

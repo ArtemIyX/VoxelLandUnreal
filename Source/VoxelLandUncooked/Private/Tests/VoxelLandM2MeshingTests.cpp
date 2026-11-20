@@ -149,12 +149,15 @@ bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2CornerOwnershipTest, "VoxelLand.M2.CornerOwnership", Flags)
 bool FVoxelLandM2CornerOwnershipTest::RunTest(const FString& Parameters)
 {
+    for (int32 NormalAxis=0; NormalAxis<3; ++NormalAxis)
+    {
     FVoxelLandMeshData Meshes[2][2][2];
     for (int32 Z=0; Z<2; ++Z) for (int32 Y=0; Y<2; ++Y) for (int32 X=0; X<2; ++X)
     {
         const FIntVector Key(X-1,Y-1,Z-1); FVoxelLandMeshingScratch Scratch;
-        TestEqual(TEXT("corner mesh built"),int32(VoxelLandMeshing::BuildSurfaceNets(Plane(Key,2,1),100.f,Scratch,Meshes[X][Y][Z],[] {return false;})),int32(EVoxelLandMeshResult::Success));
-        TestEqual(TEXT("only owning Z chunks emit plane faces"),Meshes[X][Y][Z].Indices.Num(),Z==1 ? 32*32*6 : 0);
+        TestEqual(TEXT("corner mesh built"),int32(VoxelLandMeshing::BuildSurfaceNets(Plane(Key,NormalAxis,-1),100.f,Scratch,Meshes[X][Y][Z],[] {return false;})),int32(EVoxelLandMeshResult::Success));
+        const int32 Coords[3]={X,Y,Z};
+        TestEqual(TEXT("only owning chunks emit plane faces"),Meshes[X][Y][Z].Indices.Num(),Coords[NormalAxis]==0 ? 32*32*6 : 0);
     }
     for (int32 Axis=0; Axis<3; ++Axis) for (int32 Z=0; Z<2; ++Z) for (int32 Y=0; Y<2; ++Y) for (int32 X=0; X<2; ++X)
     {
@@ -173,6 +176,7 @@ bool FVoxelLandM2CornerOwnershipTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("shared face/edge/corner vertex"),bFound); ++Count;
         }
         TestTrue(TEXT("shared border checked"),Count>0);
+    }
     }
     return true;
 }

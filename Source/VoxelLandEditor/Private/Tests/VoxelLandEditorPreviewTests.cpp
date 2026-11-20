@@ -2,6 +2,12 @@
 #include "Misc/AutomationTest.h"
 #include "Async/Async.h"
 #include "UObject/PackageReload.h"
+#include "UObject/SavePackage.h"
+#include "Data/Structs/VoxelLandReloadTestBarrier.h"
+#include "UObject/Linker.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Misc/PackageName.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -450,6 +456,188 @@ bool FVoxelLandReloadLifecycleTest::RunTest(const FString& Parameters)
     TMap<UObject*, UObject*> Replacements; Replacements.Add(Asset, Replacement);
     Toolkit->OnReplacedForTests(Replacements);
     TestTrue(TEXT("Replaced graph stops editor and drains work"), Toolkit->IsStoppedForTests());
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandRealPackageReloadTest, "VoxelLand.M3.Editor.RealPackageReload",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandRealPackageReloadTest::RunTest(const FString& Parameters)
+{
+    if (!FApp::CanEverRender())
+    {
+        AddWarning(TEXT("Real package reload test requires a native window and was not exercised with NullRHI"));
+        return true;
+    }
+    const FString Unique = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    const FString GraphName = TEXT("/Game/__VoxelLandReloadGraph_") + Unique;
+    const FString SetupName = TEXT("/Game/__VoxelLandReloadSetup_") + Unique;
+    const FString GraphFile = FPackageName::LongPackageNameToFilename(GraphName, FPackageName::GetAssetPackageExtension());
+    const FString SetupFile = FPackageName::LongPackageNameToFilename(SetupName, FPackageName::GetAssetPackageExtension());
+    if (IFileManager::Get().FileExists(*GraphFile) || IFileManager::Get().FileExists(*SetupFile) || FindPackage(nullptr, *GraphName) || FindPackage(nullptr, *SetupName))
+    {
+        AddError(TEXT("Unique reload fixture path already exists"));
+        return false;
+    }
+    UVoxelLandTerrainGraph* Source = LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
+    if (!Source)
+    {
+        AddError(TEXT("Example graph unavailable for isolated reload fixture"));
+        return false;
+    }
+    UPackage* GraphPackage = CreatePackage(*GraphName);
+    UVoxelLandTerrainGraph* Asset = DuplicateObject<UVoxelLandTerrainGraph>(Source, GraphPackage, *FPackageName::GetLongPackageAssetName(GraphName));
+    Asset->SetFlags(RF_Public | RF_Standalone);
+    UPackage* SetupPackage = CreatePackage(*SetupName);
+    UVoxelLandMaterialSetup* Setup = NewObject<UVoxelLandMaterialSetup>(SetupPackage, *FPackageName::GetLongPackageAssetName(SetupName), RF_Public | RF_Standalone);
+    FSavePackageArgs Args;
+    Args.TopLevelFlags = RF_Public | RF_Standalone;
+    const bool bGraphSaved = UPackage::SavePackage(GraphPackage, Asset, *GraphFile, Args);
+    const bool bSetupSaved = UPackage::SavePackage(SetupPackage, Setup, *SetupFile, Args);
+    if (TestTrue(TEXT("Unique fixture packages saved"), bGraphSaved && bSetupSaved))
+    {
+        TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+        Toolkit->InitializeForTests(Asset);
+        Toolkit->GetPreviewSettingsForTests()->MaterialSetup = Setup;
+        Toolkit->SynchronizePreviewForTests();
+        const int32 BeforeMaterial = Toolkit->GetPreviewStartCountForTests();
+        UPackage* ReloadedSetup = ReloadPackage(SetupPackage, LOAD_None);
+        TestNotNull(TEXT("Unreal reloaded material setup package"), ReloadedSetup);
+        TestFalse(TEXT("Material reload keeps editor available"), Toolkit->IsStoppedForTests());
+        TestTrue(TEXT("Material setup reference repointed to reloaded package"),
+            Toolkit->GetPreviewSettingsForTests()->MaterialSetup &&
+            Toolkit->GetPreviewSettingsForTests()->MaterialSetup->GetOutermost() == ReloadedSetup);
+        TestFalse(TEXT("Material reload completes pause"), Toolkit->IsReloadPausedForTests());
+        TestEqual(TEXT("Material-only reload does not start density generation"), Toolkit->GetPreviewStartCountForTests(), BeforeMaterial);
+        Toolkit->RequestCompileForTests();
+        TestTrue(TEXT("Compile result pending before graph reload"), Toolkit->HasCompileWorkForTests());
+        TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> PreviewBarrier = MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
+        Toolkit->SetPreviewReloadBarrierForTests(PreviewBarrier);
+        Toolkit->StartPreviewForTests();
+        UVoxelLandWorldSettings* SourceSettings = LoadObject<UVoxelLandWorldSettings>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings"));
+        UVoxelLandWorldSettings* Settings = SourceSettings ? DuplicateObject<UVoxelLandWorldSettings>(SourceSettings, GetTransientPackage()) : nullptr;
+        UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+        AVoxelLandWorld* Actor = nullptr;
+        bool bWorldRegistered = false;
+        TSharedRef<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> InitBarrier = MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
+        if (TestNotNull(TEXT("Example settings for reload"), Settings) && TestNotNull(TEXT("Test world"), World))
+        {
+            Settings->Graph = Asset;
+            World->AddToRoot();
+            bWorldRegistered = true;
+            FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+            Context.SetCurrentWorld(World);
+            World->InitializeActorsForPlay(FURL());
+            Actor = World->SpawnActor<AVoxelLandWorld>();
+            if (TestNotNull(TEXT("Terrain actor"), Actor))
+            {
+                Actor->bDataOnly = true;
+                Actor->DispatchBeginPlay();
+                Actor->SetInitReloadBarrierForTests(InitBarrier);
+                TestTrue(TEXT("World settings initialization starts"), Actor->InitializeFromSettings(Settings));
+            }
+        }
+        const double JobsDeadline = FPlatformTime::Seconds() + 5.0;
+        while ((!PreviewBarrier->Started.Load() || !InitBarrier->Started.Load()) && FPlatformTime::Seconds() < JobsDeadline)
+        {
+            FPlatformProcess::Sleep(0.001f);
+        }
+        TestTrue(TEXT("Actual preview worker reached its generation checkpoint"), PreviewBarrier->Started.Load());
+        TestTrue(TEXT("Actual settings worker reached its initialization checkpoint"), InitBarrier->Started.Load());
+        TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Started = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+        TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Draining = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+        TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Release = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+        TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> ReloadReturned = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+        TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> ObservedWait = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+        TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> TimedOut = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+        TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Completed = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+        Toolkit->SetReloadDrainingForTests([Draining]() { Draining->Store(true); });
+        Toolkit->AddWorkerForTests(Async(EAsyncExecution::ThreadPool, [Started, Release, TimedOut, Completed]()
+        {
+            Started->Store(true);
+            const double Deadline = FPlatformTime::Seconds() + 10.0;
+            while (!Release->Load() && FPlatformTime::Seconds() < Deadline)
+            {
+                FPlatformProcess::Sleep(0.001f);
+            }
+            if (!Release->Load()) { TimedOut->Store(true); }
+            Completed->Store(true);
+        }));
+        const double StartDeadline = FPlatformTime::Seconds() + 5.0;
+        while (!Started->Load() && FPlatformTime::Seconds() < StartDeadline)
+        {
+            FPlatformProcess::Sleep(0.001f);
+        }
+        TestTrue(TEXT("Tracked worker started before reload"), Started->Load());
+        TFuture<void> Coordinator = Async(EAsyncExecution::Thread, [Draining, Release, ReloadReturned, ObservedWait, TimedOut]()
+        {
+            const double Deadline = FPlatformTime::Seconds() + 5.0;
+            while (!Draining->Load() && FPlatformTime::Seconds() < Deadline)
+            {
+                FPlatformProcess::Sleep(0.001f);
+            }
+            if (Draining->Load())
+            {
+                FPlatformProcess::Sleep(0.05f);
+                ObservedWait->Store(!ReloadReturned->Load());
+            }
+            else { TimedOut->Store(true); }
+            Release->Store(true);
+        });
+        const uint64 BeforeGraph = Toolkit->GetPreviewRevisionForTests();
+        UPackage* ReloadedGraph = ReloadPackage(GraphPackage, LOAD_None);
+        ReloadReturned->Store(true);
+        Coordinator.Wait();
+        TestNotNull(TEXT("Unreal reloaded graph package"), ReloadedGraph);
+        TestTrue(TEXT("Reload waited for the held worker before returning"), ObservedWait->Load());
+        TestTrue(TEXT("Held worker completed before reload returned"), Completed->Load());
+        TestFalse(TEXT("Worker and reload synchronization did not time out"), TimedOut->Load());
+        TestTrue(TEXT("Graph reload invalidates stale results"), Toolkit->GetPreviewRevisionForTests() > BeforeGraph);
+        TestTrue(TEXT("Graph replacement intentionally closes editor"), Toolkit->IsStoppedForTests());
+        TestFalse(TEXT("Pending compile cannot publish after reload"), Toolkit->HasCompileWorkForTests());
+        TestTrue(TEXT("Preview worker observed cancellation"), PreviewBarrier->SawCancellation.Load());
+        TestFalse(TEXT("Preview worker did not time out"), PreviewBarrier->TimedOut.Load());
+        TestTrue(TEXT("Settings worker observed cancellation"), InitBarrier->SawCancellation.Load());
+        TestFalse(TEXT("Settings worker did not time out"), InitBarrier->TimedOut.Load());
+        if (Actor)
+        {
+            TestFalse(TEXT("Reload cancels settings initialization"), Actor->bInitializing);
+            TestFalse(TEXT("Cancelled settings cannot publish a world state"), Actor->HasWorldStateForTests());
+            TestTrue(TEXT("Settings cancellation reported"), Actor->LastInitializationError.Contains(TEXT("cancelled")));
+            Actor->Shutdown();
+        }
+        if (World)
+        {
+            World->DestroyWorld(false);
+            if (bWorldRegistered)
+            {
+                GEngine->DestroyWorldContext(World);
+                World->RemoveFromRoot();
+            }
+        }
+        Toolkit->Stop();
+        if (ReloadedGraph)
+        {
+            UObject* NewAsset = FindObject<UObject>(ReloadedGraph, *FPackageName::GetLongPackageAssetName(GraphName));
+            if (TestNotNull(TEXT("Reloaded graph asset exists"), NewAsset))
+            {
+                UAssetEditorSubsystem* Subsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
+                TestNotNull(TEXT("Unreal reopened an editor for the replacement graph"), Subsystem->FindEditorForAsset(NewAsset, false));
+                Subsystem->CloseAllEditorsForAsset(NewAsset);
+            }
+            ResetLoaders(ReloadedGraph);
+        }
+        if (ReloadedSetup)
+        {
+            ResetLoaders(ReloadedSetup);
+        }
+    }
+    if (IFileManager::Get().FileExists(*GraphFile))
+    {
+        TestTrue(TEXT("Remove unique graph fixture"), IFileManager::Get().Delete(*GraphFile));
+    }
+    if (IFileManager::Get().FileExists(*SetupFile))
+    {
+        TestTrue(TEXT("Remove unique setup fixture"), IFileManager::Get().Delete(*SetupFile));
+    }
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandInitializationReplacementTest, "VoxelLand.M3.Editor.InitializationReplacement",

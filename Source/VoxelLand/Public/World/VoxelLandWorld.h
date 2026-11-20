@@ -18,6 +18,7 @@ enum class EPackageReloadPhase : uint8;
 #endif
 struct FVoxelLandWorldState;
 struct FVoxelLandTestBarrier;
+struct FVoxelLandReloadTestBarrier;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FVoxelLandInitializationFinished, bool, bSuccess);
 
@@ -94,6 +95,7 @@ public:
 	bool IsChunkDemanded(FIntVector Coordinate) const;
 	bool HasWorldStateForTests() const { return State.IsValid(); }
 #if WITH_EDITOR
+    void SetInitReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { InitReloadBarrierForTests = MoveTemp(Barrier); }
     void OnInitObjectsReplacedForTests(const TMap<UObject*, UObject*>& Map) { HandleInitObjectsReplaced(Map); }
 #endif
 #endif
@@ -131,6 +133,9 @@ private:
     void HandleInitPackageReload(EPackageReloadPhase Phase, FPackageReloadedEvent* Event);
     void HandleInitObjectsReplaced(const TMap<UObject*, UObject*>& Map);
     void UnbindInitReloadHandlers();
+#if WITH_DEV_AUTOMATION_TESTS
+    TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> InitReloadBarrierForTests;
+#endif
     FDelegateHandle InitPackageReloadHandle;
     FDelegateHandle InitObjectsReplacedHandle;
 #endif

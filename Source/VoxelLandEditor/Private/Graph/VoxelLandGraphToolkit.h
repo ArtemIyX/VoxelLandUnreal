@@ -28,6 +28,7 @@ class FPackageReloadedEvent;
 enum class EPackageReloadPhase : uint8;
 struct FEdGraphEditAction;
 struct FPropertyChangedEvent;
+struct FVoxelLandReloadTestBarrier;
 struct FVoxelLandZoneProfile;
 struct FVoxelLandSerializedProgram;
 struct FGraphActionListBuilderBase;
@@ -50,6 +51,7 @@ public:
     UVoxelLandWorldSettings* GetPreviewSettingsForTests() const { return PreviewSettings; }
     uint64 GetPreviewRevisionForTests() const { return PreviewRevision; }
     int32 GetMaterialApplyCountForTests() const { return MaterialApplyCountForTests; }
+    int32 GetPreviewStartCountForTests() const { return PreviewStartCountForTests; }
     void SynchronizePreviewForTests() { SynchronizePreviewSettings(true); }
     void SetPreviewRadiusForTests(int32 Value, bool bHorizontal) { CommitPreviewRadius(Value, bHorizontal); }
     void SetPreviewSeedForTests(int64 Value) { SeedCommitted(FText::AsCultureInvariant(LexToString(Value)), ETextCommit::OnEnter); }
@@ -64,6 +66,11 @@ public:
     bool ResolveDiagnosticForTests(UEdGraphNode*& Node, UEdGraphPin*& Pin) const { return ResolveDiagnosticTarget(Node, Pin); }
     void OnReplacedForTests(const TMap<UObject*, UObject*>& Map) { ObjectsReplaced(Map); }
     void PackageReloadForTests(EPackageReloadPhase Phase, FPackageReloadedEvent* Event) { PackageReloaded(Phase, Event); }
+    void SetReloadDrainingForTests(TFunction<void()> Callback) { ReloadDrainingForTests = MoveTemp(Callback); }
+    void SetPreviewReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { PreviewReloadBarrierForTests = MoveTemp(Barrier); }
+    void StartPreviewForTests() { StartPreview(); }
+    void RequestCompileForTests() { RequestCompile(); }
+    bool HasCompileWorkForTests() const { return CompileWork.IsValid(); }
     void AddWorkerForTests(TFuture<void>&& Task) { WorkerTasks.Add(MoveTemp(Task)); }
     bool IsStoppedForTests() const { return bStopped; }
     bool IsReloadPausedForTests() const { return bReloadPaused; }
@@ -184,5 +191,8 @@ private:
 #if WITH_DEV_AUTOMATION_TESTS
     int32 PanelRefreshCountForTests = 0;
     int32 MaterialApplyCountForTests = 0;
+    int32 PreviewStartCountForTests = 0;
+    TFunction<void()> ReloadDrainingForTests;
+    TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> PreviewReloadBarrierForTests;
 #endif
 };

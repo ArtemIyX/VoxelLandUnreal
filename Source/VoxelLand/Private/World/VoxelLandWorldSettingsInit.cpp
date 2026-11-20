@@ -1,6 +1,9 @@
 #include "World/VoxelLandWorld.h"
 
 #include "Async/Async.h"
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+#include "Data/Structs/VoxelLandReloadTestBarrier.h"
+#endif
 #include "Data/Assets/VoxelLandMaterialSetup.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
@@ -100,13 +103,24 @@ public:
     }
 #endif
     void Run(const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
-        TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError) const
+        TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+        , const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>& Barrier
+#endif
+        ) const
     {
         TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
         if (Cancel->Load() || !FVoxelLandProgramCodec::Load(Snapshot, Payload, Program, OutError) || Cancel->Load())
         {
             return;
         }
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+        if (Barrier)
+        {
+            Barrier->WaitForCancellation(Cancel);
+            if (Cancel->Load()) { return; }
+        }
+#endif
         FVoxelLandGeneratorSettings Settings;
         Settings.Program = Program;
         Settings.WorldSeed = Seed;
@@ -205,9 +219,18 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
 #endif
     bInitializing = true;
     SetActorTickEnabled(true);
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+    const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MoveTemp(InitReloadBarrierForTests);
+    InitializationTask = Async(EAsyncExecution::ThreadPool, [Job, Barrier]()
+#else
     InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
+#endif
     {
-        Job->Request->Run(Job->Cancel, Job->Generator, Job->Error);
+        Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+            , Barrier
+#endif
+        );
     });
     return true;
 }

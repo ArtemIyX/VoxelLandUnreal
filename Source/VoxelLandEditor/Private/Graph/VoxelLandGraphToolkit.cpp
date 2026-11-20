@@ -4,6 +4,9 @@
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/PackageReload.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Data/Structs/VoxelLandReloadTestBarrier.h"
+#endif
 #include "Graph/VoxelLandEditorNode.h"
 #include "Graph/VoxelLandEditorSchema.h"
 #include "Graph/VoxelLandEditorOperator.h"
@@ -188,7 +191,11 @@ public:
 
     static bool Run(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandSerializedProgram& Payload,
         int64 Seed, const FVoxelLandZoneProfile& Profile, int32 HorizontalRadius, int32 VerticalRadius,
-        const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error)
+        const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error
+#if WITH_DEV_AUTOMATION_TESTS
+        , const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>& Barrier
+#endif
+        )
     {
         TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
         if (!FVoxelLandProgramCodec::Load(Snapshot, Payload, Program, Error))
@@ -211,6 +218,13 @@ public:
             Error = Failure.Message;
             return false;
         }
+#if WITH_DEV_AUTOMATION_TESTS
+        if (Barrier)
+        {
+            Barrier->WaitForCancellation(Cancel);
+            if (Cancel->Load()) { return false; }
+        }
+#endif
         FVoxelLandMeshingScratch Scratch;
         for (int32 Z = -VerticalRadius; Z < VerticalRadius; ++Z)
         {
@@ -1031,6 +1045,12 @@ void FVoxelLandGraphToolkit::PauseForReload(bool bGraphAffected)
     CancelPreview();
     CompileDue = 0.0;
     bCompileRequested = false;
+#if WITH_DEV_AUTOMATION_TESTS
+    if (ReloadDrainingForTests)
+    {
+        ReloadDrainingForTests();
+    }
+#endif
     for (const TFuture<void>& Task : WorkerTasks) { Task.Wait(); }
     WorkerTasks.Reset();
     CompileWork.Reset();
@@ -1329,10 +1349,22 @@ void FVoxelLandGraphToolkit::StartPreview()
     Work->VoxelSize = Profile.VoxelSizeCm;
     Work->ChunkCount = (2 * HorizontalRadius + 1) * (2 * HorizontalRadius + 1) * 2 * VerticalRadius;
     PreviewWork = Work;
+#if WITH_DEV_AUTOMATION_TESTS
+    ++PreviewStartCountForTests;
+#endif
+#if WITH_DEV_AUTOMATION_TESTS
+    const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MoveTemp(PreviewReloadBarrierForTests);
+    WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius, Cancel, Work, Barrier]() mutable
+#else
     WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius, Cancel, Work]() mutable
+#endif
     {
         const double StartTime = FPlatformTime::Seconds();
-        Work->bSuccess = FVoxelLandPreviewJob::Run(Snapshot, Payload, Seed, Profile, HorizontalRadius, VerticalRadius, Cancel, Work->Meshes, Work->Error);
+        Work->bSuccess = FVoxelLandPreviewJob::Run(Snapshot, Payload, Seed, Profile, HorizontalRadius, VerticalRadius, Cancel, Work->Meshes, Work->Error
+#if WITH_DEV_AUTOMATION_TESTS
+            , Barrier
+#endif
+        );
         Work->GenerationMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
         Work->Done.Store(true);
     }));

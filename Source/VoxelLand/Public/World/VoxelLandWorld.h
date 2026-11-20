@@ -36,6 +36,8 @@ public:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void Destroyed() override;
+    virtual void BeginDestroy() override;
     // Generator snapshots must have been created on a worker thread. Replacing one invalidates prior jobs.
     void Initialize(TSharedPtr<const FVoxelLandGenerator,ESPMode::ThreadSafe> Generator);
     void Shutdown();
@@ -56,6 +58,7 @@ public:
     void SetTestViewVelocity(FVector Velocity);
     int32 GetDemandedChunkCount() const;
     bool IsChunkDemanded(FIntVector Coordinate) const;
+    bool HasWorldStateForTests() const { return State.IsValid(); }
 #endif
 
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") bool bStartDemo = true;
@@ -76,7 +79,11 @@ private:
     void RetireChunk(const FVoxelLandChunkKey& Key);
     void PumpCompletions();
     void Dispatch();
+    void HandleWorldBeginTearDown(UWorld* World);
+    void ShutdownInternal(bool bDestroyRegionActors);
     uint64 ConfigurationEpoch = 0;
+    bool bLifecycleEnded = false;
+    FDelegateHandle WorldTearDownHandle;
     TUniquePtr<FVoxelLandWorldState> State;
     UPROPERTY(Transient) TArray<TObjectPtr<AVoxelLandRegion>> Regions;
 };

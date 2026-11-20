@@ -192,11 +192,38 @@ void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface* Material)
 
 AVoxelLandWorld::AVoxelLandWorld() { PrimaryActorTick.bCanEverTick=true; SetActorEnableCollision(false); }
 AVoxelLandWorld::~AVoxelLandWorld() = default;
-void AVoxelLandWorld::BeginPlay() { Super::BeginPlay(); if (bStartDemo) StartDemo(); }
-void AVoxelLandWorld::EndPlay(const EEndPlayReason::Type Reason) { Shutdown(); Super::EndPlay(Reason); }
+void AVoxelLandWorld::BeginPlay()
+{
+    bLifecycleEnded=false;
+    Super::BeginPlay();
+    if (!IsActorBeingDestroyed() && bStartDemo) StartDemo();
+}
+void AVoxelLandWorld::EndPlay(const EEndPlayReason::Type Reason)
+{
+    bLifecycleEnded=true; Shutdown(); Super::EndPlay(Reason);
+}
+void AVoxelLandWorld::Destroyed()
+{
+    // EndPlay is not routed for an actor that never began play.
+    bLifecycleEnded=true; Shutdown(); Super::Destroyed();
+}
+void AVoxelLandWorld::BeginDestroy()
+{
+    // World or level teardown may bypass Destroyed and EndPlay. Do not call
+    // Destroy on other UObjects from GC; world teardown owns those actors.
+    bLifecycleEnded=true; ShutdownInternal(false); Super::BeginDestroy();
+}
+void AVoxelLandWorld::HandleWorldBeginTearDown(UWorld* World)
+{
+    if (World==GetWorld()) { bLifecycleEnded=true; Shutdown(); }
+}
 void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator,ESPMode::ThreadSafe> Generator)
 {
-    check(IsInGameThread()); Shutdown(); if (!Generator) return;
+    check(IsInGameThread());
+    UWorld* World=GetWorld();
+    if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World || World->bIsTearingDown) return;
+    Shutdown(); if (!Generator) return;
+    WorldTearDownHandle=FWorldDelegates::OnWorldBeginTearDown.AddUObject(this,&AVoxelLandWorld::HandleWorldBeginTearDown);
     State=MakeUnique<FVoxelLandWorldState>(); State->Generator=Generator;
     State->bServer=bDataOnly || GetNetMode()==NM_DedicatedServer;
     State->RegionDimensions=FIntVector(FMath::Clamp(RegionSize.X,1,32),FMath::Clamp(RegionSize.Y,1,32),FMath::Clamp(RegionSize.Z,1,8));
@@ -211,12 +238,22 @@ void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator,ESPMode::T
 }
 void AVoxelLandWorld::Shutdown()
 {
+    ShutdownInternal(true);
+}
+void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
+{
     check(IsInGameThread());
     ++ConfigurationEpoch;
+    if (WorldTearDownHandle.IsValid())
+    {
+        FWorldDelegates::OnWorldBeginTearDown.Remove(WorldTearDownHandle);
+        WorldTearDownHandle.Reset();
+    }
     if (!State) return;
     ++State->Epoch;
     for (auto& Pair : State->Records) if (Pair.Value.Cancel) Pair.Value.Cancel->bCancelled.Store(true);
-    for (AVoxelLandRegion* Region : Regions) if (IsValid(Region)) { Region->SetActorHiddenInGame(true); Region->Destroy(); }
+    if (bDestroyRegionActors)
+        for (AVoxelLandRegion* Region : Regions) if (IsValid(Region)) { Region->SetActorHiddenInGame(true); Region->Destroy(); }
     Regions.Empty();
     State->Work->bStop.Store(true);
     for (int32 I=0; I<State->Threads.Num(); ++I) State->Work->Wake->Trigger();

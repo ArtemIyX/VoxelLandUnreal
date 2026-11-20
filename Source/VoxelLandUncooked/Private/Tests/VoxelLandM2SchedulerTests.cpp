@@ -140,6 +140,63 @@ private:
     TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> Barrier;
     uint64 ExpectedHash, ReplacementHash; double Started; int32 Stage=0; FVoxelLandChunkKey Key;
 };
+
+class FVoxelLandM2PrePlayDestroyCommand final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandM2PrePlayDestroyCommand(FAutomationTestBase* InTest,UWorld* InWorld,AVoxelLandWorld* InActor,
+        TSharedPtr<const FVoxelLandGenerator,ESPMode::ThreadSafe> InGenerator,
+        TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> InBarrier)
+        : Test(InTest),World(InWorld),Actor(InActor),Generator(MoveTemp(InGenerator)),Barrier(MoveTemp(InBarrier)),Started(FPlatformTime::Seconds()) {}
+    virtual bool Update() override
+    {
+        if (!IsValid(World) || !IsValid(Actor)) { Test->AddError(TEXT("Pre-play test world or actor was destroyed early")); Cleanup(); return true; }
+        if (!Barrier->Reached->Wait(0))
+        {
+            if (FPlatformTime::Seconds()-Started<30.0) return false;
+            Test->AddError(TEXT("Pre-play worker did not reach barrier")); Cleanup(); return true;
+        }
+        Test->TestFalse(TEXT("actor has not begun play"),Actor->HasActorBegunPlay());
+        Test->TestTrue(TEXT("worker state exists before destroy"),Actor->HasWorldStateForTests());
+        Test->TestTrue(TEXT("destroy before BeginPlay succeeds"),Actor->Destroy());
+        // Destroyed() joins the held worker before returning. The UObject is
+        // still allocated until GC, so observe the state in this same tick.
+        Test->TestFalse(TEXT("destroy joined worker and released state"),Actor->HasWorldStateForTests());
+        Actor->Initialize(Generator);
+        Test->TestFalse(TEXT("destroyed actor rejects initialization"),Actor->HasWorldStateForTests());
+        Test->TestFalse(TEXT("destroyed actor rejects requests"),Actor->RequestDataChunk(FIntVector::ZeroValue));
+        Actor=nullptr;
+        // World teardown can skip EndPlay for every actor when play never began.
+        AVoxelLandWorld* TeardownActor=World->SpawnActor<AVoxelLandWorld>();
+        Test->TestNotNull(TEXT("pre-play world teardown actor"),TeardownActor);
+        if (TeardownActor)
+        {
+            TeardownActor->bStartDemo=false; TeardownActor->bDataOnly=true; TeardownActor->Initialize(Generator);
+            Test->TestTrue(TEXT("world teardown fixture initialized"),TeardownActor->HasWorldStateForTests());
+            World->BeginTearingDown();
+            Test->TestFalse(TEXT("world teardown releases pre-play state"),TeardownActor->HasWorldStateForTests());
+            TeardownActor->Initialize(Generator);
+            Test->TestFalse(TEXT("tearing-down world rejects initialization"),TeardownActor->HasWorldStateForTests());
+            TeardownActor->Destroy();
+        }
+        Cleanup(); return true;
+    }
+private:
+    void Cleanup()
+    {
+        if (IsValid(Actor)) Actor->Destroy();
+        if (IsValid(World))
+        {
+            GEngine->ShutdownWorldNetDriver(World); World->DestroyWorld(false);
+            GEngine->DestroyWorldContext(World); World->RemoveFromRoot();
+        }
+        Actor=nullptr; World=nullptr;
+    }
+    FAutomationTestBase* Test; UWorld* World; AVoxelLandWorld* Actor;
+    TSharedPtr<const FVoxelLandGenerator,ESPMode::ThreadSafe> Generator;
+    TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> Barrier;
+    double Started;
+};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2SchedulerTest,"VoxelLand.M2.SchedulerDataOnly",EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -166,6 +223,35 @@ bool FVoxelLandM2SchedulerTest::RunTest(const FString& Parameters)
     Actor->SetNextTestBarrier(Barrier);
     FVoxelLandChunkKey Key; if (!Actor->RequestChunk(Key)) { AddError(TEXT("Unable to request fixture chunk")); Actor->Shutdown(); World->DestroyWorld(false); GEngine->DestroyWorldContext(World); World->RemoveFromRoot(); return false; }
     ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandM2SchedulerCommand(this,World,Actor,Fixture.Generator,Second.Generator,Barrier,Fixture.Chunk->Hash,Second.Chunk->Hash));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2PrePlayDestroyTest,"VoxelLand.M2.PrePlayDestroy",EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandM2PrePlayDestroyTest::RunTest(const FString& Parameters)
+{
+    const auto Fixture=Async(EAsyncExecution::ThreadPool,[] {
+        return VoxelLandM1Fixtures::Generate(VoxelLandM1Fixtures::Plane(),FVoxelLandZoneProfile(),FVoxelLandChunkKey(),FVoxelLandBackendOptions());
+    }).Get();
+    if (Fixture.Error || !Fixture.Generator || !GEngine) { AddError(TEXT("Unable to initialize pre-play fixture")); return false; }
+    UWorld* World=UWorld::CreateWorld(EWorldType::Game,false);
+    if (!World) { AddError(TEXT("Unable to create pre-play world")); return false; }
+    FWorldContext& Context=GEngine->CreateNewWorldContext(EWorldType::Game);
+    World->AddToRoot(); Context.SetCurrentWorld(World); World->InitializeActorsForPlay(FURL());
+    AVoxelLandWorld* Actor=World->SpawnActor<AVoxelLandWorld>();
+    if (!Actor)
+    {
+        AddError(TEXT("Unable to spawn pre-play actor"));
+        World->DestroyWorld(false); GEngine->DestroyWorldContext(World); World->RemoveFromRoot(); return false;
+    }
+    Actor->bStartDemo=false; Actor->bDataOnly=true; Actor->WorkerCount=1; Actor->Initialize(Fixture.Generator);
+    auto Barrier=MakeShared<FVoxelLandTestBarrier,ESPMode::ThreadSafe>(); Actor->SetNextTestBarrier(Barrier);
+    if (!Actor->RequestDataChunk(FIntVector::ZeroValue))
+    {
+        AddError(TEXT("Unable to queue pre-play chunk")); Actor->Destroy();
+        World->DestroyWorld(false); GEngine->DestroyWorldContext(World); World->RemoveFromRoot(); return false;
+    }
+    Actor->Tick(0.016f);
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandM2PrePlayDestroyCommand(this,World,Actor,Fixture.Generator,Barrier));
     return true;
 }
 #endif

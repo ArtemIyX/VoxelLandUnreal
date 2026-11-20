@@ -230,6 +230,7 @@ AVoxelLandWorld::AVoxelLandWorld()
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	SetActorEnableCollision(false);
 }
+AVoxelLandWorld::AVoxelLandWorld(FVTableHelper& Helper) : Super(Helper) {}
 AVoxelLandWorld::~AVoxelLandWorld() = default;
 void AVoxelLandWorld::BeginPlay()
 {

@@ -170,3 +170,28 @@ The subsequent real-RHI interactive recheck placed the invalid fBm frequency nod
 An opt-in D3D12 preview measurement now places a GPU fence after each nonempty proxy's initial geometry buffer initialization and observes completion asynchronously. On the same UE 5.7 Win64 / Ryzen 9 9950X3D / RTX 5080 D3D12 host, `VoxelLand.M3.Editor.PreviewGPUUpload` passed 20 successive 18-chunk previews, checking the upper-bound label and stale result removal on each seed change. Setup-to-observation median / nearest-rank p95 were 49.2 / 49.6 ms; change-to-observation were 141.75 / 191.5 ms. These warm preview samples include queued work and the 50 ms polling interval, and do not measure copy duration, displayed frames or cold shader time. Build log: `Saved/Logs/M3_GPUUploadBuildFinal.log`; real-RHI log: `Saved/Logs/M3_GPUUploadRealRHIFinal.log`. The focused NullRHI run reported a deliberate unsupported-path skip (`Saved/Logs/M3_GPUUploadNull.log`); it did not exercise GPU fences. Other RHIs, multi-GPU and dedicated-server builds remain unverified for this observation.
 
 The subsequent editor build passed (`Saved/Logs/M3_GPUUploadLifecycleBuild.log`). The real-RHI focused run passed both `PreviewGPUUpload` and `PreviewGPUUploadLifecycle` (`Saved/Logs/M3_GPUUploadLifecycleRealRHI.log`). A development-automation-only hold kept observation polling pending so the lifecycle test could exercise seed supersession, the actual ten-second timeout, recovery on a later preview, and Stop while pending. The hold does not hold the GPU work itself; it does not prove destruction while a GPU fence remains physically unsignaled. The pre-existing real-RHI `PreviewTiming` regression also passed (`Saved/Logs/M3_GPUUploadExistingTiming.log`). No editor process remained after the runs.
+
+
+## Packaged Win64 runtime probe
+
+A separate temporary project was created at `C:\Users\xeuse\AppData\Local\Temp\VoxelLandPackagedProbe-fdaf5b9baa4d468fae9c7908197128a7`, using the project descriptor, Source, Config and Content and the current VoxelLand and FastNoise plugin sources and content. The temporary `Source/VoxelLandExample/VoxelLandExample.cpp` contains an opt-in probe; its build file adds runtime dependencies on VoxelLand and VoxelLandData. The repository's project source was not changed. The probe checks `FPlatformProperties::RequiresCookedData()` and loads `/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings`, its graph reference and nonempty compiled program from the packaged game.
+
+The clean isolated Editor build initially failed with MSVC C4150: Unreal's generated `AVoxelLandWorld` vtable-helper constructor instantiated destruction of `TUniquePtr<FVoxelLandWorldState>` where the state was incomplete. The explicit out-of-line `FVTableHelper` constructor in `VoxelLandWorld.cpp`, where the state is complete, fixed that failure; `ProbeEditorBuild2.log` records the succeeding Editor build. The same fix is present in the tested plugin source. The Editor build command, run with the temporary project as working directory, was:
+
+```powershell
+& 'C:/Users/xeuse/Epic Games/UE_5.7/Engine/Build/BatchFiles/Build.bat' VoxelLandExampleEditor Win64 Development (Join-Path (Get-Location) 'VoxelLandExample.uproject') -WaitMutex -NoHotReload
+```
+
+The first `BuildCookRun` built the Win64 Development Game and staged and archived it successfully, but used the virtual `-cookdir=/VoxelLand/Examples`. The resulting packaged probe logged `PACKAGED_PROBE_FAIL: Cooked settings, graph or bytecode missing`; the Windows process nevertheless returned exit code 0. This was an omitted-assets cook setup failure, not a successful runtime check. `ProbeBuildCookRun.log` and `ProbePackagedRuntime.log` preserve that attempt. The examples were then cooked from their **physical** plugin content directory, and the resulting package was staged and archived with:
+
+```powershell
+& 'C:/Users/xeuse/Epic Games/UE_5.7/Engine/Build/BatchFiles/RunUAT.bat' BuildCookRun ('-project=' + (Join-Path (Get-Location) 'VoxelLandExample.uproject')) -noP4 -platform=Win64 -clientconfig=Development -cook -stage -pak -archive ('-archivedirectory=' + (Join-Path (Get-Location) 'Archive')) -map=/Engine/Maps/Entry ('-cookdir=' + (Join-Path (Get-Location) 'Plugins/VoxelLand/Content/Examples')) -unattended -utf8output
+```
+
+`ProbeBuildCookRun2.log` reports exit 0 and `BUILD SUCCESSFUL`. The archived Development executable was launched with a 130-second outer process timeout, `-VoxelLandPackagedProbe`, `-NullRHI`, `-nosound`, `-unattended`, `-nop4`, and `/Engine/Maps/Entry`; its explicit result marker, not exit code alone, is the test oracle:
+
+```powershell
+& '.\Archive\Windows\VoxelLandExample\Binaries\Win64\VoxelLandExample.exe' /Engine/Maps/Entry -NullRHI -nosound -unattended -nop4 -VoxelLandPackagedProbe '-abslog=C:\Users\xeuse\AppData\Local\Temp\VoxelLandPackagedProbe-fdaf5b9baa4d468fae9c7908197128a7\ProbePackagedRuntime2.log'
+```
+
+On UE 5.7 CL 51494982, `ProbePackagedRuntime2.log` contains `PACKAGED_PROBE_PASS` and the process exited 0. The probe observed an inert actor after BeginPlay, cancellation without publication, rejection after settings were changed during initialization, successful explicit initialization, and matching data-only hashes after reinitializing and reversing demand order for chunks (0,0,0) and (1,0,0): respectively `2757526085317063578` and `9771038454700041737`. The temporary project and logs were retained for review; launched processes exited. This is a packaged Win64 Game/NullRHI check, not a dedicated-server build, real-RHI rendering check, or cross-platform parity proof.

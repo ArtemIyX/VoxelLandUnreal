@@ -48,6 +48,7 @@ class VOXELLAND_API AVoxelLandWorld : public AActor
 	GENERATED_BODY()
 public:
 	AVoxelLandWorld();
+	AVoxelLandWorld(FVTableHelper& Helper);
 	virtual ~AVoxelLandWorld() override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;

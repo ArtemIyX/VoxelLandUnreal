@@ -8,6 +8,7 @@ class FVoxelLandGenerator;
 class UVoxelLandChunkComponent;
 class UMaterialInterface;
 struct FVoxelLandWorldState;
+struct FVoxelLandTestBarrier;
 
 UCLASS(NotBlueprintable, Transient)
 class VOXELLAND_API AVoxelLandRegion : public AActor
@@ -44,6 +45,10 @@ public:
     void SetRegionHidden(FIntVector Region, bool bHidden);
     void SetTerrainMaterial(UMaterialInterface* Material);
     UFUNCTION(BlueprintCallable, Category="VoxelLand") void DumpStats() const;
+#if WITH_DEV_AUTOMATION_TESTS
+    void SetNextTestBarrier(TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> Barrier);
+    uint64 GetStaleCompletionCount() const;
+#endif
 
     UPROPERTY(EditAnywhere, Category="VoxelLand|Demo") bool bStartDemo = true;
     // Optional data-only mode for a headless consumer or automation; dedicated servers always use it.

@@ -145,4 +145,61 @@ bool FVoxelLandM2SeamTest::RunTest(const FString& Parameters)
     }
     return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2CornerOwnershipTest, "VoxelLand.M2.CornerOwnership", Flags)
+bool FVoxelLandM2CornerOwnershipTest::RunTest(const FString& Parameters)
+{
+    FVoxelLandMeshData Meshes[2][2][2];
+    for (int32 Z=0; Z<2; ++Z) for (int32 Y=0; Y<2; ++Y) for (int32 X=0; X<2; ++X)
+    {
+        const FIntVector Key(X-1,Y-1,Z-1); FVoxelLandMeshingScratch Scratch;
+        TestEqual(TEXT("corner mesh built"),int32(VoxelLandMeshing::BuildSurfaceNets(Plane(Key,2,1),100.f,Scratch,Meshes[X][Y][Z],[] {return false;})),int32(EVoxelLandMeshResult::Success));
+        TestEqual(TEXT("only owning Z chunks emit plane faces"),Meshes[X][Y][Z].Indices.Num(),Z==1 ? 32*32*6 : 0);
+    }
+    for (int32 Axis=0; Axis<3; ++Axis) for (int32 Z=0; Z<2; ++Z) for (int32 Y=0; Y<2; ++Y) for (int32 X=0; X<2; ++X)
+    {
+        int32 A[3]={X,Y,Z}; if (A[Axis]!=0) continue;
+        int32 B[3]={X,Y,Z}; B[Axis]=1;
+        const FIntVector KA(A[0]-1,A[1]-1,A[2]-1), KB(B[0]-1,B[1]-1,B[2]-1);
+        const FVector OA=VoxelLandMeshCoordinates::RenderOrigin(KA,100.f), OB=VoxelLandMeshCoordinates::RenderOrigin(KB,100.f);
+        int32 Count=0;
+        for (const auto& VA : Meshes[A[0]][A[1]][A[2]].Vertices)
+        {
+            const FVector WA=FVector(VA.Position)+OA;
+            if (FMath::Abs(WA[Axis])>100.0) continue;
+            bool bFound=false;
+            for (const auto& VB : Meshes[B[0]][B[1]][B[2]].Vertices)
+                if (WA==FVector(VB.Position)+OB) { bFound=true; TestTrue(TEXT("shared normal"),VA.Normal.Equals(VB.Normal,1.e-6f)); break; }
+            TestTrue(TEXT("shared face/edge/corner vertex"),bFound); ++Count;
+        }
+        TestTrue(TEXT("shared border checked"),Count>0);
+    }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM2SphereTest, "VoxelLand.M2.SphereAndWinding", Flags)
+bool FVoxelLandM2SphereTest::RunTest(const FString& Parameters)
+{
+    FVoxelLandChunkData Chunk; Chunk.Density.SetNumUninitialized(FVoxelLandChunkData::SampleCount);
+    for (int32 Z=-1; Z<=33; ++Z) for (int32 Y=-1; Y<=33; ++Y) for (int32 X=-1; X<=33; ++X)
+    {
+        const FVector3f D(float(X-16),float(Y-16),float(Z-16));
+        Chunk.Density[(X+1)+35*((Y+1)+35*(Z+1))]=int16(FMath::Clamp(FMath::RoundToInt((D.Size()-8.f)*1024.f),-32768,32767));
+    }
+    FVoxelLandMeshingScratch Scratch; FVoxelLandMeshData Mesh;
+    TestEqual(TEXT("sphere builds"),int32(VoxelLandMeshing::BuildSurfaceNets(Chunk,100.f,Scratch,Mesh,[] {return false;})),int32(EVoxelLandMeshResult::Success));
+    TestTrue(TEXT("sphere emits faces"),Mesh.Indices.Num()>0);
+    for (const auto& V : Mesh.Vertices)
+    {
+        const FVector3f Out=(V.Position-FVector3f(1600,1600,1600)).GetSafeNormal();
+        TestTrue(TEXT("sphere normal points outward"),FVector3f::DotProduct(Out,V.Normal)>0.85f);
+    }
+    for (int32 I=0; I+2<Mesh.Indices.Num(); I+=3)
+    {
+        const auto& A=Mesh.Vertices[Mesh.Indices[I]]; const auto& B=Mesh.Vertices[Mesh.Indices[I+1]]; const auto& C=Mesh.Vertices[Mesh.Indices[I+2]];
+        const FVector3f Cross=FVector3f::CrossProduct(B.Position-A.Position,C.Position-A.Position);
+        TestTrue(TEXT("face orientation follows gradient"),FVector3f::DotProduct(Cross,A.Normal+B.Normal+C.Normal)>0.f);
+    }
+    return true;
+}
 #endif

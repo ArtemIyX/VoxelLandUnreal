@@ -5,6 +5,7 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandMeshing.h"
 #include "Data/Structs/VoxelLandPublication.h"
+#include "Data/Structs/VoxelLandTestBarrier.h"
 #include "GameFramework/PlayerController.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Async/Async.h"
@@ -28,6 +29,9 @@ struct FJob
     TSharedPtr<const FVoxelLandGenerator,ESPMode::ThreadSafe> Generator;
     TSharedPtr<FCancel,ESPMode::ThreadSafe> Cancel;
     bool bRender=false;
+#if WITH_DEV_AUTOMATION_TESTS
+    TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> Barrier;
+#endif
 };
 struct FCompletion
 {
@@ -80,6 +84,18 @@ public:
                     else if (!Mesh->Indices.IsEmpty()) Done.Mesh=Mesh;
                 }
             }
+#if WITH_DEV_AUTOMATION_TESTS
+            if (Job.Barrier)
+            {
+                if (Job.Barrier->bMarkHash && Done.Data)
+                {
+                    auto Marked=MakeShared<FVoxelLandChunkData,ESPMode::ThreadSafe>(*Done.Data);
+                    Marked->Hash=Job.Barrier->MarkerHash; Done.Data=Marked;
+                }
+                Job.Barrier->Reached->Trigger();
+                while (!Work->bStop.Load() && !Job.Barrier->Release->Wait(5)) {}
+            }
+#endif
             Work->Completed.Enqueue(MoveTemp(Done));
         }
         // Context and its native nodes are destroyed on this same thread.
@@ -108,6 +124,9 @@ struct FVoxelLandWorldState
     TMap<FVoxelLandChunkKey,FRecord> Records;
     TMap<FIntVector,TWeakObjectPtr<AVoxelLandRegion>> RegionMap;
     TSet<FIntVector> HiddenRegions;
+#if WITH_DEV_AUTOMATION_TESTS
+    TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> NextBarrier;
+#endif
     FIntVector CameraChunk=FIntVector::ZeroValue;
     bool bHasCamera=false, bServer=false;
 };
@@ -206,6 +225,13 @@ void AVoxelLandWorld::SetTerrainMaterial(UMaterialInterface* Material)
     check(IsInGameThread()); TerrainMaterial=Material;
     for (AVoxelLandRegion* Region : Regions) if (IsValid(Region)) Region->SetTerrainMaterial(Material);
 }
+#if WITH_DEV_AUTOMATION_TESTS
+void AVoxelLandWorld::SetNextTestBarrier(TSharedPtr<FVoxelLandTestBarrier,ESPMode::ThreadSafe> Barrier)
+{
+    check(IsInGameThread()); if (State) State->NextBarrier=MoveTemp(Barrier);
+}
+uint64 AVoxelLandWorld::GetStaleCompletionCount() const { return State ? State->Stale : 0; }
+#endif
 void AVoxelLandWorld::DumpStats() const
 {
     if (!State) { UE_LOG(LogTemp,Display,TEXT("VoxelLand inactive")); return; }
@@ -310,6 +336,9 @@ void AVoxelLandWorld::Dispatch()
         if (!Best) break;
         FJob Job; Job.Key=BestKey; Job.Generator=State->Generator; Job.Epoch=State->Epoch; Job.Ticket=++State->NextTicket;
         Job.bRender=!State->bServer; Job.Cancel=MakeShared<FCancel,ESPMode::ThreadSafe>();
+#if WITH_DEV_AUTOMATION_TESTS
+        Job.Barrier=MoveTemp(State->NextBarrier);
+#endif
         Best->Ticket=Job.Ticket; Best->Cancel=Job.Cancel; Best->bRunning=true; Best->bQueued=false;
         { FScopeLock Lock(&State->Work->Mutex); State->Work->Jobs.Enqueue(MoveTemp(Job)); }
         ++State->Active; State->Work->Wake->Trigger();

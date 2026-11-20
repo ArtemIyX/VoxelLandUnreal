@@ -1222,6 +1222,52 @@ bool FVoxelLandM3NoiseGraph::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3NoiseDefaultDiagnostics, "VoxelLand.M3.NoiseDefaultDiagnostics", M3GraphFlags)
+bool FVoxelLandM3NoiseDefaultDiagnostics::RunTest(const FString& Parameters)
+{
+    for (bool b3D : {false, true})
+    {
+        const int32 Dimensions = b3D ? 3 : 2;
+        FVoxelLandGraphSnapshot Graph;
+        Graph.Nodes.Add(Node(b3D ? EVoxelLandBuiltinNode::Fbm3 : EVoxelLandBuiltinNode::Fbm2, 40, Dimensions + 4, true));
+        Graph.Nodes[0].Pins[Dimensions].FloatDefault = 0.01f;
+        Graph.Nodes[0].Pins[Dimensions + 1].Type = EVoxelLandGraphValueType::Int32;
+        Graph.Nodes[0].Pins[Dimensions + 1].IntDefault = 3;
+        Graph.Nodes[0].Pins[Dimensions + 2].FloatDefault = 0.5f;
+        Graph.Nodes[0].Pins[Dimensions + 3].FloatDefault = 2.f;
+        Graph.Nodes.Add(Node(EVoxelLandBuiltinNode::DensityOutput, 41, 1, false));
+        Link(Graph, 0, 1, 0);
+        for (int32 Setting = 0; Setting < 4; ++Setting)
+        {
+            FVoxelLandGraphSnapshot Invalid = Graph;
+            FVoxelLandGraphPinRecord& Pin = Invalid.Nodes[0].Pins[Dimensions + Setting];
+            if (Setting == 0) { Pin.FloatDefault = -1.f; }
+            else if (Setting == 1) { Pin.IntDefault = 17; }
+            else if (Setting == 2) { Pin.FloatDefault = 1.5f; }
+            else { Pin.FloatDefault = 0.5f; }
+            FVoxelLandProgramDraft Draft; FVoxelLandGraphDiagnostic Diagnostic;
+            TestFalse(TEXT("Out-of-range noise default fails compilation"), FVoxelLandGraphCompiler::Compile(Invalid, Draft, Diagnostic));
+            TestTrue(TEXT("Noise default error identifies exact node and setting pin"),
+                Diagnostic.NodeId == Invalid.Nodes[0].Id && Diagnostic.PinId == Pin.Id && !Diagnostic.Message.IsEmpty());
+            TestTrue(TEXT("Invalid noise graph publishes no draft"), Draft.Instructions.IsEmpty());
+        }
+        FVoxelLandGraphSnapshot Linked = Graph;
+        FVoxelLandGraphParameter Parameter;
+        Parameter.Id = FGuid(0xabc1, 2, 3, b3D ? 4 : 5);
+        Parameter.Name = TEXT("bad_frequency");
+        Parameter.FloatDefault = -1.f;
+        Linked.Parameters.Add(Parameter);
+        Linked.Nodes.Add(Node(EVoxelLandBuiltinNode::FloatParameter, 42, 0, true));
+        Linked.Nodes.Last().ParameterId = Parameter.Id;
+        Link(Linked, 2, 0, Dimensions);
+        FVoxelLandProgramDraft Draft; FVoxelLandGraphDiagnostic Diagnostic;
+        TestFalse(TEXT("Invalid linked parameter default fails compilation"), FVoxelLandGraphCompiler::Compile(Linked, Draft, Diagnostic));
+        TestTrue(TEXT("Linked invalid frequency focuses noise input"), Diagnostic.NodeId == Linked.Nodes[0].Id &&
+            Diagnostic.PinId == Linked.Nodes[0].Pins[Dimensions].Id);
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM3MixedNoise, "VoxelLand.M3.MixedNoiseParameters", M3GraphFlags)
 bool FVoxelLandM3MixedNoise::RunTest(const FString& Parameters)
 {

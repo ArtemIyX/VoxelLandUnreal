@@ -508,6 +508,67 @@ bool FVoxelLandDiagnosticFocusTest::RunTest(const FString& Parameters)
     Toolkit->Stop();
     return true;
 }
+namespace
+{
+class FVoxelLandNoiseFocusCommand final : public IAutomationLatentCommand
+{
+public:
+    FVoxelLandNoiseFocusCommand(FAutomationTestBase* InTest, TSharedRef<FVoxelLandGraphToolkit> InToolkit,
+        const FGuid& InNode, const FGuid& InPin)
+        : Test(InTest), Toolkit(MoveTemp(InToolkit)), NodeId(InNode), PinId(InPin), Deadline(FPlatformTime::Seconds() + 10.0) {}
+    virtual bool Update() override
+    {
+        Toolkit->PollJobsForTests();
+        if (Toolkit->HasCompileWorkForTests())
+        {
+            if (FPlatformTime::Seconds() <= Deadline) { return false; }
+            Test->AddError(TEXT("Noise diagnostic compilation timed out"));
+            Toolkit->Stop();
+            return true;
+        }
+        const FVoxelLandGraphDiagnostic& Diagnostic = Toolkit->GetDiagnosticForTests();
+        Test->TestTrue(TEXT("Async noise error identifies node and frequency pin"),
+            Diagnostic.NodeId == NodeId && Diagnostic.PinId == PinId && Diagnostic.Message.Contains(TEXT("frequency")));
+        UEdGraphNode* Node = nullptr; UEdGraphPin* Pin = nullptr;
+        Test->TestTrue(TEXT("Noise diagnostic resolves its actual graph pin"),
+            Toolkit->ResolveDiagnosticForTests(Node, Pin) && Node && Pin && Node->NodeGuid == NodeId && Pin->PinId == PinId);
+        Toolkit->FocusErrorForTests();
+        Test->TestTrue(TEXT("Invalid noise leaves preview stale"), Toolkit->GetStatusForTests().Contains(TEXT("stale")));
+        Toolkit->Stop();
+        return true;
+    }
+private:
+    FAutomationTestBase* Test;
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit;
+    FGuid NodeId;
+    FGuid PinId;
+    double Deadline;
+};
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandNoiseFocusTest, "VoxelLand.M3.Editor.NoiseDiagnosticFocus",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandNoiseFocusTest::RunTest(const FString& Parameters)
+{
+    UVoxelLandTerrainGraph* Source = LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
+    if (!Source) { AddError(TEXT("Example graph unavailable for noise diagnostic")); return false; }
+    UVoxelLandTerrainGraph* Asset = DuplicateObject<UVoxelLandTerrainGraph>(Source, GetTransientPackage());
+    TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+    Toolkit->InitializeForTests(Asset);
+    Toolkit->CreatePanelForTests();
+    UVoxelLandEditorNode* Noise = nullptr;
+    for (UEdGraphNode* Candidate : Asset->EditorGraph->Nodes)
+    {
+        UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(Candidate);
+        if (Node && Node->Kind == int32(EVoxelLandBuiltinNode::Fbm2)) { Noise = Node; break; }
+    }
+    if (!TestNotNull(TEXT("fBm 2D node exists"), Noise)) { Toolkit->Stop(); return false; }
+    UEdGraphPin* Frequency = Noise->FindPin(TEXT("Frequency"));
+    if (!TestNotNull(TEXT("Frequency pin exists"), Frequency)) { Toolkit->Stop(); return false; }
+    Asset->EditorGraph->GetSchema()->TrySetDefaultValue(*Frequency, TEXT("-1"));
+    Toolkit->RequestCompileForTests();
+    ADD_LATENT_AUTOMATION_COMMAND(FVoxelLandNoiseFocusCommand(this, Toolkit, Noise->NodeGuid, Frequency->PinId));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandReloadLifecycleTest, "VoxelLand.M3.Editor.ReloadLifecycle",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandReloadLifecycleTest::RunTest(const FString& Parameters)

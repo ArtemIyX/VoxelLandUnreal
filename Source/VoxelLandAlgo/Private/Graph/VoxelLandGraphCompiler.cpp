@@ -519,6 +519,7 @@ private:
     bool CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result);
     bool CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result);
     bool CompileNoise(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result);
+    bool ValidateNoiseDefaults(const FVoxelLandGraphNodeRecord& Node, int32 Dimensions, const FVoxelLandNoiseConfig& Config);
     bool CompileExternal(const FVoxelLandGraphNodeRecord& Node, uint16& Result);
     bool NoiseSource(const FVoxelLandGraphNodeRecord& Node, int32 Index, EVoxelLandGraphValueType Type,
         FVoxelLandValueSource& Out);
@@ -681,6 +682,37 @@ bool FCompiler::NoiseSource(const FVoxelLandGraphNodeRecord& Node, int32 Index,
     return true;
 }
 
+bool FCompiler::ValidateNoiseDefaults(const FVoxelLandGraphNodeRecord& Node, int32 Dimensions,
+    const FVoxelLandNoiseConfig& Config)
+{
+    const auto FloatDefault = [this](const FVoxelLandValueSource& Source)
+    {
+        return Source.bParameter ? Draft.Parameters[Source.Index].FloatDefault : Draft.Constants[Source.Index];
+    };
+    const float Frequency = FloatDefault(Config.Frequency);
+    const int32 Octaves = Config.Octaves.bParameter ? Draft.Parameters[Config.Octaves.Index].IntDefault :
+        Node.Pins[Dimensions + 1].IntDefault;
+    const float Gain = FloatDefault(Config.Gain);
+    const float Lacunarity = FloatDefault(Config.Lacunarity);
+    if (!FMath::IsFinite(Frequency) || Frequency <= 0.f)
+    {
+        return FailAt(TEXT("Noise frequency must be finite and positive"), Node.Id, Node.Pins[Dimensions].Id);
+    }
+    if (Octaves < 1 || Octaves > 16)
+    {
+        return FailAt(TEXT("Noise octaves must be in [1,16]"), Node.Id, Node.Pins[Dimensions + 1].Id);
+    }
+    if (!FMath::IsFinite(Gain) || Gain < 0.f || Gain > 1.f)
+    {
+        return FailAt(TEXT("Noise gain must be finite and in [0,1]"), Node.Id, Node.Pins[Dimensions + 2].Id);
+    }
+    if (!FMath::IsFinite(Lacunarity) || Lacunarity < 1.f)
+    {
+        return FailAt(TEXT("Noise lacunarity must be finite and at least 1"), Node.Id, Node.Pins[Dimensions + 3].Id);
+    }
+    return true;
+}
+
 bool FCompiler::CompileNoise(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
 {
     const bool b3D = Kind == EVoxelLandBuiltinNode::Perlin3 || Kind == EVoxelLandBuiltinNode::Fbm3 ||
@@ -712,6 +744,10 @@ bool FCompiler::CompileNoise(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
         !NoiseSource(Node, Dimensions + 1, EVoxelLandGraphValueType::Int32, Config.Octaves) ||
         !NoiseSource(Node, Dimensions + 2, EVoxelLandGraphValueType::Float, Config.Gain) ||
         !NoiseSource(Node, Dimensions + 3, EVoxelLandGraphValueType::Float, Config.Lacunarity))
+    {
+        return false;
+    }
+    if (!ValidateNoiseDefaults(Node, Dimensions, Config))
     {
         return false;
     }

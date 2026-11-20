@@ -70,6 +70,7 @@ public:
     void SetDiagnosticForTests(const FVoxelLandGraphDiagnostic& InDiagnostic) { ErrorDiagnostic = InDiagnostic; }
     const FVoxelLandGraphDiagnostic& GetDiagnosticForTests() const { return ErrorDiagnostic; }
     bool ResolveDiagnosticForTests(UEdGraphNode*& Node, UEdGraphPin*& Pin) const { return ResolveDiagnosticTarget(Node, Pin); }
+    void FocusErrorForTests() { FocusError(); }
     void OnReplacedForTests(const TMap<UObject*, UObject*>& Map) { ObjectsReplaced(Map); }
     void PackageReloadForTests(EPackageReloadPhase Phase, FPackageReloadedEvent* Event) { PackageReloaded(Phase, Event); }
     void SetReloadDrainingForTests(TFunction<void()> Callback) { ReloadDrainingForTests = MoveTemp(Callback); }

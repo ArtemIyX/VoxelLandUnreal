@@ -32,6 +32,7 @@ struct FPropertyChangedEvent;
 struct FVoxelLandReloadTestBarrier;
 struct FVoxelLandZoneProfile;
 struct FVoxelLandSerializedProgram;
+struct FVoxelLandGraphSnapshot;
 struct FGraphActionListBuilderBase;
 struct FEdGraphSchemaAction;
 
@@ -108,6 +109,8 @@ private:
     void ActivatePalette(const TArray<TSharedPtr<FEdGraphSchemaAction>>& Actions);
     void CreateMirror();
     bool CaptureMirror(FString& Error, FVoxelLandGraphDiagnostic* Diagnostic = nullptr);
+    bool CaptureMirrorSnapshot(FVoxelLandGraphSnapshot& Snapshot, bool& bValidDefaults, FString& Error,
+        FVoxelLandGraphDiagnostic* Diagnostic = nullptr) const;
     void GraphChanged(const FEdGraphEditAction& Action);
     void SynchronizeGraph();
     void PropertiesChanged(const FPropertyChangedEvent& Event);
@@ -125,7 +128,11 @@ private:
     FReply CompileClicked();
     FText StatusText() const;
     void StartPreview();
-    bool BuildPreviewProfile(FVoxelLandZoneProfile& Profile, FString& Error) const;
+    bool BuildPreviewProfile(const FVoxelLandSerializedProgram& Payload, FVoxelLandZoneProfile& Profile, FString& Error) const;
+    bool BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& Snapshot, FString& Error) const;
+    TSharedRef<SWidget> BuildPreviewTargetMenu();
+    void SelectPreviewTarget(FGuid NodeId, FGuid PinId, FString Label);
+    FReply ReturnToRootPreview();
     void CancelPreview();
     void ClearPreview();
     void SeedCommitted(const FText& Text, ETextCommit::Type CommitType);
@@ -175,6 +182,13 @@ private:
     int32 PreviewHorizontalRadius = 1;
     int32 PreviewVerticalRadius = 1;
     uint64 PreviewRevision = 0;
+    uint64 PreviewTargetRevision = 0;
+    uint64 NodePreviewSourceHash = 0;
+    FGuid PreviewNodeId;
+    FGuid PreviewPinId;
+    FString PreviewTargetLabel;
+    TSharedPtr<FVoxelLandGraphSnapshot> NodePreviewSnapshot;
+    TSharedPtr<FVoxelLandSerializedProgram> NodePreviewPayload;
     FDelegateHandle GraphChangedHandle;
     FDelegateHandle BeginPIEHandle;
     FDelegateHandle EndPIEHandle;

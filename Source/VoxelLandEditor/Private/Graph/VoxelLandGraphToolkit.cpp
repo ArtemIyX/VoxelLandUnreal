@@ -46,6 +46,7 @@
 #include "ScopedTransaction.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBox.h"
@@ -294,6 +295,10 @@ class FVoxelLandCompileWork
 public:
     TAtomic<bool> Done{false};
     uint64 Revision = 0;
+    uint64 TargetRevision = 0;
+    uint64 SourceHash = 0;
+    bool bNodePreview = false;
+    FVoxelLandGraphSnapshot Snapshot;
     bool bSuccess = false;
     FString Error;
     FVoxelLandGraphDiagnostic Diagnostic;
@@ -622,7 +627,8 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArg
 }
 FText FVoxelLandGraphToolkit::StatusText() const
 {
-    return FText::FromString(MaterialDiagnostic.IsEmpty() ? Status : Status + TEXT(" ") + MaterialDiagnostic);
+    const FString Mode = PreviewNodeId.IsValid() ? FString::Printf(TEXT("Node preview - %s. "), *PreviewTargetLabel) : TEXT("Root preview. ");
+    return FText::FromString(Mode + Status + (MaterialDiagnostic.IsEmpty() ? FString() : TEXT(" ") + MaterialDiagnostic));
 }
 FReply FVoxelLandGraphToolkit::CompileClicked() { RequestCompile(); return FReply::Handled(); }
 bool FVoxelLandGraphToolkit::ResolveDiagnosticTarget(UEdGraphNode*& OutNode, UEdGraphPin*& OutPin) const
@@ -663,6 +669,12 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
     return SNew(SDockTab)[SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText).AutoWrapText(true)]
         + SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
+            + SHorizontalBox::Slot().AutoWidth()[SNew(SComboButton)
+                .ButtonContent()[SNew(STextBlock).Text(LOCTEXT("PreviewOutput", "Preview selected output"))]
+                .OnGetMenuContent_Raw(this, &FVoxelLandGraphToolkit::BuildPreviewTargetMenu)]
+            + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("PreviewRoot", "Preview graph output"))
+                .OnClicked_Raw(this, &FVoxelLandGraphToolkit::ReturnToRootPreview)]]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Seed", "Seed"))]
             + SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox).Text_Lambda([this] { return FText::AsCultureInvariant(LexToString(PreviewSeed)); }).OnTextCommitted_Raw(this, &FVoxelLandGraphToolkit::SeedCommitted)]
             + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("FrameTerrain", "Frame terrain (F)")).OnClicked_Raw(this, &FVoxelLandGraphToolkit::FramePreviewTerrain)]
@@ -675,6 +687,152 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
             + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).MinValue(1).MaxValue(2).Value_Lambda([this] { return PreviewVerticalRadius; }).OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { CommitPreviewRadius(Value, false); })]]
         + SVerticalBox::Slot().AutoHeight()[SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[SNew(STextBlock).Text(LOCTEXT("PreviewSettings", "Transient preview settings and overrides"))].BodyContent()[SNew(SBox).MaxDesiredHeight(250)[PreviewDetails.ToSharedRef()]]]
         + SVerticalBox::Slot().FillHeight(1)[PreviewViewport.ToSharedRef()]];
+}
+
+TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildPreviewTargetMenu()
+{
+    FMenuBuilder Menu(true, nullptr);
+    bool bHasOutput = false;
+    if (GraphWidget && !bStopped && !bPIE && !bReloadPaused)
+    {
+        for (UObject* Object : GraphWidget->GetSelectedNodes())
+        {
+            const UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(Object);
+            if (!Node)
+            {
+                continue;
+            }
+            for (const UEdGraphPin* Pin : Node->Pins)
+            {
+                if (!Pin || Pin->Direction != EGPD_Output)
+                {
+                    continue;
+                }
+                bHasOutput = true;
+                const FString Label = FString::Printf(TEXT("%s - %s (%s)"),
+                    *Node->GetNodeTitle(ENodeTitleType::ListView).ToString(), *Node->GetPinDisplayName(Pin).ToString(),
+                    *Pin->PinType.PinCategory.ToString());
+                Menu.AddMenuEntry(FText::FromString(Label), LOCTEXT("PreviewOutputTip", "Preview this output as a signed density field."),
+                    FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::SelectPreviewTarget,
+                        Node->NodeGuid, Pin->PinId, Label)));
+            }
+        }
+    }
+    if (!bHasOutput)
+    {
+        Menu.AddMenuEntry(LOCTEXT("NoPreviewOutput", "Select a node with an output"), FText::GetEmpty(), FSlateIcon(),
+            FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([] { return false; })));
+    }
+    return Menu.MakeWidget();
+}
+void FVoxelLandGraphToolkit::SelectPreviewTarget(FGuid NodeId, FGuid PinId, FString Label)
+{
+    if (bStopped || bPIE || bReloadPaused)
+    {
+        return;
+    }
+    PreviewNodeId = NodeId;
+    PreviewPinId = PinId;
+    PreviewTargetLabel = MoveTemp(Label);
+    ++PreviewTargetRevision;
+    NodePreviewSnapshot.Reset();
+    NodePreviewPayload.Reset();
+    SemanticChangeTime = FPlatformTime::Seconds();
+    RequestCompile();
+}
+FReply FVoxelLandGraphToolkit::ReturnToRootPreview()
+{
+    if (!bStopped && !bPIE && !bReloadPaused && PreviewNodeId.IsValid())
+    {
+        PreviewNodeId.Invalidate();
+        PreviewPinId.Invalidate();
+        PreviewTargetLabel.Reset();
+        ++PreviewTargetRevision;
+        NodePreviewSnapshot.Reset();
+        NodePreviewPayload.Reset();
+        SemanticChangeTime = FPlatformTime::Seconds();
+        RequestCompile();
+    }
+    return FReply::Handled();
+}
+bool FVoxelLandGraphToolkit::BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& Snapshot, FString& Error) const
+{
+    const FVoxelLandGraphNodeRecord* Node = Snapshot.Nodes.FindByPredicate([this](const FVoxelLandGraphNodeRecord& Candidate)
+    {
+        return Candidate.Id == PreviewNodeId;
+    });
+    if (!Node)
+    {
+        Error = TEXT("Selected preview node no longer exists.");
+        return false;
+    }
+    const FVoxelLandGraphPinRecord* Pin = Node->Pins.FindByPredicate([this](const FVoxelLandGraphPinRecord& Candidate)
+    {
+        return Candidate.Id == PreviewPinId && Candidate.bOutput;
+    });
+    if (!Pin)
+    {
+        Error = TEXT("Selected preview output no longer exists.");
+        return false;
+    }
+    if (Pin->Type != EVoxelLandGraphValueType::Float)
+    {
+        Error = TEXT("Node preview supports float outputs only; integer and boolean outputs cannot be displayed as density.");
+        return false;
+    }
+    if (Node->OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::SmoothDensity))
+    {
+        Error = TEXT("Filter outputs cannot be selected for node preview; preview the graph output instead.");
+        return false;
+    }
+    const auto Provider = FVoxelLandOperatorRegistry::Resolve(Node->OperatorId, Node->OperatorVersion);
+    if (Provider && Provider->Stage() == EVoxelLandOperatorStage::OneCellFilter)
+    {
+        Error = TEXT("Filter outputs cannot be selected for node preview; preview the graph output instead.");
+        return false;
+    }
+    TSet<FGuid> RemovedOutputs;
+    for (const FVoxelLandGraphNodeRecord& Candidate : Snapshot.Nodes)
+    {
+        if (Candidate.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput))
+        {
+            RemovedOutputs.Add(Candidate.Id);
+        }
+    }
+    Snapshot.Nodes.RemoveAll([&RemovedOutputs](const FVoxelLandGraphNodeRecord& Candidate)
+    {
+        return RemovedOutputs.Contains(Candidate.Id);
+    });
+    Snapshot.Links.RemoveAll([&RemovedOutputs](const FVoxelLandGraphLinkRecord& Link)
+    {
+        return RemovedOutputs.Contains(Link.SourceNode) || RemovedOutputs.Contains(Link.TargetNode);
+    });
+    TSet<FGuid> ExistingIds;
+    for (const FVoxelLandGraphNodeRecord& Candidate : Snapshot.Nodes)
+    {
+        ExistingIds.Add(Candidate.Id);
+        for (const FVoxelLandGraphPinRecord& CandidatePin : Candidate.Pins)
+        {
+            ExistingIds.Add(CandidatePin.Id);
+        }
+    }
+    FVoxelLandGraphNodeRecord Output;
+    do { Output.Id = FGuid::NewGuid(); } while (!Output.Id.IsValid() || ExistingIds.Contains(Output.Id));
+    ExistingIds.Add(Output.Id);
+    Output.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+    FVoxelLandGraphPinRecord Input;
+    do { Input.Id = FGuid::NewGuid(); } while (!Input.Id.IsValid() || ExistingIds.Contains(Input.Id));
+    Input.Name = TEXT("Density");
+    Input.Type = EVoxelLandGraphValueType::Float;
+    Output.Pins.Add(Input);
+    FVoxelLandGraphLinkRecord Link;
+    Link.SourceNode = PreviewNodeId;
+    Link.SourcePin = PreviewPinId;
+    Link.TargetNode = Output.Id;
+    Link.TargetPin = Input.Id;
+    Snapshot.Nodes.Add(MoveTemp(Output));
+    Snapshot.Links.Add(MoveTemp(Link));
+    return true;
 }
 
 void FVoxelLandGraphToolkit::CreateMirror()
@@ -748,34 +906,37 @@ void FVoxelLandGraphToolkit::CreateMirror()
     bLoading = false;
 }
 
-bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagnostic* Diagnostic)
+bool FVoxelLandGraphToolkit::CaptureMirrorSnapshot(FVoxelLandGraphSnapshot& Snapshot, bool& bValidDefaults,
+    FString& Error, FVoxelLandGraphDiagnostic* Diagnostic) const
 {
+    Snapshot = FVoxelLandGraphSnapshot();
+    bValidDefaults = true;
     if (Diagnostic) { *Diagnostic = FVoxelLandGraphDiagnostic(); }
     if (!Asset || !Graph)
     {
         Error = TEXT("Missing graph asset or editor mirror.");
         return false;
     }
-    TArray<FVoxelLandGraphNodeRecord> Nodes;
-    TArray<FVoxelLandGraphLinkRecord> Links;
-    bool bValidDefaults = true;
+    Snapshot.SourceVersion = Asset->SourceVersion;
+    Snapshot.Parameters = Asset->Parameters;
     for (UEdGraphNode* GraphNode : Graph->Nodes)
     {
         const UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(GraphNode);
-        if (!Node)
-        {
-            continue;
-        }
-        if (!CaptureNode(*Node, Nodes, Links, bValidDefaults, Error, Diagnostic))
+        if (Node && !CaptureNode(*Node, Snapshot.Nodes, Snapshot.Links, bValidDefaults, Error, Diagnostic))
         {
             return false;
         }
     }
+    return true;
+}
+bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagnostic* Diagnostic)
+{
     FVoxelLandGraphSnapshot Snapshot;
-    Snapshot.SourceVersion = Asset->SourceVersion;
-    Snapshot.Parameters = Asset->Parameters;
-    Snapshot.Nodes = Nodes;
-    Snapshot.Links = Links;
+    bool bValidDefaults = true;
+    if (!CaptureMirrorSnapshot(Snapshot, bValidDefaults, Error, Diagnostic))
+    {
+        return false;
+    }
     const uint64 NewHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
     FVoxelLandGraphSnapshot Stored;
     Stored.SourceVersion = Asset->SourceVersion;
@@ -788,8 +949,8 @@ bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagno
         {
             Asset->Modify();
         }
-        Asset->Nodes = MoveTemp(Nodes);
-        Asset->Links = MoveTemp(Links);
+        Asset->Nodes = MoveTemp(Snapshot.Nodes);
+        Asset->Links = MoveTemp(Snapshot.Links);
         Asset->MarkPackageDirty();
     }
     if (NewHash != LastSourceHash)
@@ -902,23 +1063,46 @@ void FVoxelLandGraphToolkit::RequestCompile()
     }
     FString Error;
     FVoxelLandGraphDiagnostic Diagnostic;
-    if (!CaptureMirror(Error, &Diagnostic))
+    if (!PreviewNodeId.IsValid() && !CaptureMirror(Error, &Diagnostic))
     {
         ErrorDiagnostic = MoveTemp(Diagnostic);
         Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
         return;
     }
     FVoxelLandGraphSnapshot Snapshot;
-    if (!Asset->CaptureSnapshot(Snapshot, Diagnostic))
+    bool bValidDefaults = true;
+    const bool bSnapshotValid = PreviewNodeId.IsValid()
+        ? CaptureMirrorSnapshot(Snapshot, bValidDefaults, Error, &Diagnostic) && bValidDefaults
+        : Asset->CaptureSnapshot(Snapshot, Diagnostic);
+    if (!bSnapshotValid)
     {
         ErrorDiagnostic = MoveTemp(Diagnostic);
-        Status = FString::Printf(TEXT("Error; preview stale: %s"), *ErrorDiagnostic.Message);
+        Status = FString::Printf(TEXT("Error; preview stale: %s"), *(ErrorDiagnostic.Message.IsEmpty() ? Error : ErrorDiagnostic.Message));
+        return;
+    }
+    const uint64 SourceHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
+    const bool bNodePreview = PreviewNodeId.IsValid();
+    if (bNodePreview && !BuildNodePreviewSnapshot(Snapshot, Error))
+    {
+        NodePreviewSnapshot.Reset();
+        NodePreviewPayload.Reset();
+        ErrorDiagnostic = FVoxelLandGraphDiagnostic();
+        Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
         return;
     }
     ErrorDiagnostic = FVoxelLandGraphDiagnostic();
     Status = TEXT("Compiling; prior preview is stale.");
     const TSharedRef<FVoxelLandCompileWork, ESPMode::ThreadSafe> Work = MakeShared<FVoxelLandCompileWork, ESPMode::ThreadSafe>();
     Work->Revision = Revision;
+    Work->TargetRevision = PreviewTargetRevision;
+    Work->SourceHash = SourceHash;
+    Work->bNodePreview = bNodePreview;
+    if (bNodePreview)
+    {
+        Work->Snapshot = Snapshot;
+        NodePreviewSnapshot.Reset();
+        NodePreviewPayload.Reset();
+    }
     CompileWork = Work;
     WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Work]() mutable
     {
@@ -1471,7 +1655,7 @@ FReply FVoxelLandGraphToolkit::FramePreviewTerrain()
     }
     return FReply::Handled();
 }
-bool FVoxelLandGraphToolkit::BuildPreviewProfile(FVoxelLandZoneProfile& Profile, FString& Error) const
+bool FVoxelLandGraphToolkit::BuildPreviewProfile(const FVoxelLandSerializedProgram& Payload, FVoxelLandZoneProfile& Profile, FString& Error) const
 {
     if (!PreviewSettings || PreviewSettings->Graph != Asset || !PreviewSettings->ValidateSettings(Error))
     {
@@ -1481,7 +1665,7 @@ bool FVoxelLandGraphToolkit::BuildPreviewProfile(FVoxelLandZoneProfile& Profile,
     Profile.VoxelSizeCm = PreviewSettings->VoxelSizeCm;
     for (const FVoxelLandParameterOverride& Override : PreviewSettings->Overrides)
     {
-        const FVoxelLandSerializedParameter* Parameter = Asset->CompiledProgram.Parameters.FindByPredicate([&Override](const FVoxelLandSerializedParameter& Candidate)
+        const FVoxelLandSerializedParameter* Parameter = Payload.Parameters.FindByPredicate([&Override](const FVoxelLandSerializedParameter& Candidate)
         {
             return Candidate.Id == Override.ParameterId;
         });
@@ -1524,19 +1708,42 @@ void FVoxelLandGraphToolkit::StartPreview()
     }
     FString Error;
     FVoxelLandGraphSnapshot Snapshot;
-    if (!Asset->CaptureSnapshot(Snapshot, Error) || Asset->CompiledProgram.ProgramVersion == 0 ||
-        uint64(Asset->CompiledProgram.SourceFingerprint) != FVoxelLandProgramCodec::SourceFingerprint(Snapshot))
+    bool bValidDefaults = true;
+    const bool bSnapshotValid = PreviewNodeId.IsValid()
+        ? CaptureMirrorSnapshot(Snapshot, bValidDefaults, Error) && bValidDefaults
+        : Asset->CaptureSnapshot(Snapshot, Error);
+    if (!bSnapshotValid)
     {
-        Status = FString::Printf(TEXT("Stale preview: compiled source unavailable or invalid. %s"), *Error);
+        Status = FString::Printf(TEXT("Stale preview: source unavailable or invalid. %s"), *Error);
+        return;
+    }
+    const uint64 SourceHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
+    FVoxelLandSerializedProgram Payload;
+    if (PreviewNodeId.IsValid())
+    {
+        if (!NodePreviewPayload || !NodePreviewSnapshot || NodePreviewSourceHash != SourceHash)
+        {
+            Status = TEXT("Stale node preview: compile the selected output first.");
+            return;
+        }
+        Payload = *NodePreviewPayload;
+        Snapshot = *NodePreviewSnapshot;
+    }
+    else
+    {
+        Payload = Asset->CompiledProgram;
+    }
+    if (Payload.ProgramVersion == 0 || uint64(Payload.SourceFingerprint) != FVoxelLandProgramCodec::SourceFingerprint(Snapshot))
+    {
+        Status = TEXT("Stale preview: compiled source unavailable or invalid.");
         return;
     }
     FVoxelLandZoneProfile Profile;
-    if (!BuildPreviewProfile(Profile, Error))
+    if (!BuildPreviewProfile(Payload, Profile, Error))
     {
         Status = FString::Printf(TEXT("Error; preview is stale: %s"), *Error);
         return;
     }
-    const FVoxelLandSerializedProgram Payload = Asset->CompiledProgram;
     const int64 Seed = PreviewSeed;
     const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Cancel = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
     PreviewCancel = Cancel;
@@ -1694,12 +1901,21 @@ void FVoxelLandGraphToolkit::ProcessCompileWork()
         return;
     }
     const TSharedPtr<FVoxelLandCompileWork, ESPMode::ThreadSafe> Finished = MoveTemp(CompileWork);
-    if (!bPIE && Finished->Revision == Revision && !bCompileRequested)
+    if (!bPIE && Finished->Revision == Revision && Finished->TargetRevision == PreviewTargetRevision && !bCompileRequested)
     {
         if (Finished->bSuccess)
         {
             ErrorDiagnostic = FVoxelLandGraphDiagnostic();
-            StoreCompiledProgram(*Asset, MoveTemp(Finished->Payload));
+            if (Finished->bNodePreview)
+            {
+                NodePreviewSourceHash = Finished->SourceHash;
+                NodePreviewSnapshot = MakeShared<FVoxelLandGraphSnapshot>(MoveTemp(Finished->Snapshot));
+                NodePreviewPayload = MakeShared<FVoxelLandSerializedProgram>(MoveTemp(Finished->Payload));
+            }
+            else
+            {
+                StoreCompiledProgram(*Asset, MoveTemp(Finished->Payload));
+            }
             LastCompileMs = Finished->CompileMs;
             StartPreview();
         }

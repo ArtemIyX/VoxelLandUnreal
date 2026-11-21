@@ -5,6 +5,7 @@
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/PackageReload.h"
+#include "UObject/SoftObjectPath.h"
 #include "RenderCommandFence.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Data/Structs/VoxelLandReloadTestBarrier.h"
@@ -512,6 +513,8 @@ public:
 	bool bM4 = false;
 	bool bM4Inspection = false;
 	bool bHasM4HeightRange = false;
+	bool bHasM4StageStats = false;
+	FVoxelLandM4StageStats M4StageStats;
 	int32 M4MinHeightQ8 = 0;
 	int32 M4MaxHeightQ8 = 0;
 	int32 M4MinChunkZ = 0;
@@ -2261,12 +2264,20 @@ void FVoxelLandGraphToolkit::PackageReloaded(EPackageReloadPhase Phase, FPackage
 		const bool bGraphAffected = Asset && Asset->GetOutermost() == Package;
 		const UObject* Setup = PreviewSettings ? PreviewSettings->MaterialSetup.Get() : nullptr;
 		const UObject* Selected = SelectedPreviewSettings.Get();
+		const bool bM4FunctionAffected =
+			M4FunctionDependencies.ContainsByPredicate([Package](const TWeakObjectPtr<UObject>& Dependency) {
+				const UObject* Object = Dependency.Get();
+				return Object && Object->GetOutermost() == Package;
+			});
 		const bool bM4Affected =
-			M4PreviewConfig
-			&& (M4PreviewConfig->GetOutermost() == Package
-				|| (M4PreviewConfig->Continental.Graph && M4PreviewConfig->Continental.Graph->GetOutermost() == Package)
-				|| (M4PreviewConfig->Mountain.Graph && M4PreviewConfig->Mountain.Graph->GetOutermost() == Package)
-				|| (M4PreviewConfig->Peaks.Graph && M4PreviewConfig->Peaks.Graph->GetOutermost() == Package));
+			bM4FunctionAffected
+			|| M4PreviewConfig
+				   && (M4PreviewConfig->GetOutermost() == Package
+					   || (M4PreviewConfig->Continental.Graph
+						   && M4PreviewConfig->Continental.Graph->GetOutermost() == Package)
+					   || (M4PreviewConfig->Mountain.Graph
+						   && M4PreviewConfig->Mountain.Graph->GetOutermost() == Package)
+					   || (M4PreviewConfig->Peaks.Graph && M4PreviewConfig->Peaks.Graph->GetOutermost() == Package));
 		if (bGraphAffected || (Setup && Setup->GetOutermost() == Package)
 			|| (Selected && Selected->GetOutermost() == Package)
 			|| (PreviewMaterial && PreviewMaterial->GetOutermost() == Package) || bM4Affected)
@@ -2304,11 +2315,17 @@ void FVoxelLandGraphToolkit::ObjectsReplaced(const TMap<UObject*, UObject*>& Rep
 			}
 		}
 	}
+	const bool bM4FunctionAffected =
+		M4FunctionDependencies.ContainsByPredicate([&Replacements](const TWeakObjectPtr<UObject>& Dependency) {
+			UObject* Object = Dependency.Get();
+			return Object && Replacements.Contains(Object);
+		});
 	const bool bM4Affected =
-		M4PreviewConfig
-		&& (Replacements.Contains(M4PreviewConfig) || Replacements.Contains(M4PreviewConfig->Continental.Graph)
-			|| Replacements.Contains(M4PreviewConfig->Mountain.Graph)
-			|| Replacements.Contains(M4PreviewConfig->Peaks.Graph));
+		bM4FunctionAffected
+		|| M4PreviewConfig
+			   && (Replacements.Contains(M4PreviewConfig) || Replacements.Contains(M4PreviewConfig->Continental.Graph)
+				   || Replacements.Contains(M4PreviewConfig->Mountain.Graph)
+				   || Replacements.Contains(M4PreviewConfig->Peaks.Graph));
 	if (bGraphAffected || Replacements.Contains(PreviewSettings) || bM4Affected)
 	{
 		PauseForReload(true);
@@ -2348,7 +2365,11 @@ void FVoxelLandGraphToolkit::MaterialSetupPropertyChanged(UObject* Object, FProp
 			ApplyPreviewMaterial(Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr);
 			return;
 		}
-		if (Object == M4PreviewConfig || Object == M4PreviewConfig->Continental.Graph
+		const bool bM4FunctionAffected =
+			Object && M4FunctionDependencies.ContainsByPredicate([Object](const TWeakObjectPtr<UObject>& Dependency) {
+				return Dependency.Get() == Object;
+			});
+		if (bM4FunctionAffected || Object == M4PreviewConfig || Object == M4PreviewConfig->Continental.Graph
 			|| Object == M4PreviewConfig->Mountain.Graph || Object == M4PreviewConfig->Peaks.Graph)
 		{
 			StartM4Preview();
@@ -2595,10 +2616,25 @@ template <typename T> bool M4PreviewArraysEqual(const TArray<T>& A, const TArray
 
 bool M4PreviewSourceEqual(const FVoxelLandGraphSnapshot& A, const FVoxelLandGraphSnapshot& B)
 {
-	// M4 capture rejects function graphs, so nonempty function tables fail closed.
-	return A.SourceVersion == B.SourceVersion && A.Functions.IsEmpty() && B.Functions.IsEmpty()
-		&& M4PreviewArraysEqual(A.Parameters, B.Parameters) && M4PreviewArraysEqual(A.Nodes, B.Nodes)
-		&& M4PreviewArraysEqual(A.Links, B.Links);
+	if (A.SourceVersion != B.SourceVersion || !M4PreviewArraysEqual(A.Parameters, B.Parameters)
+		|| !M4PreviewArraysEqual(A.Nodes, B.Nodes) || !M4PreviewArraysEqual(A.Links, B.Links)
+		|| A.Functions.Num() != B.Functions.Num())
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < A.Functions.Num(); ++Index)
+	{
+		const FVoxelLandGraphFunctionSnapshot& Left = A.Functions[Index];
+		const FVoxelLandGraphFunctionSnapshot& Right = B.Functions[Index];
+		if (Left.AssetPath != Right.AssetPath || Left.SourceVersion != Right.SourceVersion
+			|| Left.OutputType != Right.OutputType || Left.OutputNode != Right.OutputNode
+			|| Left.OutputPin != Right.OutputPin || !M4PreviewArraysEqual(Left.Inputs, Right.Inputs)
+			|| !M4PreviewArraysEqual(Left.Nodes, Right.Nodes) || !M4PreviewArraysEqual(Left.Links, Right.Links))
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 void M4InspectionAppendOverrides(FString& Out, const TCHAR* Label, const FVoxelLandM4ControlSnapshot& Control)
@@ -2716,6 +2752,23 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 		Status = FString::Printf(TEXT("Error; previous preview is stale: %s"), *Error);
 		return;
 	}
+	TArray<TWeakObjectPtr<UObject>> Dependencies;
+	const FVoxelLandM4ControlSnapshot* Controls[] = {&Snapshot->Continental, &Snapshot->Mountain, &Snapshot->Peaks};
+	for (const FVoxelLandM4ControlSnapshot* Control : Controls)
+	{
+		for (const FVoxelLandGraphFunctionSnapshot& Function : Control->Source.Functions)
+		{
+			UObject* Dependency = FSoftObjectPath(Function.AssetPath).ResolveObject();
+			if (!Dependency)
+			{
+				Status = TEXT("Stale preview: a graph function dependency is unavailable.");
+				return;
+			}
+			Dependencies.AddUnique(Dependency);
+		}
+	}
+	M4FunctionDependencies = MoveTemp(Dependencies);
+	M4FunctionPresentationRevision = FVoxelLandEditorOperatorRegistry::GetRevision();
 	if (bM4Inspection && Snapshot->Domain.Mode != EVoxelLandM4DomainMode::Finite)
 	{
 		Status = TEXT("2 km inspection requires a finite prepass height grid; select finite mode.");
@@ -2768,6 +2821,7 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 			{
 				Grid->GetHeightRangeQ8(Work->M4MinHeightQ8, Work->M4MaxHeightQ8);
 				Grid->GetBoundsCm(Work->M4MinX, Work->M4MinY, Work->M4MaxX, Work->M4MaxY);
+				Work->bHasM4StageStats = Grid->GetStageStats(Work->M4StageStats);
 				Work->bHasM4HeightRange = true;
 			}
 			if (Work->bM4Inspection)
@@ -3014,11 +3068,25 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 		{
 			M4StageDiagnostics = FString::Printf(
 				TEXT(
-					"M4 global-stage inspector (completed CPU prepass): grid XY [%lld,%lld] to [%lld,%lld] cm, %d x %d cells, spacing %lld cm; stored height range %.2f to %.2f cm. Erosion %s. Range excludes overhang and final smoothing; per-control ranges are not measured."),
+					"M4 global-stage inspector (completed CPU prepass): grid XY [%lld,%lld] to [%lld,%lld] cm, %d x %d cells, spacing %lld cm; stored height range %.2f to %.2f cm. Erosion %s. Range excludes overhang and final smoothing."),
 				Finished.M4MinX, Finished.M4MinY, Finished.M4MaxX, Finished.M4MaxY, Snapshot.Domain.CellsX,
 				Snapshot.Domain.CellsY, Snapshot.Domain.GridSpacingCm, double(Finished.M4MinHeightQ8) / 256.0,
 				double(Finished.M4MaxHeightQ8) / 256.0,
 				Snapshot.Domain.bGlobalErosion ? TEXT("enabled") : TEXT("disabled"));
+			if (Finished.bHasM4StageStats)
+			{
+				const FVoxelLandM4StageStats& S = Finished.M4StageStats;
+				M4StageDiagnostics += FString::Printf(
+					TEXT(
+						"\nObserved %d samples: continental [%u,%u], mountain [%u,%u], peaks [%u,%u] (normalized uint16); base height [%.2f,%.2f] cm before erosion."),
+					S.SampleCount, uint32(S.ContinentalMin), uint32(S.ContinentalMax), uint32(S.MountainMin),
+					uint32(S.MountainMax), uint32(S.PeaksMin), uint32(S.PeaksMax), double(S.BaseHeightMinQ8) / 256.0,
+					double(S.BaseHeightMaxQ8) / 256.0);
+			}
+			else
+			{
+				M4StageDiagnostics += TEXT(" Per-control observations unavailable for this grid.");
+			}
 		}
 		else
 		{
@@ -3349,6 +3417,12 @@ bool FVoxelLandGraphToolkit::PollJobs(float)
 	WorkerTasks.RemoveAll([](const TFuture<void>& Task) { return Task.IsReady(); });
 	PollFunctionPalette();
 	const uint64 CurrentPresentationRevision = FVoxelLandEditorOperatorRegistry::GetRevision();
+	if (bM4Preview && !M4FunctionDependencies.IsEmpty()
+		&& M4FunctionPresentationRevision != CurrentPresentationRevision)
+	{
+		M4FunctionPresentationRevision = CurrentPresentationRevision;
+		StartM4Preview();
+	}
 	if (PaletteWidget && PresentationRevision != CurrentPresentationRevision)
 	{
 		PresentationRevision = CurrentPresentationRevision;

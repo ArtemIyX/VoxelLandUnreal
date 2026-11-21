@@ -228,6 +228,8 @@ private:
 	TSoftObjectPtr<UVoxelLandWorldSettings> SelectedPreviewSettings;
 	TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;
 	TObjectPtr<UVoxelLandM4WorldConfig> M4PreviewConfig = nullptr;
+	TArray<TWeakObjectPtr<UObject>> M4FunctionDependencies;
+	uint64 M4FunctionPresentationRevision = 0;
 	bool bM4Preview = false;
 	bool bM4Inspection = false;
 	FString M4StageDiagnostics;

@@ -49,6 +49,16 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease)
 {
+	return Generate(Domain, BaseHeightsQ8, WorldSeed, StageId, Salt, DropletCount, Erosion, OutGrid, OutHash,
+		IsCancelled, MoveTemp(Lease), nullptr);
+}
+
+FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayView<int32> BaseHeightsQ8,
+	uint64 WorldSeed, const FGuid& StageId, uint32 Salt, int32 DropletCount, const FVoxelLandM4ErosionSettings& Erosion,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease,
+	const FVoxelLandM4StageStats* StageStats)
+{
 	if (const FVoxelLandError Error = VoxelLandM4Domain::Validate(Domain))
 	{
 		return Error;
@@ -106,7 +116,7 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 		return bGridCancelled;
 	};
 	if (!FVoxelLandM4HeightGrid::Create(Domain.OriginXCm, Domain.OriginYCm, Domain.CellsX, Domain.CellsY,
-			Domain.GridSpacingCm, FinalHeights, Grid, CheckGridCancellation, Lease))
+			Domain.GridSpacingCm, FinalHeights, Grid, CheckGridCancellation, Lease, StageStats))
 	{
 		return bGridCancelled ? M4PrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 prepass cancelled"))
 							  : M4PrepassError(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height grid"));

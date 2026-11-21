@@ -20,6 +20,15 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease)
 {
+	return Create(InOriginX, InOriginY, InCellsX, InCellsY, InSpacingCm, HeightsQ8, OutGrid, IsCancelled,
+		MoveTemp(Lease), nullptr);
+}
+
+bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCellsX, int32 InCellsY, int64 InSpacingCm,
+	TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease,
+	const FVoxelLandM4StageStats* ObservedStats)
+{
 	if (IsCancelled() || InCellsX < 1 || InCellsY < 1 || InCellsX > 1024 || InCellsY > 1024 || InSpacingCm <= 0)
 	{
 		return false;
@@ -75,6 +84,17 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	Grid->CellsY = InCellsY;
 	Grid->MinimumHeightQ8 = MinimumHeight;
 	Grid->MaximumHeightQ8 = MaximumHeight;
+	if (ObservedStats)
+	{
+		if (ObservedStats->SampleCount != Count || ObservedStats->ContinentalMin > ObservedStats->ContinentalMax
+			|| ObservedStats->MountainMin > ObservedStats->MountainMax
+			|| ObservedStats->PeaksMin > ObservedStats->PeaksMax
+			|| ObservedStats->BaseHeightMinQ8 > ObservedStats->BaseHeightMaxQ8)
+		{
+			return false;
+		}
+		Grid->StageStats = *ObservedStats;
+	}
 	Grid->Heights.Reserve(int32(Count));
 	for (int32 Y = 0; Y <= InCellsY; ++Y)
 	{

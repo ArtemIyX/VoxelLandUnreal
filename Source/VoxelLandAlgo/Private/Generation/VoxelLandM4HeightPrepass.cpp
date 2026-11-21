@@ -3,6 +3,7 @@
 #include "Generation/VoxelLandM4CurveLut.h"
 #include "Generation/VoxelLandM4Domain.h"
 #include "Generation/VoxelLandM4Prepass.h"
+#include "Data/Structs/VoxelLandM4StageStats.h"
 
 namespace VoxelLandM4HeightPrepass
 {
@@ -98,7 +99,32 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 	{
 		return Error;
 	}
-	return VoxelLandM4Prepass::Generate(
-		Domain, BaseHeights, WorldSeed, StageId, Salt, DropletCount, Erosion, OutGrid, OutHash, IsCancelled, Lease);
+	FVoxelLandM4StageStats Stats;
+	Stats.SampleCount = BaseHeights.Num();
+	Stats.ContinentalMin = Stats.MountainMin = Stats.PeaksMin = MAX_uint16;
+	Stats.BaseHeightMinQ8 = MAX_int32;
+	Stats.BaseHeightMaxQ8 = MIN_int32;
+	const int32 Width = Domain.CellsX + 1;
+	for (int32 Y = 0; Y <= Domain.CellsY; ++Y)
+	{
+		if (IsCancelled())
+		{
+			return M4HeightPrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 height statistics cancelled"));
+		}
+		for (int32 X = 0; X < Width; ++X)
+		{
+			const int32 Index = Y * Width + X;
+			Stats.ContinentalMin = FMath::Min(Stats.ContinentalMin, Continental[Index]);
+			Stats.ContinentalMax = FMath::Max(Stats.ContinentalMax, Continental[Index]);
+			Stats.MountainMin = FMath::Min(Stats.MountainMin, Mountain[Index]);
+			Stats.MountainMax = FMath::Max(Stats.MountainMax, Mountain[Index]);
+			Stats.PeaksMin = FMath::Min(Stats.PeaksMin, Peaks[Index]);
+			Stats.PeaksMax = FMath::Max(Stats.PeaksMax, Peaks[Index]);
+			Stats.BaseHeightMinQ8 = FMath::Min(Stats.BaseHeightMinQ8, BaseHeights[Index]);
+			Stats.BaseHeightMaxQ8 = FMath::Max(Stats.BaseHeightMaxQ8, BaseHeights[Index]);
+		}
+	}
+	return VoxelLandM4Prepass::Generate(Domain, BaseHeights, WorldSeed, StageId, Salt, DropletCount, Erosion, OutGrid,
+		OutHash, IsCancelled, Lease, &Stats);
 }
 }

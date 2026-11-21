@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/Structs/VoxelLandM4StageStats.h"
 #include "Generation/VoxelLandM4GridLease.h"
 
 /** Immutable bounded Q8 height snapshot for the M4 prepass foundation.
@@ -32,6 +33,12 @@ public:
 	static bool Create(int64 OriginX, int64 OriginY, int32 CellsX, int32 CellsY, int64 SpacingCm,
 		TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease);
+	// Stage statistics are copied before publication; callers must provide only
+	// observations from the exact control samples that produced HeightsQ8.
+	static bool Create(int64 OriginX, int64 OriginY, int32 CellsX, int32 CellsY, int64 SpacingCm,
+		TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
+		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease,
+		const FVoxelLandM4StageStats* StageStats);
 
 	/** Samples integer world centimeters inside the inclusive grid bounds.
 	 * The four-corner bilinear expression is rounded once, ties away from zero.
@@ -53,6 +60,16 @@ public:
 		OutMinimum = MinimumHeightQ8;
 		OutMaximum = MaximumHeightQ8;
 	}
+	// False for grids created without the complete observed control stages.
+	bool GetStageStats(FVoxelLandM4StageStats& OutStats) const
+	{
+		if (!StageStats.IsSet())
+		{
+			return false;
+		}
+		OutStats = StageStats.GetValue();
+		return true;
+	}
 	// Cache producers may publish only a grid that retains their exact lease.
 	bool RetainsLease(const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& Lease) const
 	{
@@ -70,6 +87,7 @@ private:
 	int32 CellsY = 0;
 	int32 MinimumHeightQ8 = 0;
 	int32 MaximumHeightQ8 = 0;
+	TOptional<FVoxelLandM4StageStats> StageStats;
 	// Declared before Heights so its destructor runs after the grid allocation is released.
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> GridLease;
 	TArray<int32> Heights;

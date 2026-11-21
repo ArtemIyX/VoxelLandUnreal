@@ -1,4 +1,5 @@
 #include "Operators/VoxelLandOperator.h"
+#include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Misc/ScopeLock.h"
 #include "HAL/PlatformProcess.h"
 #include "Modules/ModuleManager.h"
@@ -80,9 +81,16 @@ bool FVoxelLandOperatorRegistry::RegisterV2(FName ModuleName, TSharedRef<const I
         Error = TEXT("Incompatible VoxelLand C++ provider ABI; rebuild the provider against this plugin version");
         return false;
     }
+    const FGuid OperatorId = Provider->Id();
+    const FGuid ReservedPrefix = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+    if (OperatorId.A == ReservedPrefix.A && OperatorId.B == ReservedPrefix.B && OperatorId.C == ReservedPrefix.C)
+    {
+        Error = TEXT("Operator ID uses the reserved VoxelLand builtin and function namespace");
+        return false;
+    }
     const TArray<EVoxelLandGraphValueType> Inputs = Provider->InputTypes();
     const EVoxelLandOperatorSimdRequirement Simd = Provider->SimdRequirement();
-    if (!Provider->Id().IsValid() || Provider->Version() < 1 || Inputs.Num() < 1 || Inputs.Num() > 3 ||
+    if (!OperatorId.IsValid() || Provider->Version() < 1 || Inputs.Num() < 1 || Inputs.Num() > 3 ||
         (Provider->Stage() != EVoxelLandOperatorStage::Sample && Provider->Stage() != EVoxelLandOperatorStage::OneCellFilter) ||
         (Provider->Stage() == EVoxelLandOperatorStage::OneCellFilter && (Inputs.Num() != 1 || Inputs[0] != EVoxelLandGraphValueType::Float || Provider->OutputType() != EVoxelLandGraphValueType::Float || Simd != EVoxelLandOperatorSimdRequirement::None)) ||
         (Simd != EVoxelLandOperatorSimdRequirement::None && Simd != EVoxelLandOperatorSimdRequirement::SSE2))

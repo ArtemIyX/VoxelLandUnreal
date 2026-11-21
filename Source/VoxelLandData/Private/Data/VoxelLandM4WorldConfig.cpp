@@ -2,6 +2,7 @@
 
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/VoxelLandGraphFunctionId.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Hash/xxhash.h"
@@ -12,9 +13,107 @@ namespace
 constexpr int64 M4AssetHeightLimit = 512000000;
 constexpr int64 M4AssetExactFloatLimit = 16777216;
 
+// Inspect dependency assets before CaptureSnapshot copies them. The existing
+// M3 capture verifies the function interface, recursion and source topology;
+// this tighter M4 budget bounds all captured records for one control channel.
+class FM4AssetFunctionPreflight
+{
+public:
+	bool Run(const UVoxelLandTerrainGraph& Root, FString& OutError)
+	{
+		Error = &OutError;
+		return VisitGraph(Root, 0);
+	}
+
+private:
+	bool Fail(const TCHAR* Message) const
+	{
+		*Error = Message;
+		return false;
+	}
+
+	bool VisitGraph(const UVoxelLandTerrainGraph& Graph, int32 Depth)
+	{
+		if (Depth > 16 || Graph.SourceVersion != 1 || Graph.Parameters.Num() > 128
+			|| TotalNodes + Graph.Nodes.Num() > 128 || TotalLinks + Graph.Links.Num() > 2048)
+		{
+			return Fail(TEXT("M4 control function dependencies exceed graph limits."));
+		}
+		TotalNodes += Graph.Nodes.Num();
+		TotalLinks += Graph.Links.Num();
+		for (const FVoxelLandGraphParameter& Parameter : Graph.Parameters)
+		{
+			if (Parameter.Name.Len() > 128)
+			{
+				return Fail(TEXT("M4 function parameter name exceeds capture limits."));
+			}
+		}
+		for (const FVoxelLandGraphNodeRecord& Node : Graph.Nodes)
+		{
+			if (!Node.Configuration.IsEmpty() || Node.Pins.Num() > 64 || TotalPins > 1024 - Node.Pins.Num())
+			{
+				return Fail(TEXT("M4 control function exceeds pin limits or uses unsupported operator configuration."));
+			}
+			TotalPins += Node.Pins.Num();
+			for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+			{
+				if (Pin.Name.Len() > 128)
+				{
+					return Fail(TEXT("M4 control pin name exceeds capture limits."));
+				}
+			}
+			const bool bCall = Node.OperatorId == VoxelLandGraphFunctionCallId();
+			if (!bCall && !Node.FunctionPath.IsNull())
+			{
+				return Fail(TEXT("Only an M4 graph function call may reference a function asset."));
+			}
+			if (!bCall)
+			{
+				continue;
+			}
+			if (Node.FunctionPath.IsNull() || Node.FunctionPath.ToString().Len() > 2048)
+			{
+				return Fail(TEXT("M4 function call has a missing or oversized asset path."));
+			}
+			UVoxelLandGraphFunction* Function = Cast<UVoxelLandGraphFunction>(Node.FunctionPath.TryLoad());
+			if (!Function)
+			{
+				return Fail(TEXT("M4 control function is missing or has an incompatible class."));
+			}
+			const FString Path = Function->GetPathName();
+			if (Visiting.Contains(Path))
+			{
+				return Fail(TEXT("Recursive M4 control function dependency detected."));
+			}
+			if (Visited.Contains(Path))
+			{
+				continue;
+			}
+			if (Visited.Num() + Visiting.Num() >= 16 || Function->Parameters.Num() > 63)
+			{
+				return Fail(TEXT("M4 control function count or interface exceeds capture limits."));
+			}
+			Visiting.Add(Path);
+			if (!VisitGraph(*Function, Depth + 1))
+			{
+				return false;
+			}
+			Visiting.Remove(Path);
+			Visited.Add(Path);
+		}
+		return true;
+	}
+
+	FString* Error = nullptr;
+	int32 TotalNodes = 0;
+	int32 TotalLinks = 0;
+	int32 TotalPins = 0;
+	TSet<FString> Visiting;
+	TSet<FString> Visited;
+};
+
 // Bound every control before copying any of the three snapshots. Function
-// expansion and external operators are not supported by the current M4 2D
-// control VM, so reject them before they can allocate dependency snapshots.
+// expansion is bounded before capture; external providers remain unsupported.
 // These limits constrain copied records and strings; they are not a measurement
 // of allocator, engine, or native-noise overhead and do not by themselves prove
 // an exact process-memory bound.
@@ -37,24 +136,9 @@ bool M4AssetWithinCaptureLimits(const FVoxelLandM4ControlConfig& Control, FStrin
 		Error = TEXT("M4 control exceeds capture limits or uses an unsupported external operator.");
 		return false;
 	}
-	int32 PinCount = 0;
-	for (const FVoxelLandGraphNodeRecord& Node : Graph.Nodes)
+	if (!FM4AssetFunctionPreflight().Run(Graph, Error))
 	{
-		if (!Node.FunctionPath.IsNull() || !Node.Configuration.IsEmpty() || Node.Pins.Num() > 64
-			|| PinCount > 1024 - Node.Pins.Num())
-		{
-			Error = TEXT("M4 control exceeds pin limits or uses an unsupported function or operator configuration.");
-			return false;
-		}
-		PinCount += Node.Pins.Num();
-		for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
-		{
-			if (Pin.Name.Len() > 128)
-			{
-				Error = TEXT("M4 control pin name exceeds capture limits.");
-				return false;
-			}
-		}
+		return false;
 	}
 	for (const FVoxelLandGraphParameter& Parameter : Graph.Parameters)
 	{
@@ -157,6 +241,13 @@ bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, FVoxelLandM
 	for (FVoxelLandGraphParameter& Parameter : Temp.Source.Parameters)
 	{
 		Parameter.Tooltip = FText::GetEmpty();
+	}
+	for (FVoxelLandGraphFunctionSnapshot& Function : Temp.Source.Functions)
+	{
+		for (FVoxelLandGraphParameter& Parameter : Function.Inputs)
+		{
+			Parameter.Tooltip = FText::GetEmpty();
+		}
 	}
 	TMap<FGuid, const FVoxelLandGraphParameter*> Parameters;
 	TSet<FString> Names;

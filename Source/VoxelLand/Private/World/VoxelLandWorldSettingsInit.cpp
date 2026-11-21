@@ -388,6 +388,20 @@ public:
 		, Startup(InStartup)
 		, Lease(MoveTemp(InLease))
 	{
+		// Capture weak dependency handles only on the game thread. Worker jobs
+		// use the UObject-free function snapshots, while reload handlers can
+		// cancel a request before a function module or asset is reinstanced.
+		const FVoxelLandM4ControlSnapshot* Channels[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
+		for (const FVoxelLandM4ControlSnapshot* Channel : Channels)
+		{
+			for (const FVoxelLandGraphFunctionSnapshot& Function : Channel->Source.Functions)
+			{
+				if (UObject* Dependency = FSoftObjectPath(Function.AssetPath).ResolveObject())
+				{
+					FunctionDependencies.AddUnique(TWeakObjectPtr<UObject>(Dependency));
+				}
+			}
+		}
 	}
 
 	bool IsCurrent() const override
@@ -441,14 +455,33 @@ public:
 #if WITH_EDITOR
 	bool References(const UObject* Object) const override
 	{
-		return Object == WeakConfig.Get() || Object == Continental.Get() || Object == Mountain.Get()
-			|| Object == Peaks.Get();
+		if (Object == WeakConfig.Get() || Object == Continental.Get() || Object == Mountain.Get()
+			|| Object == Peaks.Get())
+		{
+			return true;
+		}
+		for (const TWeakObjectPtr<UObject>& Dependency : FunctionDependencies)
+		{
+			if (Dependency.Get() == Object)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 	bool ReferencesPackage(const UPackage* Package) const override
 	{
 		const UObject* Objects[] = {WeakConfig.Get(), Continental.Get(), Mountain.Get(), Peaks.Get()};
 		for (const UObject* Object : Objects)
 		{
+			if (Object && Object->GetOutermost() == Package)
+			{
+				return true;
+			}
+		}
+		for (const TWeakObjectPtr<UObject>& Dependency : FunctionDependencies)
+		{
+			const UObject* Object = Dependency.Get();
 			if (Object && Object->GetOutermost() == Package)
 			{
 				return true;
@@ -521,6 +554,7 @@ public:
 private:
 	TWeakObjectPtr<UVoxelLandM4WorldConfig> WeakConfig;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> Continental, Mountain, Peaks;
+	TArray<TWeakObjectPtr<UObject>> FunctionDependencies;
 	// Declared before Snapshot so admission remains held until its memory is freed.
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease;
 	FVoxelLandM4WorldSnapshot Snapshot;

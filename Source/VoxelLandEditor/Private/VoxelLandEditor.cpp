@@ -1,10 +1,13 @@
 #include "VoxelLandEditor.h"
+#include "VoxelLandM4EditorBake.h"
 #include "Operators/VoxelLandOperator.h"
 #include "AssetToolsModule.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "AssetTypeActions_Base.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
+#include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Graph/VoxelLandGraphPinFactory.h"
 #include "Graph/VoxelLandWorldSettingsDetails.h"
@@ -13,6 +16,8 @@
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM4ControlGrid.h"
+#include "Generation/VoxelLandM4CurveBake.h"
 #include "Async/Async.h"
 #include "UObject/ObjectSaveContext.h"
 #include "VoxelLandAlgo.h"
@@ -24,6 +29,52 @@
 #include "Brushes/SlateImageBrush.h"
 
 #define LOCTEXT_NAMESPACE "FVoxelLandEditorModule"
+
+namespace VoxelLandM4Editor
+{
+bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
+{
+	FVoxelLandM4WorldSnapshot Snapshot;
+	if (!Config.CaptureSnapshot(Snapshot, Error))
+	{
+		return false;
+	}
+	TArray<int32> Baked[3];
+	const bool bBaked = Async(EAsyncExecution::ThreadPool, [&Snapshot, &Baked, &Error]() {
+		const FVoxelLandM4ControlSnapshot* Channels[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Channels); ++Index)
+		{
+			const FVoxelLandM4ControlSnapshot& Channel = *Channels[Index];
+			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+			if (!FVoxelLandProgramCodec::Load(Channel.Source, Channel.Payload, Program, Error))
+			{
+				return false;
+			}
+			if (const FVoxelLandError Validation = VoxelLandM4ControlGrid::ValidateProgram(*Program))
+			{
+				Error = Validation.Message;
+				return false;
+			}
+			TArray<FVoxelLandM4CurveKey> Keys;
+			Keys.Reserve(Channel.CurveKeys.Num());
+			for (const FVoxelLandM4CurveAuthoringKey& Key : Channel.CurveKeys)
+			{
+				FVoxelLandM4CurveKey& Target = Keys.AddDefaulted_GetRef();
+				Target.InputQ16 = uint16(Key.InputQ16);
+				Target.Output = Key.OutputQ8;
+			}
+			TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> Curve;
+			if (!VoxelLandM4CurveBake::Bake(Keys, -512000000, 512000000, Baked[Index], Curve, Error))
+			{
+				return false;
+			}
+		}
+		return true;
+	}).Get();
+	return bBaked
+		&& Config.SetBakedCurves(Baked[0], Baked[1], Baked[2], int32(VoxelLandM4CurveBake::AlgorithmVersion), Error);
+}
+}
 
 namespace
 {
@@ -93,6 +144,7 @@ void FVoxelLandEditorModule::StartupModule()
 		};
 		AddIcon(TEXT("VoxelLandTerrainGraph"), TEXT("TerrainGraph"));
 		AddIcon(TEXT("VoxelLandWorldSettings"), TEXT("WorldSettings"));
+		AddIcon(TEXT("VoxelLandM4WorldConfig"), TEXT("WorldSettings"));
 		AddIcon(TEXT("VoxelLandMaterialSetup"), TEXT("MaterialSetup"));
 		FSlateStyleRegistry::RegisterSlateStyle(*Style);
 	}
@@ -228,6 +280,29 @@ void FVoxelLandEditorModule::OnFunctionObjectsReplaced(const TMap<UObject*, UObj
 
 void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveContext Context)
 {
+	if (UVoxelLandM4WorldConfig* Config = Cast<UVoxelLandM4WorldConfig>(Object))
+	{
+		if (!Context.IsFirstConcurrentSave())
+		{
+			return;
+		}
+		FString Error;
+		if (!VoxelLandM4Editor::BakeWorldConfig(*Config, Error))
+		{
+			Config->ClearBakedCurves();
+			if (Context.IsCooking())
+			{
+				UE_LOG(LogTemp, Error, TEXT("VoxelLand M4 configuration %s cannot cook: %s"), *Config->GetPathName(),
+					*Error);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("VoxelLand M4 configuration %s is not baked: %s"), *Config->GetPathName(),
+					*Error);
+			}
+		}
+		return;
+	}
 	UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Object);
 	if (!Graph || Graph->IsA<UVoxelLandGraphFunction>() || !Context.IsFirstConcurrentSave())
 	{

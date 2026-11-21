@@ -38,6 +38,17 @@ public:
 };
 
 UCLASS()
+class UVoxelLandM4WorldConfigFactory : public UFactory
+{
+	GENERATED_BODY()
+
+public:
+	UVoxelLandM4WorldConfigFactory();
+	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
+		UObject* Context, FFeedbackContext* Warn) override;
+};
+
+UCLASS()
 class UVoxelLandMaterialSetupFactory : public UFactory
 {
 	GENERATED_BODY()

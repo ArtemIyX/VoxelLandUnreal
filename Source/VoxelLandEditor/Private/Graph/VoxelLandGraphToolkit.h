@@ -23,6 +23,7 @@ class UVoxelLandChunkComponent;
 class UMaterialInterface;
 class UTexture2D;
 class UVoxelLandWorldSettings;
+class UVoxelLandM4WorldConfig;
 struct FAssetData;
 class FVoxelLandCompileWork;
 class FVoxelLandPreviewWork;
@@ -106,6 +107,13 @@ public:
 	const FString& GetStatusForTests() const { return Status; }
 	bool HasPreviewFenceForTests() const { return PreviewFence.IsValid(); }
 	void StartPreviewForTests() { StartPreview(); }
+	void StartM4PreviewForTests(UVoxelLandM4WorldConfig* Config)
+	{
+		M4PreviewConfig = Config;
+		bM4Preview = true;
+		StartM4Preview();
+	}
+	bool HasM4PreviewWorkForTests() const { return PreviewWork.IsValid(); }
 	void RequestCompileForTests() { RequestCompile(); }
 	bool HasCompileWorkForTests() const { return CompileWork.IsValid(); }
 	void AddWorkerForTests(TFuture<void>&& Task) { WorkerTasks.Add(MoveTemp(Task)); }
@@ -152,6 +160,10 @@ private:
 	void DuplicateSelected();
 	FText StatusText() const;
 	void StartPreview();
+	void StartM4Preview();
+	void M4PreviewConfigChanged(const FAssetData& Settings);
+	FString M4PreviewConfigPath() const;
+	bool IsM4PreviewCurrent(const FVoxelLandPreviewWork& Work) const;
 	bool BuildPreviewProfile(const FVoxelLandSerializedProgram& Payload, FVoxelLandZoneProfile& Profile,
 		FString& Error) const;
 	bool BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& Snapshot, FString& Error) const;
@@ -213,6 +225,8 @@ private:
 	TSoftObjectPtr<UMaterialInterface> SelectedPreviewMaterial;
 	TSoftObjectPtr<UVoxelLandWorldSettings> SelectedPreviewSettings;
 	TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;
+	TObjectPtr<UVoxelLandM4WorldConfig> M4PreviewConfig = nullptr;
+	bool bM4Preview = false;
 	TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> PreviewCancel;
 	int64 PreviewSeed = 1234;
 	int32 PreviewHorizontalRadius = 1;

@@ -66,25 +66,9 @@ FText UVoxelLandEditorNode::GetPinDisplayName(const UEdGraphPin* Pin) const
     {
         return Super::GetPinDisplayName(Pin);
     }
-    const EVoxelLandBuiltinNode Op = static_cast<EVoxelLandBuiltinNode>(Kind);
-    if (Op == EVoxelLandBuiltinNode::HeightToDensity && Pin->PinName == TEXT("Value"))
-    {
-        return LOCTEXT("HeightPin", "Height (cm)");
-    }
-    if ((Op == EVoxelLandBuiltinNode::SmoothDensity || Op == EVoxelLandBuiltinNode::DensityOutput) && Pin->PinName == TEXT("Density"))
-    {
-        return LOCTEXT("DensityPin", "Density (cm)");
-    }
-    if (Kind >= int32(EVoxelLandBuiltinNode::Perlin2) && Kind <= int32(EVoxelLandBuiltinNode::Simplex3) && Pin->PinName == TEXT("Frequency"))
-    {
-        return LOCTEXT("FrequencyPin", "Frequency (1/cm)");
-    }
-    if (Kind >= int32(EVoxelLandBuiltinNode::Plane) && Kind <= int32(EVoxelLandBuiltinNode::Box) &&
-        (Pin->PinName == TEXT("Radius") || Pin->PinName == TEXT("Offset") || Pin->PinName.ToString().StartsWith(TEXT("Extent"))))
-    {
-        return FText::FromString(Pin->PinName.ToString() + TEXT(" (cm)"));
-    }
-    return Super::GetPinDisplayName(Pin);
+    FText Label;
+    return FVoxelLandBuiltinPresentationCatalog::TryPinLabel(static_cast<EVoxelLandBuiltinNode>(Kind), Pin->PinName, Label)
+        ? Label : Super::GetPinDisplayName(Pin);
 }
 void UVoxelLandEditorNode::GetPinHoverText(const UEdGraphPin& Pin, FString& HoverTextOut) const
 {
@@ -132,30 +116,8 @@ void UVoxelLandEditorNode::GetPinHoverText(const UEdGraphPin& Pin, FString& Hove
             Pin.Direction == EGPD_Output ? TEXT("output") : TEXT("input"), *GetTooltipText().ToString());
         return;
     }
-    const FString Name = Pin.PinName.ToString();
-    if (Pin.Direction == EGPD_Output)
-    {
-        HoverTextOut = FString::Printf(TEXT("%s output. %s"), *Pin.PinType.PinCategory.ToString(), *GetTooltipText().ToString());
-    }
-    else if (Name == TEXT("X") || Name == TEXT("Y") || Name == TEXT("Z"))
-    {
-        HoverTextOut = TEXT("Coordinate in centimeters; connect a world position or another coordinate field.");
-    }
-    else if (Name == TEXT("Frequency")) { HoverTextOut = TEXT("Noise frequency in inverse centimeters; must be positive and uniform."); }
-    else if (Name == TEXT("Octaves")) { HoverTextOut = TEXT("Uniform integer octave count from 1 to 16."); }
-    else if (Name == TEXT("Gain")) { HoverTextOut = TEXT("Uniform amplitude multiplier per octave, from 0 to 1."); }
-    else if (Name == TEXT("Lacunarity")) { HoverTextOut = TEXT("Uniform frequency multiplier per octave; at least 1."); }
-    else if (Name == TEXT("Density")) { HoverTextOut = TEXT("Signed density in centimeters: negative is solid and positive is empty."); }
-    else if (Name == TEXT("Strength")) { HoverTextOut = TEXT("Uniform filter blend from 0 (original density) to 1 (full smoothing)."); }
-    else if (Name == TEXT("Enabled")) { HoverTextOut = TEXT("Uniform boolean controlling whether the filter is applied."); }
-    else if (Name == TEXT("Radius")) { HoverTextOut = TEXT("Sphere radius in centimeters; must be positive."); }
-    else if (Name.StartsWith(TEXT("Extent"))) { HoverTextOut = TEXT("Box half extent in centimeters; must be positive."); }
-    else if (Name.StartsWith(TEXT("Normal"))) { HoverTextOut = TEXT("Plane normal component; the complete normal must have unit length."); }
-    else if (Name == TEXT("Offset")) { HoverTextOut = TEXT("Plane offset in centimeters."); }
-    else if (Name == TEXT("Alpha")) { HoverTextOut = TEXT("Interpolation factor; values outside 0 to 1 extrapolate."); }
-    else if (Name == TEXT("Condition")) { HoverTextOut = TEXT("Selects the True input when true; otherwise selects False."); }
-    else if (static_cast<EVoxelLandBuiltinNode>(Kind) == EVoxelLandBuiltinNode::HeightToDensity) { HoverTextOut = TEXT("Surface height in centimeters."); }
-    else { HoverTextOut = FString::Printf(TEXT("%s input. %s"), *Pin.PinType.PinCategory.ToString(), *GetTooltipText().ToString()); }
+    HoverTextOut = FVoxelLandBuiltinPresentationCatalog::PinTooltip(static_cast<EVoxelLandBuiltinNode>(Kind),
+        Pin.PinName, Pin.PinType.PinCategory, Pin.Direction == EGPD_Output).ToString();
 }
 void UVoxelLandEditorNode::PinDefaultValueChanged(UEdGraphPin*)
 {

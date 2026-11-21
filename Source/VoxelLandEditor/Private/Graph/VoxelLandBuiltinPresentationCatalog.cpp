@@ -227,4 +227,84 @@ FLinearColor FVoxelLandBuiltinPresentationCatalog::TitleColor(EVoxelLandBuiltinN
     }
 }
 
+namespace
+{
+bool IsNoise(EVoxelLandBuiltinNode Kind)
+{
+    switch (Kind)
+    {
+    case EVoxelLandBuiltinNode::Perlin2:
+    case EVoxelLandBuiltinNode::Perlin3:
+    case EVoxelLandBuiltinNode::Fbm2:
+    case EVoxelLandBuiltinNode::Fbm3:
+    case EVoxelLandBuiltinNode::Value2:
+    case EVoxelLandBuiltinNode::Value3:
+    case EVoxelLandBuiltinNode::Simplex2:
+    case EVoxelLandBuiltinNode::Simplex3:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool IsShape(EVoxelLandBuiltinNode Kind)
+{
+    return Kind == EVoxelLandBuiltinNode::Plane || Kind == EVoxelLandBuiltinNode::Sphere || Kind == EVoxelLandBuiltinNode::Box;
+}
+}
+
+bool FVoxelLandBuiltinPresentationCatalog::TryPinLabel(EVoxelLandBuiltinNode Kind, FName PinName, FText& OutLabel)
+{
+    OutLabel = FText::GetEmpty();
+    if (Kind == EVoxelLandBuiltinNode::HeightToDensity && PinName == TEXT("Value"))
+    {
+        OutLabel = NSLOCTEXT("VoxelLandEditorNode", "HeightPin", "Height (cm)");
+        return true;
+    }
+    if ((Kind == EVoxelLandBuiltinNode::SmoothDensity || Kind == EVoxelLandBuiltinNode::DensityOutput) && PinName == TEXT("Density"))
+    {
+        OutLabel = NSLOCTEXT("VoxelLandEditorNode", "DensityPin", "Density (cm)");
+        return true;
+    }
+    if (IsNoise(Kind) && PinName == TEXT("Frequency"))
+    {
+        OutLabel = NSLOCTEXT("VoxelLandEditorNode", "FrequencyPin", "Frequency (1/cm)");
+        return true;
+    }
+    if (IsShape(Kind) && (PinName == TEXT("Radius") || PinName == TEXT("Offset") || PinName.ToString().StartsWith(TEXT("Extent"))))
+    {
+        OutLabel = FText::Format(LOCTEXT("PinCentimeters", "{0} (cm)"), FText::FromName(PinName));
+        return true;
+    }
+    return false;
+}
+
+FText FVoxelLandBuiltinPresentationCatalog::PinTooltip(EVoxelLandBuiltinNode Kind, FName PinName, FName PinType, bool bOutput)
+{
+    if (bOutput)
+    {
+        return FText::Format(LOCTEXT("OutputTooltipFormat", "{0} output. {1}"), FText::FromName(PinType), Description(Kind));
+    }
+    const FString Name = PinName.ToString();
+    if (Name == TEXT("X") || Name == TEXT("Y") || Name == TEXT("Z"))
+    {
+        return LOCTEXT("PinCoordinates", "Coordinate in centimeters; connect a world position or another coordinate field.");
+    }
+    if (Name == TEXT("Frequency")) { return LOCTEXT("PinFrequency", "Noise frequency in inverse centimeters; must be positive and uniform."); }
+    if (Name == TEXT("Octaves")) { return LOCTEXT("PinOctaves", "Uniform integer octave count from 1 to 16."); }
+    if (Name == TEXT("Gain")) { return LOCTEXT("PinGain", "Uniform amplitude multiplier per octave, from 0 to 1."); }
+    if (Name == TEXT("Lacunarity")) { return LOCTEXT("PinLacunarity", "Uniform frequency multiplier per octave; at least 1."); }
+    if (Name == TEXT("Density")) { return LOCTEXT("PinDensity", "Signed density in centimeters: negative is solid and positive is empty."); }
+    if (Name == TEXT("Strength")) { return LOCTEXT("PinStrength", "Uniform filter blend from 0 (original density) to 1 (full smoothing)."); }
+    if (Name == TEXT("Enabled")) { return LOCTEXT("PinEnabled", "Uniform boolean controlling whether the filter is applied."); }
+    if (Name == TEXT("Radius")) { return LOCTEXT("PinRadius", "Sphere radius in centimeters; must be positive."); }
+    if (Name.StartsWith(TEXT("Extent"))) { return LOCTEXT("PinExtent", "Box half extent in centimeters; must be positive."); }
+    if (Name.StartsWith(TEXT("Normal"))) { return LOCTEXT("PinNormal", "Plane normal component; the complete normal must have unit length."); }
+    if (Name == TEXT("Offset")) { return LOCTEXT("PinOffset", "Plane offset in centimeters."); }
+    if (Name == TEXT("Alpha")) { return LOCTEXT("PinAlpha", "Interpolation factor; values outside 0 to 1 extrapolate."); }
+    if (Name == TEXT("Condition")) { return LOCTEXT("PinCondition", "Selects the True input when true; otherwise selects False."); }
+    if (Kind == EVoxelLandBuiltinNode::HeightToDensity) { return LOCTEXT("PinHeight", "Surface height in centimeters."); }
+    return FText::Format(LOCTEXT("InputTooltipFormat", "{0} input. {1}"), FText::FromName(PinType), Description(Kind));
+}
+
 #undef LOCTEXT_NAMESPACE

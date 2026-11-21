@@ -1,7 +1,9 @@
 #include "Graph/VoxelLandPreviewViewport.h"
+#include "Graph/VoxelLandM4Inspection.h"
 #include "AdvancedPreviewScene.h"
 #include "EditorViewportClient.h"
 #include "InputCoreTypes.h"
+#include "UnrealClient.h"
 
 namespace
 {
@@ -50,6 +52,16 @@ void SVoxelLandPreviewViewport::ResetCamera()
 {
 	if (TSharedPtr<FEditorViewportClient> ViewportClient = GetViewportClient())
 	{
+		if (PreviousViewFov.IsSet())
+		{
+			ViewportClient->ViewFOV = PreviousViewFov.GetValue();
+			PreviousViewFov.Reset();
+		}
+		if (PreviousStoredFov.IsSet())
+		{
+			ViewportClient->FOVAngle = PreviousStoredFov.GetValue();
+			PreviousStoredFov.Reset();
+		}
 		ViewportClient->SetViewLocation(FVector(-7000.0, -7000.0, 5000.0));
 		ViewportClient->SetViewRotation(FRotator(-25.0, 45.0, 0.0));
 		Invalidate();
@@ -77,6 +89,55 @@ bool SVoxelLandPreviewViewport::FrameTerrain()
 		ViewportClient->FocusViewportOnBox(TerrainBounds.ExpandBy(Padding), true);
 		Invalidate();
 		return true;
+	}
+	return false;
+}
+
+bool SVoxelLandPreviewViewport::SetInspectionCamera(const FVector& Target)
+{
+	if (Target.ContainsNaN())
+	{
+		return false;
+	}
+	if (TSharedPtr<FEditorViewportClient> Client = GetViewportClient())
+	{
+		if (!Client->Viewport)
+		{
+			return false;
+		}
+		if (!PreviousViewFov.IsSet())
+		{
+			PreviousViewFov = Client->ViewFOV;
+		}
+		if (!PreviousStoredFov.IsSet())
+		{
+			PreviousStoredFov = Client->FOVAngle;
+		}
+		const FVector Location = VoxelLandM4Inspection::CameraLocation(Target);
+		Client->SetViewLocation(Location);
+		Client->SetViewRotation((Target - Location).Rotation());
+		Client->ViewFOV = VoxelLandM4Inspection::HorizontalFovDegrees;
+		Client->FOVAngle = VoxelLandM4Inspection::HorizontalFovDegrees;
+		Invalidate();
+		return true;
+	}
+	return false;
+}
+
+bool SVoxelLandPreviewViewport::GetCameraDetails(
+	FVector& OutLocation, FRotator& OutRotation, float& OutHorizontalFov, FIntPoint& OutResolution) const
+{
+	if (TSharedPtr<FEditorViewportClient> Client = GetViewportClient())
+	{
+		if (!Client->Viewport)
+		{
+			return false;
+		}
+		OutLocation = Client->GetViewLocation();
+		OutRotation = Client->GetViewRotation();
+		OutHorizontalFov = Client->ViewFOV;
+		OutResolution = Client->Viewport->GetSizeXY();
+		return OutResolution.X > 0 && OutResolution.Y > 0;
 	}
 	return false;
 }

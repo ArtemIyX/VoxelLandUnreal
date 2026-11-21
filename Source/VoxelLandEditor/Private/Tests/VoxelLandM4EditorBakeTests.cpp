@@ -11,6 +11,7 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Misc/AutomationTest.h"
+#include "World/VoxelLandM4Preparation.h"
 
 namespace
 {
@@ -130,10 +131,14 @@ public:
 				Cleanup();
 				return true;
 			}
+			Test->TestTrue(TEXT("inspector reports the completed global height grid"),
+				Toolkit->GetM4StageInspectorForTests().Contains(TEXT("stored height range")));
 			++Config->Seed;
 			Toolkit->StartM4PreviewForTests(Config);
 			Test->TestTrue(TEXT("previous preview is visibly stale while replacement runs"),
 				Toolkit->GetStatusForTests().Contains(TEXT("stale"), ESearchCase::IgnoreCase));
+			Test->TestTrue(TEXT("earlier inspector values are marked stale during replacement"),
+				Toolkit->GetM4StageInspectorForTests().Contains(TEXT("stale"), ESearchCase::IgnoreCase));
 			// No property notification is needed for the publication-time guard:
 			// change source immediately after capturing it but before pumping completion.
 			++Config->Seed;
@@ -203,6 +208,39 @@ bool FVoxelLandM4EditorPreviewSafetyTest::RunTest(const FString& Parameters)
 	Toolkit->InitializePreviewForTests();
 	Toolkit->StartM4PreviewForTests(Config);
 	ADD_LATENT_AUTOMATION_COMMAND(FM4EditorPreviewSafetyCommand(this, Config, Toolkit));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4EditorValidationAdmissionTest, "VoxelLand.M4.Editor.ValidationAdmission", M4EditorBakeFlags)
+bool FVoxelLandM4EditorValidationAdmissionTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("shared coordinator is available"), VoxelLandM4Preparation::EnsureCoordinatorReady()))
+	{
+		return false;
+	}
+	TArray<TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>> Permits;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		auto Permit = VoxelLandM4Preparation::ReserveValidation();
+		if (!TestTrue(TEXT("validation permit is available"), Permit.IsValid()))
+		{
+			return false;
+		}
+		Permits.Add(MoveTemp(Permit));
+	}
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
+	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+	Toolkit->InitializeForTests(Graph);
+	Toolkit->InitializePreviewForTests();
+	Toolkit->StartM4PreviewForTests(Config);
+	TestTrue(TEXT("preview reports exhausted validation admission"),
+		Toolkit->GetStatusForTests().Contains(TEXT("snapshot validation capacity")));
+	TestFalse(TEXT("rejected preview does not launch work"), Toolkit->HasM4PreviewWorkForTests());
+	Permits[0].Reset();
+	TestTrue(TEXT("released permit can be acquired again"), VoxelLandM4Preparation::ReserveValidation().IsValid());
+	Toolkit->Stop();
 	return true;
 }
 

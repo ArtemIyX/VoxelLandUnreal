@@ -15,6 +15,10 @@ public:
 	void ResetCamera();
 	void SetTerrainBounds(const FBox& Bounds);
 	bool FrameTerrain();
+	// Place a reproducible 20-degree view 2 km horizontally from the target.
+	bool SetInspectionCamera(const FVector& Target);
+	bool GetCameraDetails(
+		FVector& OutLocation, FRotator& OutRotation, float& OutHorizontalFov, FIntPoint& OutResolution) const;
 	FBox GetTerrainBounds() const { return TerrainBounds; }
 
 protected:
@@ -23,4 +27,6 @@ protected:
 private:
 	TSharedPtr<FAdvancedPreviewScene> PreviewScene;
 	FBox TerrainBounds = FBox(ForceInit);
+	TOptional<float> PreviousViewFov;
+	TOptional<float> PreviousStoredFov;
 };

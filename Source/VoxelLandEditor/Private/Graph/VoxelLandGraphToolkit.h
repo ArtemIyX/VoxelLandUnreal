@@ -105,6 +105,7 @@ public:
 	bool FramePreviewForTests();
 	void PollJobsForTests() { PollJobs(0.0f); }
 	const FString& GetStatusForTests() const { return Status; }
+	const FString& GetM4StageInspectorForTests() const { return M4StageDiagnostics; }
 	bool HasPreviewFenceForTests() const { return PreviewFence.IsValid(); }
 	void StartPreviewForTests() { StartPreview(); }
 	void StartM4PreviewForTests(UVoxelLandM4WorldConfig* Config)
@@ -159,6 +160,7 @@ private:
 	void PasteNodes();
 	void DuplicateSelected();
 	FText StatusText() const;
+	FText M4StageInspectorText() const;
 	void StartPreview();
 	void StartM4Preview();
 	void M4PreviewConfigChanged(const FAssetData& Settings);
@@ -227,6 +229,9 @@ private:
 	TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;
 	TObjectPtr<UVoxelLandM4WorldConfig> M4PreviewConfig = nullptr;
 	bool bM4Preview = false;
+	bool bM4Inspection = false;
+	FString M4StageDiagnostics;
+	FString M4InspectionDetails;
 	TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> PreviewCancel;
 	int64 PreviewSeed = 1234;
 	int32 PreviewHorizontalRadius = 1;

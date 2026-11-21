@@ -13,6 +13,7 @@
 #include "Graph/VoxelLandEditorSchema.h"
 #include "Graph/VoxelLandEditorOperator.h"
 #include "Graph/VoxelLandPreviewViewport.h"
+#include "Graph/VoxelLandM4Inspection.h"
 #include "Graph/VoxelLandPreviewScene.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
@@ -25,6 +26,7 @@
 #include "Data/VoxelLandGraphFunctionCapture.h"
 #include "Data/VoxelLandGraphFunctionId.h"
 #include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM4HeightGrid.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Generation/VoxelLandMeshing.h"
@@ -65,6 +67,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Images/SImage.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "Misc/App.h"
 
 #define LOCTEXT_NAMESPACE "VoxelLandGraphToolkit"
 
@@ -322,6 +325,14 @@ public:
 		int32 HorizontalRadius, int32 VerticalRadius, const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
 		FResult& Meshes, FString& Error)
 	{
+		return RunPreparedRange(
+			Generator, HorizontalRadius, -VerticalRadius, VerticalRadius - 1, Cancel, Meshes, Error);
+	}
+
+	static bool RunPreparedRange(const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& Generator,
+		int32 HorizontalRadius, int32 MinZ, int32 MaxZ, const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
+		FResult& Meshes, FString& Error, uint64 MaxRetainedMeshBytes = MAX_uint64)
+	{
 		if (!Generator || Cancel->Load())
 		{
 			return false;
@@ -333,16 +344,29 @@ public:
 			return false;
 		}
 		FVoxelLandMeshingScratch Scratch;
-		for (int32 Z = -VerticalRadius; Z < VerticalRadius; ++Z)
+		uint64 RetainedMeshBytes = 0;
+		for (int32 Z = MinZ; Z <= MaxZ; ++Z)
 		{
 			for (int32 Y = -HorizontalRadius; Y <= HorizontalRadius; ++Y)
 			{
 				for (int32 X = -HorizontalRadius; X <= HorizontalRadius; ++X)
 				{
+					const int32 PreviousCount = Meshes.Num();
 					if (!Generate(*Generator, *Worker, Scratch, FIntVector(X, Y, Z),
 							Generator->GetProfile().VoxelSizeCm, Cancel, Meshes, Error))
 					{
 						return false;
+					}
+					if (Meshes.Num() > PreviousCount)
+					{
+						const FVoxelLandMeshData& Mesh = *Meshes.Last().Value;
+						RetainedMeshBytes +=
+							uint64(Mesh.Vertices.GetAllocatedSize()) + uint64(Mesh.Indices.GetAllocatedSize());
+						if (RetainedMeshBytes + uint64(Meshes.GetAllocatedSize()) > MaxRetainedMeshBytes)
+						{
+							Error = TEXT("Inspection mesh buffers exceed the 64 MiB retention limit.");
+							return false;
+						}
 					}
 				}
 			}
@@ -486,7 +510,21 @@ public:
 	bool bSuccess = false;
 	bool bNoise2D = false;
 	bool bM4 = false;
+	bool bM4Inspection = false;
+	bool bHasM4HeightRange = false;
+	int32 M4MinHeightQ8 = 0;
+	int32 M4MaxHeightQ8 = 0;
+	int32 M4MinChunkZ = 0;
+	int32 M4MaxChunkZ = 0;
+	int64 M4MinX = 0;
+	int64 M4MinY = 0;
+	int64 M4MaxX = 0;
+	int64 M4MaxY = 0;
+	// Members are destroyed in reverse order: release the validation permit
+	// only after both bounded input snapshots have been destroyed.
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> M4ValidationLease;
 	TSharedPtr<FVoxelLandM4WorldSnapshot, ESPMode::ThreadSafe> M4Snapshot;
+	TSharedPtr<FVoxelLandM4WorldSnapshot, ESPMode::ThreadSafe> M4ExecutionSnapshot;
 	TWeakObjectPtr<UVoxelLandM4WorldConfig> M4Config;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Continental;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Mountain;
@@ -917,26 +955,32 @@ FReply FVoxelLandGraphToolkit::AddParameter(EVoxelLandGraphValueType Type)
 TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArgs&)
 {
 	return SNew(SDockTab)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(4)
-			[
-				SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText)
-			]
-		];
+		[SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(
+				4)[SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText)]
+			+ SVerticalBox::Slot().AutoHeight().Padding(
+				4)[SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::M4StageInspectorText)]];
 }
 
 FText FVoxelLandGraphToolkit::StatusText() const
 {
-	const FString Mode = bNoisePreview
-		                     ? FString::Printf(TEXT("2D noise %s - %s. "),
-			                     bNoiseStandalone ? TEXT("standalone coordinates") : TEXT("graph-wired slice"),
-			                     *PreviewTargetLabel)
-		                     : PreviewNodeId.IsValid()
-		                     ? FString::Printf(TEXT("Node preview - %s. "), *PreviewTargetLabel)
-		                     : TEXT("Root preview. ");
+	const FString Mode =
+		bM4Preview ? FString(bM4Inspection ? TEXT("M4 2 km inspection. ") : TEXT("M4 terrain preview. "))
+		: bNoisePreview
+			? FString::Printf(TEXT("2D noise %s - %s. "),
+				  bNoiseStandalone ? TEXT("standalone coordinates") : TEXT("graph-wired slice"), *PreviewTargetLabel)
+		: PreviewNodeId.IsValid() ? FString::Printf(TEXT("Node preview - %s. "), *PreviewTargetLabel)
+								  : TEXT("Root preview. ");
 	return FText::FromString(
 		Mode + Status + (MaterialDiagnostic.IsEmpty() ? FString() : TEXT(" ") + MaterialDiagnostic));
+}
+
+FText FVoxelLandGraphToolkit::M4StageInspectorText() const
+{
+	return FText::FromString(
+		M4StageDiagnostics.IsEmpty()
+			? TEXT("M4 global-stage inspector: generate a finite M4 preview to inspect its completed height grid.")
+			: M4StageDiagnostics);
 }
 
 bool FVoxelLandGraphToolkit::ResolveDiagnosticTarget(UEdGraphNode*& OutNode, UEdGraphPin*& OutPin) const
@@ -993,8 +1037,38 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
 					+ SHorizontalBox::Slot().AutoWidth()
 						[SNew(SButton).Text(LOCTEXT("M4PreviewGenerate", "Preview M4 world")).OnClicked_Lambda([this] {
 							bM4Preview = true;
+							bM4Inspection = false;
 							bNoisePreview = false;
 							StartM4Preview();
+							return FReply::Handled();
+						})]
+					+ SHorizontalBox::Slot().AutoWidth()
+						[SNew(SButton).Text(LOCTEXT("M4Inspect2km", "Inspect from 2 km")).OnClicked_Lambda([this] {
+							bM4Preview = true;
+							bM4Inspection = true;
+							bNoisePreview = false;
+							StartM4Preview();
+							return FReply::Handled();
+						})]
+					+ SHorizontalBox::Slot().AutoWidth()
+						[SNew(SButton).Text(LOCTEXT("M4CopyInspection", "Copy inspection details")).OnClicked_Lambda([this] {
+							if (!M4InspectionDetails.IsEmpty())
+							{
+								FString Details = M4InspectionDetails;
+								FVector Location;
+								FRotator Rotation;
+								float Fov = 0.f;
+								FIntPoint Resolution;
+								if (PreviewViewport
+									&& PreviewViewport->GetCameraDetails(Location, Rotation, Fov, Resolution))
+								{
+									Details += FString::Printf(
+										TEXT(
+											"\nView at time of copy: %s; rotation %s; horizontal FOV %.2f degrees; viewport %d x %d."),
+										*Location.ToString(), *Rotation.ToString(), Fov, Resolution.X, Resolution.Y);
+								}
+								FPlatformApplicationMisc::ClipboardCopy(*Details);
+							}
 							return FReply::Handled();
 						})]]
 			+ SVerticalBox::Slot().AutoHeight()
@@ -2526,6 +2600,38 @@ bool M4PreviewSourceEqual(const FVoxelLandGraphSnapshot& A, const FVoxelLandGrap
 		&& M4PreviewArraysEqual(A.Parameters, B.Parameters) && M4PreviewArraysEqual(A.Nodes, B.Nodes)
 		&& M4PreviewArraysEqual(A.Links, B.Links);
 }
+
+void M4InspectionAppendOverrides(FString& Out, const TCHAR* Label, const FVoxelLandM4ControlSnapshot& Control)
+{
+	Out += FString::Printf(TEXT("%s source/program/LUT hashes: %lld / %lld / %lld (LUT v%d)\n"), Label,
+		Control.Payload.SourceFingerprint, Control.Payload.ProgramFingerprint, Control.CookedCurve.SamplesHash,
+		Control.CookedCurve.BakeVersion);
+	Out += FString::Printf(TEXT("%s overrides:"), Label);
+	if (Control.Overrides.IsEmpty())
+	{
+		Out += TEXT(" defaults");
+	}
+	for (const FVoxelLandParameterOverride& Override : Control.Overrides)
+	{
+		const FString Id = Override.ParameterId.ToString();
+		switch (Override.Type)
+		{
+			case EVoxelLandGraphValueType::Float:
+				Out += FString::Printf(TEXT(" %s=%.9g"), *Id, double(Override.FloatValue));
+				break;
+			case EVoxelLandGraphValueType::Int32:
+				Out += FString::Printf(TEXT(" %s=%d"), *Id, Override.IntValue);
+				break;
+			case EVoxelLandGraphValueType::Bool:
+				Out += FString::Printf(TEXT(" %s=%s"), *Id, Override.BoolValue ? TEXT("true") : TEXT("false"));
+				break;
+			default:
+				Out += FString::Printf(TEXT(" %s=<unsupported>"), *Id);
+				break;
+		}
+	}
+	Out += TEXT("\n");
+}
 }
 
 bool FVoxelLandGraphToolkit::IsM4PreviewCurrent(const FVoxelLandPreviewWork& Work) const
@@ -2567,6 +2673,8 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 		return;
 	}
 	CancelPreview();
+	M4StageDiagnostics = TEXT("M4 stages: generating; earlier inspector values are stale.");
+	M4InspectionDetails.Reset();
 	bNoisePreview = false;
 	if (PreviewWork)
 	{
@@ -2579,10 +2687,26 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 		Status = TEXT("Stale preview: select an M4 world configuration.");
 		return;
 	}
-	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = VoxelLandM4Preparation::Reserve();
-	if (!Lease)
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
+	if (M4PreviewConfig->bUnlimited)
+	{
+		Lease = VoxelLandM4Preparation::Reserve();
+	}
+	else if (!VoxelLandM4Preparation::EnsureCoordinatorReady())
+	{
+		Status = TEXT("Stale preview: M4 shared prepass coordinator is unavailable.");
+		return;
+	}
+	if (M4PreviewConfig->bUnlimited && !Lease)
 	{
 		Status = TEXT("Stale preview: M4 prepass admission budget is exhausted.");
+		return;
+	}
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease =
+		VoxelLandM4Preparation::ReserveValidation();
+	if (!ValidationLease)
+	{
+		Status = TEXT("Stale preview: M4 snapshot validation capacity is exhausted.");
 		return;
 	}
 	FString Error;
@@ -2592,6 +2716,18 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 		Status = FString::Printf(TEXT("Error; previous preview is stale: %s"), *Error);
 		return;
 	}
+	if (bM4Inspection && Snapshot->Domain.Mode != EVoxelLandM4DomainMode::Finite)
+	{
+		Status = TEXT("2 km inspection requires a finite prepass height grid; select finite mode.");
+		return;
+	}
+	// The inspection profile is a distinct descriptor. Preserve the authored
+	// snapshot separately for the freshness check; do not modify the asset.
+	auto ExecutionSnapshot = MakeShared<FVoxelLandM4WorldSnapshot, ESPMode::ThreadSafe>(*Snapshot);
+	if (bM4Inspection)
+	{
+		ExecutionSnapshot->VoxelSizeCm = VoxelLandM4Inspection::VoxelSizeCm;
+	}
 	const int32 Horizontal = FMath::Min(Snapshot->HorizontalRadius, 2);
 	const int32 Vertical = FMath::Min(Snapshot->VerticalRadius, 2);
 	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Cancel = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
@@ -2599,14 +2735,17 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 	const TSharedRef<FVoxelLandPreviewWork, ESPMode::ThreadSafe> Work =
 		MakeShared<FVoxelLandPreviewWork, ESPMode::ThreadSafe>();
 	Work->bM4 = true;
+	Work->bM4Inspection = bM4Inspection;
+	Work->M4ValidationLease = ValidationLease;
 	Work->M4Snapshot = Snapshot;
+	Work->M4ExecutionSnapshot = ExecutionSnapshot;
 	Work->M4Config = M4PreviewConfig;
 	Work->M4Continental = M4PreviewConfig->Continental.Graph;
 	Work->M4Mountain = M4PreviewConfig->Mountain.Graph;
 	Work->M4Peaks = M4PreviewConfig->Peaks.Graph;
 	Work->PreviewRevision = PreviewRevision;
 	Work->SourceRevision = Revision;
-	Work->VoxelSize = float(Snapshot->VoxelSizeCm);
+	Work->VoxelSize = float(ExecutionSnapshot->VoxelSizeCm);
 	Work->ChunkCount = (2 * Horizontal + 1) * (2 * Horizontal + 1) * 2 * Vertical;
 #if WITH_DEV_AUTOMATION_TESTS
 	Work->SeedForTests = Snapshot->Seed;
@@ -2615,16 +2754,53 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 	PreviewWork = Work;
 	SemanticChangeTime = FPlatformTime::Seconds();
 	Status = TEXT("Generating M4 terrain; previous preview is stale.");
-	WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Work, Snapshot, Lease, Cancel, Horizontal, Vertical]() {
+	WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Work, Lease, Cancel, Horizontal, Vertical]() {
 		const double Started = FPlatformTime::Seconds();
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 		auto IsCancelled = [&Cancel] {
 			return Cancel->Load();
 		};
-		if (VoxelLandM4Preparation::Prepare(*Snapshot, Lease, IsCancelled, Generator, Work->Error))
+		if (VoxelLandM4Preparation::Prepare(
+				*Work->M4ExecutionSnapshot, Lease, Work->M4ValidationLease, IsCancelled, Generator, Work->Error))
 		{
-			Work->bSuccess =
-				FVoxelLandPreviewJob::RunPrepared(Generator, Horizontal, Vertical, Cancel, Work->Meshes, Work->Error);
+			const TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid = Generator->GetM4HeightGrid();
+			if (Grid)
+			{
+				Grid->GetHeightRangeQ8(Work->M4MinHeightQ8, Work->M4MaxHeightQ8);
+				Grid->GetBoundsCm(Work->M4MinX, Work->M4MinY, Work->M4MaxX, Work->M4MaxY);
+				Work->bHasM4HeightRange = true;
+			}
+			if (Work->bM4Inspection)
+			{
+				const int32 BandQ8 =
+					Work->M4ExecutionSnapshot->bOverhangEnabled && Work->M4ExecutionSnapshot->OverhangAmplitudeQ8 > 0
+						? Work->M4ExecutionSnapshot->OverhangBandQ8
+						: 0;
+				if (!Grid
+					|| !VoxelLandM4Inspection::VerticalChunkRange(
+						Work->M4MinHeightQ8, Work->M4MaxHeightQ8, BandQ8, Work->M4MinChunkZ, Work->M4MaxChunkZ))
+				{
+					Work->Error = TEXT(
+						"2 km inspection exceeds the 16-chunk vertical cap or supported Z range, including clearance.");
+				}
+				else
+				{
+					Work->ChunkCount = 9 * (Work->M4MaxChunkZ - Work->M4MinChunkZ + 1);
+					Work->bSuccess = FVoxelLandPreviewJob::RunPreparedRange(Generator, 1, Work->M4MinChunkZ,
+						Work->M4MaxChunkZ, Cancel, Work->Meshes, Work->Error, VoxelLandM4Inspection::MaxMeshBytes);
+					if (Work->bSuccess && Work->Meshes.IsEmpty())
+					{
+						Work->bSuccess = false;
+						Work->Error =
+							TEXT("2 km inspection generated no visible surface; check terrain and domain bounds.");
+					}
+				}
+			}
+			else
+			{
+				Work->bSuccess = FVoxelLandPreviewJob::RunPrepared(
+					Generator, Horizontal, Vertical, Cancel, Work->Meshes, Work->Error);
+			}
 		}
 		Work->GenerationMs = (FPlatformTime::Seconds() - Started) * 1000.0;
 		Work->Done.Store(true);
@@ -2830,6 +3006,78 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 	if (PreviewViewport)
 	{
 		PreviewViewport->SetTerrainBounds(TerrainBounds);
+	}
+	if (Finished.bM4 && Finished.M4Snapshot)
+	{
+		const FVoxelLandM4WorldSnapshot& Snapshot = *Finished.M4Snapshot;
+		if (Finished.bHasM4HeightRange)
+		{
+			M4StageDiagnostics = FString::Printf(
+				TEXT(
+					"M4 global-stage inspector (completed CPU prepass): grid XY [%lld,%lld] to [%lld,%lld] cm, %d x %d cells, spacing %lld cm; stored height range %.2f to %.2f cm. Erosion %s. Range excludes overhang and final smoothing; per-control ranges are not measured."),
+				Finished.M4MinX, Finished.M4MinY, Finished.M4MaxX, Finished.M4MaxY, Snapshot.Domain.CellsX,
+				Snapshot.Domain.CellsY, Snapshot.Domain.GridSpacingCm, double(Finished.M4MinHeightQ8) / 256.0,
+				double(Finished.M4MaxHeightQ8) / 256.0,
+				Snapshot.Domain.bGlobalErosion ? TEXT("enabled") : TEXT("disabled"));
+		}
+		else
+		{
+			M4StageDiagnostics =
+				TEXT("M4 local mode: no global prepass grid is generated. Per-control ranges are not measured.");
+		}
+		if (Finished.bM4Inspection)
+		{
+			FVector CameraLocation = FVector::ZeroVector;
+			FRotator CameraRotation = FRotator::ZeroRotator;
+			float CameraFov = 0.f;
+			FIntPoint Resolution = FIntPoint::ZeroValue;
+			const FVector Target(VoxelLandM4Inspection::ChunkSizeCm / 2.0, VoxelLandM4Inspection::ChunkSizeCm / 2.0,
+				(double(Finished.M4MinHeightQ8) + double(Finished.M4MaxHeightQ8)) / 512.0);
+			const bool bCameraReady =
+				PreviewViewport && PreviewViewport->SetInspectionCamera(Target)
+				&& PreviewViewport->GetCameraDetails(CameraLocation, CameraRotation, CameraFov, Resolution);
+			M4InspectionDetails = FString::Printf(
+				TEXT(
+					"M4 2 km inspection (visual acceptance not assessed)\nConfiguration: %s\nSeed: %lld\nInspection voxel: 800 cm; LOD 0; XY chunks -1..1; Z chunks %d..%d\nGlobal prepass height: %.2f..%.2f cm; overhang band: %d Q8 cm\nRHI: %s; viewport: %d x %d\nCamera location cm: %s; rotation: %s; horizontal FOV: %.2f degrees; camera ready: %s\n"),
+				*M4PreviewConfig->GetPathName(), Snapshot.Seed, Finished.M4MinChunkZ, Finished.M4MaxChunkZ,
+				double(Finished.M4MinHeightQ8) / 256.0, double(Finished.M4MaxHeightQ8) / 256.0,
+				Snapshot.bOverhangEnabled ? Snapshot.OverhangBandQ8 : 0, *FApp::GetGraphicsRHI(), Resolution.X,
+				Resolution.Y, *CameraLocation.ToString(), *CameraRotation.ToString(), CameraFov,
+				bCameraReady ? TEXT("yes") : TEXT("no"));
+			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Continental"), Snapshot.Continental);
+			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Mountain"), Snapshot.Mountain);
+			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Peaks"), Snapshot.Peaks);
+			M4InspectionDetails += FString::Printf(
+				TEXT(
+					"Descriptor: base=%d Q8 cm; domain origin=(%lld,%lld), cells=(%d,%d), spacing=%lld cm; slope=%d; smoothing=(v%u,%d,%.9g); erosion=(%d,seed %s,salt %d,droplets %d,steps %d,thermal %d,capacity %lld,talus %lld,transfer %lld); overhang=(%d,amp %d,band %d,freq %.9g,seed %s,salt %d)\n"),
+				Snapshot.BaseHeightQ8, Snapshot.Domain.OriginXCm, Snapshot.Domain.OriginYCm, Snapshot.Domain.CellsX,
+				Snapshot.Domain.CellsY, Snapshot.Domain.GridSpacingCm, int32(Snapshot.bNormalizeSlope),
+				Snapshot.Smooth.Version, int32(Snapshot.Smooth.bEnabled), double(Snapshot.Smooth.Strength),
+				int32(Snapshot.Domain.bGlobalErosion), *Snapshot.ErosionStageId.ToString(), Snapshot.ErosionSalt,
+				Snapshot.DropletCount, Snapshot.Erosion.MaxSteps, Snapshot.Erosion.ThermalIterations,
+				Snapshot.Erosion.CapacityMaxQ8, Snapshot.Erosion.TalusQ8, Snapshot.Erosion.MaxTransferQ8,
+				int32(Snapshot.bOverhangEnabled), Snapshot.OverhangAmplitudeQ8, Snapshot.OverhangBandQ8,
+				double(Snapshot.OverhangFrequencyPerCm), *Snapshot.OverhangNodeId.ToString(), Snapshot.OverhangSalt);
+			for (int32 Z = Finished.M4MinChunkZ; Z <= Finished.M4MaxChunkZ; ++Z)
+			{
+				for (int32 Y = -1; Y <= 1; ++Y)
+				{
+					for (int32 X = -1; X <= 1; ++X)
+					{
+						M4InspectionDetails += FString::Printf(
+							TEXT("Chunk (%d,%d,%d): min (%d,%d,%d), max (%d,%d,%d) cm\n"), X, Y, Z,
+							X * VoxelLandM4Inspection::ChunkSizeCm, Y * VoxelLandM4Inspection::ChunkSizeCm,
+							Z * VoxelLandM4Inspection::ChunkSizeCm, (X + 1) * VoxelLandM4Inspection::ChunkSizeCm,
+							(Y + 1) * VoxelLandM4Inspection::ChunkSizeCm, (Z + 1) * VoxelLandM4Inspection::ChunkSizeCm);
+					}
+				}
+			}
+			M4InspectionDetails += TEXT(
+				"Record a screenshot and review silhouette, ridges and valleys; no visual acceptance is inferred. This is a bounded target, not a 2 km streamed horizon.");
+			M4StageDiagnostics += bCameraReady
+									? TEXT(" Inspection view configured; copy details and capture an image manually.")
+									: TEXT(" Inspection camera unavailable; no view has been established.");
+		}
 	}
 #if WITH_DEV_AUTOMATION_TESTS
 	++PreviewPublishCountForTests;

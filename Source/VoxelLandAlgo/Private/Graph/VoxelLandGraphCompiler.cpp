@@ -4,6 +4,7 @@
 #include "Graph/VoxelLandProgramOptimizer.h"
 
 #include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/VoxelLandBuiltinCatalog.h"
 #include "Data/VoxelLandGraphCycle.h"
 #include "Data/Enums/VoxelLandParameterType.h"
 #include "Operators/VoxelLandOperator.h"
@@ -233,9 +234,7 @@ private:
         }
         const FVoxelLandGraphNodeRecord& Filter = **Upstream;
         TGuardValue<const FVoxelLandGraphNodeRecord*> FilterContext(CurrentNode, &Filter);
-        const EVoxelLandGraphValueType Types[] = {EVoxelLandGraphValueType::Float, EVoxelLandGraphValueType::Bool,
-            EVoxelLandGraphValueType::Float, EVoxelLandGraphValueType::Float};
-        if (!CheckTypedPins(Filter, MakeArrayView(Types)))
+        if (!CheckBuiltinPins(Filter))
         {
             return false;
         }
@@ -313,38 +312,27 @@ private:
                 {
                     return FailAt(TEXT("Exactly one valid density output is required"), Node.Id);
                 }
-                if (!CheckPins(Node, 1, false)) { return false; }
+                if (!CheckBuiltinPins(Node)) { return false; }
                 Output = &Node;
             }
         }
         return Output != nullptr || Fail(TEXT("Missing density output"));
     }
 
-    bool CheckPins(const FVoxelLandGraphNodeRecord& Node, int32 Inputs, bool HasOutput)
+    bool CheckBuiltinPins(const FVoxelLandGraphNodeRecord& Node)
     {
-        if (Node.OperatorVersion != 1 || Node.Configuration.Num() != 0 || Node.Pins.Num() != Inputs + int32(HasOutput))
+        const EVoxelLandBuiltinNode Kind = static_cast<EVoxelLandBuiltinNode>(Node.OperatorId.D);
+        const bool bVariadic = Kind == EVoxelLandBuiltinNode::Add || Kind == EVoxelLandBuiltinNode::Multiply;
+        const int32 VariadicInputs = bVariadic ? Node.Pins.Num() - 1 : 2;
+        FVoxelLandBuiltinNodeSpec Spec;
+        if (!FVoxelLandBuiltinCatalog::Find(Kind, Spec, VariadicInputs) || Node.OperatorVersion != Spec.OperatorVersion ||
+            Node.Configuration.Num() != 0 || Node.Pins.Num() != Spec.Pins.Num())
         {
             return FailAt(TEXT("Invalid builtin version, configuration or pin count"), Node.Id);
         }
         for (int32 Index = 0; Index < Node.Pins.Num(); ++Index)
         {
-            if (Node.Pins[Index].Type != EVoxelLandGraphValueType::Float || Node.Pins[Index].bOutput != (Index == Inputs && HasOutput))
-            {
-                return FailAt(TEXT("Invalid builtin pin direction or type"), Node.Id, Node.Pins[Index].Id);
-            }
-        }
-        return true;
-    }
-
-    bool CheckTypedPins(const FVoxelLandGraphNodeRecord& Node, TConstArrayView<EVoxelLandGraphValueType> Types)
-    {
-        if (Node.OperatorVersion != 1 || Node.Configuration.Num() != 0 || Node.Pins.Num() != Types.Num())
-        {
-            return FailAt(TEXT("Invalid builtin version, configuration or pin count"), Node.Id);
-        }
-        for (int32 Index = 0; Index < Types.Num(); ++Index)
-        {
-            if (Node.Pins[Index].Type != Types[Index] || Node.Pins[Index].bOutput != (Index == Types.Num() - 1))
+            if (Node.Pins[Index].Type != Spec.Pins[Index].Type || Node.Pins[Index].bOutput != Spec.Pins[Index].bOutput)
             {
                 return FailAt(TEXT("Invalid builtin pin direction or type"), Node.Id, Node.Pins[Index].Id);
             }
@@ -554,14 +542,11 @@ bool FCompiler::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Re
     const EVoxelLandBuiltinNode Kind = EVoxelLandBuiltinNode(Node.OperatorId.D);
     if (Kind == EVoxelLandBuiltinNode::RerouteFloat || Kind == EVoxelLandBuiltinNode::RerouteInt || Kind == EVoxelLandBuiltinNode::RerouteBool)
     {
-        const EVoxelLandGraphValueType Type = Kind == EVoxelLandBuiltinNode::RerouteFloat ? EVoxelLandGraphValueType::Float :
-            Kind == EVoxelLandBuiltinNode::RerouteInt ? EVoxelLandGraphValueType::Int32 : EVoxelLandGraphValueType::Bool;
-        const EVoxelLandGraphValueType Types[] = {Type, Type};
-        return CheckTypedPins(Node, MakeArrayView(Types)) && CompileInput(Node, 0, Result);
+        return CheckBuiltinPins(Node) && CompileInput(Node, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::PositionX || Kind == EVoxelLandBuiltinNode::PositionY || Kind == EVoxelLandBuiltinNode::PositionZ)
     {
-        if (!CheckPins(Node, 0, true))
+        if (!CheckBuiltinPins(Node))
         {
             return false;
         }
@@ -571,11 +556,11 @@ bool FCompiler::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Re
     }
     if (Kind == EVoxelLandBuiltinNode::FloatParameter)
     {
-        return CheckPins(Node, 0, true) && CompileParameter(Node, EVoxelLandGraphValueType::Float, Result);
+        return CheckBuiltinPins(Node) && CompileParameter(Node, EVoxelLandGraphValueType::Float, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::FloatConstant)
     {
-        if (!CheckPins(Node, 1, true) || InputLinks.Contains(Node.Pins[0].Id))
+        if (!CheckBuiltinPins(Node) || InputLinks.Contains(Node.Pins[0].Id))
         {
             return Fail(TEXT("Float constant requires one unconnected value pin"));
         }
@@ -662,9 +647,8 @@ bool FCompiler::NoiseSource(const FVoxelLandGraphNodeRecord& Node, int32 Index,
         {
             return Fail(TEXT("Uniform settings must be unconnected defaults or direct parameter references"));
         }
-        const EVoxelLandGraphValueType Types[] = {Type};
         int32 Slot = INDEX_NONE;
-        if (!CheckTypedPins(**Upstream, MakeArrayView(Types))) { return false; }
+        if (!CheckBuiltinPins(**Upstream)) { return false; }
         {
             TGuardValue<const FVoxelLandGraphNodeRecord*> NodeContext(CurrentNode, *Upstream);
             TGuardValue<FGuid> ParameterPinContext(ActivePin, FGuid());
@@ -720,16 +704,7 @@ bool FCompiler::CompileNoise(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
     const bool b3D = Kind == EVoxelLandBuiltinNode::Perlin3 || Kind == EVoxelLandBuiltinNode::Fbm3 ||
         Kind == EVoxelLandBuiltinNode::Value3 || Kind == EVoxelLandBuiltinNode::Simplex3;
     const int32 Dimensions = b3D ? 3 : 2;
-    TArray<EVoxelLandGraphValueType> Types;
-    for (int32 Index = 0; Index < Dimensions + 1; ++Index)
-    {
-        Types.Add(EVoxelLandGraphValueType::Float);
-    }
-    Types.Add(EVoxelLandGraphValueType::Int32);
-    Types.Add(EVoxelLandGraphValueType::Float);
-    Types.Add(EVoxelLandGraphValueType::Float);
-    Types.Add(EVoxelLandGraphValueType::Float);
-    if (!CheckTypedPins(Node, Types))
+    if (!CheckBuiltinPins(Node))
     {
         return false;
     }
@@ -779,24 +754,24 @@ bool FCompiler::CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
     if (Kind == EVoxelLandBuiltinNode::HeightToDensity)
     {
         uint16 Z = 0, Height = 0;
-        return CheckPins(Node, 1, true) && Emit(EVoxelLandOpcode::LoadZ, 0, 0, 0, 0, Z) &&
+        return CheckBuiltinPins(Node) && Emit(EVoxelLandOpcode::LoadZ, 0, 0, 0, 0, Z) &&
             CompileInput(Node, 0, Height) && Emit(EVoxelLandOpcode::Subtract, Z, Height, 0, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::Abs || Kind == EVoxelLandBuiltinNode::Negate)
     {
         uint16 A = 0;
         const EVoxelLandOpcode Op = Kind == EVoxelLandBuiltinNode::Abs ? EVoxelLandOpcode::Abs : EVoxelLandOpcode::Negate;
-        return CheckPins(Node, 1, true) && CompileInput(Node, 0, A) && Emit(Op, A, 0, 0, 0, Result);
+        return CheckBuiltinPins(Node) && CompileInput(Node, 0, A) && Emit(Op, A, 0, 0, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::Saturate)
     {
         uint16 A = 0, Zero = 0, One = 0, Lower = 0;
-        return CheckPins(Node, 1, true) && CompileInput(Node, 0, A) && Constant(0.f, Zero) && Constant(1.f, One) &&
+        return CheckBuiltinPins(Node) && CompileInput(Node, 0, A) && Constant(0.f, Zero) && Constant(1.f, One) &&
             Emit(EVoxelLandOpcode::Max, A, Zero, 0, 0, Lower) && Emit(EVoxelLandOpcode::Min, Lower, One, 0, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::Clamp)
     {
-        if (!CheckPins(Node, 3, true)) { return false; }
+        if (!CheckBuiltinPins(Node)) { return false; }
         if (!InputLinks.Contains(Node.Pins[1].Id) && !InputLinks.Contains(Node.Pins[2].Id) &&
             Node.Pins[1].FloatDefault > Node.Pins[2].FloatDefault)
         {
@@ -809,7 +784,7 @@ bool FCompiler::CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
     if (Kind == EVoxelLandBuiltinNode::Lerp)
     {
         uint16 A = 0, B = 0, Alpha = 0, Difference = 0, Scaled = 0;
-        return CheckPins(Node, 3, true) && CompileInput(Node, 0, A) && CompileInput(Node, 1, B) &&
+        return CheckBuiltinPins(Node) && CompileInput(Node, 0, A) && CompileInput(Node, 1, B) &&
             CompileInput(Node, 2, Alpha) && Emit(EVoxelLandOpcode::Subtract, B, A, 0, 0, Difference) &&
             Emit(EVoxelLandOpcode::Multiply, Difference, Alpha, 0, 0, Scaled) &&
             Emit(EVoxelLandOpcode::Add, A, Scaled, 0, 0, Result);
@@ -834,7 +809,7 @@ bool FCompiler::CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
     {
         return Fail(TEXT("Invalid arithmetic input count"));
     }
-    if (!CheckPins(Node, InputCount, true)) { return false; }
+    if (!CheckBuiltinPins(Node)) { return false; }
     if (Kind == EVoxelLandBuiltinNode::Divide && !InputLinks.Contains(Node.Pins[1].Id) && Node.Pins[1].FloatDefault == 0.f)
     {
         return FailAt(TEXT("Division by zero"), Node.Id, Node.Pins[1].Id);
@@ -860,10 +835,7 @@ bool FCompiler::CompileTypedBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
 {
     if (Kind == EVoxelLandBuiltinNode::IntConstant || Kind == EVoxelLandBuiltinNode::BoolConstant)
     {
-        const EVoxelLandGraphValueType Type = Kind == EVoxelLandBuiltinNode::IntConstant ?
-            EVoxelLandGraphValueType::Int32 : EVoxelLandGraphValueType::Bool;
-        const EVoxelLandGraphValueType Types[] = {Type, Type};
-        if (!CheckTypedPins(Node, MakeArrayView(Types))) { return false; }
+        if (!CheckBuiltinPins(Node)) { return false; }
         if (InputLinks.Contains(Node.Pins[0].Id))
         {
             return FailAt(TEXT("Typed constant requires an unconnected value"), Node.Id, Node.Pins[0].Id);
@@ -874,52 +846,42 @@ bool FCompiler::CompileTypedBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
     {
         const EVoxelLandGraphValueType Type = Kind == EVoxelLandBuiltinNode::IntParameter ?
             EVoxelLandGraphValueType::Int32 : EVoxelLandGraphValueType::Bool;
-        const EVoxelLandGraphValueType Types[] = {Type};
-        return CheckTypedPins(Node, MakeArrayView(Types)) && CompileParameter(Node, Type, Result);
+        return CheckBuiltinPins(Node) && CompileParameter(Node, Type, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::IntToFloat)
     {
-        const EVoxelLandGraphValueType Types[] = {EVoxelLandGraphValueType::Int32, EVoxelLandGraphValueType::Float};
         uint16 A = 0;
-        return CheckTypedPins(Node, MakeArrayView(Types)) && CompileInput(Node, 0, A) &&
+        return CheckBuiltinPins(Node) && CompileInput(Node, 0, A) &&
             Emit(EVoxelLandOpcode::IntToFloat, A, 0, 0, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::Less || Kind == EVoxelLandBuiltinNode::LessEqual || Kind == EVoxelLandBuiltinNode::Equal)
     {
-        const EVoxelLandGraphValueType Types[] = {EVoxelLandGraphValueType::Float, EVoxelLandGraphValueType::Float,
-            EVoxelLandGraphValueType::Bool};
         const EVoxelLandOpcode Op = Kind == EVoxelLandBuiltinNode::Less ? EVoxelLandOpcode::Less :
             Kind == EVoxelLandBuiltinNode::LessEqual ? EVoxelLandOpcode::LessEqual : EVoxelLandOpcode::Equal;
         uint16 A = 0, B = 0;
-        return CheckTypedPins(Node, MakeArrayView(Types)) && CompileInput(Node, 0, A) && CompileInput(Node, 1, B) &&
+        return CheckBuiltinPins(Node) && CompileInput(Node, 0, A) && CompileInput(Node, 1, B) &&
             Emit(Op, A, B, 0, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::BoolAnd || Kind == EVoxelLandBuiltinNode::BoolOr || Kind == EVoxelLandBuiltinNode::BoolNot)
     {
         const bool bUnary = Kind == EVoxelLandBuiltinNode::BoolNot;
-        const EVoxelLandGraphValueType Unary[] = {EVoxelLandGraphValueType::Bool, EVoxelLandGraphValueType::Bool};
-        const EVoxelLandGraphValueType Binary[] = {EVoxelLandGraphValueType::Bool, EVoxelLandGraphValueType::Bool,
-            EVoxelLandGraphValueType::Bool};
         const EVoxelLandOpcode Op = bUnary ? EVoxelLandOpcode::BoolNot :
             Kind == EVoxelLandBuiltinNode::BoolAnd ? EVoxelLandOpcode::BoolAnd : EVoxelLandOpcode::BoolOr;
         uint16 A = 0, B = 0;
-        return CheckTypedPins(Node, bUnary ? MakeArrayView(Unary) : MakeArrayView(Binary)) &&
+        return CheckBuiltinPins(Node) &&
             CompileInput(Node, 0, A) && (bUnary || CompileInput(Node, 1, B)) && Emit(Op, A, B, 0, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::SelectFloat || Kind == EVoxelLandBuiltinNode::SelectInt || Kind == EVoxelLandBuiltinNode::SelectBool)
     {
-        const EVoxelLandGraphValueType Type = Kind == EVoxelLandBuiltinNode::SelectFloat ? EVoxelLandGraphValueType::Float :
-            Kind == EVoxelLandBuiltinNode::SelectInt ? EVoxelLandGraphValueType::Int32 : EVoxelLandGraphValueType::Bool;
-        const EVoxelLandGraphValueType Types[] = {EVoxelLandGraphValueType::Bool, Type, Type, Type};
         const EVoxelLandOpcode Op = Kind == EVoxelLandBuiltinNode::SelectFloat ? EVoxelLandOpcode::SelectFloat :
             Kind == EVoxelLandBuiltinNode::SelectInt ? EVoxelLandOpcode::SelectInt : EVoxelLandOpcode::SelectBool;
         uint16 A = 0, B = 0, C = 0;
-        return CheckTypedPins(Node, MakeArrayView(Types)) && CompileInput(Node, 0, A) && CompileInput(Node, 1, B) &&
+        return CheckBuiltinPins(Node) && CompileInput(Node, 0, A) && CompileInput(Node, 1, B) &&
             CompileInput(Node, 2, C) && Emit(Op, A, B, C, 0, Result);
     }
     if (Kind == EVoxelLandBuiltinNode::Power)
     {
-        if (!CheckPins(Node, 2, true))
+        if (!CheckBuiltinPins(Node))
         {
             return false;
         }
@@ -935,7 +897,7 @@ bool FCompiler::CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
     if (Kind == EVoxelLandBuiltinNode::Plane || Kind == EVoxelLandBuiltinNode::Sphere || Kind == EVoxelLandBuiltinNode::Box)
     {
         const int32 InputCount = Kind == EVoxelLandBuiltinNode::Plane ? 7 : Kind == EVoxelLandBuiltinNode::Sphere ? 4 : 6;
-        if (!CheckPins(Node, InputCount, true))
+        if (!CheckBuiltinPins(Node))
         {
             return false;
         }

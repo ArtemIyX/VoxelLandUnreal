@@ -15,6 +15,11 @@ class VOXELLANDDATA_API UVoxelLandM4WorldConfig : public UDataAsset
 {
 	GENERATED_BODY()
 public:
+#if WITH_EDITOR
+	// Data validation checks the persisted authoring settings and baked LUTs.
+	// Full compiled-program/2D validation still runs in the editor bake hook.
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
+#endif
 	// Game-thread validation/capture only. Graph compilation and proof of 2D
 	// evaluation, cooked program validation and prepass execution are separate.
 	bool ValidateSettings(FString& OutError) const;

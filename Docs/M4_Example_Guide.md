@@ -34,6 +34,8 @@ Set seed `271828`, voxel size `100` cm, base height `0`, and leave the finite-do
 
 Save the graphs before saving the M4 config. The editor's config save hook validates the graph programs and bakes the 4,097-entry curves. If the config reports missing, stale, or invalid baked curves, fix and save its inputs again. The current invalid-cook path clears baked data and logs an error; whether that log aborts an actual cook remains to be verified.
 
+For cook-time asset validation, enable and load Unreal's **Data Validation** plugin and pass `-RunAssetValidation -ValidationErrorsAreFatal` to the cook commandlet. Unreal's content-validation setting must permit validation. With those conditions, M4 config data validation reports invalid settings, missing or stale baked curves, and unsupported or missing compiled-program envelopes as errors; Unreal can reject the affected package when validation errors are fatal. This validation does not prove that compiled graph bytecode matches its source or is valid for M4's 2D control evaluation. The config's later save hook performs those checks and clears old baked curves if they fail, but its error log alone is not a verified unconditional cook abort. Test the actual packaging configuration and inspect its cook result and logs.
+
 ## Preview and runtime
 
 Open a control graph, choose the M4 config in the preview panel, and select **Preview M4 world**. The preview uses the CPU preparation path and a bounded chunk volume. A previous surface remains marked **Stale** while replacement work is pending or invalid. The ordinary preview does not establish the 2 km criterion.

@@ -34,9 +34,15 @@ namespace VoxelLandM4Editor
 {
 bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 {
+	if (!IsInGameThread())
+	{
+		Error = TEXT("M4 configuration baking requires the game thread");
+		return false;
+	}
 	FVoxelLandM4WorldSnapshot Snapshot;
 	if (!Config.CaptureSnapshot(Snapshot, Error))
 	{
+		Config.ClearBakedCurves();
 		return false;
 	}
 	TArray<int32> Baked[3];
@@ -71,8 +77,15 @@ bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 		}
 		return true;
 	}).Get();
-	return bBaked
-		&& Config.SetBakedCurves(Baked[0], Baked[1], Baked[2], int32(VoxelLandM4CurveBake::AlgorithmVersion), Error);
+	if (!bBaked
+		|| !Config.SetBakedCurves(Baked[0], Baked[1], Baked[2], int32(VoxelLandM4CurveBake::AlgorithmVersion), Error))
+	{
+		// Never retain previously valid LUTs when the current source cannot be
+		// baked. This also protects direct callers, not only the PreSave hook.
+		Config.ClearBakedCurves();
+		return false;
+	}
+	return true;
 }
 }
 
@@ -289,7 +302,6 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 		FString Error;
 		if (!VoxelLandM4Editor::BakeWorldConfig(*Config, Error))
 		{
-			Config->ClearBakedCurves();
 			if (Context.IsCooking())
 			{
 				UE_LOG(LogTemp, Error, TEXT("VoxelLand M4 configuration %s cannot cook: %s"), *Config->GetPathName(),

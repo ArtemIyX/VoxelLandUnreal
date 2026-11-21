@@ -35,11 +35,37 @@ void AddCoordinates(FVoxelLandBuiltinNodeSpec& Spec, bool b3D)
 void AddNoise(FVoxelLandBuiltinNodeSpec& Spec, bool b3D)
 {
     Spec.bNoise = true;
+    Spec.NoiseDimensions = b3D ? 3 : 2;
     AddCoordinates(Spec, b3D);
     AddPin(Spec, TEXT("Frequency"), EType::Float, TEXT("0.01"), false, true);
     AddPin(Spec, TEXT("Octaves"), EType::Int32, TEXT("3"), false, true);
     AddPin(Spec, TEXT("Gain"), EType::Float, TEXT("0.5"), false, true);
     AddPin(Spec, TEXT("Lacunarity"), EType::Float, TEXT("2"), false, true);
+}
+
+bool UsesTypedCompilerDispatch(EVoxelLandBuiltinNode Kind)
+{
+    switch (Kind)
+    {
+    case EVoxelLandBuiltinNode::IntConstant:
+    case EVoxelLandBuiltinNode::BoolConstant:
+    case EVoxelLandBuiltinNode::IntParameter:
+    case EVoxelLandBuiltinNode::BoolParameter:
+    case EVoxelLandBuiltinNode::IntToFloat:
+    case EVoxelLandBuiltinNode::Less:
+    case EVoxelLandBuiltinNode::LessEqual:
+    case EVoxelLandBuiltinNode::Equal:
+    case EVoxelLandBuiltinNode::BoolAnd:
+    case EVoxelLandBuiltinNode::BoolOr:
+    case EVoxelLandBuiltinNode::BoolNot:
+    case EVoxelLandBuiltinNode::SelectFloat:
+    case EVoxelLandBuiltinNode::SelectInt:
+    case EVoxelLandBuiltinNode::SelectBool:
+    case EVoxelLandBuiltinNode::Power:
+        return true;
+    default:
+        return false;
+    }
 }
 
 void AddSelect(FVoxelLandBuiltinNodeSpec& Spec, EType Type)
@@ -55,6 +81,7 @@ bool FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode Kind, FVoxelLandBuilti
     OutSpec = FVoxelLandBuiltinNodeSpec();
     FVoxelLandBuiltinNodeSpec Spec;
     Spec.Kind = Kind;
+    Spec.bTypedCompilerDispatch = UsesTypedCompilerDispatch(Kind);
     Spec.OperatorId = VoxelLandBuiltinNodeId(Kind);
     EType OutputType = EType::Float;
     bool bHasOutput = true;

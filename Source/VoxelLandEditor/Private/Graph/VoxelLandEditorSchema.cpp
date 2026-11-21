@@ -294,7 +294,8 @@ const FPinConnectionResponse UVoxelLandEditorSchema::CanCreateConnection(const U
             return FPinConnectionResponse(CONNECT_RESPONSE_DISALLOW, LOCTEXT("SmoothUniform", "Filter controls accept direct parameter references or unconnected defaults."));
         }
     }
-    if (ToNode && ToNode->Kind >= int32(EVoxelLandBuiltinNode::Perlin2) && ToNode->Kind <= int32(EVoxelLandBuiltinNode::Simplex3))
+    FVoxelLandBuiltinNodeSpec NoiseSpec;
+    if (ToNode && FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode(ToNode->Kind), NoiseSpec) && NoiseSpec.bNoise)
     {
         const bool bUniform = Input->PinName == TEXT("Frequency") || Input->PinName == TEXT("Octaves") ||
             Input->PinName == TEXT("Gain") || Input->PinName == TEXT("Lacunarity");

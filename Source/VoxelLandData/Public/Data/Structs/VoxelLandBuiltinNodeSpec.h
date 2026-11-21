@@ -14,6 +14,8 @@ struct VOXELLANDDATA_API FVoxelLandBuiltinNodeSpec
     EVoxelLandOperatorStage Stage = EVoxelLandOperatorStage::Sample;
     bool bParameterReference = false;
     bool bNoise = false;
+    bool bTypedCompilerDispatch = false;
+    int32 NoiseDimensions = 0;
     int32 MinVariadicInputs = 0;
     int32 MaxVariadicInputs = 0;
     TArray<FVoxelLandBuiltinPinSpec> Pins;

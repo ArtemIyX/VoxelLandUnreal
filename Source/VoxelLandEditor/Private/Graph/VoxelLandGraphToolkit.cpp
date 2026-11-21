@@ -1,6 +1,7 @@
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Operators/VoxelLandOperator.h"
 #include "Graph/VoxelLandEditorFloat.h"
+#include "Data/VoxelLandBuiltinCatalog.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/PackageReload.h"
@@ -967,7 +968,8 @@ FReply FVoxelLandGraphToolkit::SelectNoisePreview(bool bStandalone)
     }
     const FGraphPanelSelectionSet Selection = GraphWidget->GetSelectedNodes();
     const UVoxelLandEditorNode* Node = Selection.Num() == 1 ? Cast<UVoxelLandEditorNode>(*Selection.CreateConstIterator()) : nullptr;
-    if (!Node || Node->Kind < int32(EVoxelLandBuiltinNode::Perlin2) || Node->Kind > int32(EVoxelLandBuiltinNode::Simplex3))
+    FVoxelLandBuiltinNodeSpec NoiseSpec;
+    if (!Node || !FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode(Node->Kind), NoiseSpec) || !NoiseSpec.bNoise)
     {
         CancelPreview();
         Status = TEXT("Error; preview stale: select exactly one Perlin, fBm, Value, or Simplex noise node.");
@@ -1101,15 +1103,16 @@ bool FVoxelLandGraphToolkit::BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& S
     if (bNoisePreview)
     {
         const FGuid FirstNoise = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::Perlin2);
+        FVoxelLandBuiltinNodeSpec NoiseSpec;
         if (Node->OperatorId.A != FirstNoise.A || Node->OperatorId.B != FirstNoise.B || Node->OperatorId.C != FirstNoise.C ||
-            Node->OperatorId.D < uint32(EVoxelLandBuiltinNode::Perlin2) || Node->OperatorId.D > uint32(EVoxelLandBuiltinNode::Simplex3))
+            !FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode(Node->OperatorId.D), NoiseSpec) || !NoiseSpec.bNoise)
         {
             Error = TEXT("The selected node is no longer a supported noise node.");
             return false;
         }
         if (bNoiseStandalone)
         {
-            const int32 Dimensions = ((Node->OperatorId.D - uint32(EVoxelLandBuiltinNode::Perlin2)) % 2) ? 3 : 2;
+            const int32 Dimensions = NoiseSpec.NoiseDimensions;
             if (Node->Pins.Num() < Dimensions)
             {
                 Error = TEXT("The noise node is missing coordinate inputs.");

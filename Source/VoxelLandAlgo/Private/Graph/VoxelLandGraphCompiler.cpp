@@ -566,7 +566,9 @@ bool FCompiler::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Re
         }
         return Constant(Node.Pins[0].FloatDefault, Result);
     }
-    if (uint32(Kind) >= uint32(EVoxelLandBuiltinNode::IntConstant) && uint32(Kind) <= uint32(EVoxelLandBuiltinNode::Power))
+    FVoxelLandBuiltinNodeSpec BuiltinSpec;
+    const bool bKnownBuiltin = FVoxelLandBuiltinCatalog::Find(Kind, BuiltinSpec);
+    if (bKnownBuiltin && BuiltinSpec.bTypedCompilerDispatch)
     {
         return CompileTypedBuiltin(Node, Kind, Result);
     }
@@ -574,7 +576,7 @@ bool FCompiler::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Re
     {
         return CompileShape(Node, Kind, Result);
     }
-    if (uint32(Kind) >= uint32(EVoxelLandBuiltinNode::Perlin2) && uint32(Kind) <= uint32(EVoxelLandBuiltinNode::Simplex3))
+    if (bKnownBuiltin && BuiltinSpec.bNoise)
     {
         return CompileNoise(Node, Kind, Result);
     }

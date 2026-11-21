@@ -9,10 +9,11 @@ class UStaticMeshComponent;
 class FVoxelLandPreviewScene final : public FAdvancedPreviewScene
 {
 public:
-    FVoxelLandPreviewScene();
-    bool IsBackdropRegistered() const;
-    virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	FVoxelLandPreviewScene();
+	bool IsBackdropRegistered() const;
+	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+
 private:
-    TObjectPtr<UStaticMeshComponent> RemovedFloor;
-    TObjectPtr<UStaticMeshComponent> RemovedEnvironment;
+	TObjectPtr<UStaticMeshComponent> RemovedFloor;
+	TObjectPtr<UStaticMeshComponent> RemovedEnvironment;
 };

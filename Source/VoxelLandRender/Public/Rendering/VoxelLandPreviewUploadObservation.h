@@ -9,15 +9,15 @@ class FRHICommandListBase;
 class VOXELLANDRENDER_API FVoxelLandPreviewUploadObservation final
 {
 public:
-    explicit FVoxelLandPreviewUploadObservation(int32 InExpectedCount);
-    ~FVoxelLandPreviewUploadObservation();
+	explicit FVoxelLandPreviewUploadObservation(int32 InExpectedCount);
+	~FVoxelLandPreviewUploadObservation();
 
-    static bool IsSupported();
-    void RecordUpload(FRHICommandListBase& RHICmdList);
-    bool IsComplete();
+	static bool IsSupported();
+	void RecordUpload(FRHICommandListBase& RHICmdList);
+	bool IsComplete();
 
 private:
-    class FState;
-    TUniquePtr<FState> State;
+	class FState;
+	TUniquePtr<FState> State;
 };
 #endif

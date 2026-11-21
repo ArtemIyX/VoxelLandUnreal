@@ -7,35 +7,43 @@
 UCLASS()
 class UVoxelLandTerrainGraphFactory : public UFactory
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
+
 public:
-    UVoxelLandTerrainGraphFactory();
-    virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
+	UVoxelLandTerrainGraphFactory();
+	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
+		UObject* Context, FFeedbackContext* Warn) override;
 };
 
 UCLASS()
 class UVoxelLandGraphFunctionFactory : public UFactory
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
+
 public:
-    UVoxelLandGraphFunctionFactory();
-    virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
+	UVoxelLandGraphFunctionFactory();
+	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
+		UObject* Context, FFeedbackContext* Warn) override;
 };
 
 UCLASS()
 class UVoxelLandWorldSettingsFactory : public UFactory
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
+
 public:
-    UVoxelLandWorldSettingsFactory();
-    virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
+	UVoxelLandWorldSettingsFactory();
+	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
+		UObject* Context, FFeedbackContext* Warn) override;
 };
 
 UCLASS()
 class UVoxelLandMaterialSetupFactory : public UFactory
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
+
 public:
-    UVoxelLandMaterialSetupFactory();
-    virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
+	UVoxelLandMaterialSetupFactory();
+	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
+		UObject* Context, FFeedbackContext* Warn) override;
 };

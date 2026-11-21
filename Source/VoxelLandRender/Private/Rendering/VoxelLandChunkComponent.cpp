@@ -37,10 +37,10 @@ public:
 #endif
 		)
 		: FPrimitiveSceneProxy(Component)
-		, Mesh(MoveTemp(InMesh))
-		, Factory(GetScene().GetFeatureLevel(), "VoxelLandChunk")
+		  , Mesh(MoveTemp(InMesh))
+		  , Factory(GetScene().GetFeatureLevel(), "VoxelLandChunk")
 #if WITH_EDITOR
-		, UploadObservation(MoveTemp(InObservation))
+		  , UploadObservation(MoveTemp(InObservation))
 #endif
 	{
 		UMaterialInterface* Material = Component->GetMaterial(0);
@@ -161,21 +161,21 @@ bool UVoxelLandChunkComponent::SetMesh(TSharedPtr<const FVoxelLandMeshData, ESPM
 {
 	check(IsInGameThread());
 	if (!InMesh || InMesh->Vertices.IsEmpty() || InMesh->Indices.IsEmpty() || InMesh->Indices.Num() % 3 != 0
-		|| !InMesh->Bounds.IsValid)
+	    || !InMesh->Bounds.IsValid)
 	{
 		return false;
 	}
-	for (uint32 I : InMesh->Indices)
+	for (uint32 Index : InMesh->Indices)
 	{
-		if (I >= uint32(InMesh->Vertices.Num()))
+		if (Index >= static_cast<uint32>(InMesh->Vertices.Num()))
 		{
 			return false;
 		}
 	}
-	for (const auto& V : InMesh->Vertices)
+	for (const FVoxelLandMeshVertex& Vertex : InMesh->Vertices)
 	{
-		if (V.Position.ContainsNaN() || V.Normal.ContainsNaN() || V.Tangent.ContainsNaN()
-			|| !InMesh->Bounds.IsInsideOrOn(V.Position))
+		if (Vertex.Position.ContainsNaN() || Vertex.Normal.ContainsNaN() || Vertex.Tangent.ContainsNaN()
+		    || !InMesh->Bounds.IsInsideOrOn(Vertex.Position))
 		{
 			return false;
 		}
@@ -204,11 +204,12 @@ FPrimitiveSceneProxy* UVoxelLandChunkComponent::CreateSceneProxy()
 #if WITH_EDITOR
 		, MoveTemp(PreviewUploadObservation)
 #endif
-	);
+		);
 }
 
 #if WITH_EDITOR
-void UVoxelLandChunkComponent::SetPreviewUploadObservation(TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> InObservation)
+void UVoxelLandChunkComponent::SetPreviewUploadObservation(
+	TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> InObservation)
 {
 	check(IsInGameThread());
 	PreviewUploadObservation = MoveTemp(InObservation);

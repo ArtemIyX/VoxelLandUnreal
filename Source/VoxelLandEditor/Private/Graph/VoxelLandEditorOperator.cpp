@@ -24,7 +24,7 @@ bool ValidateInputs(const FVoxelLandEditorOperatorPresentation& Presentation,
     TSet<FString> Names;
     for (int32 Index = 0; Index < Types.Num(); ++Index)
     {
-        const FVoxelLandGraphPinRecord& Pin = Presentation.Inputs[Index];
+	    const FVoxelLandGraphPinRecord& Pin = Presentation.Inputs[Index];
         const FString Key = Pin.Name.ToLower();
         if (Pin.bOutput || Pin.bInvalidDefault || !IsValidType(Pin.Type) || Pin.Type != Types[Index] || Pin.Name.IsEmpty() || Pin.Name.Len() > 128 ||
             Names.Contains(Key) || !FMath::IsFinite(Pin.FloatDefault))

@@ -5,8 +5,9 @@
 
 namespace
 {
-constexpr EAutomationTestFlags Flags = EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
-int64 Sum(const TArray<int32>& Values)
+constexpr EAutomationTestFlags M4ErosionFlags =
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
+int64 SumM4ErosionHeights(const TArray<int32>& Values)
 {
 	int64 Result = 0;
 	for (int32 Value : Values)
@@ -17,7 +18,7 @@ int64 Sum(const TArray<int32>& Values)
 }
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ErosionHydraulicTest, "VoxelLand.M4.Erosion.Hydraulic", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ErosionHydraulicTest, "VoxelLand.M4.Erosion.Hydraulic", M4ErosionFlags)
 bool FVoxelLandM4ErosionHydraulicTest::RunTest(const FString& Parameters)
 {
 	FVoxelLandM4ErosionSettings Settings;
@@ -37,7 +38,7 @@ bool FVoxelLandM4ErosionHydraulicTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("first cell erodes"), Output[0], 95);
 	TestEqual(TEXT("intermediate capacity drop deposits"), Output[1], 62);
 	TestEqual(TEXT("local minimum receives remaining sediment"), Output[2], 62);
-	TestEqual(TEXT("mass conserved"), Sum(Output), Sum(Input));
+	TestEqual(TEXT("mass conserved"), SumM4ErosionHeights(Output), SumM4ErosionHeights(Input));
 
 	Settings.MaxSteps = 1;
 	TArray<int32> StepCap;
@@ -47,12 +48,12 @@ bool FVoxelLandM4ErosionHydraulicTest::RunTest(const FString& Parameters)
 	if (StepCap.Num() == 6)
 	{
 		TestEqual(TEXT("step cap deposits carried sediment"), StepCap[1], 65);
-		TestEqual(TEXT("step cap conserves mass"), Sum(StepCap), Sum(Input));
+		TestEqual(TEXT("step cap conserves mass"), SumM4ErosionHeights(StepCap), SumM4ErosionHeights(Input));
 	}
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ErosionThermalTest, "VoxelLand.M4.Erosion.Thermal", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ErosionThermalTest, "VoxelLand.M4.Erosion.Thermal", M4ErosionFlags)
 bool FVoxelLandM4ErosionThermalTest::RunTest(const FString& Parameters)
 {
 	FVoxelLandM4ErosionSettings Settings;
@@ -72,7 +73,7 @@ bool FVoxelLandM4ErosionThermalTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("source loses a quarter"), Output[0], 75);
 	TestEqual(TEXT("+X wins equal-height neighbor tie"), Output[1], 25);
 	TestEqual(TEXT("+Y tie target is unchanged"), Output[2], 0);
-	TestEqual(TEXT("thermal conserves mass"), Sum(Output), Sum(Input));
+	TestEqual(TEXT("thermal conserves mass"), SumM4ErosionHeights(Output), SumM4ErosionHeights(Input));
 	TArray<int32> Repeat;
 	const FVoxelLandError RepeatError =
 		VoxelLandM4Erosion::Apply(1, 1, Input, Starts, Settings, Repeat, [] { return false; });
@@ -87,12 +88,13 @@ bool FVoxelLandM4ErosionThermalTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("negative source transfers"), NegativeOutput[0], -125);
 		TestEqual(TEXT("negative target receives"), NegativeOutput[1], -175);
-		TestEqual(TEXT("negative heights conserve mass"), Sum(NegativeOutput), Sum(NegativeInput));
+		TestEqual(TEXT("negative heights conserve mass"), SumM4ErosionHeights(NegativeOutput),
+			SumM4ErosionHeights(NegativeInput));
 	}
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ErosionFailureTest, "VoxelLand.M4.Erosion.Failures", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ErosionFailureTest, "VoxelLand.M4.Erosion.Failures", M4ErosionFlags)
 bool FVoxelLandM4ErosionFailureTest::RunTest(const FString& Parameters)
 {
 	FVoxelLandM4ErosionSettings Settings;

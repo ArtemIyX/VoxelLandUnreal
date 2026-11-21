@@ -6,10 +6,11 @@
 
 namespace
 {
-constexpr EAutomationTestFlags Flags = EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
+constexpr EAutomationTestFlags M4CurveFlags =
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4CurveInterpolation, "VoxelLand.M4.Curve.Interpolation", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4CurveInterpolation, "VoxelLand.M4.Curve.Interpolation", M4CurveFlags)
 bool FVoxelLandM4CurveInterpolation::RunTest(const FString& Parameters)
 {
 	TArray<int32> Samples;
@@ -71,7 +72,7 @@ bool FVoxelLandM4CurveInterpolation::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4CurveValidation, "VoxelLand.M4.Curve.Validation", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4CurveValidation, "VoxelLand.M4.Curve.Validation", M4CurveFlags)
 bool FVoxelLandM4CurveValidation::RunTest(const FString& Parameters)
 {
 	TArray<int32> Samples;

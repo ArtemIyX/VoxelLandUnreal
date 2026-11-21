@@ -150,7 +150,6 @@ private:
 	void ExtendGraphToolbar();
 	void PasteNodes();
 	void DuplicateSelected();
-	FReply CompileClicked();
 	FText StatusText() const;
 	void StartPreview();
 	bool BuildPreviewProfile(const FVoxelLandSerializedProgram& Payload, FVoxelLandZoneProfile& Profile,

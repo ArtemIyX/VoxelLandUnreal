@@ -877,16 +877,6 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArg
 	return SNew(SDockTab)
 		[
 			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SNew(SButton).Text(LOCTEXT("Compile", "Compile")).OnClicked_Raw(this,
-					&FVoxelLandGraphToolkit::CompileClicked)
-			]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SNew(SButton).Text(LOCTEXT("FocusError", "Focus error node")).OnClicked_Raw(this,
-					&FVoxelLandGraphToolkit::FocusError)
-			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(4)
 			[
 				SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText)
@@ -905,12 +895,6 @@ FText FVoxelLandGraphToolkit::StatusText() const
 		                     : TEXT("Root preview. ");
 	return FText::FromString(
 		Mode + Status + (MaterialDiagnostic.IsEmpty() ? FString() : TEXT(" ") + MaterialDiagnostic));
-}
-
-FReply FVoxelLandGraphToolkit::CompileClicked()
-{
-	RequestCompile();
-	return FReply::Handled();
 }
 
 bool FVoxelLandGraphToolkit::ResolveDiagnosticTarget(UEdGraphNode*& OutNode, UEdGraphPin*& OutPin) const

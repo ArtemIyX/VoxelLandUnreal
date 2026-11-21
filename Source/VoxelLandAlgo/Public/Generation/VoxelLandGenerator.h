@@ -12,6 +12,7 @@
 class IVoxelLandOperator;
 class FVoxelLandOperatorRegistrySnapshot;
 class FVoxelLandWorkerContext;
+class FVoxelLandM4HeightGrid;
 struct FVoxelLandWorkerContextImpl;
 
 // Copies and validates the draft before publishing it. Safe to share across workers.
@@ -41,9 +42,18 @@ class VOXELLANDALGO_API FVoxelLandGenerator : public TSharedFromThis<FVoxelLandG
 public:
 	static FVoxelLandError Create(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	// Transitional explicit height-field source. The VM's pure code is not run;
+	// only its optional built-in Smooth Density stage is retained. External operators and filters,
+	// height detail and overhangs are not supported. Existing Create is unchanged.
+	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
     // Proof-only hint; chunk sampling still runs and remains authoritative.
     EVoxelLandChunkClassification ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const;
+	// Thread-safe read-only demand gate. M3 returns success and retains its
+	// existing scheduler validation; M4 checks padded/filter/stencil XY and Z.
+	FVoxelLandError ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const;
 	FVoxelLandError GenerateChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const;
 	FVoxelLandError GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
@@ -64,6 +74,12 @@ public:
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 
 private:
+	static FVoxelLandError CreateInternal(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	FVoxelLandError GenerateM4Density(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset,
+		TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const;
 	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const;
 	FVoxelLandError GenerateExpandedDensity(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
@@ -74,6 +90,8 @@ private:
 	FVoxelLandGenerator(const FVoxelLandGenerator&) = delete;
 	FVoxelLandGenerator& operator=(const FVoxelLandGenerator&) = delete;
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> M4HeightGrid;
+	bool bM4NormalizeSlope = false;
 	FVoxelLandZoneProfile Profile;
 	FVoxelLandBackendOptions Options;
 	bool bSmoothEnabled = false;

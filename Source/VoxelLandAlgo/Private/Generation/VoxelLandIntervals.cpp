@@ -67,7 +67,11 @@ FVoxelLandDensityInterval Binary(EVoxelLandOpcode Op, const FVoxelLandDensityInt
 }
 EVoxelLandChunkClassification FVoxelLandGenerator::ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const
 {
-    const FVoxelLandProgramDraft& Draft = Program->GetData();
+	if (M4HeightGrid)
+	{
+		return EVoxelLandChunkClassification::NeedsSamples;
+	}
+	const FVoxelLandProgramDraft& Draft = Program->GetData();
     if (Key.LOD != 0 || Draft.ExternalFilterIndex != INDEX_NONE || Profile.VoxelSizeCm < 1.e-12f)
     {
         return EVoxelLandChunkClassification::NeedsSamples;

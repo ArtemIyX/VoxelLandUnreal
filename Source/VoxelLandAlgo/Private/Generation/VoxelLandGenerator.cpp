@@ -1,4 +1,7 @@
 #include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM4Control.h"
+#include "Generation/VoxelLandM4HeightGrid.h"
+#include "Generation/VoxelLandM4Slope.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "../VoxelLandNativeNoise.h"
 #include "HAL/PlatformTLS.h"
@@ -104,6 +107,43 @@ EVoxelLandNoiseBackend FVoxelLandWorkerContext::GetNoiseBackend() const
 FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& Settings,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
+	return CreateInternal(Settings, nullptr, false, OutGenerator);
+}
+
+FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	if (!HeightGrid)
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height grid is required"));
+	}
+	const float Size = Settings.Profile.VoxelSizeCm;
+	if (!FMath::IsFinite(Size) || Size < 1.f || Size > 2000000.f || FMath::FloorToDouble(double(Size)) != double(Size))
+	{
+		return Fail(EVoxelLandErrorCode::InvalidProfile,
+			TEXT("M4 voxel size must be an integral centimeter value in [1, 2000000]"));
+	}
+	if (!Settings.Program || Settings.Program->GetData().ExternalFilterIndex != INDEX_NONE
+		|| !Settings.Program->GetData().ExternalOperators.IsEmpty())
+	{
+		return Fail(
+			EVoxelLandErrorCode::InvalidProgram, TEXT("M4 height fields do not support external operators or filters"));
+	}
+	// Build locally so failure never changes a caller's existing generator.
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+	if (FVoxelLandError Error = CreateInternal(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Result))
+	{
+		return Error;
+	}
+	OutGenerator = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
 	OutGenerator.Reset();
 	if (IsInGameThread())
 	{
@@ -123,6 +163,8 @@ FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& S
 	}
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandGenerator);
 	Result->Program = Program;
+	Result->M4HeightGrid = MoveTemp(HeightGrid);
+	Result->bM4NormalizeSlope = bNormalizeSlope;
 	Result->Profile = Profile;
 	Result->Options = Options;
 	const FVoxelLandProgramDraft& D = Program->GetData();
@@ -341,6 +383,13 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	W.Owner = AsShared();
 	W.Thread = FPlatformTLS::GetCurrentThreadId();
 	W.VM = SelectedVM;
+	if (M4HeightGrid)
+	{
+		// The transitional source never evaluates pure VM instructions or noise.
+		// Keep the thread-affine context for output hashing and Smooth scratch only.
+		OutWorker = MoveTemp(Worker);
+		return {};
+	}
 	const FVoxelLandProgramDraft& ProgramData = Program->GetData();
 	if (FVoxelLandError Error = W.InitializeNoise(ProgramData, Options, FloatParameters, IntParameters))
 	{
@@ -722,6 +771,11 @@ FVoxelLandError FVoxelLandWorkerContextImpl::QuantizeOutput(int32 N, float Voxel
 FVoxelLandError FVoxelLandGenerator::EvaluateToWorkerBuffer(
     TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const
 {
+	if (M4HeightGrid)
+	{
+		return Fail(
+			EVoxelLandErrorCode::InvalidContext, TEXT("M4 height fields require exact chunk lattice coordinates"));
+	}
 	if (IsInGameThread())
 	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
@@ -835,11 +889,169 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	return GeneratePureChunkCancellable(Key, Worker, OutChunk, IsCancelled);
 }
 
+FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const
+{
+	if (!M4HeightGrid)
+	{
+		return {};
+	}
+	return bSmoothEnabled && SmoothStrength > 0.f ? ValidateM4Footprint(Key, 37, -2) : ValidateM4Footprint(Key, 35, -1);
+}
+
+FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const
+{
+	if (!M4HeightGrid || (Axis != 35 && Axis != 37))
+	{
+		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Invalid M4 height-field evaluation"));
+	}
+	if (Key.LOD != 0)
+	{
+		return Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 height field supports only LOD 0"));
+	}
+	const int64 VoxelSize = int64(Profile.VoxelSizeCm);
+	const int64 BaseX = int64(Key.Coordinate.X) * 32;
+	const int64 BaseY = int64(Key.Coordinate.Y) * 32;
+	const int64 BaseZ = int64(Key.Coordinate.Z) * 32;
+	const int32 Margin = bM4NormalizeSlope ? 1 : 0;
+	int64 MinX = 0, MaxX = 0, MinY = 0, MaxY = 0;
+	if (!VoxelLandM4Control::LatticePositionCm(BaseX + Offset - Margin, VoxelSize, MinX)
+		|| !VoxelLandM4Control::LatticePositionCm(BaseX + Offset + Axis - 1 + Margin, VoxelSize, MaxX)
+		|| !VoxelLandM4Control::LatticePositionCm(BaseY + Offset - Margin, VoxelSize, MinY)
+		|| !VoxelLandM4Control::LatticePositionCm(BaseY + Offset + Axis - 1 + Margin, VoxelSize, MaxY))
+	{
+		return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field footprint overflows"));
+	}
+	int32 Check = 0;
+	if (!M4HeightGrid->Sample(MinX, MinY, Check) || !M4HeightGrid->Sample(MaxX, MaxY, Check))
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter,
+			TEXT("M4 chunk including padding, filter halo and slope stencil is outside the height grid"));
+	}
+	int64 MinZ = 0, MaxZ = 0;
+	if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Offset, VoxelSize, MinZ)
+		|| !VoxelLandM4Control::LatticePositionCm(BaseZ + Offset + Axis - 1, VoxelSize, MaxZ) || MinZ < -2000000
+		|| MaxZ > 2000000)
+	{
+		return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));
+	}
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset,
+	TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const
+{
+	if (FVoxelLandError Error = ValidateM4Footprint(Key, Axis, Offset))
+	{
+		return Error;
+	}
+	const int64 VoxelSize = int64(Profile.VoxelSizeCm);
+	const int64 BaseX = int64(Key.Coordinate.X) * 32;
+	const int64 BaseY = int64(Key.Coordinate.Y) * 32;
+	const int64 BaseZ = int64(Key.Coordinate.Z) * 32;
+	// Height and stencil inputs are 2D; evaluate each XY column once rather
+	// than repeating the same bilinear lookups for every Z sample.
+	TArray<int32> Centers, PlusX, MinusX, PlusY, MinusY;
+	Centers.SetNumUninitialized(Axis * Axis);
+	if (bM4NormalizeSlope)
+	{
+		PlusX.SetNumUninitialized(Axis * Axis);
+		MinusX.SetNumUninitialized(Axis * Axis);
+		PlusY.SetNumUninitialized(Axis * Axis);
+		MinusY.SetNumUninitialized(Axis * Axis);
+	}
+	for (int32 Y = 0; Y < Axis; ++Y)
+	{
+		if (IsCancelled())
+		{
+			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+		}
+		const int64 YCm = (BaseY + Offset + Y) * VoxelSize;
+		for (int32 X = 0; X < Axis; ++X)
+		{
+			const int64 XCm = (BaseX + Offset + X) * VoxelSize;
+			const int32 Column = X + Axis * Y;
+			if (!M4HeightGrid->Sample(XCm, YCm, Centers[Column]))
+			{
+				return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height sample outside grid"));
+			}
+			if (bM4NormalizeSlope
+				&& (!M4HeightGrid->Sample(XCm + VoxelSize, YCm, PlusX[Column])
+					|| !M4HeightGrid->Sample(XCm - VoxelSize, YCm, MinusX[Column])
+					|| !M4HeightGrid->Sample(XCm, YCm + VoxelSize, PlusY[Column])
+					|| !M4HeightGrid->Sample(XCm, YCm - VoxelSize, MinusY[Column])))
+			{
+				return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 slope stencil outside grid"));
+			}
+		}
+	}
+	TArray<int16> Density;
+	Density.Reserve(Axis * Axis * Axis);
+	for (int32 Z = 0; Z < Axis; ++Z)
+	{
+		if (IsCancelled())
+		{
+			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+		}
+		int64 ZCm = 0;
+		if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Offset + Z, VoxelSize, ZCm) || ZCm < -2000000
+			|| ZCm > 2000000)
+		{
+			return Fail(
+				EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));
+		}
+		for (int32 Y = 0; Y < Axis; ++Y)
+		{
+			if (IsCancelled())
+			{
+				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+			}
+			for (int32 X = 0; X < Axis; ++X)
+			{
+				const int32 Column = X + Axis * Y;
+				const int32 Center = Centers[Column];
+				int64 DensityQ8 = ZCm * 256 - Center;
+				if (bM4NormalizeSlope)
+				{
+					if (!VoxelLandM4Slope::DensityQ8(ZCm * 256, Center, PlusX[Column], MinusX[Column], PlusY[Column],
+							MinusY[Column], int32(VoxelSize), DensityQ8))
+					{
+						return Fail(EVoxelLandErrorCode::InvalidMathDomain,
+							TEXT("M4 slope stencil is outside its supported range"));
+					}
+				}
+				// Q8 cm -> 1/1024 voxel. Integer division rounds nearest, ties away.
+				const int64 Numerator = DensityQ8 * 4;
+				const int64 Magnitude = Numerator < 0 ? -Numerator : Numerator;
+				int64 Quantized = Magnitude / VoxelSize;
+				const int64 Remainder = Magnitude % VoxelSize;
+				if (Remainder != 0 && Remainder >= VoxelSize - Remainder)
+				{
+					++Quantized;
+				}
+				if (Numerator < 0)
+				{
+					Quantized = -Quantized;
+				}
+				Density.Add(int16(FMath::Clamp<int64>(Quantized, -32768, 32767)));
+			}
+		}
+	}
+	if (IsCancelled())
+	{
+		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+	}
+	OutDensity = MoveTemp(Density);
+	return {};
+}
+
 FVoxelLandError FVoxelLandGenerator::GeneratePureChunkCancellable(const FVoxelLandChunkKey& Key,
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
-	OutChunk.Reset();
+	if (!M4HeightGrid)
+	{
+		OutChunk.Reset();
+	}
 	if (IsInGameThread())
 	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Chunk generation requires a worker thread"));
@@ -855,6 +1067,24 @@ FVoxelLandError FVoxelLandGenerator::GeneratePureChunkCancellable(const FVoxelLa
 	TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
 	Chunk->Key = Key;
 	Chunk->Density.Reserve(FVoxelLandChunkData::SampleCount);
+	if (M4HeightGrid)
+	{
+		if (FVoxelLandError Error = GenerateM4Density(Key, 35, -1, Chunk->Density, IsCancelled))
+		{
+			return Error;
+		}
+		if (IsCancelled())
+		{
+			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+		}
+		Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);
+		if (IsCancelled())
+		{
+			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+		}
+		OutChunk = MoveTemp(Chunk);
+		return {};
+	}
 	FVector3f Positions[BatchSize];
 	TArray<int16> Batch;
 	Batch.Reserve(BatchSize);

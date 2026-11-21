@@ -77,7 +77,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 	FVoxelLandWorkerContext& Worker, bool bEnabled, float Strength,
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const
 {
-	OutChunk.Reset();
+	if (!M4HeightGrid)
+	{
+		OutChunk.Reset();
+	}
 	if (!FMath::IsFinite(Strength) || Strength < 0.f || Strength > 1.f)
 	{
 		return SmoothError(EVoxelLandErrorCode::InvalidParameter, TEXT("Smooth strength must be finite and in [0,1]"));
@@ -183,7 +186,11 @@ FVoxelLandError FVoxelLandGenerator::GenerateExternalFilteredChunkCancellable(co
 FVoxelLandError FVoxelLandGenerator::GenerateExpandedDensity(const FVoxelLandChunkKey& Key,
     FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const
 {
-    TArray<int16>& Expanded = Worker.SmoothScratch;
+	if (M4HeightGrid)
+	{
+		return GenerateM4Density(Key, ExpandedAxis, -2, Worker.SmoothScratch, IsCancelled);
+	}
+	TArray<int16>& Expanded = Worker.SmoothScratch;
     Expanded.Reset();
     Expanded.Reserve(ExpandedCount);
     FVector3f Positions[SmoothBatchSize];

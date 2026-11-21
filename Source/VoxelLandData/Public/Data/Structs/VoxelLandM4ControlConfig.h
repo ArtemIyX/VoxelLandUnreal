@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM4CurveAuthoringKey.h"
+#include "Data/Structs/VoxelLandM4CookedCurve.h"
 #include "Data/Structs/VoxelLandParameterOverride.h"
 #include "VoxelLandM4ControlConfig.generated.h"
 
@@ -22,4 +23,8 @@ struct VOXELLANDDATA_API FVoxelLandM4ControlConfig
 	// Strictly increasing inputs, including 0 and 65535. Output is Q8 centimeters.
 	UPROPERTY(EditAnywhere, Category = "Control")
 	TArray<FVoxelLandM4CurveAuthoringKey> CurveKeys;
+
+	// Stored on save/cook, never rebuilt by runtime workers.
+	UPROPERTY()
+	FVoxelLandM4CookedCurve CookedCurve;
 };

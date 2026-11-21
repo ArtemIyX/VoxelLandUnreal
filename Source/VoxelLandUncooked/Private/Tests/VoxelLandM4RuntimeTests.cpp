@@ -212,6 +212,14 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 	M4RuntimeSetCurve(Config->Continental);
 	M4RuntimeSetCurve(Config->Mountain);
 	M4RuntimeSetCurve(Config->Peaks);
+	TArray<int32> BakedCurve;
+	BakedCurve.Init(0, 4097);
+	if (!Config->SetBakedCurves(BakedCurve, BakedCurve, BakedCurve, 1, Error))
+	{
+		AddError(FString::Printf(TEXT("Could not prepare baked curves: %s"), *Error));
+		Config->RemoveFromRoot();
+		return false;
+	}
 	Config->CellsX = Config->CellsY = 8;
 	Config->OriginXCm = Config->OriginYCm = -25600;
 	Config->GridSpacingCm = 6400;

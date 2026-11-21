@@ -1,4 +1,5 @@
 #include "World/VoxelLandWorld.h"
+#include "World/VoxelLandM4Preparation.h"
 
 #include "Async/Async.h"
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
@@ -9,13 +10,16 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/Structs/VoxelLandCanonicalWriter.h"
+#include "Hash/xxhash.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
+#include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandWorldState.h"
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4ControlPipeline.h"
 #include "Generation/VoxelLandM4ControlGrid.h"
-#include "Generation/VoxelLandM4CurveBake.h"
+#include "Generation/VoxelLandM4CurveLut.h"
 #include "Generation/VoxelLandM4GridLease.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
@@ -427,60 +431,6 @@ public:
 #endif
 	) const override
 	{
-		const FVoxelLandM4ControlSnapshot* Channels[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
-		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Programs[3];
-		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generators[3];
-		TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> Curves[3];
-		TUniquePtr<FVoxelLandWorkerContext> Workers[3];
-		FVoxelLandZoneProfile Profiles[3];
-		// Stable channel namespaces keep reused graphs independent. Version 1.
-		const FGuid ChannelIds[] = {FGuid(0x564c4d34, 0x434f4e54, 1, 1), FGuid(0x564c4d34, 0x4d4f554e, 1, 1),
-			FGuid(0x564c4d34, 0x5045414b, 1, 1)};
-		for (int32 Index = 0; Index < 3; ++Index)
-		{
-			if (Cancel->Load()
-				|| !FVoxelLandProgramCodec::Load(
-					Channels[Index]->Source, Channels[Index]->Payload, Programs[Index], OutError)
-				|| Cancel->Load())
-			{
-				return;
-			}
-			// Reject unsupported external workers, filters and 3D operations
-			// before allocating any worker-local backend resources.
-			if (const FVoxelLandError Failure = VoxelLandM4ControlGrid::ValidateProgram(*Programs[Index]))
-			{
-				OutError = Failure.Message;
-				return;
-			}
-			CopyM4Overrides(*Channels[Index], Snapshot.VoxelSizeCm, Profiles[Index]);
-			FVoxelLandGeneratorSettings Settings;
-			Settings.Program = Programs[Index];
-			Settings.WorldSeed = VoxelLandDeterminism::DeriveNodeSeed(uint64(Snapshot.Seed), ChannelIds[Index], 0);
-			Settings.Profile = Profiles[Index];
-			if (const FVoxelLandError Failure = FVoxelLandGenerator::Create(Settings, Generators[Index]))
-			{
-				OutError = Failure.Message;
-				return;
-			}
-			TArray<FVoxelLandM4CurveKey> Keys;
-			Keys.Reserve(Channels[Index]->CurveKeys.Num());
-			for (const FVoxelLandM4CurveAuthoringKey& Key : Channels[Index]->CurveKeys)
-			{
-				FVoxelLandM4CurveKey& Baked = Keys.AddDefaulted_GetRef();
-				Baked.InputQ16 = uint16(Key.InputQ16);
-				Baked.Output = Key.OutputQ8;
-			}
-			TArray<int32> Baked;
-			if (!VoxelLandM4CurveBake::Bake(Keys, -512000000, 512000000, Baked, Curves[Index], OutError))
-			{
-				return;
-			}
-			if (const FVoxelLandError Failure = Generators[Index]->CreateWorker(Workers[Index]))
-			{
-				OutError = Failure.Message;
-				return;
-			}
-		}
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 		if (Barrier)
 		{
@@ -494,37 +444,9 @@ public:
 		auto IsCancelled = [&Cancel]() {
 			return Cancel->Load();
 		};
-		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
-		uint64 GridHash = 0;
-		if (const FVoxelLandError Failure =
-				VoxelLandM4ControlPipeline::Generate(Snapshot.Domain, *Generators[0], *Workers[0], *Curves[0],
-					*Generators[1], *Workers[1], *Curves[1], *Generators[2], *Workers[2], *Curves[2],
-					Snapshot.BaseHeightQ8, uint64(Snapshot.Seed), Snapshot.ErosionStageId, uint32(Snapshot.ErosionSalt),
-					Snapshot.DropletCount, Snapshot.Erosion, Grid, GridHash, IsCancelled, Lease))
-		{
-			OutError = Failure.Message;
-			return;
-		}
-		if (Cancel->Load())
-		{
-			return;
-		}
-		FVoxelLandM4OverhangConfig Overhang;
-		Overhang.Displacement.bEnabled = Snapshot.bOverhangEnabled;
-		Overhang.Displacement.AmplitudeQ8 = Snapshot.OverhangAmplitudeQ8;
-		Overhang.Displacement.BandHalfWidthQ8 = Snapshot.OverhangBandQ8;
-		Overhang.FrequencyPerCm = Snapshot.OverhangFrequencyPerCm;
-		Overhang.NodeId = Snapshot.OverhangNodeId;
-		Overhang.Salt = uint32(Snapshot.OverhangSalt);
-		FVoxelLandGeneratorSettings FinalSettings;
-		FinalSettings.Program = Programs[0];
-		FinalSettings.WorldSeed = uint64(Snapshot.Seed);
-		FinalSettings.Profile = Profiles[0];
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
-		if (const FVoxelLandError Failure = FVoxelLandGenerator::CreateM4HeightField(
-				FinalSettings, Grid, Snapshot.bNormalizeSlope, Overhang, Result))
+		if (!VoxelLandM4Preparation::Prepare(Snapshot, Lease, IsCancelled, Result, OutError))
 		{
-			OutError = Failure.Message;
 			return;
 		}
 		// Validate the entire requested startup bubble before publishing the generator.
@@ -594,6 +516,179 @@ UMaterialInterface* ResolveM4TerrainMaterial(const UVoxelLandM4WorldConfig& Sett
 	return Material;
 }
 #endif
+}
+
+TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> VoxelLandM4Preparation::Reserve()
+{
+	if (!IsInGameThread())
+	{
+		return nullptr;
+	}
+	return ReserveM4Budget();
+}
+
+bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& Lease, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError)
+{
+	if (IsInGameThread() || !Lease.IsValid())
+	{
+		OutError = TEXT("M4 preparation requires a worker thread and resource reservation");
+		return false;
+	}
+	if (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite
+		&& Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Unlimited)
+	{
+		OutError = TEXT("Unsupported M4 domain mode");
+		return false;
+	}
+	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && Snapshot.Domain.bGlobalErosion)
+	{
+		OutError = TEXT("Unlimited M4 worlds cannot run global erosion");
+		return false;
+	}
+	const FVoxelLandM4ControlSnapshot* ValidatedChannels[] = {
+		&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
+	for (const FVoxelLandM4ControlSnapshot* Channel : ValidatedChannels)
+	{
+		const FVoxelLandM4CookedCurve& Curve = Channel->CookedCurve;
+		if (Curve.BakeVersion != 1 || Curve.SamplesQ8.Num() != 4097 || Curve.SourceKeys.Num() < 2
+			|| Curve.SourceKeys.Num() != Channel->CurveKeys.Num())
+		{
+			OutError = TEXT("M4 baked curve is missing or unsupported");
+			return false;
+		}
+		for (int32 I = 0; I < Curve.SourceKeys.Num(); ++I)
+		{
+			if (Curve.SourceKeys[I].InputQ16 != Channel->CurveKeys[I].InputQ16
+				|| Curve.SourceKeys[I].OutputQ8 != Channel->CurveKeys[I].OutputQ8)
+			{
+				OutError = TEXT("M4 baked curve is stale");
+				return false;
+			}
+		}
+		FCanonicalWriter Writer;
+		for (int32 Value : Curve.SamplesQ8)
+		{
+			Writer.U32(uint32(Value));
+		}
+		const uint64 Hash = FXxHash64::HashBuffer(Writer.Bytes.GetData(), Writer.Bytes.Num()).Hash;
+		int64 Bits = 0;
+		FMemory::Memcpy(&Bits, &Hash, sizeof(Bits));
+		if (Bits != Curve.SamplesHash)
+		{
+			OutError = TEXT("M4 baked curve hash mismatch");
+			return false;
+		}
+	}
+	const FVoxelLandM4ControlSnapshot* Channels[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
+	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Programs[3];
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generators[3];
+	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> Curves[3];
+	TUniquePtr<FVoxelLandWorkerContext> Workers[3];
+	FVoxelLandZoneProfile Profiles[3];
+	// Stable channel namespaces keep reused graphs independent. Version 1.
+	const FGuid ChannelIds[] = {
+		FGuid(0x564c4d34, 0x434f4e54, 1, 1), FGuid(0x564c4d34, 0x4d4f554e, 1, 1), FGuid(0x564c4d34, 0x5045414b, 1, 1)};
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		if (IsCancelled()
+			|| !FVoxelLandProgramCodec::Load(
+				Channels[Index]->Source, Channels[Index]->Payload, Programs[Index], OutError)
+			|| IsCancelled())
+		{
+			return false;
+		}
+		// Reject unsupported external workers, filters and 3D operations
+		// before allocating any worker-local backend resources.
+		if (const FVoxelLandError Failure = VoxelLandM4ControlGrid::ValidateProgram(*Programs[Index]))
+		{
+			OutError = Failure.Message;
+			return false;
+		}
+		CopyM4Overrides(*Channels[Index], Snapshot.VoxelSizeCm, Profiles[Index]);
+		FVoxelLandGeneratorSettings Settings;
+		Settings.Program = Programs[Index];
+		Settings.WorldSeed = VoxelLandDeterminism::DeriveNodeSeed(uint64(Snapshot.Seed), ChannelIds[Index], 0);
+		Settings.Profile = Profiles[Index];
+		if (const FVoxelLandError Failure = FVoxelLandGenerator::Create(Settings, Generators[Index]))
+		{
+			OutError = Failure.Message;
+			return false;
+		}
+		if (!FVoxelLandM4CurveLut::Create(
+				Channels[Index]->CookedCurve.SamplesQ8, -512000000, 512000000, Curves[Index], OutError))
+		{
+			return false;
+		}
+		if (const FVoxelLandError Failure = Generators[Index]->CreateWorker(Workers[Index]))
+		{
+			OutError = Failure.Message;
+			return false;
+		}
+	}
+	FVoxelLandM4OverhangConfig Overhang;
+	Overhang.Displacement.bEnabled = Snapshot.bOverhangEnabled;
+	Overhang.Displacement.AmplitudeQ8 = Snapshot.OverhangAmplitudeQ8;
+	Overhang.Displacement.BandHalfWidthQ8 = Snapshot.OverhangBandQ8;
+	Overhang.FrequencyPerCm = Snapshot.OverhangFrequencyPerCm;
+	Overhang.NodeId = Snapshot.OverhangNodeId;
+	Overhang.Salt = uint32(Snapshot.OverhangSalt);
+	FVoxelLandGeneratorSettings FinalSettings;
+	FinalSettings.Program = Programs[0];
+	FinalSettings.WorldSeed = uint64(Snapshot.Seed);
+	FinalSettings.Profile = Profiles[0];
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
+	{
+		FVoxelLandM4UnlimitedConfig Unlimited;
+		Unlimited.ContinentalGenerator = Generators[0];
+		Unlimited.MountainGenerator = Generators[1];
+		Unlimited.PeaksGenerator = Generators[2];
+		Unlimited.ContinentalCurve = Curves[0];
+		Unlimited.MountainCurve = Curves[1];
+		Unlimited.PeaksCurve = Curves[2];
+		Unlimited.BaseQ8 = Snapshot.BaseHeightQ8;
+		Unlimited.bNormalizeSlope = Snapshot.bNormalizeSlope;
+		Unlimited.Overhang = Overhang;
+		Unlimited.SmoothOverride = Snapshot.Smooth;
+		if (const FVoxelLandError Failure = FVoxelLandGenerator::CreateM4Unlimited(FinalSettings, Unlimited, Result))
+		{
+			OutError = Failure.Message;
+			return false;
+		}
+	}
+	else
+	{
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
+		uint64 GridHash = 0;
+		if (const FVoxelLandError Failure =
+				VoxelLandM4ControlPipeline::Generate(Snapshot.Domain, *Generators[0], *Workers[0], *Curves[0],
+					*Generators[1], *Workers[1], *Curves[1], *Generators[2], *Workers[2], *Curves[2],
+					Snapshot.BaseHeightQ8, uint64(Snapshot.Seed), Snapshot.ErosionStageId, uint32(Snapshot.ErosionSalt),
+					Snapshot.DropletCount, Snapshot.Erosion, Grid, GridHash, IsCancelled, Lease))
+		{
+			OutError = Failure.Message;
+			return false;
+		}
+		if (IsCancelled())
+		{
+			return false;
+		}
+		if (const FVoxelLandError Failure = FVoxelLandGenerator::CreateM4HeightField(
+				FinalSettings, Grid, Snapshot.bNormalizeSlope, Overhang, Snapshot.Smooth, Result))
+		{
+			OutError = Failure.Message;
+			return false;
+		}
+	}
+
+	if (IsCancelled())
+	{
+		return false;
+	}
+	OutGenerator = MoveTemp(Result);
+	return true;
 }
 
 class FVoxelLandInitializationJob
@@ -691,14 +786,15 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		return false;
 	}
 	// Reserve before capturing potentially large graph snapshots or launching work.
-	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = ReserveM4Budget();
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = VoxelLandM4Preparation::Reserve();
 	if (!Lease)
 	{
 		LastInitializationError = TEXT("M4 prepass process budget is exhausted");
 		return false;
 	}
 	FVoxelLandM4WorldSnapshot Snapshot;
-	if (!Settings->CaptureSnapshot(Snapshot, LastInitializationError))
+	if (!Settings->ValidateBakedCurves(LastInitializationError)
+		|| !Settings->CaptureSnapshot(Snapshot, LastInitializationError))
 	{
 		return false;
 	}

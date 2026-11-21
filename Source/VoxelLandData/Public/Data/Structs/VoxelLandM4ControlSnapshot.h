@@ -5,6 +5,7 @@
 #include "Data/Structs/VoxelLandSerializedProgram.h"
 #include "Data/Structs/VoxelLandParameterOverride.h"
 #include "Data/Structs/VoxelLandM4CurveAuthoringKey.h"
+#include "Data/Structs/VoxelLandM4CookedCurve.h"
 
 // Game-thread capture; graph asset pointers are deliberately not retained.
 struct FVoxelLandM4ControlSnapshot
@@ -13,4 +14,5 @@ struct FVoxelLandM4ControlSnapshot
 	FVoxelLandSerializedProgram Payload;
 	TArray<FVoxelLandParameterOverride> Overrides;
 	TArray<FVoxelLandM4CurveAuthoringKey> CurveKeys;
+	FVoxelLandM4CookedCurve CookedCurve;
 };

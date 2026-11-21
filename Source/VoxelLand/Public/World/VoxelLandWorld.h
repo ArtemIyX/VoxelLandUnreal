@@ -61,7 +61,7 @@ public:
 	// Copies settings on the game thread and initializes asynchronously. No work starts in BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool InitializeFromSettings(UVoxelLandWorldSettings* Settings);
-	// Explicit finite M4 startup. The entire requested startup radius must fit.
+	// Explicit M4 startup. The entire requested startup radius must fit the selected mode.
 	// Admission reserves a conservative 128 MiB estimate per retained grid under
 	// voxel.M4.PrepassBudgetMiB; actual allocator/backend usage is not measured.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")

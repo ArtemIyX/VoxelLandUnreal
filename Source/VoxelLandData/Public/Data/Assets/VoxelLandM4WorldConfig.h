@@ -8,7 +8,7 @@
 class UVoxelLandMaterialSetup;
 struct FVoxelLandM4WorldSnapshot;
 
-// Finite M4 authoring configuration. It is separate from M3 world settings so
+// M4 authoring configuration. It is separate from M3 world settings so
 // old assets and their serialized program identity remain unchanged.
 UCLASS(BlueprintType)
 class VOXELLANDDATA_API UVoxelLandM4WorldConfig : public UDataAsset
@@ -23,6 +23,11 @@ public:
 	// or graph contents. Caller must verify graph inputs and refresh the current
 	// material separately on the game thread before publishing.
 	bool MatchesSnapshot(const FVoxelLandM4WorldSnapshot& Snapshot) const;
+	// Replaces all three baked curves atomically after validation.
+	bool SetBakedCurves(TConstArrayView<int32> ContinentalSamples, TConstArrayView<int32> MountainSamples,
+		TConstArrayView<int32> PeaksSamples, int32 BakeVersion, FString& OutError);
+	void ClearBakedCurves();
+	bool ValidateBakedCurves(FString& OutError) const;
 
 	UPROPERTY(VisibleAnywhere, Category = "VoxelLand|M4")
 	int32 FormatVersion = 1;
@@ -40,6 +45,16 @@ public:
 	int32 BaseHeightQ8 = 0;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4")
 	bool bNormalizeSlope = false;
+	// Versioned final density filter, applied after overhang. Older assets default disabled.
+	UPROPERTY(VisibleAnywhere, Category = "VoxelLand|M4|Smooth")
+	int32 SmoothVersion = 1;
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Smooth")
+	bool bSmoothEnabled = false;
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Smooth", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SmoothStrength = 0.5f;
+	// Unlimited mode evaluates controls per chunk and requires global erosion off.
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")
+	bool bUnlimited = false;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")
 	int64 OriginXCm = -819200;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")

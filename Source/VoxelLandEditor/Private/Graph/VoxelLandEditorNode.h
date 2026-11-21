@@ -39,6 +39,10 @@ public:
 
     virtual void AllocateDefaultPins() override;
     virtual FText GetNodeTitle(ENodeTitleType::Type TitleType) const override;
+    virtual FLinearColor GetNodeTitleColor() const override;
+    virtual FText GetTooltipText() const override;
+    virtual FText GetPinDisplayName(const UEdGraphPin* Pin) const override;
+    virtual void GetPinHoverText(const UEdGraphPin& Pin, FString& HoverTextOut) const override;
     virtual void PinDefaultValueChanged(UEdGraphPin* Pin) override;
     virtual void PinConnectionListChanged(UEdGraphPin* Pin) override;
     virtual void GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const override;

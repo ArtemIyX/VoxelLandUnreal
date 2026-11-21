@@ -17,6 +17,10 @@
 #include "VoxelLandAlgo.h"
 #include "Operators/VoxelLandSquareOperator.h"
 #include "Operators/VoxelLandExampleFilterOperator.h"
+#include "Interfaces/IPluginManager.h"
+#include "Styling/SlateStyle.h"
+#include "Styling/SlateStyleRegistry.h"
+#include "Brushes/SlateImageBrush.h"
 
 #define LOCTEXT_NAMESPACE "FVoxelLandEditorModule"
 namespace
@@ -61,6 +65,22 @@ private:
 }
 void FVoxelLandEditorModule::StartupModule()
 {
+    const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("VoxelLand"));
+    if (Plugin)
+    {
+        Style = MakeShared<FSlateStyleSet>(TEXT("VoxelLandEditorStyle"));
+        Style->SetContentRoot(Plugin->GetBaseDir() / TEXT("Resources"));
+        const auto AddIcon = [this](const TCHAR* ClassName, const TCHAR* FileName)
+        {
+            const FString Path = Style->RootToContentDir(FileName, TEXT(".svg"));
+            Style->Set(*FString::Printf(TEXT("ClassIcon.%s"), ClassName), new FSlateVectorImageBrush(Path, FVector2D(16.0f, 16.0f)));
+            Style->Set(*FString::Printf(TEXT("ClassThumbnail.%s"), ClassName), new FSlateVectorImageBrush(Path, FVector2D(64.0f, 64.0f)));
+        };
+        AddIcon(TEXT("VoxelLandTerrainGraph"), TEXT("TerrainGraph"));
+        AddIcon(TEXT("VoxelLandWorldSettings"), TEXT("WorldSettings"));
+        AddIcon(TEXT("VoxelLandMaterialSetup"), TEXT("MaterialSetup"));
+        FSlateStyleRegistry::RegisterSlateStyle(*Style);
+    }
     FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor")).RegisterCustomClassLayout(
         TEXT("VoxelLandWorldSettings"), FOnGetDetailCustomizationInstance::CreateStatic(&FVoxelLandWorldSettingsDetails::MakeInstance));
     PinFactory = MakeShared<FVoxelLandGraphPinFactory>();
@@ -75,6 +95,8 @@ void FVoxelLandEditorModule::StartupModule()
     Input.Name = TEXT("Value");
     Input.Type = EVoxelLandGraphValueType::Float;
     Square.Inputs.Add(MoveTemp(Input));
+    Square.InputTooltips.Add(LOCTEXT("SquareInputTip", "Value to multiply by itself."));
+    Square.OutputTooltip = LOCTEXT("SquareOutputTip", "The square of the input value.");
     FString Error;
     if (!FVoxelLandEditorOperatorRegistry::Register(Square, Error))
     {
@@ -89,6 +111,8 @@ void FVoxelLandEditorModule::StartupModule()
     Density.Name = TEXT("Density");
     Density.Type = EVoxelLandGraphValueType::Float;
     Filter.Inputs.Add(MoveTemp(Density));
+    Filter.InputTooltips.Add(LOCTEXT("ExampleFilterInputTip", "Source density in centimeters; negative values represent solid terrain."));
+    Filter.OutputTooltip = LOCTEXT("ExampleFilterOutputTip", "Quantized density averaged along the X axis.");
     if (!FVoxelLandEditorOperatorRegistry::Register(Filter, Error))
     {
         UE_LOG(LogTemp, Warning, TEXT("VoxelLand filter presentation unavailable: %s"), *Error);
@@ -119,6 +143,11 @@ void FVoxelLandEditorModule::ShutdownModule()
     FVoxelLandEditorOperatorRegistry::Unregister(VoxelLandExampleFilterOperatorId(), 1);
     FVoxelLandEditorOperatorRegistry::Unregister(VoxelLandSquareOperatorId(), 1);
     FVoxelLandEditorOperatorRegistry::Clear();
+    if (Style)
+    {
+        FSlateStyleRegistry::UnRegisterSlateStyle(*Style);
+        Style.Reset();
+    }
 }
 void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveContext Context)
 {

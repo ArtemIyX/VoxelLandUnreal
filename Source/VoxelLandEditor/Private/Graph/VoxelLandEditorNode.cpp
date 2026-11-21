@@ -1,5 +1,6 @@
 #include "Graph/VoxelLandEditorNode.h"
 #include "Graph/VoxelLandEditorFloat.h"
+#include "Graph/VoxelLandEditorOperator.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "EdGraph/EdGraph.h"
@@ -26,6 +27,37 @@ const TCHAR* const NodeDisplayNames[] = {
     TEXT("fBm 3D"), TEXT("Value 2D"), TEXT("Value 3D"), TEXT("Simplex 2D"), TEXT("Simplex 3D"),
     TEXT("Reroute Float"), TEXT("Reroute Int"), TEXT("Reroute Bool"), TEXT("Smooth Density")
 };
+const TCHAR* const NodeDescriptions[] = {
+    TEXT("Unknown operator."),
+    TEXT("Final signed density in centimeters. Negative is solid; positive is empty. A graph requires exactly one output."),
+    TEXT("World-space X coordinate in centimeters."), TEXT("World-space Y coordinate in centimeters."), TEXT("World-space Z coordinate in centimeters."),
+    TEXT("A constant floating-point value."), TEXT("Reads a float parameter selected by its stable ID; world settings may override it."),
+    TEXT("Adds inputs in their displayed order. Add, remove, or reorder inputs from the context menu."),
+    TEXT("Subtracts B from A."), TEXT("Multiplies inputs in their displayed order. Add, remove, or reorder inputs from the context menu."),
+    TEXT("Divides A by B. A zero divisor or non-finite result causes an evaluation error."),
+    TEXT("Returns the smaller of A and B."), TEXT("Returns the larger of A and B."), TEXT("Returns the absolute value."), TEXT("Negates the input."),
+    TEXT("Combines signed density fields with a hard union (minimum)."), TEXT("Cuts field B from field A using hard signed-density subtraction."),
+    TEXT("Keeps the intersection of two signed density fields (maximum)."), TEXT("Converts a height in centimeters to density using world Z minus height."),
+    TEXT("Restricts the value to the inclusive minimum and maximum. Minimum must not exceed maximum."), TEXT("Restricts the value to the range 0 to 1."),
+    TEXT("Interpolates as A + (B - A) * Alpha. Alpha is not implicitly clamped."),
+    TEXT("A constant signed 32-bit integer."), TEXT("A constant boolean value."), TEXT("Reads an integer parameter selected by stable ID."), TEXT("Reads a boolean parameter selected by stable ID."),
+    TEXT("Explicitly converts a 32-bit integer to float; values that cannot be represented exactly cause an evaluation error."),
+    TEXT("Returns true when A is less than B."), TEXT("Returns true when A is less than or equal to B."), TEXT("Returns true when A equals B."),
+    TEXT("Returns true when both boolean inputs are true."), TEXT("Returns true when either boolean input is true."), TEXT("Inverts a boolean value."),
+    TEXT("Returns True or False float input according to Condition."), TEXT("Returns True or False integer input according to Condition."), TEXT("Returns True or False boolean input according to Condition."),
+    TEXT("Raises Base to Exponent. Invalid domains and non-finite results cause an evaluation error."),
+    TEXT("Signed distance to a plane. The normal must be unit length; offset and position are in centimeters."),
+    TEXT("Signed distance to a sphere centered at the origin; position and positive radius are in centimeters."),
+    TEXT("Signed distance to an axis-aligned box centered at the origin; positive half extents and position are in centimeters."),
+    TEXT("Samples independently seeded 2D Perlin noise at X and Y."), TEXT("Samples independently seeded 3D Perlin noise at X, Y and Z."),
+    TEXT("Samples independently seeded 2D fractal Brownian Perlin noise."), TEXT("Samples independently seeded 3D fractal Brownian Perlin noise."),
+    TEXT("Samples independently seeded 2D value noise."), TEXT("Samples independently seeded 3D value noise."),
+    TEXT("Samples independently seeded 2D simplex noise."), TEXT("Samples independently seeded 3D simplex noise."),
+    TEXT("Routes a float wire without changing its value."), TEXT("Routes an integer wire without changing its value."), TEXT("Routes a boolean wire without changing its value."),
+    TEXT("Applies one-cell density smoothing before Density Output. Enabled and Strength are uniform controls; strength ranges from 0 to 1.")
+};
+static_assert(UE_ARRAY_COUNT(NodeDescriptions) == UE_ARRAY_COUNT(NodeDisplayNames));
+
 void Input(UVoxelLandEditorNode& Node, const FName Type, const TCHAR* Name, const TCHAR* Default = TEXT("0"))
 {
     UEdGraphPin* Pin = Node.CreatePin(EGPD_Input, Type, FName(Name));
@@ -64,6 +96,116 @@ FText UVoxelLandEditorNode::GetNodeTitle(ENodeTitleType::Type) const
         return ExternalTitle.IsEmpty() ? FText::FromString(FString::Printf(TEXT("External operator %s v%d"), *ExternalOperatorId.ToString(), OperatorVersion)) : ExternalTitle;
     }
     return DisplayName(Kind);
+}
+FLinearColor UVoxelLandEditorNode::GetNodeTitleColor() const
+{
+    if (Kind == 0)
+    {
+        FVoxelLandEditorOperatorPresentation Presentation;
+        return FVoxelLandEditorOperatorRegistry::FindPresentation(ExternalOperatorId, OperatorVersion, Presentation)
+            ? Presentation.NodeColor : FLinearColor(0.25f, 0.25f, 0.25f);
+    }
+    const EVoxelLandBuiltinNode Op = static_cast<EVoxelLandBuiltinNode>(Kind);
+    if (Op == EVoxelLandBuiltinNode::DensityOutput) { return FLinearColor(0.55f, 0.16f, 0.13f); }
+    if (Op == EVoxelLandBuiltinNode::SmoothDensity) { return FLinearColor(0.15f, 0.38f, 0.46f); }
+    if (Kind >= int32(EVoxelLandBuiltinNode::Perlin2) && Kind <= int32(EVoxelLandBuiltinNode::Simplex3)) { return FLinearColor(0.48f, 0.30f, 0.12f); }
+    if (Kind >= int32(EVoxelLandBuiltinNode::Plane) && Kind <= int32(EVoxelLandBuiltinNode::Box)) { return FLinearColor(0.15f, 0.42f, 0.30f); }
+    if (Kind >= int32(EVoxelLandBuiltinNode::RerouteFloat) && Kind <= int32(EVoxelLandBuiltinNode::RerouteBool)) { return FLinearColor(0.25f, 0.25f, 0.25f); }
+    if (Kind >= int32(EVoxelLandBuiltinNode::IntToFloat) && Kind <= int32(EVoxelLandBuiltinNode::SelectBool)) { return FLinearColor(0.32f, 0.22f, 0.50f); }
+    if (Kind >= int32(EVoxelLandBuiltinNode::Union) && Kind <= int32(EVoxelLandBuiltinNode::Intersect)) { return FLinearColor(0.15f, 0.42f, 0.30f); }
+    if ((Kind >= int32(EVoxelLandBuiltinNode::PositionX) && Kind <= int32(EVoxelLandBuiltinNode::FloatParameter)) ||
+        (Kind >= int32(EVoxelLandBuiltinNode::IntConstant) && Kind <= int32(EVoxelLandBuiltinNode::BoolParameter))) { return FLinearColor(0.18f, 0.34f, 0.53f); }
+    return FLinearColor(0.34f, 0.32f, 0.18f);
+}
+FText UVoxelLandEditorNode::GetTooltipText() const
+{
+    if (Kind == 0)
+    {
+        FVoxelLandEditorOperatorPresentation Presentation;
+        if (FVoxelLandEditorOperatorRegistry::FindPresentation(ExternalOperatorId, OperatorVersion, Presentation))
+        {
+            return Presentation.Tooltip;
+        }
+        return LOCTEXT("MissingProvider", "The editor presentation or runtime provider for this operator is unavailable.");
+    }
+    return FText::FromString(Kind > 0 && Kind < UE_ARRAY_COUNT(NodeDescriptions) ? NodeDescriptions[Kind] : NodeDescriptions[0]);
+}
+FText UVoxelLandEditorNode::GetPinDisplayName(const UEdGraphPin* Pin) const
+{
+    if (!Pin || Pin->Direction != EGPD_Input)
+    {
+        return Super::GetPinDisplayName(Pin);
+    }
+    const EVoxelLandBuiltinNode Op = static_cast<EVoxelLandBuiltinNode>(Kind);
+    if (Op == EVoxelLandBuiltinNode::HeightToDensity && Pin->PinName == TEXT("Value"))
+    {
+        return LOCTEXT("HeightPin", "Height (cm)");
+    }
+    if ((Op == EVoxelLandBuiltinNode::SmoothDensity || Op == EVoxelLandBuiltinNode::DensityOutput) && Pin->PinName == TEXT("Density"))
+    {
+        return LOCTEXT("DensityPin", "Density (cm)");
+    }
+    if (Kind >= int32(EVoxelLandBuiltinNode::Perlin2) && Kind <= int32(EVoxelLandBuiltinNode::Simplex3) && Pin->PinName == TEXT("Frequency"))
+    {
+        return LOCTEXT("FrequencyPin", "Frequency (1/cm)");
+    }
+    if (Kind >= int32(EVoxelLandBuiltinNode::Plane) && Kind <= int32(EVoxelLandBuiltinNode::Box) &&
+        (Pin->PinName == TEXT("Radius") || Pin->PinName == TEXT("Offset") || Pin->PinName.ToString().StartsWith(TEXT("Extent"))))
+    {
+        return FText::FromString(Pin->PinName.ToString() + TEXT(" (cm)"));
+    }
+    return Super::GetPinDisplayName(Pin);
+}
+void UVoxelLandEditorNode::GetPinHoverText(const UEdGraphPin& Pin, FString& HoverTextOut) const
+{
+    if (Kind == 0)
+    {
+        FVoxelLandEditorOperatorPresentation Presentation;
+        if (FVoxelLandEditorOperatorRegistry::FindPresentation(ExternalOperatorId, OperatorVersion, Presentation))
+        {
+            if (Pin.Direction == EGPD_Output && !Presentation.OutputTooltip.IsEmpty())
+            {
+                HoverTextOut = Presentation.OutputTooltip.ToString();
+                return;
+            }
+            for (int32 Index = 0; Index < Presentation.Inputs.Num(); ++Index)
+            {
+                if (Pin.Direction == EGPD_Input && Pin.PinName == FName(*Presentation.Inputs[Index].Name) &&
+                    Presentation.InputTooltips.IsValidIndex(Index) && !Presentation.InputTooltips[Index].IsEmpty())
+                {
+                    HoverTextOut = Presentation.InputTooltips[Index].ToString();
+                    return;
+                }
+            }
+        }
+        HoverTextOut = FString::Printf(TEXT("%s %s. %s"), *Pin.PinType.PinCategory.ToString(),
+            Pin.Direction == EGPD_Output ? TEXT("output") : TEXT("input"), *GetTooltipText().ToString());
+        return;
+    }
+    const FString Name = Pin.PinName.ToString();
+    if (Pin.Direction == EGPD_Output)
+    {
+        HoverTextOut = FString::Printf(TEXT("%s output. %s"), *Pin.PinType.PinCategory.ToString(), *GetTooltipText().ToString());
+    }
+    else if (Name == TEXT("X") || Name == TEXT("Y") || Name == TEXT("Z"))
+    {
+        HoverTextOut = TEXT("Coordinate in centimeters; connect a world position or another coordinate field.");
+    }
+    else if (Name == TEXT("Frequency")) { HoverTextOut = TEXT("Noise frequency in inverse centimeters; must be positive and uniform."); }
+    else if (Name == TEXT("Octaves")) { HoverTextOut = TEXT("Uniform integer octave count from 1 to 16."); }
+    else if (Name == TEXT("Gain")) { HoverTextOut = TEXT("Uniform amplitude multiplier per octave, from 0 to 1."); }
+    else if (Name == TEXT("Lacunarity")) { HoverTextOut = TEXT("Uniform frequency multiplier per octave; at least 1."); }
+    else if (Name == TEXT("Density")) { HoverTextOut = TEXT("Signed density in centimeters: negative is solid and positive is empty."); }
+    else if (Name == TEXT("Strength")) { HoverTextOut = TEXT("Uniform filter blend from 0 (original density) to 1 (full smoothing)."); }
+    else if (Name == TEXT("Enabled")) { HoverTextOut = TEXT("Uniform boolean controlling whether the filter is applied."); }
+    else if (Name == TEXT("Radius")) { HoverTextOut = TEXT("Sphere radius in centimeters; must be positive."); }
+    else if (Name.StartsWith(TEXT("Extent"))) { HoverTextOut = TEXT("Box half extent in centimeters; must be positive."); }
+    else if (Name.StartsWith(TEXT("Normal"))) { HoverTextOut = TEXT("Plane normal component; the complete normal must have unit length."); }
+    else if (Name == TEXT("Offset")) { HoverTextOut = TEXT("Plane offset in centimeters."); }
+    else if (Name == TEXT("Alpha")) { HoverTextOut = TEXT("Interpolation factor; values outside 0 to 1 extrapolate."); }
+    else if (Name == TEXT("Condition")) { HoverTextOut = TEXT("Selects the True input when true; otherwise selects False."); }
+    else if (static_cast<EVoxelLandBuiltinNode>(Kind) == EVoxelLandBuiltinNode::HeightToDensity) { HoverTextOut = TEXT("Surface height in centimeters."); }
+    else { HoverTextOut = FString::Printf(TEXT("%s input. %s"), *Pin.PinType.PinCategory.ToString(), *GetTooltipText().ToString()); }
 }
 void UVoxelLandEditorNode::PinDefaultValueChanged(UEdGraphPin*)
 {

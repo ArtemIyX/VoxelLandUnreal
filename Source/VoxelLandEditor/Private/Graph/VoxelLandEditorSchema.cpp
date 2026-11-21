@@ -98,6 +98,14 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
         {
             Category = LOCTEXT("Inputs", "Inputs and output");
         }
+        else if (Kind >= int32(EVoxelLandBuiltinNode::Union) && Kind <= int32(EVoxelLandBuiltinNode::HeightToDensity))
+        {
+            Category = LOCTEXT("TerrainAndCsg", "Terrain and CSG");
+        }
+        else if (Kind >= int32(EVoxelLandBuiltinNode::IntToFloat) && Kind <= int32(EVoxelLandBuiltinNode::SelectBool))
+        {
+            Category = LOCTEXT("TypedControl", "Typed control");
+        }
         else if (Kind == int32(EVoxelLandBuiltinNode::SmoothDensity))
         {
             Category = LOCTEXT("Filters", "Density filters");
@@ -114,9 +122,10 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
         {
             Category = LOCTEXT("Shapes", "Shapes");
         }
-        TSharedPtr<FEdGraphSchemaAction_NewNode> Action = MakeShared<FEdGraphSchemaAction_NewNode>(Category, UVoxelLandEditorNode::DisplayName(Kind), FText(), 0);
         UVoxelLandEditorNode* Template = NewObject<UVoxelLandEditorNode>(ContextMenuBuilder.OwnerOfTemporaries);
         Template->Kind = Kind;
+        TSharedPtr<FEdGraphSchemaAction_NewNode> Action = MakeShared<FEdGraphSchemaAction_NewNode>(
+            Category, UVoxelLandEditorNode::DisplayName(Kind), Template->GetTooltipText(), 0);
         Action->NodeTemplate = Template;
         ContextMenuBuilder.AddAction(Action);
     }

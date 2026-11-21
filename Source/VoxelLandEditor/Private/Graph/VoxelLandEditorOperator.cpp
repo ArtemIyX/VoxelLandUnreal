@@ -15,7 +15,8 @@ bool ValidateInputs(const FVoxelLandEditorOperatorPresentation& Presentation,
     const IVoxelLandOperator& Provider, FString& Error)
 {
     const TArray<EVoxelLandGraphValueType> Types = Provider.InputTypes();
-    if (Types.IsEmpty() || Types.Num() > 3 || Presentation.Inputs.Num() != Types.Num())
+    if (Types.IsEmpty() || Types.Num() > 3 || Presentation.Inputs.Num() != Types.Num() ||
+        (!Presentation.InputTooltips.IsEmpty() && Presentation.InputTooltips.Num() != Types.Num()))
     {
         Error = TEXT("Presentation input count must match the supported provider signature.");
         return false;
@@ -105,6 +106,19 @@ uint64 FVoxelLandEditorOperatorRegistry::GetRevision()
 {
     check(IsInGameThread());
     return PresentationRevision;
+}
+bool FVoxelLandEditorOperatorRegistry::FindPresentation(const FGuid& OperatorId, int32 Version,
+    FVoxelLandEditorOperatorPresentation& OutPresentation)
+{
+    check(IsInGameThread());
+    const TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = RegistryPresentations.Find(OperatorId);
+    const FVoxelLandEditorOperatorPresentation* Found = Versions ? Versions->Find(Version) : nullptr;
+    if (!Found || !FVoxelLandOperatorRegistry::Resolve(OperatorId, Version))
+    {
+        return false;
+    }
+    OutPresentation = *Found;
+    return true;
 }
 void FVoxelLandEditorOperatorRegistry::GetPresentations(TArray<FVoxelLandEditorOperatorPresentation>& OutRegistryPresentations)
 {

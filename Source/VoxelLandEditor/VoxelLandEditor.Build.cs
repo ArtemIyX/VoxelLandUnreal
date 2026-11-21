@@ -31,6 +31,7 @@ public class VoxelLandEditor : ModuleRules
                 "AssetRegistry",
                 "GraphEditor",
                 "PropertyEditor",
+                "Projects",
                 "ToolMenus",
                 "ApplicationCore",
                 "EditorFramework",

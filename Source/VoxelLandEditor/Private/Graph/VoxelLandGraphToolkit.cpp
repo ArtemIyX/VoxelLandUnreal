@@ -32,6 +32,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/Material.h"
+#include "Engine/Texture2D.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Async/Async.h"
 #include "EdGraph/EdGraph.h"
@@ -58,6 +59,7 @@
 #include "Widgets/SBoxPanel.h"
 #include "Containers/Ticker.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Images/SImage.h"
 #include "HAL/PlatformApplicationMisc.h"
 
 #define LOCTEXT_NAMESPACE "VoxelLandGraphToolkit"
@@ -324,6 +326,76 @@ private:
 };
 }
 
+class FVoxelLandNoisePreviewJob
+{
+public:
+    static constexpr int32 Resolution = 128;
+
+    static bool Run(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandSerializedProgram& Payload,
+        int64 Seed, const FVoxelLandZoneProfile& Profile, float SpacingCm, float SliceZCm,
+        const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, TArray<uint8>& Pixels,
+        float& Minimum, float& Maximum, int32& Clipped, FString& Error)
+    {
+        TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+        if (Cancel->Load() || !FVoxelLandProgramCodec::Load(Snapshot, Payload, Program, Error) || Cancel->Load())
+        {
+            return false;
+        }
+        FVoxelLandGeneratorSettings Settings;
+        Settings.Program = Program;
+        Settings.WorldSeed = uint64(Seed);
+        Settings.Profile = Profile;
+        TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+        if (FVoxelLandError Failure = FVoxelLandGenerator::Create(Settings, Generator))
+        {
+            Error = Failure.Message;
+            return false;
+        }
+        TUniquePtr<FVoxelLandWorkerContext> Worker;
+        if (FVoxelLandError Failure = Generator->CreateWorker(Worker))
+        {
+            Error = Failure.Message;
+            return false;
+        }
+        TArray<uint8> Result;
+        Result.SetNumUninitialized(Resolution * Resolution * 4);
+        FVector3f Positions[Resolution];
+        TArray<float> Values;
+        Minimum = TNumericLimits<float>::Max();
+        Maximum = TNumericLimits<float>::Lowest();
+        Clipped = 0;
+        for (int32 Y = 0; Y < Resolution; ++Y)
+        {
+            if (Cancel->Load()) { return false; }
+            for (int32 X = 0; X < Resolution; ++X)
+            {
+                Positions[X] = FVector3f((float(X) - 63.5f) * SpacingCm, (63.5f - float(Y)) * SpacingCm, SliceZCm);
+            }
+            if (FVoxelLandError Failure = Generator->EvaluateSamplesRaw(MakeArrayView(Positions, Resolution), *Worker, Values))
+            {
+                Error = Failure.Message;
+                return false;
+            }
+            for (int32 X = 0; X < Resolution; ++X)
+            {
+                const float Value = Values[X];
+                Minimum = FMath::Min(Minimum, Value);
+                Maximum = FMath::Max(Maximum, Value);
+                if (Value < -1.0f || Value > 1.0f) { ++Clipped; }
+                const uint8 Grey = uint8(FMath::RoundToInt((FMath::Clamp(Value, -1.0f, 1.0f) + 1.0f) * 127.5f));
+                const int32 Offset = (Y * Resolution + X) * 4;
+                Result[Offset] = Grey;
+                Result[Offset + 1] = Grey;
+                Result[Offset + 2] = Grey;
+                Result[Offset + 3] = 255;
+            }
+        }
+        if (Cancel->Load()) { return false; }
+        Pixels = MoveTemp(Result);
+        return true;
+    }
+};
+
 class FVoxelLandCompileWork
 {
 public:
@@ -348,6 +420,11 @@ public:
     float VoxelSize = 100.0f;
     int32 ChunkCount = 18;
     bool bSuccess = false;
+    bool bNoise2D = false;
+    TArray<uint8> NoisePixels;
+    float NoiseMin = 0.0f;
+    float NoiseMax = 0.0f;
+    int32 NoiseClipped = 0;
     FString Error;
     double GenerationMs = 0;
 #if WITH_DEV_AUTOMATION_TESTS
@@ -422,6 +499,8 @@ void FVoxelLandGraphToolkit::Stop()
     WorkerTasks.Reset();
     CompileWork.Reset();
     PreviewWork.Reset();
+    NoiseBrush.SetResourceObject(nullptr);
+    NoiseTexture = nullptr;
     ClearPreview();
 }
 void FVoxelLandGraphToolkit::AddReferencedObjects(FReferenceCollector& Collector)
@@ -430,6 +509,7 @@ void FVoxelLandGraphToolkit::AddReferencedObjects(FReferenceCollector& Collector
     Collector.AddReferencedObject(Graph);
     Collector.AddReferencedObjects(PreviewComponents);
     Collector.AddReferencedObject(PreviewMaterial);
+    Collector.AddReferencedObject(NoiseTexture);
     Collector.AddReferencedObject(PreviewSettings);
 }
 FText FVoxelLandGraphToolkit::GetBaseToolkitName() const
@@ -669,7 +749,9 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArg
 }
 FText FVoxelLandGraphToolkit::StatusText() const
 {
-    const FString Mode = PreviewNodeId.IsValid() ? FString::Printf(TEXT("Node preview - %s. "), *PreviewTargetLabel) : TEXT("Root preview. ");
+    const FString Mode = bNoisePreview
+        ? FString::Printf(TEXT("2D noise %s - %s. "), bNoiseStandalone ? TEXT("standalone coordinates") : TEXT("graph-wired slice"), *PreviewTargetLabel)
+        : PreviewNodeId.IsValid() ? FString::Printf(TEXT("Node preview - %s. "), *PreviewTargetLabel) : TEXT("Root preview. ");
     return FText::FromString(Mode + Status + (MaterialDiagnostic.IsEmpty() ? FString() : TEXT(" ") + MaterialDiagnostic));
 }
 FReply FVoxelLandGraphToolkit::CompileClicked() { RequestCompile(); return FReply::Handled(); }
@@ -717,6 +799,25 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
             + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("PreviewRoot", "Preview graph output"))
                 .OnClicked_Raw(this, &FVoxelLandGraphToolkit::ReturnToRootPreview)]]
         + SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
+            + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("NoiseWired", "2D noise: graph-wired"))
+                .ToolTipText(LOCTEXT("NoiseWiredTip", "Sample the selected noise node with its existing graph connections."))
+                .OnClicked_Lambda([this] { return SelectNoisePreview(false); })]
+            + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("NoiseStandalone", "2D noise: standalone"))
+                .ToolTipText(LOCTEXT("NoiseStandaloneTip", "Temporarily substitute XY and Z positions for the selected noise node's coordinate inputs."))
+                .OnClicked_Lambda([this] { return SelectNoisePreview(true); })]]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
+            .Visibility_Lambda([this] { return bNoisePreview ? EVisibility::Visible : EVisibility::Collapsed; })
+            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("NoiseSpacing", "Spacing (cm/pixel)"))]
+            + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<float>).MinValue(0.01f).MaxValue(100000.0f)
+                .Value_Lambda([this] { return NoiseSpacingCm; }).OnValueCommitted_Raw(this, &FVoxelLandGraphToolkit::SetNoiseSpacing)]
+            + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("NoiseSlice", "World Z (cm)"))]
+            + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<float>).MinValue(-10000000.0f).MaxValue(10000000.0f)
+                .Value_Lambda([this] { return NoiseSliceZCm; }).OnValueCommitted_Raw(this, &FVoxelLandGraphToolkit::SetNoiseSlice)]]
+        + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock)
+            .Visibility_Lambda([this] { return bNoisePreview ? EVisibility::Visible : EVisibility::Collapsed; })
+            .Text(LOCTEXT("NoiseLegend", "128 x 128; X right, Y up. Black = -1, grey = 0, white = +1; values outside [-1, 1] clip. Graph-wired mode samples the graph at world Z; Z only affects connected inputs."))
+            .AutoWrapText(true)]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Seed", "Seed"))]
             + SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox).Text_Lambda([this] { return FText::AsCultureInvariant(LexToString(PreviewSeed)); }).OnTextCommitted_Raw(this, &FVoxelLandGraphToolkit::SeedCommitted)]
             + SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("FrameTerrain", "Frame terrain (F)")).OnClicked_Raw(this, &FVoxelLandGraphToolkit::FramePreviewTerrain)]
@@ -728,7 +829,12 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
             + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).MinValue(1).MaxValue(2).Value_Lambda([this] { return PreviewHorizontalRadius; }).OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { CommitPreviewRadius(Value, true); })]
             + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).MinValue(1).MaxValue(2).Value_Lambda([this] { return PreviewVerticalRadius; }).OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) { CommitPreviewRadius(Value, false); })]]
         + SVerticalBox::Slot().AutoHeight()[SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[SNew(STextBlock).Text(LOCTEXT("PreviewSettings", "Transient preview settings and overrides"))].BodyContent()[SNew(SBox).MaxDesiredHeight(250)[PreviewDetails.ToSharedRef()]]]
-        + SVerticalBox::Slot().FillHeight(1)[PreviewViewport.ToSharedRef()]];
+        + SVerticalBox::Slot().FillHeight(1)[SNew(SBox)
+            .Visibility_Lambda([this] { return bNoisePreview ? EVisibility::Collapsed : EVisibility::Visible; })
+            [PreviewViewport.ToSharedRef()]]
+        + SVerticalBox::Slot().FillHeight(1)[SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)
+            .Visibility_Lambda([this] { return bNoisePreview ? EVisibility::Visible : EVisibility::Collapsed; })
+            [SNew(SBox).WidthOverride(384.0f).HeightOverride(384.0f)[SNew(SImage).Image_Raw(this, &FVoxelLandGraphToolkit::GetNoiseBrush)]]]];
 }
 
 TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildFunctionOutputMenu()
@@ -840,6 +946,7 @@ void FVoxelLandGraphToolkit::SelectPreviewTarget(FGuid NodeId, FGuid PinId, FStr
     {
         return;
     }
+    bNoisePreview = false;
     PreviewNodeId = NodeId;
     PreviewPinId = PinId;
     PreviewTargetLabel = MoveTemp(Label);
@@ -849,10 +956,100 @@ void FVoxelLandGraphToolkit::SelectPreviewTarget(FGuid NodeId, FGuid PinId, FStr
     SemanticChangeTime = FPlatformTime::Seconds();
     RequestCompile();
 }
+FReply FVoxelLandGraphToolkit::SelectNoisePreview(bool bStandalone)
+{
+    if (bStopped || bPIE || bReloadPaused || !GraphWidget) { return FReply::Handled(); }
+    if (Asset && Asset->IsA<UVoxelLandGraphFunction>())
+    {
+        CancelPreview();
+        Status = TEXT("Error; preview stale: 2D noise preview requires a terrain graph; function noise seeds depend on the calling instance.");
+        return FReply::Handled();
+    }
+    const FGraphPanelSelectionSet Selection = GraphWidget->GetSelectedNodes();
+    const UVoxelLandEditorNode* Node = Selection.Num() == 1 ? Cast<UVoxelLandEditorNode>(*Selection.CreateConstIterator()) : nullptr;
+    if (!Node || Node->Kind < int32(EVoxelLandBuiltinNode::Perlin2) || Node->Kind > int32(EVoxelLandBuiltinNode::Simplex3))
+    {
+        CancelPreview();
+        Status = TEXT("Error; preview stale: select exactly one Perlin, fBm, Value, or Simplex noise node.");
+        return FReply::Handled();
+    }
+    const UEdGraphPin* Output = nullptr;
+    for (const UEdGraphPin* Pin : Node->Pins)
+    {
+        if (Pin && Pin->Direction == EGPD_Output && Pin->PinType.PinCategory == TEXT("float"))
+        {
+            if (Output)
+            {
+                CancelPreview();
+                Status = TEXT("Error; preview stale: selected noise node has more than one float output.");
+                return FReply::Handled();
+            }
+            Output = Pin;
+        }
+    }
+    if (!Output)
+    {
+        CancelPreview();
+        Status = TEXT("Error; preview stale: selected noise node has no float output.");
+        return FReply::Handled();
+    }
+    bNoisePreview = true;
+    bNoiseStandalone = bStandalone;
+    PreviewNodeId = Node->NodeGuid;
+    PreviewPinId = Output->PinId;
+    PreviewTargetLabel = Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
+    ++PreviewTargetRevision;
+    NodePreviewSnapshot.Reset();
+    NodePreviewPayload.Reset();
+    SemanticChangeTime = FPlatformTime::Seconds();
+    RequestCompile();
+    return FReply::Handled();
+}
+void FVoxelLandGraphToolkit::SetNoiseSpacing(float Value, ETextCommit::Type)
+{
+    if (!FMath::IsFinite(Value) || Value < 0.01f || Value > 100000.0f)
+    {
+        bNoiseSpacingValid = false;
+        CancelPreview();
+        Status = TEXT("Error; preview stale: spacing must be finite and between 0.01 and 100000 cm/pixel.");
+        return;
+    }
+    const bool bChanged = NoiseSpacingCm != Value || !bNoiseSpacingValid;
+    bNoiseSpacingValid = true;
+    NoiseSpacingCm = Value;
+    if (bChanged && bNoisePreview && bNoiseSliceValid)
+    {
+        SemanticChangeTime = FPlatformTime::Seconds();
+        StartPreview();
+    }
+}
+void FVoxelLandGraphToolkit::SetNoiseSlice(float Value, ETextCommit::Type)
+{
+    if (!FMath::IsFinite(Value) || FMath::Abs(Value) > 10000000.0f)
+    {
+        bNoiseSliceValid = false;
+        CancelPreview();
+        Status = TEXT("Error; preview stale: world Z must be finite and within +/-10000000 cm.");
+        return;
+    }
+    const bool bChanged = NoiseSliceZCm != Value || !bNoiseSliceValid;
+    bNoiseSliceValid = true;
+    NoiseSliceZCm = Value;
+    if (bChanged && bNoisePreview && bNoiseSpacingValid)
+    {
+        SemanticChangeTime = FPlatformTime::Seconds();
+        StartPreview();
+    }
+}
+const FSlateBrush* FVoxelLandGraphToolkit::GetNoiseBrush() const
+{
+    return &NoiseBrush;
+}
 FReply FVoxelLandGraphToolkit::ReturnToRootPreview()
 {
     if (!bStopped && !bPIE && !bReloadPaused && PreviewNodeId.IsValid())
     {
+        bNoisePreview = false;
         PreviewNodeId.Invalidate();
         PreviewPinId.Invalidate();
         PreviewTargetLabel.Reset();
@@ -900,6 +1097,35 @@ bool FVoxelLandGraphToolkit::BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& S
         Error = TEXT("Filter outputs cannot be selected for node preview; preview the graph output instead.");
         return false;
     }
+    TArray<FGuid> CoordinatePins;
+    if (bNoisePreview)
+    {
+        const FGuid FirstNoise = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::Perlin2);
+        if (Node->OperatorId.A != FirstNoise.A || Node->OperatorId.B != FirstNoise.B || Node->OperatorId.C != FirstNoise.C ||
+            Node->OperatorId.D < uint32(EVoxelLandBuiltinNode::Perlin2) || Node->OperatorId.D > uint32(EVoxelLandBuiltinNode::Simplex3))
+        {
+            Error = TEXT("The selected node is no longer a supported noise node.");
+            return false;
+        }
+        if (bNoiseStandalone)
+        {
+            const int32 Dimensions = ((Node->OperatorId.D - uint32(EVoxelLandBuiltinNode::Perlin2)) % 2) ? 3 : 2;
+            if (Node->Pins.Num() < Dimensions)
+            {
+                Error = TEXT("The noise node is missing coordinate inputs.");
+                return false;
+            }
+            for (int32 Index = 0; Index < Dimensions; ++Index)
+            {
+                if (Node->Pins[Index].bOutput || Node->Pins[Index].Type != EVoxelLandGraphValueType::Float)
+                {
+                    Error = TEXT("The noise node has invalid coordinate inputs.");
+                    return false;
+                }
+                CoordinatePins.Add(Node->Pins[Index].Id);
+            }
+        }
+    }
     TSet<FGuid> RemovedOutputs;
     for (const FVoxelLandGraphNodeRecord& Candidate : Snapshot.Nodes)
     {
@@ -912,9 +1138,9 @@ bool FVoxelLandGraphToolkit::BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& S
     {
         return RemovedOutputs.Contains(Candidate.Id);
     });
-    Snapshot.Links.RemoveAll([&RemovedOutputs](const FVoxelLandGraphLinkRecord& Link)
+    Snapshot.Links.RemoveAll([&RemovedOutputs, &CoordinatePins](const FVoxelLandGraphLinkRecord& Link)
     {
-        return RemovedOutputs.Contains(Link.SourceNode) || RemovedOutputs.Contains(Link.TargetNode);
+        return RemovedOutputs.Contains(Link.SourceNode) || RemovedOutputs.Contains(Link.TargetNode) || CoordinatePins.Contains(Link.TargetPin);
     });
     TSet<FGuid> ExistingIds;
     for (const FVoxelLandGraphNodeRecord& Candidate : Snapshot.Nodes)
@@ -924,6 +1150,29 @@ bool FVoxelLandGraphToolkit::BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& S
         {
             ExistingIds.Add(CandidatePin.Id);
         }
+    }
+    for (int32 Index = 0; Index < CoordinatePins.Num(); ++Index)
+    {
+        FVoxelLandGraphNodeRecord Position;
+        do { Position.Id = FGuid::NewGuid(); } while (!Position.Id.IsValid() || ExistingIds.Contains(Position.Id));
+        ExistingIds.Add(Position.Id);
+        const EVoxelLandBuiltinNode Kind = Index == 0 ? EVoxelLandBuiltinNode::PositionX :
+            Index == 1 ? EVoxelLandBuiltinNode::PositionY : EVoxelLandBuiltinNode::PositionZ;
+        Position.OperatorId = VoxelLandBuiltinNodeId(Kind);
+        FVoxelLandGraphPinRecord PositionOutput;
+        do { PositionOutput.Id = FGuid::NewGuid(); } while (!PositionOutput.Id.IsValid() || ExistingIds.Contains(PositionOutput.Id));
+        ExistingIds.Add(PositionOutput.Id);
+        PositionOutput.Name = TEXT("Result");
+        PositionOutput.Type = EVoxelLandGraphValueType::Float;
+        PositionOutput.bOutput = true;
+        Position.Pins.Add(PositionOutput);
+        FVoxelLandGraphLinkRecord CoordinateLink;
+        CoordinateLink.SourceNode = Position.Id;
+        CoordinateLink.SourcePin = PositionOutput.Id;
+        CoordinateLink.TargetNode = PreviewNodeId;
+        CoordinateLink.TargetPin = CoordinatePins[Index];
+        Snapshot.Nodes.Add(MoveTemp(Position));
+        Snapshot.Links.Add(MoveTemp(CoordinateLink));
     }
     FVoxelLandGraphNodeRecord Output;
     do { Output.Id = FGuid::NewGuid(); } while (!Output.Id.IsValid() || ExistingIds.Contains(Output.Id));
@@ -1866,6 +2115,11 @@ void FVoxelLandGraphToolkit::StartPreview()
         return;
     }
     CancelPreview();
+    if (bNoisePreview && (!bNoiseSpacingValid || !bNoiseSliceValid))
+    {
+        Status = TEXT("Error; preview stale: enter valid 2D noise spacing and world Z values.");
+        return;
+    }
     if (SemanticChangeTime <= 0.0)
     {
         SemanticChangeTime = FPlatformTime::Seconds();
@@ -1919,10 +2173,15 @@ void FVoxelLandGraphToolkit::StartPreview()
     PreviewCancel = Cancel;
     const int32 HorizontalRadius = PreviewHorizontalRadius;
     const int32 VerticalRadius = PreviewVerticalRadius;
-    Status = TEXT("Generating bounded chunks; previous preview is stale.");
+    const bool bMakeNoise2D = bNoisePreview;
+    const float SpacingCm = NoiseSpacingCm;
+    const float SliceZCm = NoiseSliceZCm;
+    Status = bMakeNoise2D ? TEXT("Generating 2D noise; previous preview is stale.") :
+        TEXT("Generating bounded chunks; previous preview is stale.");
     const TSharedRef<FVoxelLandPreviewWork, ESPMode::ThreadSafe> Work = MakeShared<FVoxelLandPreviewWork, ESPMode::ThreadSafe>();
     Work->PreviewRevision = PreviewRevision;
     Work->SourceRevision = Revision;
+    Work->bNoise2D = bMakeNoise2D;
 #if WITH_DEV_AUTOMATION_TESTS
     Work->SeedForTests = Seed;
 #endif
@@ -1934,21 +2193,68 @@ void FVoxelLandGraphToolkit::StartPreview()
 #endif
 #if WITH_DEV_AUTOMATION_TESTS
     const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MoveTemp(PreviewReloadBarrierForTests);
-    WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius, Cancel, Work, Barrier]() mutable
+    WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius, SpacingCm, SliceZCm, bMakeNoise2D, Cancel, Work, Barrier]() mutable
 #else
-    WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius, Cancel, Work]() mutable
+    WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius, SpacingCm, SliceZCm, bMakeNoise2D, Cancel, Work]() mutable
 #endif
     {
         const double StartTime = FPlatformTime::Seconds();
-        Work->bSuccess = FVoxelLandPreviewJob::Run(Snapshot, Payload, Seed, Profile, HorizontalRadius, VerticalRadius, Cancel, Work->Meshes, Work->Error
+        if (bMakeNoise2D)
+        {
+            Work->bSuccess = FVoxelLandNoisePreviewJob::Run(Snapshot, Payload, Seed, Profile, SpacingCm, SliceZCm,
+                Cancel, Work->NoisePixels, Work->NoiseMin, Work->NoiseMax, Work->NoiseClipped, Work->Error);
+        }
+        else
+        {
+            Work->bSuccess = FVoxelLandPreviewJob::Run(Snapshot, Payload, Seed, Profile, HorizontalRadius, VerticalRadius, Cancel, Work->Meshes, Work->Error
 #if WITH_DEV_AUTOMATION_TESTS
-            , Barrier
+                , Barrier
 #endif
-        );
+            );
+        }
         Work->GenerationMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
         Work->Done.Store(true);
     }));
 
+}
+bool FVoxelLandGraphToolkit::PublishNoisePreview(const FVoxelLandPreviewWork& Finished)
+{
+    constexpr int32 Resolution = FVoxelLandNoisePreviewJob::Resolution;
+    if (Finished.NoisePixels.Num() != Resolution * Resolution * 4)
+    {
+        Status = TEXT("Error; previous preview is stale: invalid 2D image data.");
+        return false;
+    }
+    UTexture2D* Texture = NoiseTexture.Get();
+    if (!Texture)
+    {
+        Texture = UTexture2D::CreateTransient(Resolution, Resolution, PF_B8G8R8A8);
+    }
+    if (!Texture || !Texture->GetPlatformData() || Texture->GetPlatformData()->Mips.IsEmpty())
+    {
+        Status = TEXT("Error; previous preview is stale: could not allocate the 2D image.");
+        return false;
+    }
+    void* Destination = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+    if (!Destination)
+    {
+        Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+        Status = TEXT("Error; previous preview is stale: could not update the 2D image.");
+        return false;
+    }
+    FMemory::Memcpy(Destination, Finished.NoisePixels.GetData(), Finished.NoisePixels.Num());
+    Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+    Texture->SRGB = true;
+    Texture->NeverStream = true;
+    Texture->Filter = TF_Nearest;
+    Texture->UpdateResource();
+    NoiseTexture = Texture;
+    NoiseBrush.SetResourceObject(Texture);
+    NoiseBrush.SetImageSize(FVector2D(Resolution, Resolution));
+    Status = FString::Printf(TEXT("Ready: observed range %.6g to %.6g; %d of %d samples clipped outside [-1, 1]; CPU %.1f ms."),
+        Finished.NoiseMin, Finished.NoiseMax, Finished.NoiseClipped, Resolution * Resolution, Finished.GenerationMs);
+    SemanticChangeTime = 0.0;
+    return true;
 }
 bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finished)
 {
@@ -2114,6 +2420,10 @@ void FVoxelLandGraphToolkit::ProcessPreviewWork()
         if (!Finished->bSuccess)
         {
             Status = FString::Printf(TEXT("Error; previous preview is stale: %s"), *Finished->Error);
+        }
+        else if (Finished->bNoise2D)
+        {
+            PublishNoisePreview(*Finished);
         }
         else
         {

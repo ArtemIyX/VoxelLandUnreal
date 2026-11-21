@@ -8,6 +8,7 @@
 #include "Data/Structs/VoxelLandGraphDiagnostic.h"
 #include "Async/Future.h"
 #include "Containers/Ticker.h"
+#include "Styling/SlateBrush.h"
 
 class UVoxelLandTerrainGraph;
 class UEdGraph;
@@ -20,6 +21,7 @@ class SVoxelLandPreviewViewport;
 class SGraphActionMenu;
 class UVoxelLandChunkComponent;
 class UMaterialInterface;
+class UTexture2D;
 class UVoxelLandWorldSettings;
 struct FAssetData;
 class FVoxelLandCompileWork;
@@ -136,6 +138,11 @@ private:
     TSharedRef<SWidget> BuildFunctionOutputMenu();
     void SetFunctionOutput(FGuid NodeId, FGuid PinId, EVoxelLandGraphValueType Type);
     void SelectPreviewTarget(FGuid NodeId, FGuid PinId, FString Label);
+    FReply SelectNoisePreview(bool bStandalone);
+    void SetNoiseSpacing(float Value, ETextCommit::Type CommitType);
+    void SetNoiseSlice(float Value, ETextCommit::Type CommitType);
+    const FSlateBrush* GetNoiseBrush() const;
+    bool PublishNoisePreview(const FVoxelLandPreviewWork& Finished);
     FReply ReturnToRootPreview();
     void CancelPreview();
     void ClearPreview();
@@ -180,6 +187,8 @@ private:
     TSharedPtr<SVoxelLandPreviewViewport> PreviewViewport;
     TArray<TObjectPtr<UVoxelLandChunkComponent>> PreviewComponents;
     TObjectPtr<UMaterialInterface> PreviewMaterial = nullptr;
+    TObjectPtr<UTexture2D> NoiseTexture = nullptr;
+    FSlateBrush NoiseBrush;
     TSoftObjectPtr<UMaterialInterface> SelectedPreviewMaterial;
     TSoftObjectPtr<UVoxelLandWorldSettings> SelectedPreviewSettings;
     TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;
@@ -187,6 +196,12 @@ private:
     int64 PreviewSeed = 1234;
     int32 PreviewHorizontalRadius = 1;
     int32 PreviewVerticalRadius = 1;
+    bool bNoisePreview = false;
+    bool bNoiseStandalone = false;
+    bool bNoiseSpacingValid = true;
+    bool bNoiseSliceValid = true;
+    float NoiseSpacingCm = 100.0f;
+    float NoiseSliceZCm = 0.0f;
     uint64 PreviewRevision = 0;
     uint64 PreviewTargetRevision = 0;
     uint64 NodePreviewSourceHash = 0;

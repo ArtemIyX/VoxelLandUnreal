@@ -57,10 +57,14 @@ public:
 	// Evaluate the pure VM stage at 1..256 positions; neighborhood filters apply only to chunks.
 	FVoxelLandError EvaluateSamples(
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const;
+	// Raw finite values from the same pure VM stage before density quantization and filters.
+	FVoxelLandError EvaluateSamplesRaw(
+		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 
 private:
+	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const;
 	FVoxelLandError GenerateExpandedDensity(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
         TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;

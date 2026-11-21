@@ -719,10 +719,9 @@ FVoxelLandError FVoxelLandWorkerContextImpl::QuantizeOutput(int32 N, float Voxel
 	return {};
 }
 
-FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
-	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const
+FVoxelLandError FVoxelLandGenerator::EvaluateToWorkerBuffer(
+    TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const
 {
-    OutDensity.Reset();
 	if (IsInGameThread())
 	{
 		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
@@ -749,7 +748,30 @@ FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
 			return Error;
 		}
 	}
-	return W.QuantizeOutput(Positions.Num(), Profile.VoxelSizeCm, OutDensity);
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
+    TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const
+{
+    OutDensity.Reset();
+    if (FVoxelLandError Error = EvaluateToWorkerBuffer(Positions, Worker))
+    {
+        return Error;
+    }
+    return Worker.Impl->QuantizeOutput(Positions.Num(), Profile.VoxelSizeCm, OutDensity);
+}
+
+FVoxelLandError FVoxelLandGenerator::EvaluateSamplesRaw(
+    TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const
+{
+    OutValues.Reset();
+    if (FVoxelLandError Error = EvaluateToWorkerBuffer(Positions, Worker))
+    {
+        return Error;
+    }
+    OutValues.Append(Worker.Impl->Output.GetData(), Positions.Num());
+    return {};
 }
 
 namespace

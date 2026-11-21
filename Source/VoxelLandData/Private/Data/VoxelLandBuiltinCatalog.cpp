@@ -248,58 +248,142 @@ bool FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode Kind, FVoxelLandBuilti
 void FVoxelLandBuiltinCatalog::GetKinds(TArray<EVoxelLandBuiltinNode>& OutKinds)
 {
     static constexpr EVoxelLandBuiltinNode Kinds[] = {
-        EVoxelLandBuiltinNode::DensityOutput,
-        EVoxelLandBuiltinNode::PositionX,
-        EVoxelLandBuiltinNode::PositionY,
-        EVoxelLandBuiltinNode::PositionZ,
-        EVoxelLandBuiltinNode::FloatConstant,
-        EVoxelLandBuiltinNode::FloatParameter,
-        EVoxelLandBuiltinNode::Add,
-        EVoxelLandBuiltinNode::Subtract,
-        EVoxelLandBuiltinNode::Multiply,
-        EVoxelLandBuiltinNode::Divide,
-        EVoxelLandBuiltinNode::Min,
-        EVoxelLandBuiltinNode::Max,
-        EVoxelLandBuiltinNode::Abs,
-        EVoxelLandBuiltinNode::Negate,
-        EVoxelLandBuiltinNode::Union,
-        EVoxelLandBuiltinNode::SubtractShape,
-        EVoxelLandBuiltinNode::Intersect,
-        EVoxelLandBuiltinNode::HeightToDensity,
-        EVoxelLandBuiltinNode::Clamp,
-        EVoxelLandBuiltinNode::Saturate,
-        EVoxelLandBuiltinNode::Lerp,
-        EVoxelLandBuiltinNode::IntConstant,
-        EVoxelLandBuiltinNode::BoolConstant,
-        EVoxelLandBuiltinNode::IntParameter,
-        EVoxelLandBuiltinNode::BoolParameter,
-        EVoxelLandBuiltinNode::IntToFloat,
-        EVoxelLandBuiltinNode::Less,
-        EVoxelLandBuiltinNode::LessEqual,
-        EVoxelLandBuiltinNode::Equal,
-        EVoxelLandBuiltinNode::BoolAnd,
-        EVoxelLandBuiltinNode::BoolOr,
-        EVoxelLandBuiltinNode::BoolNot,
-        EVoxelLandBuiltinNode::SelectFloat,
-        EVoxelLandBuiltinNode::SelectInt,
-        EVoxelLandBuiltinNode::SelectBool,
-        EVoxelLandBuiltinNode::Power,
-        EVoxelLandBuiltinNode::Plane,
-        EVoxelLandBuiltinNode::Sphere,
-        EVoxelLandBuiltinNode::Box,
-        EVoxelLandBuiltinNode::Perlin2,
-        EVoxelLandBuiltinNode::Perlin3,
-        EVoxelLandBuiltinNode::Fbm2,
-        EVoxelLandBuiltinNode::Fbm3,
-        EVoxelLandBuiltinNode::Value2,
-        EVoxelLandBuiltinNode::Value3,
-        EVoxelLandBuiltinNode::Simplex2,
-        EVoxelLandBuiltinNode::Simplex3,
-        EVoxelLandBuiltinNode::RerouteFloat,
-        EVoxelLandBuiltinNode::RerouteInt,
-        EVoxelLandBuiltinNode::RerouteBool,
-        EVoxelLandBuiltinNode::SmoothDensity,
+#define VOXELLAND_BUILTIN_KIND(Name, Value) EVoxelLandBuiltinNode::Name,
+        VOXELLAND_BUILTIN_NODE_LIST(VOXELLAND_BUILTIN_KIND)
+#undef VOXELLAND_BUILTIN_KIND
     };
     OutKinds.Reset(UE_ARRAY_COUNT(Kinds));
     OutKinds.Append(Kinds, UE_ARRAY_COUNT(Kinds));
+}
+
+
+namespace
+{
+bool ValidateBuiltinPins(const FVoxelLandBuiltinNodeSpec& Spec, FString& Error)
+{
+    TSet<FName> Names;
+    int32 Outputs = 0;
+    for (const FVoxelLandBuiltinPinSpec& Pin : Spec.Pins)
+    {
+        if (Pin.Name.IsEmpty() || Names.Contains(FName(*Pin.Name)) ||
+            (Pin.Type != EType::Float && Pin.Type != EType::Int32 && Pin.Type != EType::Bool) ||
+            (Pin.bOutput && (Pin.bUniform || !Pin.DefaultLiteral.IsEmpty())))
+        {
+            Error = TEXT("invalid or duplicate pin definition");
+            return false;
+        }
+        Names.Add(FName(*Pin.Name));
+        Outputs += Pin.bOutput ? 1 : 0;
+        if (!Pin.bOutput)
+        {
+            float FloatValue = 0.f;
+            int32 IntValue = 0;
+            const bool bValidDefault = Pin.Type == EType::Float ?
+                LexTryParseString(FloatValue, *Pin.DefaultLiteral) && FMath::IsFinite(FloatValue) :
+                Pin.Type == EType::Int32 ? LexTryParseString(IntValue, *Pin.DefaultLiteral) :
+                (Pin.DefaultLiteral == TEXT("true") || Pin.DefaultLiteral == TEXT("false") ||
+                    Pin.DefaultLiteral == TEXT("0") || Pin.DefaultLiteral == TEXT("1"));
+            if (!bValidDefault)
+            {
+                Error = TEXT("invalid pin default literal");
+                return false;
+            }
+        }
+    }
+    const int32 ExpectedOutputs = Spec.Kind == EVoxelLandBuiltinNode::DensityOutput ? 0 : 1;
+    if (Outputs != ExpectedOutputs || (Outputs == 1 && !Spec.Pins.Last().bOutput))
+    {
+        Error = TEXT("invalid output pin definition");
+        return false;
+    }
+    return true;
+}
+
+bool ValidateBuiltinRoles(const FVoxelLandBuiltinNodeSpec& Spec, FString& Error)
+{
+    if ((Spec.MinVariadicInputs == 0) != (Spec.MaxVariadicInputs == 0) ||
+        (Spec.MinVariadicInputs != 0 && (Spec.MinVariadicInputs < 1 || Spec.MaxVariadicInputs < Spec.MinVariadicInputs)))
+    {
+        Error = TEXT("invalid variadic bounds");
+        return false;
+    }
+    if (Spec.bNoise != (Spec.NoiseDimensions == 2 || Spec.NoiseDimensions == 3))
+    {
+        Error = TEXT("invalid noise dimensions");
+        return false;
+    }
+    if (Spec.bNoise)
+    {
+        if (Spec.Pins.Num() != Spec.NoiseDimensions + 5)
+        {
+            Error = TEXT("invalid noise pin count");
+            return false;
+        }
+        for (int32 Index = 0; Index < Spec.Pins.Num(); ++Index)
+        {
+            const bool bExpectedUniform = Index >= Spec.NoiseDimensions && Index < Spec.NoiseDimensions + 4;
+            if (Spec.Pins[Index].bUniform != bExpectedUniform)
+            {
+                Error = TEXT("invalid noise uniform pin roles");
+                return false;
+            }
+        }
+    }
+    else if (Spec.NoiseDimensions != 0)
+    {
+        Error = TEXT("non-noise builtin has noise dimensions");
+        return false;
+    }
+    if (!Spec.bNoise)
+    {
+        for (int32 Index = 0; Index < Spec.Pins.Num(); ++Index)
+        {
+            const bool bExpectedUniform = Spec.Kind == EVoxelLandBuiltinNode::SmoothDensity && (Index == 1 || Index == 2);
+            if (Spec.Pins[Index].bUniform != bExpectedUniform)
+            {
+                Error = TEXT("invalid builtin uniform pin roles");
+                return false;
+            }
+        }
+    }
+    return true;
+}
+}
+
+bool FVoxelLandBuiltinCatalog::Validate(FString& OutError)
+{
+    OutError.Reset();
+    TArray<EVoxelLandBuiltinNode> Kinds;
+    GetKinds(Kinds);
+    TSet<uint32> Values;
+    TSet<FGuid> Ids;
+    for (EVoxelLandBuiltinNode Kind : Kinds)
+    {
+        FVoxelLandBuiltinNodeSpec Spec;
+        FString Detail;
+        if (Values.Contains(uint32(Kind)) || !Find(Kind, Spec) || Spec.Kind != Kind ||
+            Spec.OperatorId != VoxelLandBuiltinNodeId(Kind) || Ids.Contains(Spec.OperatorId) ||
+            !Spec.OperatorId.IsValid() || Spec.OperatorVersion < 1 ||
+            !ValidateBuiltinPins(Spec, Detail) || !ValidateBuiltinRoles(Spec, Detail))
+        {
+            OutError = FString::Printf(TEXT("Invalid builtin catalog entry %u: %s"), uint32(Kind),
+                Detail.IsEmpty() ? TEXT("missing, duplicate or invalid identity") : *Detail);
+            return false;
+        }
+        Values.Add(uint32(Kind));
+        Ids.Add(Spec.OperatorId);
+        if (Spec.MinVariadicInputs != 0)
+        {
+            FVoxelLandBuiltinNodeSpec MinSpec;
+            FVoxelLandBuiltinNodeSpec MaxSpec;
+            if (!Find(Kind, MinSpec, Spec.MinVariadicInputs) || !Find(Kind, MaxSpec, Spec.MaxVariadicInputs) ||
+                MinSpec.Pins.Num() != Spec.MinVariadicInputs + 1 || MaxSpec.Pins.Num() != Spec.MaxVariadicInputs + 1 ||
+                !ValidateBuiltinPins(MinSpec, Detail) || !ValidateBuiltinPins(MaxSpec, Detail))
+            {
+                OutError = FString::Printf(TEXT("Invalid builtin catalog variadic entry %u"), uint32(Kind));
+                return false;
+            }
+        }
+    }
+    return true;
 }

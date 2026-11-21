@@ -637,6 +637,12 @@ bool FCompiler::CompileExternal(const FVoxelLandGraphNodeRecord& Node, uint16& R
 bool FCompiler::NoiseSource(const FVoxelLandGraphNodeRecord& Node, int32 Index,
     EVoxelLandGraphValueType Type, FVoxelLandValueSource& Out)
 {
+    FVoxelLandBuiltinNodeSpec Spec;
+    if (!FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode(Node.OperatorId.D), Spec) ||
+        !Spec.Pins.IsValidIndex(Index) || !Spec.Pins[Index].bUniform || Spec.Pins[Index].Type != Type)
+    {
+        return FailAt(TEXT("Invalid builtin uniform pin contract"), Node.Id);
+    }
     const FVoxelLandGraphPinRecord& Pin = Node.Pins[Index];
     TGuardValue<FGuid> PinContext(ActivePin, Pin.Id);
     if (const FGuid* UpstreamId = InputLinks.Find(Pin.Id))
@@ -993,6 +999,10 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot, c
 {
     OutDraft = FVoxelLandProgramDraft();
     OutDiagnostic = FVoxelLandGraphDiagnostic();
+    if (!FVoxelLandBuiltinCatalog::Validate(OutDiagnostic.Message))
+    {
+        return false;
+    }
     const bool bHasCalls = Snapshot.Nodes.ContainsByPredicate([](const FVoxelLandGraphNodeRecord& Node)
     {
         return Node.OperatorId == VoxelLandGraphFunctionCallId() || !Node.FunctionPath.IsNull();

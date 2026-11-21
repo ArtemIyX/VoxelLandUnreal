@@ -1,8 +1,9 @@
 #include "Graph/VoxelLandBuiltinPresentationCatalog.h"
+#include "Data/VoxelLandBuiltinCatalog.h"
 
 #define LOCTEXT_NAMESPACE "VoxelLandBuiltinPresentation"
 
-FText FVoxelLandBuiltinPresentationCatalog::Title(EVoxelLandBuiltinNode Kind)
+static FText ExplicitTitle(EVoxelLandBuiltinNode Kind)
 {
     switch (Kind)
     {
@@ -57,11 +58,11 @@ FText FVoxelLandBuiltinPresentationCatalog::Title(EVoxelLandBuiltinNode Kind)
     case EVoxelLandBuiltinNode::RerouteInt: return LOCTEXT("TitleRerouteInt", "Reroute Int");
     case EVoxelLandBuiltinNode::RerouteBool: return LOCTEXT("TitleRerouteBool", "Reroute Bool");
     case EVoxelLandBuiltinNode::SmoothDensity: return LOCTEXT("TitleSmoothDensity", "Smooth Density");
-    default: return LOCTEXT("UnknownTitle", "Unknown operator");
+    default: return FText::GetEmpty();
     }
 }
 
-FText FVoxelLandBuiltinPresentationCatalog::Description(EVoxelLandBuiltinNode Kind)
+static FText ExplicitDescription(EVoxelLandBuiltinNode Kind)
 {
     switch (Kind)
     {
@@ -116,11 +117,11 @@ FText FVoxelLandBuiltinPresentationCatalog::Description(EVoxelLandBuiltinNode Ki
     case EVoxelLandBuiltinNode::RerouteInt: return LOCTEXT("DescriptionRerouteInt", "Routes an integer wire without changing its value.");
     case EVoxelLandBuiltinNode::RerouteBool: return LOCTEXT("DescriptionRerouteBool", "Routes a boolean wire without changing its value.");
     case EVoxelLandBuiltinNode::SmoothDensity: return LOCTEXT("DescriptionSmoothDensity", "Applies one-cell density smoothing before Density Output. Enabled and Strength are uniform controls; strength ranges from 0 to 1.");
-    default: return LOCTEXT("UnknownDescription", "Unknown operator.");
+    default: return FText::GetEmpty();
     }
 }
 
-FText FVoxelLandBuiltinPresentationCatalog::Category(EVoxelLandBuiltinNode Kind)
+static FText ExplicitCategory(EVoxelLandBuiltinNode Kind)
 {
     switch (Kind)
     {
@@ -170,11 +171,63 @@ FText FVoxelLandBuiltinPresentationCatalog::Category(EVoxelLandBuiltinNode Kind)
     case EVoxelLandBuiltinNode::Sphere:
     case EVoxelLandBuiltinNode::Box:
         return LOCTEXT("CategoryShapes", "Shapes");
-    default: return LOCTEXT("CategoryMath", "Math and control");
+    case EVoxelLandBuiltinNode::Add:
+    case EVoxelLandBuiltinNode::Subtract:
+    case EVoxelLandBuiltinNode::Multiply:
+    case EVoxelLandBuiltinNode::Divide:
+    case EVoxelLandBuiltinNode::Min:
+    case EVoxelLandBuiltinNode::Max:
+    case EVoxelLandBuiltinNode::Abs:
+    case EVoxelLandBuiltinNode::Negate:
+    case EVoxelLandBuiltinNode::Clamp:
+    case EVoxelLandBuiltinNode::Saturate:
+    case EVoxelLandBuiltinNode::Lerp:
+    case EVoxelLandBuiltinNode::Power:
+        return LOCTEXT("CategoryMath", "Math and control");
+    default: return FText::GetEmpty();
     }
 }
 
-FLinearColor FVoxelLandBuiltinPresentationCatalog::TitleColor(EVoxelLandBuiltinNode Kind)
+static FLinearColor ExplicitTitleColor(EVoxelLandBuiltinNode Kind);
+
+bool FVoxelLandBuiltinPresentationCatalog::Validate(FString& OutError)
+{
+    if (!FVoxelLandBuiltinCatalog::Validate(OutError))
+    {
+        return false;
+    }
+    TArray<EVoxelLandBuiltinNode> Kinds;
+    FVoxelLandBuiltinCatalog::GetKinds(Kinds);
+    for (EVoxelLandBuiltinNode Kind : Kinds)
+    {
+        if (ExplicitTitle(Kind).IsEmpty() || ExplicitDescription(Kind).IsEmpty() || ExplicitCategory(Kind).IsEmpty() || ExplicitTitleColor(Kind).R < 0.f)
+        {
+            OutError = FString::Printf(TEXT("Missing builtin editor presentation for %u"), uint32(Kind));
+            return false;
+        }
+    }
+    return true;
+}
+
+FText FVoxelLandBuiltinPresentationCatalog::Title(EVoxelLandBuiltinNode Kind)
+{
+    const FText Value = ExplicitTitle(Kind);
+    return Value.IsEmpty() ? LOCTEXT("UnknownTitle", "Unknown operator") : Value;
+}
+
+FText FVoxelLandBuiltinPresentationCatalog::Description(EVoxelLandBuiltinNode Kind)
+{
+    const FText Value = ExplicitDescription(Kind);
+    return Value.IsEmpty() ? LOCTEXT("UnknownDescription", "Unknown operator.") : Value;
+}
+
+FText FVoxelLandBuiltinPresentationCatalog::Category(EVoxelLandBuiltinNode Kind)
+{
+    const FText Value = ExplicitCategory(Kind);
+    return Value.IsEmpty() ? LOCTEXT("CategoryMath", "Math and control") : Value;
+}
+
+static FLinearColor ExplicitTitleColor(EVoxelLandBuiltinNode Kind)
 {
     switch (Kind)
     {
@@ -223,8 +276,28 @@ FLinearColor FVoxelLandBuiltinPresentationCatalog::TitleColor(EVoxelLandBuiltinN
     case EVoxelLandBuiltinNode::IntParameter:
     case EVoxelLandBuiltinNode::BoolParameter:
         return FLinearColor(0.18f, 0.34f, 0.53f);
-    default: return FLinearColor(0.34f, 0.32f, 0.18f);
+    case EVoxelLandBuiltinNode::Add:
+    case EVoxelLandBuiltinNode::Subtract:
+    case EVoxelLandBuiltinNode::Multiply:
+    case EVoxelLandBuiltinNode::Divide:
+    case EVoxelLandBuiltinNode::Min:
+    case EVoxelLandBuiltinNode::Max:
+    case EVoxelLandBuiltinNode::Abs:
+    case EVoxelLandBuiltinNode::Negate:
+    case EVoxelLandBuiltinNode::HeightToDensity:
+    case EVoxelLandBuiltinNode::Clamp:
+    case EVoxelLandBuiltinNode::Saturate:
+    case EVoxelLandBuiltinNode::Lerp:
+    case EVoxelLandBuiltinNode::Power:
+        return FLinearColor(0.34f, 0.32f, 0.18f);
+    default: return FLinearColor(-1.f, -1.f, -1.f);
     }
+}
+
+FLinearColor FVoxelLandBuiltinPresentationCatalog::TitleColor(EVoxelLandBuiltinNode Kind)
+{
+    const FLinearColor Value = ExplicitTitleColor(Kind);
+    return Value.R < 0.f ? FLinearColor(0.34f, 0.32f, 0.18f) : Value;
 }
 
 namespace

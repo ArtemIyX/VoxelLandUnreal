@@ -199,7 +199,15 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
     Comment->NodeTemplate = NewObject<UEdGraphNode_Comment>(ContextMenuBuilder.OwnerOfTemporaries);
     ContextMenuBuilder.AddAction(Comment);
     TArray<EVoxelLandBuiltinNode> Builtins;
-    FVoxelLandBuiltinCatalog::GetKinds(Builtins);
+    FString CatalogError;
+    if (FVoxelLandBuiltinPresentationCatalog::Validate(CatalogError))
+    {
+        FVoxelLandBuiltinCatalog::GetKinds(Builtins);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Error, TEXT("VoxelLand builtin catalog unavailable: %s"), *CatalogError);
+    }
     for (EVoxelLandBuiltinNode Builtin : Builtins)
     {
         const int32 Kind = int32(Builtin);
@@ -285,7 +293,13 @@ const FPinConnectionResponse UVoxelLandEditorSchema::CanCreateConnection(const U
     {
         return FPinConnectionResponse(CONNECT_RESPONSE_DISALLOW, LOCTEXT("SmoothOutput", "A filter must feed only Density Output."));
     }
-    if (ToNode && ToNode->Kind == int32(EVoxelLandBuiltinNode::SmoothDensity) && Input->PinName != FName(TEXT("Density")))
+    FVoxelLandBuiltinNodeSpec SmoothSpec;
+    const bool bSmooth = ToNode && ToNode->Kind == int32(EVoxelLandBuiltinNode::SmoothDensity);
+    const bool bHasSmoothSpec = bSmooth && FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode::SmoothDensity, SmoothSpec);
+    const FVoxelLandBuiltinPinSpec* SmoothPin = bHasSmoothSpec ? SmoothSpec.Pins.FindByPredicate(
+        [Input](const FVoxelLandBuiltinPinSpec& PinSpec) { return !PinSpec.bOutput && FName(*PinSpec.Name) == Input->PinName; }) : nullptr;
+    const bool bSmoothUniform = SmoothPin ? SmoothPin->bUniform : Input->PinName != FName(TEXT("Density"));
+    if (bSmooth && bSmoothUniform)
     {
         const int32 Expected = Input->PinName == FName(TEXT("Enabled")) ? int32(EVoxelLandBuiltinNode::BoolParameter) :
             int32(EVoxelLandBuiltinNode::FloatParameter);
@@ -297,8 +311,10 @@ const FPinConnectionResponse UVoxelLandEditorSchema::CanCreateConnection(const U
     FVoxelLandBuiltinNodeSpec NoiseSpec;
     if (ToNode && FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode(ToNode->Kind), NoiseSpec) && NoiseSpec.bNoise)
     {
-        const bool bUniform = Input->PinName == TEXT("Frequency") || Input->PinName == TEXT("Octaves") ||
-            Input->PinName == TEXT("Gain") || Input->PinName == TEXT("Lacunarity");
+        const bool bUniform = NoiseSpec.Pins.ContainsByPredicate([Input](const FVoxelLandBuiltinPinSpec& PinSpec)
+        {
+            return PinSpec.bUniform && FName(*PinSpec.Name) == Input->PinName;
+        });
         if (bUniform)
         {
             const int32 Expected = Input->PinType.PinCategory == TEXT("int") ? int32(EVoxelLandBuiltinNode::IntParameter) :

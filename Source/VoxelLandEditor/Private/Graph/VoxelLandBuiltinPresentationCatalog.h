@@ -7,6 +7,7 @@
 class FVoxelLandBuiltinPresentationCatalog
 {
 public:
+    static bool Validate(FString& OutError);
     static FText Title(EVoxelLandBuiltinNode Kind);
     static FText Description(EVoxelLandBuiltinNode Kind);
     static FText Category(EVoxelLandBuiltinNode Kind);

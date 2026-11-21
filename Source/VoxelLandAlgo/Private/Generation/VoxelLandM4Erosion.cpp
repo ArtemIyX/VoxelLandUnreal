@@ -2,11 +2,11 @@
 
 namespace
 {
-constexpr int64 MaxHeight = 512000000;
-constexpr int32 MaxCells = 1024;
-constexpr int64 MaxSamples = 1050625;
+constexpr int64 M4ErosionMaxHeight = 512000000;
+constexpr int32 M4ErosionMaxCells = 1024;
+constexpr int64 M4ErosionMaxSamples = 1050625;
 
-FVoxelLandError Fail(EVoxelLandErrorCode Code, const TCHAR* Message)
+FVoxelLandError M4ErosionFail(EVoxelLandErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandError Error;
 	Error.Code = Code;
@@ -14,15 +14,15 @@ FVoxelLandError Fail(EVoxelLandErrorCode Code, const TCHAR* Message)
 	return Error;
 }
 
-bool InRange(int64 Value)
+bool M4ErosionInRange(int64 Value)
 {
-	return Value >= -MaxHeight && Value <= MaxHeight;
+	return Value >= -M4ErosionMaxHeight && Value <= M4ErosionMaxHeight;
 }
 
 // All inputs are checked against the M4 limits before processing. With at most
 // 1,050,625 Q8 samples, height sums and the sum of four neighbor transfers fit
 // in int64. Hydraulic sediment is additionally bounded by capacity and slope.
-int32 LowestNeighbor(const TArray<int32>& Heights, int32 Width, int32 Height, int32 X, int32 Y)
+int32 M4ErosionLowestNeighbor(const TArray<int32>& Heights, int32 Width, int32 Height, int32 X, int32 Y)
 {
 	const int32 Current = Y * Width + X;
 	int32 Lowest = Current;
@@ -44,10 +44,10 @@ int32 LowestNeighbor(const TArray<int32>& Heights, int32 Width, int32 Height, in
 	return Lowest;
 }
 
-bool AddHeight(TArray<int32>& Heights, int32 Index, int64 Delta)
+bool M4ErosionAddHeight(TArray<int32>& Heights, int32 Index, int64 Delta)
 {
 	const int64 Result = int64(Heights[Index]) + Delta;
-	if (!InRange(Result))
+	if (!M4ErosionInRange(Result))
 	{
 		return false;
 	}
@@ -60,32 +60,32 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 	TConstArrayView<FIntPoint> DropletStarts, const FVoxelLandM4ErosionSettings& Settings, TArray<int32>& OutHeights,
 	TFunctionRef<bool()> IsCancelled)
 {
-	if (CellsX < 1 || CellsY < 1 || CellsX > MaxCells || CellsY > MaxCells || Settings.MaxSteps < 0
+	if (CellsX < 1 || CellsY < 1 || CellsX > M4ErosionMaxCells || CellsY > M4ErosionMaxCells || Settings.MaxSteps < 0
 		|| Settings.MaxSteps > 128 || Settings.ThermalIterations < 0 || Settings.ThermalIterations > 32
-		|| Settings.CapacityMaxQ8 < 0 || Settings.CapacityMaxQ8 > MaxHeight || Settings.TalusQ8 < 0
-		|| Settings.TalusQ8 > MaxHeight || Settings.MaxTransferQ8 < 0 || Settings.MaxTransferQ8 > MaxHeight
-		|| DropletStarts.Num() > 65536)
+		|| Settings.CapacityMaxQ8 < 0 || Settings.CapacityMaxQ8 > M4ErosionMaxHeight || Settings.TalusQ8 < 0
+		|| Settings.TalusQ8 > M4ErosionMaxHeight || Settings.MaxTransferQ8 < 0
+		|| Settings.MaxTransferQ8 > M4ErosionMaxHeight || DropletStarts.Num() > 65536)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 erosion dimensions or settings"));
+		return M4ErosionFail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 erosion dimensions or settings"));
 	}
 	const int32 Width = CellsX + 1;
 	const int32 Height = CellsY + 1;
 	const int64 Count = int64(Width) * Height;
-	if (Count > MaxSamples || Heights.Num() != Count)
+	if (Count > M4ErosionMaxSamples || Heights.Num() != Count)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 erosion sample count"));
+		return M4ErosionFail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 erosion sample count"));
 	}
 	for (int32 Y = 0; Y < Height; ++Y)
 	{
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+			return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 		}
 		for (int32 X = 0; X < Width; ++X)
 		{
-			if (!InRange(Heights[Y * Width + X]))
+			if (!M4ErosionInRange(Heights[Y * Width + X]))
 			{
-				return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height outside Q8 range"));
+				return M4ErosionFail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height outside Q8 range"));
 			}
 		}
 	}
@@ -93,16 +93,16 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 	{
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+			return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 		}
 		if (Start.X < 0 || Start.X > CellsX || Start.Y < 0 || Start.Y > CellsY)
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 droplet start outside grid"));
+			return M4ErosionFail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 droplet start outside grid"));
 		}
 	}
 	if (IsCancelled())
 	{
-		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+		return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 	}
 	TArray<int32> Working;
 	Working.Append(Heights.GetData(), Heights.Num());
@@ -110,7 +110,7 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 	{
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+			return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 		}
 		int32 Current = Start.Y * Width + Start.X;
 		int64 Sediment = 0;
@@ -118,9 +118,9 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 		{
 			if (IsCancelled())
 			{
-				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+				return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 			}
-			const int32 Next = LowestNeighbor(Working, Width, Height, Current % Width, Current / Width);
+			const int32 Next = M4ErosionLowestNeighbor(Working, Width, Height, Current % Width, Current / Width);
 			if (Next == Current)
 			{
 				break;
@@ -130,9 +130,9 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 			if (Sediment > Capacity)
 			{
 				const int64 Deposit = (Sediment - Capacity) / 2;
-				if (!AddHeight(Working, Current, Deposit))
+				if (!M4ErosionAddHeight(Working, Current, Deposit))
 				{
-					return Fail(
+					return M4ErosionFail(
 						EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 hydraulic deposit exceeds height range"));
 				}
 				Sediment -= Deposit;
@@ -141,18 +141,19 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 			{
 				const int64 Removed =
 					FMath::Min(FMath::Min((Capacity - Sediment) / 2, Settings.MaxTransferQ8), Slope / 4);
-				if (!AddHeight(Working, Current, -Removed))
+				if (!M4ErosionAddHeight(Working, Current, -Removed))
 				{
-					return Fail(
+					return M4ErosionFail(
 						EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 hydraulic erosion exceeds height range"));
 				}
 				Sediment += Removed;
 			}
 			Current = Next;
 		}
-		if (!AddHeight(Working, Current, Sediment))
+		if (!M4ErosionAddHeight(Working, Current, Sediment))
 		{
-			return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 terminal deposit exceeds height range"));
+			return M4ErosionFail(
+				EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 terminal deposit exceeds height range"));
 		}
 	}
 	TArray<int64> Delta;
@@ -167,12 +168,12 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 		{
 			if (IsCancelled())
 			{
-				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+				return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 			}
 			for (int32 X = 0; X < Width; ++X)
 			{
 				const int32 Current = Y * Width + X;
-				const int32 Next = LowestNeighbor(Working, Width, Height, X, Y);
+				const int32 Next = M4ErosionLowestNeighbor(Working, Width, Height, X, Y);
 				const int64 Difference = int64(Working[Current]) - Working[Next];
 				if (Difference > Settings.TalusQ8)
 				{
@@ -186,14 +187,14 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 		{
 			if (IsCancelled())
 			{
-				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+				return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 			}
 			for (int32 X = 0; X < Width; ++X)
 			{
 				const int32 Index = Y * Width + X;
-				if (!AddHeight(Working, Index, Delta[Index]))
+				if (!M4ErosionAddHeight(Working, Index, Delta[Index]))
 				{
-					return Fail(
+					return M4ErosionFail(
 						EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 thermal transfer exceeds height range"));
 				}
 			}
@@ -201,7 +202,7 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 	}
 	if (IsCancelled())
 	{
-		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
+		return M4ErosionFail(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion cancelled"));
 	}
 	OutHeights = MoveTemp(Working);
 	return {};

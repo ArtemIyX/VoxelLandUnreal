@@ -57,6 +57,7 @@ void UVoxelLandEditorSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeCo
         return;
     }
     FToolMenuSection& Section = Menu->AddSection(TEXT("VoxelLandEdit"), LOCTEXT("Edit", "Edit"));
+    Section.AddMenuEntry(FGenericCommands::Get().Cut);
     Section.AddMenuEntry(FGenericCommands::Get().Copy);
     Section.AddMenuEntry(FGenericCommands::Get().Duplicate);
     Section.AddMenuEntry(FGenericCommands::Get().Delete);

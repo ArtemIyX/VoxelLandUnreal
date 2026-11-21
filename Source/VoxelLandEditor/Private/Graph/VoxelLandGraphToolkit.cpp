@@ -36,6 +36,10 @@
 #include "Editor.h"
 #include "Framework/Commands/GenericCommands.h"
 #include "GraphEditor.h"
+#include "GraphEditorActions.h"
+#include "EdGraphNode_Comment.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Styling/AppStyle.h"
 #include "SGraphActionMenu.h"
 #include "IDetailsView.h"
 #include "PropertyEditorModule.h"
@@ -455,6 +459,7 @@ void FVoxelLandGraphToolkit::Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode:
             ->Split(FTabManager::NewStack()->SetSizeCoefficient(0.2f)->AddTab(DiagnosticsTab, ETabState::OpenedTab)));
     InitAssetEditor(Mode, Host, TEXT("VoxelLandGraphEditor"), Layout, true, true, Asset);
     bHasEditorWindow = true;
+    ExtendGraphToolbar();
     RegenerateMenusAndToolbars();
     RequestCompile();
 }
@@ -550,10 +555,7 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnGraph(const FSpawnTabArgs&)
     return SNew(SDockTab)[SNew(SVerticalBox)
         + SVerticalBox::Slot().AutoHeight()[SNew(SButton).Text(LOCTEXT("FrameSelection", "Frame selection")).OnClicked_Lambda([this]
         {
-            if (GraphWidget)
-            {
-                GraphWidget->ZoomToFit(true);
-            }
+            FrameSelection();
             return FReply::Handled();
         })]
         + SVerticalBox::Slot().FillHeight(1)[GraphWidget.ToSharedRef()]];
@@ -948,8 +950,11 @@ void FVoxelLandGraphToolkit::RequestCompile()
 }
 void FVoxelLandGraphToolkit::BindCommands()
 {
+    FGraphEditorCommands::Register();
     Commands = MakeShared<FUICommandList>();
     Commands->MapAction(FGenericCommands::Get().Delete, FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::DeleteSelected));
+    Commands->MapAction(FGenericCommands::Get().Cut, FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::CutSelected));
+    Commands->MapAction(FGraphEditorCommands::Get().CreateComment, FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::CreateComment));
     Commands->MapAction(FGenericCommands::Get().Copy, FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::CopySelected));
     Commands->MapAction(FGenericCommands::Get().Paste, FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::PasteNodes));
     Commands->MapAction(FGenericCommands::Get().Duplicate, FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::DuplicateSelected));
@@ -981,9 +986,96 @@ void FVoxelLandGraphToolkit::CopySelected()
     {
         return;
     }
+    FGraphPanelSelectionSet Copyable;
+    for (UObject* Object : GraphWidget->GetSelectedNodes())
+    {
+        UEdGraphNode* Node = Cast<UEdGraphNode>(Object);
+        if (Node && Node->CanDuplicateNode())
+        {
+            Copyable.Add(Node);
+        }
+    }
+    if (!Copyable.IsEmpty())
+    {
+        FString Exported;
+        FEdGraphUtilities::ExportNodesToText(Copyable, Exported);
+        FPlatformApplicationMisc::ClipboardCopy(*Exported);
+    }
+}
+void FVoxelLandGraphToolkit::CutSelected()
+{
+    if (!GraphWidget || !Graph)
+    {
+        return;
+    }
+    FGraphPanelSelectionSet Cuttable;
+    for (UObject* Object : GraphWidget->GetSelectedNodes())
+    {
+        UEdGraphNode* Node = Cast<UEdGraphNode>(Object);
+        if (Node && Node->CanUserDeleteNode() && Node->CanDuplicateNode())
+        {
+            Cuttable.Add(Node);
+        }
+    }
+    if (Cuttable.IsEmpty())
+    {
+        return;
+    }
     FString Exported;
-    FEdGraphUtilities::ExportNodesToText(GraphWidget->GetSelectedNodes(), Exported);
+    FEdGraphUtilities::ExportNodesToText(Cuttable, Exported);
+    if (Exported.IsEmpty())
+    {
+        return;
+    }
     FPlatformApplicationMisc::ClipboardCopy(*Exported);
+    const FScopedTransaction Transaction(LOCTEXT("Cut", "Cut graph nodes"));
+    Graph->Modify();
+    for (UObject* Object : Cuttable)
+    {
+        UEdGraphNode* Node = CastChecked<UEdGraphNode>(Object);
+        GraphWidget->SetNodeSelection(Node, false);
+        Node->Modify();
+        Node->DestroyNode();
+    }
+    Graph->NotifyGraphChanged();
+}
+void FVoxelLandGraphToolkit::CreateComment()
+{
+    if (!GraphWidget || !Graph)
+    {
+        return;
+    }
+    UEdGraphNode_Comment* Template = NewObject<UEdGraphNode_Comment>();
+    FSlateRect Bounds;
+    FVector2f Location = GraphWidget->GetPasteLocation2f();
+    if (GraphWidget->GetBoundsForSelectedNodes(Bounds, 50.0f))
+    {
+        Template->SetBounds(Bounds);
+        Location = FVector2f(Template->NodePosX, Template->NodePosY);
+    }
+    FEdGraphSchemaAction_NewNode::SpawnNodeFromTemplate<UEdGraphNode_Comment>(Graph, Template, Location);
+}
+void FVoxelLandGraphToolkit::FrameSelection()
+{
+    if (GraphWidget)
+    {
+        GraphWidget->ZoomToFit(true);
+    }
+}
+void FVoxelLandGraphToolkit::ExtendGraphToolbar()
+{
+    TSharedPtr<FExtender> Extender = MakeShared<FExtender>();
+    const FUIAction CompileAction(FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::RequestCompile));
+    const FUIAction FrameAction(FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::FrameSelection));
+    Extender->AddToolBarExtension("Asset", EExtensionHook::After, GetToolkitCommands(),
+        FToolBarExtensionDelegate::CreateLambda([CompileAction, FrameAction](FToolBarBuilder& Builder)
+        {
+            Builder.AddToolBarButton(CompileAction, NAME_None, LOCTEXT("ToolbarCompile", "Compile"),
+                LOCTEXT("ToolbarCompileTip", "Compile the terrain graph."), FSlateIcon(FAppStyle::GetAppStyleSetName(), "AssetEditor.CompileStatus.Background"));
+            Builder.AddToolBarButton(FrameAction, NAME_None, LOCTEXT("ToolbarFrame", "Frame selection"),
+                LOCTEXT("ToolbarFrameTip", "Frame selected graph nodes."), FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.FrameActor"));
+        }));
+    AddToolbarExtender(Extender);
 }
 void FVoxelLandGraphToolkit::PasteNodes()
 {
@@ -1025,8 +1117,20 @@ void FVoxelLandGraphToolkit::PasteNodes()
 }
 void FVoxelLandGraphToolkit::DuplicateSelected()
 {
-    CopySelected();
-    PasteNodes();
+    if (!GraphWidget)
+    {
+        return;
+    }
+    for (UObject* Object : GraphWidget->GetSelectedNodes())
+    {
+        const UEdGraphNode* Node = Cast<UEdGraphNode>(Object);
+        if (Node && Node->CanDuplicateNode())
+        {
+            CopySelected();
+            PasteNodes();
+            return;
+        }
+    }
 }
 
 

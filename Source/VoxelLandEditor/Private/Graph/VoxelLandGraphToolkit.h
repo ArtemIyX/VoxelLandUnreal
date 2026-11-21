@@ -116,6 +116,10 @@ private:
     void BindCommands();
     void DeleteSelected();
     void CopySelected();
+    void CutSelected();
+    void CreateComment();
+    void FrameSelection();
+    void ExtendGraphToolbar();
     void PasteNodes();
     void DuplicateSelected();
     FReply CompileClicked();

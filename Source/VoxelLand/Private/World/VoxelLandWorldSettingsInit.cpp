@@ -5,11 +5,26 @@
 #include "Data/Structs/VoxelLandReloadTestBarrier.h"
 #endif
 #include "Data/Assets/VoxelLandMaterialSetup.h"
+#include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
+#include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/Structs/VoxelLandM4OverhangConfig.h"
 #include "Data/Structs/VoxelLandWorldState.h"
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM4ControlPipeline.h"
+#include "Generation/VoxelLandM4ControlGrid.h"
+#include "Generation/VoxelLandM4CurveBake.h"
+#include "Generation/VoxelLandM4GridLease.h"
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeLock.h"
+#include "Modules/ModuleManager.h"
+#if PLATFORM_WINDOWS
+#include "Windows/WindowsHWrapper.h"
+#endif
 #include "Graph/VoxelLandProgramCodec.h"
 #if WITH_EDITOR
 #include "UObject/PackageReload.h"
@@ -21,6 +36,9 @@
 
 namespace
 {
+#if !UE_SERVER
+UMaterialInterface* ResolveM4TerrainMaterial(const UVoxelLandM4WorldConfig& Settings);
+#endif
 void CopyOverrides(const UVoxelLandWorldSettings& Settings, const FVoxelLandSerializedProgram& Payload,
     FVoxelLandZoneProfile& Profile)
 {
@@ -67,7 +85,27 @@ bool OverridesEqual(const TArray<FVoxelLandParameterOverride>& A, const TArray<F
     return true;
 }
 
-class FSettingsInitializationRequest
+class FInitializationRequest
+{
+public:
+	virtual ~FInitializationRequest() = default;
+	virtual bool IsCurrent() const = 0;
+	virtual void PreparePresentation(AVoxelLandWorld&) const {}
+	virtual bool PublishStartup(AVoxelLandWorld&) const { return true; }
+#if WITH_EDITOR
+	virtual bool References(const UObject* Object) const = 0;
+	virtual bool ReferencesPackage(const UPackage* Package) const = 0;
+#endif
+	virtual void Run(const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+		,
+		const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>& Barrier
+#endif
+	) const = 0;
+};
+
+class FSettingsInitializationRequest final : public FInitializationRequest
 {
 public:
     FSettingsInitializationRequest(UVoxelLandWorldSettings& Settings, FVoxelLandGraphSnapshot&& InSnapshot,
@@ -144,6 +182,393 @@ private:
     int32 VerticalRadius;
 };
 
+// The process-wide limit is deliberately conservative: each admitted M4 world
+// reserves the full 128 MiB prepass bound for as long as any grid reader lives.
+// No sharing or cache reuse is claimed. Reducing the cvar never evicts readers;
+// it only prevents new reservations. The state outlives module static teardown.
+TAutoConsoleVariable<int32> CVarVoxelLandM4BudgetMiB(TEXT("voxel.M4.PrepassBudgetMiB"), 256,
+	TEXT("Process-wide M4 prepass/grid reservation budget in MiB."), ECVF_Default);
+struct FM4BudgetState
+{
+	FCriticalSection Mutex;
+	int64 Reserved = 0;
+	void* RuntimeHandle = nullptr;
+	void* AlgoHandle = nullptr;
+};
+FM4BudgetState& M4BudgetState()
+{
+	static FM4BudgetState* State = new FM4BudgetState();
+	return *State;
+}
+class FM4GridReservation final : public FVoxelLandM4GridLease
+{
+public:
+	static constexpr int64 Bytes = 128ll * 1024 * 1024;
+	~FM4GridReservation() override
+	{
+		FM4BudgetState& State = M4BudgetState();
+		FScopeLock Lock(&State.Mutex);
+		State.Reserved -= Bytes;
+	}
+};
+#if !IS_MONOLITHIC
+void* PinM4Module(const FName Name)
+{
+	if (!FModuleManager::Get().IsModuleLoaded(Name))
+	{
+		return nullptr;
+	}
+	const FString Filename = FModuleManager::Get().GetModuleFilename(Name);
+	if (Filename.IsEmpty())
+	{
+		return nullptr;
+	}
+#if PLATFORM_WINDOWS
+	const FString Absolute = FPaths::ConvertRelativePathToFull(Filename);
+	return reinterpret_cast<void*>(::LoadLibraryW(*Absolute));
+#elif PLATFORM_LINUX
+	return FPlatformProcess::GetDllHandle(*Filename);
+#else
+	return nullptr;
+#endif
+}
+#endif
+TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ReserveM4Budget()
+{
+	FM4BudgetState& State = M4BudgetState();
+	FScopeLock Lock(&State.Mutex);
+	const int64 Limit = int64(FMath::Max(0, CVarVoxelLandM4BudgetMiB.GetValueOnAnyThread())) * 1024 * 1024;
+	if (State.Reserved > Limit || FM4GridReservation::Bytes > Limit - State.Reserved)
+	{
+		return nullptr;
+	}
+#if !IS_MONOLITHIC
+	if (!State.RuntimeHandle || !State.AlgoHandle)
+	{
+		void* Runtime = PinM4Module(TEXT("VoxelLand"));
+		void* Algo = PinM4Module(TEXT("VoxelLandAlgo"));
+		if (!Runtime || !Algo)
+		{
+			if (Runtime)
+			{
+				FPlatformProcess::FreeDllHandle(Runtime);
+			}
+			if (Algo)
+			{
+				FPlatformProcess::FreeDllHandle(Algo);
+			}
+			return nullptr;
+		}
+		// Keep both references until process exit: the last immutable grid and
+		// its reservation can be released on any thread after world shutdown.
+		State.RuntimeHandle = Runtime;
+		State.AlgoHandle = Algo;
+	}
+#endif
+	State.Reserved += FM4GridReservation::Bytes;
+	return MakeShared<FM4GridReservation, ESPMode::ThreadSafe>();
+}
+
+void CopyM4Overrides(const FVoxelLandM4ControlSnapshot& Channel, int32 VoxelSizeCm, FVoxelLandZoneProfile& Profile)
+{
+	Profile.VoxelSizeCm = float(VoxelSizeCm);
+	for (const FVoxelLandParameterOverride& Override : Channel.Overrides)
+	{
+		const FVoxelLandSerializedParameter* Parameter =
+			Channel.Payload.Parameters.FindByPredicate([&Override](const FVoxelLandSerializedParameter& Candidate) {
+				return Candidate.Id == Override.ParameterId;
+			});
+		if (!Parameter)
+		{
+			continue;
+		}
+		switch (Override.Type)
+		{
+			case EVoxelLandGraphValueType::Float:
+				Profile.FloatOverrides.Add(Parameter->Name, Override.FloatValue);
+				break;
+			case EVoxelLandGraphValueType::Int32:
+				Profile.IntOverrides.Add(Parameter->Name, Override.IntValue);
+				break;
+			case EVoxelLandGraphValueType::Bool:
+				Profile.BoolOverrides.Add(Parameter->Name, Override.BoolValue);
+				break;
+		}
+	}
+}
+
+template <typename T> bool M4StructArraysEqual(const TArray<T>& Left, const TArray<T>& Right)
+{
+	if (Left.Num() != Right.Num())
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < Left.Num(); ++Index)
+	{
+		if (!T::StaticStruct()->CompareScriptStruct(&Left[Index], &Right[Index], 0))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool M4SourcesEqual(const FVoxelLandGraphSnapshot& A, const FVoxelLandGraphSnapshot& B)
+{
+	if (A.SourceVersion != B.SourceVersion || !M4StructArraysEqual(A.Parameters, B.Parameters)
+		|| !M4StructArraysEqual(A.Nodes, B.Nodes) || !M4StructArraysEqual(A.Links, B.Links)
+		|| A.Functions.Num() != B.Functions.Num())
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < A.Functions.Num(); ++Index)
+	{
+		const FVoxelLandGraphFunctionSnapshot& Left = A.Functions[Index];
+		const FVoxelLandGraphFunctionSnapshot& Right = B.Functions[Index];
+		if (Left.AssetPath != Right.AssetPath || Left.SourceVersion != Right.SourceVersion
+			|| Left.OutputType != Right.OutputType || Left.OutputNode != Right.OutputNode
+			|| Left.OutputPin != Right.OutputPin || !M4StructArraysEqual(Left.Inputs, Right.Inputs)
+			|| !M4StructArraysEqual(Left.Nodes, Right.Nodes) || !M4StructArraysEqual(Left.Links, Right.Links))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+class FM4InitializationRequest final : public FInitializationRequest
+{
+public:
+	FM4InitializationRequest(UVoxelLandM4WorldConfig& Config, FVoxelLandM4WorldSnapshot&& InSnapshot,
+		FIntVector InStartup, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InLease)
+		: WeakConfig(&Config)
+		, Continental(Config.Continental.Graph)
+		, Mountain(Config.Mountain.Graph)
+		, Peaks(Config.Peaks.Graph)
+		, Snapshot(MoveTemp(InSnapshot))
+		, Startup(InStartup)
+		, Lease(MoveTemp(InLease))
+	{
+	}
+
+	bool IsCurrent() const override
+	{
+		UVoxelLandM4WorldConfig* Config = WeakConfig.Get();
+		if (!Config || Config->Continental.Graph != Continental.Get() || Config->Mountain.Graph != Mountain.Get()
+			|| Config->Peaks.Graph != Peaks.Get() || !Config->MatchesSnapshot(Snapshot))
+		{
+			return false;
+		}
+		FVoxelLandM4WorldSnapshot Current;
+		FString Error;
+		if (!Config->CaptureSnapshot(Current, Error))
+		{
+			return false;
+		}
+		const FVoxelLandM4ControlSnapshot* Old[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
+		const FVoxelLandM4ControlSnapshot* New[] = {&Current.Continental, &Current.Mountain, &Current.Peaks};
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			if (!M4SourcesEqual(Old[Index]->Source, New[Index]->Source)
+				|| !FVoxelLandSerializedProgram::StaticStruct()->CompareScriptStruct(
+					&Old[Index]->Payload, &New[Index]->Payload, 0))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool PublishStartup(AVoxelLandWorld& World) const override
+	{
+		FVoxelLandChunkKey Key;
+		Key.Coordinate = Startup;
+		return World.RequestChunk(Key);
+	}
+
+	void PreparePresentation(AVoxelLandWorld& World) const override
+	{
+#if !UE_SERVER
+		if (!World.bDataOnly && World.GetNetMode() != NM_DedicatedServer)
+		{
+			if (const UVoxelLandM4WorldConfig* Config = WeakConfig.Get())
+			{
+				World.SetTerrainMaterial(ResolveM4TerrainMaterial(*Config));
+			}
+		}
+#endif
+	}
+
+#if WITH_EDITOR
+	bool References(const UObject* Object) const override
+	{
+		return Object == WeakConfig.Get() || Object == Continental.Get() || Object == Mountain.Get()
+			|| Object == Peaks.Get();
+	}
+	bool ReferencesPackage(const UPackage* Package) const override
+	{
+		const UObject* Objects[] = {WeakConfig.Get(), Continental.Get(), Mountain.Get(), Peaks.Get()};
+		for (const UObject* Object : Objects)
+		{
+			if (Object && Object->GetOutermost() == Package)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+#endif
+
+	void Run(const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+		,
+		const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>& Barrier
+#endif
+	) const override
+	{
+		const FVoxelLandM4ControlSnapshot* Channels[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Programs[3];
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generators[3];
+		TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> Curves[3];
+		TUniquePtr<FVoxelLandWorkerContext> Workers[3];
+		FVoxelLandZoneProfile Profiles[3];
+		// Stable channel namespaces keep reused graphs independent. Version 1.
+		const FGuid ChannelIds[] = {FGuid(0x564c4d34, 0x434f4e54, 1, 1), FGuid(0x564c4d34, 0x4d4f554e, 1, 1),
+			FGuid(0x564c4d34, 0x5045414b, 1, 1)};
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			if (Cancel->Load()
+				|| !FVoxelLandProgramCodec::Load(
+					Channels[Index]->Source, Channels[Index]->Payload, Programs[Index], OutError)
+				|| Cancel->Load())
+			{
+				return;
+			}
+			// Reject unsupported external workers, filters and 3D operations
+			// before allocating any worker-local backend resources.
+			if (const FVoxelLandError Failure = VoxelLandM4ControlGrid::ValidateProgram(*Programs[Index]))
+			{
+				OutError = Failure.Message;
+				return;
+			}
+			CopyM4Overrides(*Channels[Index], Snapshot.VoxelSizeCm, Profiles[Index]);
+			FVoxelLandGeneratorSettings Settings;
+			Settings.Program = Programs[Index];
+			Settings.WorldSeed = VoxelLandDeterminism::DeriveNodeSeed(uint64(Snapshot.Seed), ChannelIds[Index], 0);
+			Settings.Profile = Profiles[Index];
+			if (const FVoxelLandError Failure = FVoxelLandGenerator::Create(Settings, Generators[Index]))
+			{
+				OutError = Failure.Message;
+				return;
+			}
+			TArray<FVoxelLandM4CurveKey> Keys;
+			Keys.Reserve(Channels[Index]->CurveKeys.Num());
+			for (const FVoxelLandM4CurveAuthoringKey& Key : Channels[Index]->CurveKeys)
+			{
+				FVoxelLandM4CurveKey& Baked = Keys.AddDefaulted_GetRef();
+				Baked.InputQ16 = uint16(Key.InputQ16);
+				Baked.Output = Key.OutputQ8;
+			}
+			TArray<int32> Baked;
+			if (!VoxelLandM4CurveBake::Bake(Keys, -512000000, 512000000, Baked, Curves[Index], OutError))
+			{
+				return;
+			}
+			if (const FVoxelLandError Failure = Generators[Index]->CreateWorker(Workers[Index]))
+			{
+				OutError = Failure.Message;
+				return;
+			}
+		}
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+		if (Barrier)
+		{
+			Barrier->WaitForCancellation(Cancel);
+			if (Cancel->Load())
+			{
+				return;
+			}
+		}
+#endif
+		auto IsCancelled = [&Cancel]() {
+			return Cancel->Load();
+		};
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
+		uint64 GridHash = 0;
+		if (const FVoxelLandError Failure =
+				VoxelLandM4ControlPipeline::Generate(Snapshot.Domain, *Generators[0], *Workers[0], *Curves[0],
+					*Generators[1], *Workers[1], *Curves[1], *Generators[2], *Workers[2], *Curves[2],
+					Snapshot.BaseHeightQ8, uint64(Snapshot.Seed), Snapshot.ErosionStageId, uint32(Snapshot.ErosionSalt),
+					Snapshot.DropletCount, Snapshot.Erosion, Grid, GridHash, IsCancelled, Lease))
+		{
+			OutError = Failure.Message;
+			return;
+		}
+		if (Cancel->Load())
+		{
+			return;
+		}
+		FVoxelLandM4OverhangConfig Overhang;
+		Overhang.Displacement.bEnabled = Snapshot.bOverhangEnabled;
+		Overhang.Displacement.AmplitudeQ8 = Snapshot.OverhangAmplitudeQ8;
+		Overhang.Displacement.BandHalfWidthQ8 = Snapshot.OverhangBandQ8;
+		Overhang.FrequencyPerCm = Snapshot.OverhangFrequencyPerCm;
+		Overhang.NodeId = Snapshot.OverhangNodeId;
+		Overhang.Salt = uint32(Snapshot.OverhangSalt);
+		FVoxelLandGeneratorSettings FinalSettings;
+		FinalSettings.Program = Programs[0];
+		FinalSettings.WorldSeed = uint64(Snapshot.Seed);
+		FinalSettings.Profile = Profiles[0];
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+		if (const FVoxelLandError Failure = FVoxelLandGenerator::CreateM4HeightField(
+				FinalSettings, Grid, Snapshot.bNormalizeSlope, Overhang, Result))
+		{
+			OutError = Failure.Message;
+			return;
+		}
+		// Validate the entire requested startup bubble before publishing the generator.
+		for (int32 Z = -Snapshot.VerticalRadius; Z <= Snapshot.VerticalRadius; ++Z)
+		{
+			for (int32 Y = -Snapshot.HorizontalRadius; Y <= Snapshot.HorizontalRadius; ++Y)
+			{
+				for (int32 X = -Snapshot.HorizontalRadius; X <= Snapshot.HorizontalRadius; ++X)
+				{
+					if (Cancel->Load())
+					{
+						return;
+					}
+					const int64 CX = int64(Startup.X) + X, CY = int64(Startup.Y) + Y, CZ = int64(Startup.Z) + Z;
+					if (CX < MIN_int32 || CX > MAX_int32 || CY < MIN_int32 || CY > MAX_int32 || CZ < MIN_int32
+						|| CZ > MAX_int32)
+					{
+						OutError = TEXT("M4 startup demand coordinate overflows");
+						return;
+					}
+					FVoxelLandChunkKey Key;
+					Key.Coordinate = FIntVector(int32(CX), int32(CY), int32(CZ));
+					if (const FVoxelLandError Failure = Result->ValidateM4ChunkDemand(Key))
+					{
+						OutError = FString::Printf(TEXT("M4 startup demand is invalid: %s"), *Failure.Message);
+						return;
+					}
+				}
+			}
+		}
+		if (!Cancel->Load())
+		{
+			OutGenerator = MoveTemp(Result);
+		}
+	}
+
+private:
+	TWeakObjectPtr<UVoxelLandM4WorldConfig> WeakConfig;
+	TWeakObjectPtr<UVoxelLandTerrainGraph> Continental, Mountain, Peaks;
+	FVoxelLandM4WorldSnapshot Snapshot;
+	FIntVector Startup;
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
+};
+
 #if !UE_SERVER
 UMaterialInterface* ResolveTerrainMaterial(const UVoxelLandWorldSettings& Settings)
 {
@@ -156,18 +581,31 @@ UMaterialInterface* ResolveTerrainMaterial(const UVoxelLandWorldSettings& Settin
     }
     return Material;
 }
+UMaterialInterface* ResolveM4TerrainMaterial(const UVoxelLandM4WorldConfig& Settings)
+{
+	const UVoxelLandMaterialSetup* Setup = Settings.MaterialSetup.LoadSynchronous();
+	UMaterialInterface* Material = Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr;
+	if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("VoxelLand: missing or unsupported terrain material; using the default surface material"));
+		return UMaterial::GetDefaultMaterial(MD_Surface);
+	}
+	return Material;
+}
 #endif
 }
 
 class FVoxelLandInitializationJob
 {
 public:
-    explicit FVoxelLandInitializationJob(const TSharedRef<FSettingsInitializationRequest, ESPMode::ThreadSafe>& InRequest)
-        : Request(InRequest), Cancel(MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false))
-    {
+	explicit FVoxelLandInitializationJob(const TSharedRef<FInitializationRequest, ESPMode::ThreadSafe>& InRequest)
+		: Request(InRequest)
+		, Cancel(MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false))
+	{
     }
-    TSharedRef<FSettingsInitializationRequest, ESPMode::ThreadSafe> Request;
-    TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Cancel;
+	TSharedRef<FInitializationRequest, ESPMode::ThreadSafe> Request;
+	TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Cancel;
     TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
     FString Error;
 };
@@ -235,6 +673,68 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
     return true;
 }
 
+bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk)
+{
+	check(IsInGameThread());
+	UWorld* World = GetWorld();
+	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
+		|| World->bIsTearingDown || !HasActorBegunPlay())
+	{
+		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
+		return false;
+	}
+	Shutdown();
+	LastInitializationError.Reset();
+	if (!Settings)
+	{
+		LastInitializationError = TEXT("M4 world settings are missing");
+		return false;
+	}
+	// Reserve before capturing potentially large graph snapshots or launching work.
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = ReserveM4Budget();
+	if (!Lease)
+	{
+		LastInitializationError = TEXT("M4 prepass process budget is exhausted");
+		return false;
+	}
+	FVoxelLandM4WorldSnapshot Snapshot;
+	if (!Settings->CaptureSnapshot(Snapshot, LastInitializationError))
+	{
+		return false;
+	}
+	HorizontalRadius = Snapshot.HorizontalRadius;
+	VerticalRadius = Snapshot.VerticalRadius;
+	const TSharedRef<FM4InitializationRequest, ESPMode::ThreadSafe> Request =
+		MakeShared<FM4InitializationRequest, ESPMode::ThreadSafe>(
+			*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease));
+	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
+		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
+	PendingInitialization = Job;
+#if WITH_EDITOR
+	InitPackageReloadHandle =
+		FCoreUObjectDelegates::OnPackageReloaded.AddUObject(this, &AVoxelLandWorld::HandleInitPackageReload);
+	InitObjectsReplacedHandle =
+		FCoreUObjectDelegates::OnObjectsReplaced.AddUObject(this, &AVoxelLandWorld::HandleInitObjectsReplaced);
+#endif
+	bInitializing = true;
+	SetActorTickEnabled(true);
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+	const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MoveTemp(InitReloadBarrierForTests);
+	InitializationTask = Async(EAsyncExecution::ThreadPool, [Job, Barrier]()
+#else
+	InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
+#endif
+		{
+			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+				,
+				Barrier
+#endif
+			);
+		});
+	return true;
+}
+
 void AVoxelLandWorld::StopPendingInitialization()
 {
 #if WITH_EDITOR
@@ -284,9 +784,21 @@ void AVoxelLandWorld::PollInitialization()
         OnInitializationFinished.Broadcast(false);
         return;
     }
-    Initialize(Job->Generator);
-    if (!State || State->Threads.IsEmpty())
-    {
+	const uint64 PresentationEpoch = ConfigurationEpoch;
+	Job->Request->PreparePresentation(*this);
+	// Material resolution can synchronously load an asset and dispatch engine
+	// callbacks. Recheck the source and actor after that potential reentry.
+	if (ConfigurationEpoch != PresentationEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+		|| GetWorld()->bIsTearingDown || !Job->Request->IsCurrent())
+	{
+		LastInitializationError = TEXT("Initialization result was superseded during presentation setup");
+		SetActorTickEnabled(false);
+		OnInitializationFinished.Broadcast(false);
+		return;
+	}
+	Initialize(Job->Generator);
+	if (!State || State->Threads.IsEmpty() || !Job->Request->PublishStartup(*this))
+	{
         Shutdown();
         LastInitializationError = TEXT("Unable to start terrain workers");
         OnInitializationFinished.Broadcast(false);

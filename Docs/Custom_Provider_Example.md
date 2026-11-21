@@ -1,0 +1,26 @@
+# Native provider example
+
+`Examples/VoxelLandSampleProvider` is an optional, separate plugin showing the ABI 2 native operator interface. It is outside the project's `Plugins` scan directory and its descriptor is disabled by default. It does not install itself or modify the project. The example has not been built or tested as part of this change.
+
+## Install and use
+
+1. Copy the entire `VoxelLandSampleProvider` directory into your project's `Plugins` directory. Keep VoxelLand and its dependencies available in the project.
+2. Enable **VoxelLand Sample Provider** in the project plugin settings or explicitly in the project descriptor, then regenerate project files and build the appropriate targets. The sample has one runtime module and a separate editor module; the runtime module has no editor or rendering dependency.
+3. Open a terrain graph and search for **Double** under **Sample provider**. Connect a float value and use the float result. It computes `Value * 2`; non-finite output is an evaluation error. The operator has empty configuration and does not use its seed. Save/recompile dependent graphs after changing providers as needed.
+4. Before disabling or replacing the provider, stop generation and release programs, snapshots and workers that retain it. Both example modules opt out of dynamic reload; restart the process when replacing their code. A graph referring to a missing provider or incompatible version fails explicitly during compilation or runtime initialization; disabling the plugin does not turn that node into a built-in or silently preserve execution.
+
+No packaged, dedicated-server, Linux, plugin-unload, or third-party compatibility run is claimed for this sample. Verify the targets and workflows you intend to ship, including a cook and load with the provider enabled, missing/version-mismatch rejection, and clean shutdown after workers are drained. Native FastNoise has its own platform requirements; this sample does not change them.
+
+## Adapt the provider
+
+Generate a new globally unique GUID for your operator. The example's GUID and version 1 identify its exact float-to-float, empty-configuration behavior; do not reuse that identity for a different provider. Keep old versions available when existing saved programs require them, or migrate and recompile affected assets deliberately. Canonical configuration bytes, signature, stage and version are part of the compatibility contract.
+
+The runtime module depends on `VoxelLandAlgo` and `VoxelLandData`. It registers a thread-safe immutable `IVoxelLandOperator` with `RegisterV2`, passing its owning module name and `FVoxelLandOperatorRegistry::ProviderAbiVersion`. ABI 2 uses the checked `FVoxelLandOperatorOutput` writer. The sample validates an empty configuration, reports a conservative worker allocation bound and creates worker state on the calling worker. A worker may read only its provided inputs, configuration and seed; it must be deterministic and independent of call history, chunk order and mutable UObject state. Write every output lane exactly once using the matching typed writer, detect invalid domains and propagate failures. Do not retain input/output views beyond a call. The sample uses scalar execution only; optional SIMD requires scalar-equivalent behavior and the runtime's fallback contract.
+
+The editor-only module depends on `VoxelLandEditor` and the runtime module. Its presentation has the same GUID, version, ordered types, stage-compatible output and validated default configuration as the provider. ABI 2 graph providers support one to three inputs and one output, with float, int32 or bool types. Register the presentation on the game thread after the provider; unregister it during editor module shutdown. The runtime provider unregisters in its own shutdown. Unregister can fail while compiled programs or workers hold a lease: keep its binary resident and do not rely on destructible module globals in provider/worker code. The example logs registration and unregister failures.
+
+See [M3_Operators.md](M3_Operators.md) for provider lifetime, SIMD, filter-stage and platform details. A one-cell filter has a different halo and cancellation contract; this scalar sample is not a filter example.
+
+## Adding a built-in node
+
+For a built-in rather than a separate provider, coordinate a stable, unused `EVoxelLandBuiltinNode` numeric ID. Never renumber or reuse existing IDs. Define the runtime pin contract, defaults, typed dispatch and any noise dimensions in `FVoxelLandBuiltinCatalog`; add editor titles, category, colors and pin presentation in `FVoxelLandBuiltinPresentationCatalog`. Implement compiler lowering, validation and an actual VM operation where required; a catalog entry alone does not make a working node. Preserve serialized opcode values, version/fingerprint behavior and graph compatibility, and ensure invalid math domains fail explicitly. Keep authoring UObjects and editor presentation out of runtime/worker data. Audit scalar and optional SIMD semantics, seed derivation, cancellation, filter halo and headless execution where applicable. Add focused automation and exercise save/reopen, cook/load, runtime and relevant target platforms before calling the node complete. Do not expose an entry until its end-to-end implementation is available.

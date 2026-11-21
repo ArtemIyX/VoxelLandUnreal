@@ -1,0 +1,15 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0",
+  "FriendlyName": "VoxelLand Sample Provider",
+  "Description": "Optional example of a separate native VoxelLand operator provider.",
+  "Category": "Examples",
+  "EnabledByDefault": false,
+  "CanContainContent": false,
+  "Plugins": [{ "Name": "VoxelLand", "Enabled": true }],
+  "Modules": [
+    { "Name": "VoxelLandSampleProvider", "Type": "Runtime", "LoadingPhase": "Default" },
+    { "Name": "VoxelLandSampleProviderEditor", "Type": "Editor", "LoadingPhase": "Default" }
+  ]
+}

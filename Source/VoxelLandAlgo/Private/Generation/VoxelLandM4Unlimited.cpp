@@ -27,7 +27,7 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	const FVoxelLandGenerator& PeaksGenerator, FVoxelLandWorkerContext& PeaksWorker,
 	const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
-	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride)
+	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail)
 {
 	if (Key.LOD != 0)
 	{
@@ -99,10 +99,10 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 	const FVoxelLandError CreateError =
-		SmoothOverride.IsSet()
-			? FVoxelLandGenerator::CreateM4HeightField(
-				  FinalSettings, Grid, bNormalizeSlope, Overhang, SmoothOverride.GetValue(), Generator)
-			: FVoxelLandGenerator::CreateM4HeightField(FinalSettings, Grid, bNormalizeSlope, Overhang, Generator);
+		SmoothOverride.IsSet() ? FVoxelLandGenerator::CreateM4HeightField(FinalSettings, Grid, bNormalizeSlope,
+									 Overhang, SmoothOverride.GetValue(), HeightDetail, Generator)
+							   : FVoxelLandGenerator::CreateM4HeightField(
+									 FinalSettings, Grid, bNormalizeSlope, Overhang, HeightDetail, Generator);
 	if (CreateError)
 	{
 		return CreateError;

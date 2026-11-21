@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "Data/Structs/VoxelLandM4ControlConfig.h"
+#include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 #include "VoxelLandM4WorldConfig.generated.h"
 
 class UVoxelLandMaterialSetup;
@@ -57,6 +58,8 @@ public:
 	bool bSmoothEnabled = false;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Smooth", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SmoothStrength = 0.5f;
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Height Detail")
+	FVoxelLandM4HeightDetailConfig HeightDetail;
 	// Unlimited mode evaluates controls per chunk and requires global erosion off.
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")
 	bool bUnlimited = false;

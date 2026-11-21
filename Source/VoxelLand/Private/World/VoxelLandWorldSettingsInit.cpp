@@ -788,6 +788,7 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		Unlimited.bNormalizeSlope = Snapshot.bNormalizeSlope;
 		Unlimited.Overhang = Overhang;
 		Unlimited.SmoothOverride = Snapshot.Smooth;
+		Unlimited.HeightDetail = Snapshot.HeightDetail;
 		if (const FVoxelLandError Failure = FVoxelLandGenerator::CreateM4Unlimited(FinalSettings, Unlimited, Result))
 		{
 			OutError = Failure.Message;
@@ -919,8 +920,8 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		{
 			return false;
 		}
-		if (const FVoxelLandError Failure = FVoxelLandGenerator::CreateM4HeightField(
-				FinalSettings, Grid, Snapshot.bNormalizeSlope, Overhang, Snapshot.Smooth, Result))
+		if (const FVoxelLandError Failure = FVoxelLandGenerator::CreateM4HeightField(FinalSettings, Grid,
+				Snapshot.bNormalizeSlope, Overhang, Snapshot.Smooth, Snapshot.HeightDetail, Result))
 		{
 			OutError = Failure.Message;
 			return false;

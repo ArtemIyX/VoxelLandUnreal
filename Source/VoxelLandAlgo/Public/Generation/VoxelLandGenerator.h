@@ -9,6 +9,7 @@
 #include "Data/Structs/VoxelLandZoneProfile.h"
 #include "Generation/VoxelLandGeneratorSettings.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
+#include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 
 class IVoxelLandOperator;
 class FVoxelLandOperatorRegistrySnapshot;
@@ -46,8 +47,8 @@ public:
 	static FVoxelLandError Create(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	// Transitional explicit height-field source. The VM's pure code is not run;
-	// only its optional built-in Smooth Density stage is retained. External operators and filters,
-	// height detail and overhangs are not supported. Existing Create is unchanged.
+	// only its optional built-in Smooth Density stage is retained. External operators and filters
+	// are not supported. Existing Create is unchanged.
 	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
@@ -60,6 +61,15 @@ public:
 	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4SmoothSettings& Smooth,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4HeightDetailConfig& Detail,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4SmoothSettings& Smooth,
+		const FVoxelLandM4HeightDetailConfig& Detail,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	// M4 without global erosion; bounded by the VM's exact integer coordinate range.
 	static FVoxelLandError CreateM4Unlimited(const FVoxelLandGeneratorSettings& Settings,
@@ -117,6 +127,8 @@ private:
 	bool bM4NormalizeSlope = false;
 	FVoxelLandM4OverhangConfig M4Overhang;
 	int32 M4OverhangSeed = 0;
+	FVoxelLandM4HeightDetailConfig M4HeightDetail;
+	int32 M4HeightDetailSeed = 0;
 	FVoxelLandZoneProfile Profile;
 	FVoxelLandBackendOptions Options;
 	bool bSmoothEnabled = false;

@@ -5,6 +5,7 @@
 #include "Data/Structs/VoxelLandM4DomainSettings.h"
 #include "Data/Structs/VoxelLandM4ErosionSettings.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
+#include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 
 // Plain immutable-by-convention worker input. Source graph identities are checked
 // by the caller against the captured source and payload using the program codec.
@@ -24,6 +25,7 @@ struct FVoxelLandM4WorldSnapshot
 	int32 DropletCount = 4096;
 	bool bNormalizeSlope = false;
 	FVoxelLandM4SmoothSettings Smooth;
+	FVoxelLandM4HeightDetailConfig HeightDetail;
 	bool bOverhangEnabled = false;
 	int32 OverhangAmplitudeQ8 = 0;
 	int32 OverhangBandQ8 = 256000;

@@ -4,6 +4,7 @@
 #include "Data/Structs/VoxelLandError.h"
 #include "Data/Structs/VoxelLandChunkData.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
+#include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
 #include "Generation/VoxelLandGeneratorSettings.h"
 
@@ -34,5 +35,6 @@ VOXELLANDALGO_API FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSetting
 	const FVoxelLandGenerator& PeaksGenerator, FVoxelLandWorkerContext& PeaksWorker,
 	const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
-	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride = TOptional<FVoxelLandM4SmoothSettings>());
+	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride = TOptional<FVoxelLandM4SmoothSettings>(),
+	const FVoxelLandM4HeightDetailConfig& HeightDetail = FVoxelLandM4HeightDetailConfig());
 }

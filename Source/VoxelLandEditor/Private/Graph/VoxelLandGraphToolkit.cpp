@@ -2830,9 +2830,11 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 					Work->M4ExecutionSnapshot->bOverhangEnabled && Work->M4ExecutionSnapshot->OverhangAmplitudeQ8 > 0
 						? Work->M4ExecutionSnapshot->OverhangBandQ8
 						: 0;
+				const auto& Detail = Work->M4ExecutionSnapshot->HeightDetail;
+				const int32 DetailAmplitudeQ8 = Detail.bEnabled ? Detail.AmplitudeQ8 : 0;
 				if (!Grid
-					|| !VoxelLandM4Inspection::VerticalChunkRange(
-						Work->M4MinHeightQ8, Work->M4MaxHeightQ8, BandQ8, Work->M4MinChunkZ, Work->M4MaxChunkZ))
+					|| !VoxelLandM4Inspection::VerticalChunkRange(Work->M4MinHeightQ8, Work->M4MaxHeightQ8, BandQ8,
+						DetailAmplitudeQ8, Work->M4MinChunkZ, Work->M4MaxChunkZ))
 				{
 					Work->Error = TEXT(
 						"2 km inspection exceeds the 16-chunk vertical cap or supported Z range, including clearance.");
@@ -3106,11 +3108,12 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 				&& PreviewViewport->GetCameraDetails(CameraLocation, CameraRotation, CameraFov, Resolution);
 			M4InspectionDetails = FString::Printf(
 				TEXT(
-					"M4 2 km inspection (visual acceptance not assessed)\nConfiguration: %s\nSeed: %lld\nInspection voxel: 800 cm; LOD 0; XY chunks -1..1; Z chunks %d..%d\nGlobal prepass height: %.2f..%.2f cm; overhang band: %d Q8 cm\nRHI: %s; viewport: %d x %d\nCamera location cm: %s; rotation: %s; horizontal FOV: %.2f degrees; camera ready: %s\n"),
+					"M4 2 km inspection (visual acceptance not assessed)\nConfiguration: %s\nSeed: %lld\nInspection voxel: 800 cm; LOD 0; XY chunks -1..1; Z chunks %d..%d\nGlobal prepass height: %.2f..%.2f cm; overhang band: %d Q8 cm; height detail bound: %d Q8 cm\nRHI: %s; viewport: %d x %d\nCamera location cm: %s; rotation: %s; horizontal FOV: %.2f degrees; camera ready: %s\n"),
 				*M4PreviewConfig->GetPathName(), Snapshot.Seed, Finished.M4MinChunkZ, Finished.M4MaxChunkZ,
 				double(Finished.M4MinHeightQ8) / 256.0, double(Finished.M4MaxHeightQ8) / 256.0,
-				Snapshot.bOverhangEnabled ? Snapshot.OverhangBandQ8 : 0, *FApp::GetGraphicsRHI(), Resolution.X,
-				Resolution.Y, *CameraLocation.ToString(), *CameraRotation.ToString(), CameraFov,
+				Snapshot.bOverhangEnabled && Snapshot.OverhangAmplitudeQ8 > 0 ? Snapshot.OverhangBandQ8 : 0,
+				Snapshot.HeightDetail.bEnabled ? Snapshot.HeightDetail.AmplitudeQ8 : 0, *FApp::GetGraphicsRHI(),
+				Resolution.X, Resolution.Y, *CameraLocation.ToString(), *CameraRotation.ToString(), CameraFov,
 				bCameraReady ? TEXT("yes") : TEXT("no"));
 			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Continental"), Snapshot.Continental);
 			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Mountain"), Snapshot.Mountain);

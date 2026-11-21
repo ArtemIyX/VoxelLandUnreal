@@ -465,6 +465,13 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 		OutError = TEXT("M4 smooth filter version or strength is invalid.");
 		return false;
 	}
+	if (HeightDetail.AlgorithmVersion != 1 || HeightDetail.AmplitudeQ8 < 0 || HeightDetail.AmplitudeQ8 > 1280000
+		|| !FMath::IsFinite(HeightDetail.FrequencyPerCm) || HeightDetail.FrequencyPerCm <= 0.f
+		|| HeightDetail.FrequencyPerCm > 1.f || !HeightDetail.NodeId.IsValid())
+	{
+		OutError = TEXT("M4 height detail configuration is invalid.");
+		return false;
+	}
 	if (FormatVersion != 1 || VoxelSizeCm < 1 || VoxelSizeCm > 2000000 || (bUnlimited && VoxelSizeCm > 134217)
 		|| int64(BaseHeightQ8) < -M4AssetHeightLimit || int64(BaseHeightQ8) > M4AssetHeightLimit || HorizontalRadius < 1
 		|| HorizontalRadius > 8 || VerticalRadius < 1 || VerticalRadius > 4)
@@ -537,6 +544,7 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 	S.Erosion.TalusQ8 = TalusQ8;
 	S.Erosion.MaxTransferQ8 = MaxTransferQ8;
 	S.bNormalizeSlope = bNormalizeSlope;
+	S.HeightDetail = HeightDetail;
 	S.Smooth.Version = uint32(SmoothVersion);
 	S.Smooth.bEnabled = bSmoothEnabled;
 	S.Smooth.Strength = SmoothStrength;
@@ -557,8 +565,12 @@ bool UVoxelLandM4WorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S
 {
 	return IsInGameThread() && FormatVersion == S.FormatVersion && Seed == S.Seed && VoxelSizeCm == S.VoxelSizeCm
 		&& BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
-		&& SmoothVersion == int32(S.Smooth.Version) && bSmoothEnabled == S.Smooth.bEnabled
-		&& (!bSmoothEnabled || SmoothStrength == S.Smooth.Strength)
+		&& HeightDetail.bEnabled == S.HeightDetail.bEnabled
+		&& HeightDetail.AlgorithmVersion == S.HeightDetail.AlgorithmVersion
+		&& HeightDetail.AmplitudeQ8 == S.HeightDetail.AmplitudeQ8
+		&& HeightDetail.FrequencyPerCm == S.HeightDetail.FrequencyPerCm && HeightDetail.NodeId == S.HeightDetail.NodeId
+		&& HeightDetail.Salt == S.HeightDetail.Salt && SmoothVersion == int32(S.Smooth.Version)
+		&& bSmoothEnabled == S.Smooth.bEnabled && (!bSmoothEnabled || SmoothStrength == S.Smooth.Strength)
 		&& (bUnlimited ? S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
 					   : S.Domain.Mode == EVoxelLandM4DomainMode::Finite)
 		&& bGlobalErosion == S.Domain.bGlobalErosion && OriginXCm == S.Domain.OriginXCm

@@ -184,6 +184,13 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGeneratorSettings& Settings,
 	const FVoxelLandM4UnlimitedConfig& Config, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
+	const auto& Detail = Config.HeightDetail;
+	if (Detail.AlgorithmVersion != 1 || Detail.AmplitudeQ8 < 0 || Detail.AmplitudeQ8 > 1280000
+		|| !FMath::IsFinite(Detail.FrequencyPerCm) || Detail.FrequencyPerCm <= 0.f || Detail.FrequencyPerCm > 1.f
+		|| !Detail.NodeId.IsValid())
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height detail settings"));
+	}
 	if (IsInGameThread())
 	{
 		return Fail(
@@ -236,6 +243,53 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
 	Mutable->M4Unlimited = MakeShared<FVoxelLandM4UnlimitedConfig, ESPMode::ThreadSafe>(Config);
 	Mutable->M4UnlimitedSettings = MakeShared<FVoxelLandGeneratorSettings, ESPMode::ThreadSafe>(Settings);
+	OutGenerator = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4HeightDetailConfig& Detail,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	if (Detail.AlgorithmVersion != 1 || Detail.AmplitudeQ8 < 0 || Detail.AmplitudeQ8 > 1280000
+		|| !FMath::IsFinite(Detail.FrequencyPerCm) || Detail.FrequencyPerCm <= 0.f || Detail.FrequencyPerCm > 1.f
+		|| !Detail.NodeId.IsValid())
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height detail settings"));
+	}
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+	if (FVoxelLandError Error = CreateM4HeightField(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Overhang, Result))
+	{
+		return Error;
+	}
+	auto Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
+	Mutable->M4HeightDetail = Detail;
+	const uint32 Bits = uint32(VoxelLandDeterminism::DeriveNodeSeed(Settings.WorldSeed, Detail.NodeId, Detail.Salt));
+	Mutable->M4HeightDetailSeed = Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll);
+	OutGenerator = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4SmoothSettings& Smooth,
+	const FVoxelLandM4HeightDetailConfig& Detail,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	if (Smooth.Version != 1 || !FMath::IsFinite(Smooth.Strength) || Smooth.Strength < 0.f || Smooth.Strength > 1.f)
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
+	}
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+	if (FVoxelLandError Error =
+			CreateM4HeightField(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Overhang, Detail, Result))
+	{
+		return Error;
+	}
+	auto Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
+	Mutable->bSmoothEnabled = Smooth.bEnabled;
+	Mutable->SmoothStrength = Smooth.Strength;
 	OutGenerator = MoveTemp(Result);
 	return {};
 }
@@ -508,7 +562,8 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	if (M4HeightGrid)
 	{
 		// Native noise resources are created and destroyed on this worker's thread.
-		if (M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
+		if ((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
+			|| (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0))
 		{
 			VoxelLandNative::EBackend Backend = VoxelLandNative::EBackend::Auto;
 			if (Options.Noise == EVoxelLandNoiseBackend::Scalar)
@@ -1051,7 +1106,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 			*Worker.Impl->M4UnlimitedWorkers[0], *M4Unlimited->ContinentalCurve, *M4Unlimited->MountainGenerator,
 			*Worker.Impl->M4UnlimitedWorkers[1], *M4Unlimited->MountainCurve, *M4Unlimited->PeaksGenerator,
 			*Worker.Impl->M4UnlimitedWorkers[2], *M4Unlimited->PeaksCurve, Key, OutChunk, IsCancelled,
-			M4Unlimited->SmoothOverride);
+			M4Unlimited->SmoothOverride, M4Unlimited->HeightDetail);
 	}
 	if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
     {
@@ -1120,7 +1175,8 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 		return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field footprint overflows"));
 	}
 	// Native noise receives exact integer centimeter positions converted to float.
-	if (M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0
+	if (((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
+			|| (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0))
 		&& (MinX < -16777216 || MaxX > 16777216 || MinY < -16777216 || MaxY > 16777216))
 	{
 		return Fail(
@@ -1186,6 +1242,77 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 					|| !M4HeightGrid->Sample(XCm, YCm - VoxelSize, MinusY[Column])))
 			{
 				return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 slope stencil outside grid"));
+			}
+		}
+	}
+	if (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0)
+	{
+		if (!Worker.Impl || !Worker.Impl->Noise)
+		{
+			return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("M4 height detail worker missing"));
+		}
+		const int32 Margin = bM4NormalizeSlope ? 1 : 0;
+		const int32 DetailAxis = Axis + 2 * Margin;
+		TArray<int32> DetailedHeights;
+		DetailedHeights.SetNumUninitialized(DetailAxis * DetailAxis);
+		for (int32 Y = 0; Y < DetailAxis; ++Y)
+		{
+			if (IsCancelled())
+			{
+				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height detail generation cancelled"));
+			}
+			const int64 YCm = (BaseY + Offset + Y - Margin) * VoxelSize;
+			float XNoise[39], YNoise[39], Noise[39];
+			for (int32 X = 0; X < DetailAxis; ++X)
+			{
+				XNoise[X] = float((BaseX + Offset + X - Margin) * VoxelSize) * M4HeightDetail.FrequencyPerCm;
+				YNoise[X] = float(YCm) * M4HeightDetail.FrequencyPerCm;
+			}
+			FString Error;
+			if (!Worker.Impl->Noise->Sample(
+					0, false, M4HeightDetailSeed, DetailAxis, XNoise, YNoise, nullptr, Noise, Error))
+			{
+				return NativeError(Error);
+			}
+			for (int32 X = 0; X < DetailAxis; ++X)
+			{
+				int32 BaseHeight = 0, NoiseQ = 0;
+				const int64 XCm = (BaseX + Offset + X - Margin) * VoxelSize;
+				if (!M4HeightGrid->Sample(XCm, YCm, BaseHeight)
+					|| !VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ))
+				{
+					return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 height detail sample"));
+				}
+				const int64 Product = int64(M4HeightDetail.AmplitudeQ8) * NoiseQ;
+				const int64 Magnitude = Product < 0 ? -Product : Product;
+				int64 Delta = (Magnitude + 16383) / 32767;
+				if (Product < 0)
+				{
+					Delta = -Delta;
+				}
+				const int64 Height = int64(BaseHeight) + Delta;
+				if (Height < -512000000 || Height > 512000000)
+				{
+					return Fail(
+						EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 detailed height exceeds fixed-point range"));
+				}
+				DetailedHeights[X + DetailAxis * Y] = int32(Height);
+			}
+		}
+		for (int32 Y = 0; Y < Axis; ++Y)
+		{
+			for (int32 X = 0; X < Axis; ++X)
+			{
+				const int32 Column = X + Axis * Y;
+				const int32 I = X + Margin + DetailAxis * (Y + Margin);
+				Centers[Column] = DetailedHeights[I];
+				if (bM4NormalizeSlope)
+				{
+					PlusX[Column] = DetailedHeights[I + 1];
+					MinusX[Column] = DetailedHeights[I - 1];
+					PlusY[Column] = DetailedHeights[I + DetailAxis];
+					MinusY[Column] = DetailedHeights[I - DetailAxis];
+				}
 			}
 		}
 	}

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
+#include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
 
 class FVoxelLandGenerator;
@@ -20,6 +21,7 @@ struct FVoxelLandM4UnlimitedConfig
 	int32 BaseQ8 = 0;
 	bool bNormalizeSlope = false;
 	FVoxelLandM4OverhangConfig Overhang;
+	FVoxelLandM4HeightDetailConfig HeightDetail;
 	// Unset preserves the final program's legacy filter behavior.
 	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride;
 };

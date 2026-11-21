@@ -6,6 +6,7 @@
 #include "Data/Structs/VoxelLandM4ErosionSettings.h"
 
 class FVoxelLandM4HeightGrid;
+class FVoxelLandM4GridLease;
 
 namespace VoxelLandM4Prepass
 {
@@ -20,4 +21,9 @@ VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Dom
 	TConstArrayView<int32> BaseHeightsQ8, uint64 WorldSeed, const FGuid& StageId, uint32 Salt, int32 DropletCount,
 	const FVoxelLandM4ErosionSettings& Erosion, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 	uint64& OutHash, TFunctionRef<bool()> IsCancelled);
+VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain,
+	TConstArrayView<int32> BaseHeightsQ8, uint64 WorldSeed, const FGuid& StageId, uint32 Salt, int32 DropletCount,
+	const FVoxelLandM4ErosionSettings& Erosion, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
+	uint64& OutHash, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease);
 }

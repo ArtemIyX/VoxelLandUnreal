@@ -9,6 +9,7 @@ class FVoxelLandGenerator;
 class FVoxelLandWorkerContext;
 class FVoxelLandM4CurveLut;
 class FVoxelLandM4HeightGrid;
+class FVoxelLandM4GridLease;
 
 // Opt-in CPU pipeline from three existing single-output VM programs to an
 // immutable, finite height prepass. Each generator must own its corresponding
@@ -32,4 +33,13 @@ VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Dom
 	int32 DropletCount, const FVoxelLandM4ErosionSettings& Erosion,
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
 	TFunctionRef<bool()> IsCancelled);
+VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain,
+	const FVoxelLandGenerator& ContinentalGenerator, FVoxelLandWorkerContext& ContinentalWorker,
+	const FVoxelLandM4CurveLut& ContinentalCurve, const FVoxelLandGenerator& MountainGenerator,
+	FVoxelLandWorkerContext& MountainWorker, const FVoxelLandM4CurveLut& MountainCurve,
+	const FVoxelLandGenerator& PeaksGenerator, FVoxelLandWorkerContext& PeaksWorker,
+	const FVoxelLandM4CurveLut& PeaksCurve, int32 BaseQ8, uint64 WorldSeed, const FGuid& StageId, uint32 Salt,
+	int32 DropletCount, const FVoxelLandM4ErosionSettings& Erosion,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease);
 }

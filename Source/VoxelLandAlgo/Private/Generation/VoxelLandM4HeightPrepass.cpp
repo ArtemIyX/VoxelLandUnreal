@@ -80,6 +80,18 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 	const FVoxelLandM4ErosionSettings& Erosion, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 	uint64& OutHash, TFunctionRef<bool()> IsCancelled)
 {
+	return Generate(Domain, Continental, ContinentalCurve, Mountain, MountainCurve, Peaks, PeaksCurve, BaseQ8,
+		WorldSeed, StageId, Salt, DropletCount, Erosion, OutGrid, OutHash, IsCancelled, nullptr);
+}
+
+FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayView<uint16> Continental,
+	const FVoxelLandM4CurveLut& ContinentalCurve, TConstArrayView<uint16> Mountain,
+	const FVoxelLandM4CurveLut& MountainCurve, TConstArrayView<uint16> Peaks, const FVoxelLandM4CurveLut& PeaksCurve,
+	int32 BaseQ8, uint64 WorldSeed, const FGuid& StageId, uint32 Salt, int32 DropletCount,
+	const FVoxelLandM4ErosionSettings& Erosion, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
+	uint64& OutHash, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease)
+{
 	TArray<int32> BaseHeights;
 	if (const FVoxelLandError Error = BuildBaseHeights(Domain, Continental, ContinentalCurve, Mountain, MountainCurve,
 			Peaks, PeaksCurve, BaseQ8, BaseHeights, IsCancelled))
@@ -87,6 +99,6 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 		return Error;
 	}
 	return VoxelLandM4Prepass::Generate(
-		Domain, BaseHeights, WorldSeed, StageId, Salt, DropletCount, Erosion, OutGrid, OutHash, IsCancelled);
+		Domain, BaseHeights, WorldSeed, StageId, Salt, DropletCount, Erosion, OutGrid, OutHash, IsCancelled, Lease);
 }
 }

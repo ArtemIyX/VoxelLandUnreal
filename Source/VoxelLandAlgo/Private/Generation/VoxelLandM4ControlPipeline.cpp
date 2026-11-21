@@ -27,6 +27,20 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, const FVoxelL
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
 	TFunctionRef<bool()> IsCancelled)
 {
+	return Generate(Domain, ContinentalGenerator, ContinentalWorker, ContinentalCurve, MountainGenerator,
+		MountainWorker, MountainCurve, PeaksGenerator, PeaksWorker, PeaksCurve, BaseQ8, WorldSeed, StageId, Salt,
+		DropletCount, Erosion, OutGrid, OutHash, IsCancelled, nullptr);
+}
+
+FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, const FVoxelLandGenerator& ContinentalGenerator,
+	FVoxelLandWorkerContext& ContinentalWorker, const FVoxelLandM4CurveLut& ContinentalCurve,
+	const FVoxelLandGenerator& MountainGenerator, FVoxelLandWorkerContext& MountainWorker,
+	const FVoxelLandM4CurveLut& MountainCurve, const FVoxelLandGenerator& PeaksGenerator,
+	FVoxelLandWorkerContext& PeaksWorker, const FVoxelLandM4CurveLut& PeaksCurve, int32 BaseQ8, uint64 WorldSeed,
+	const FGuid& StageId, uint32 Salt, int32 DropletCount, const FVoxelLandM4ErosionSettings& Erosion,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease)
+{
 	if (const FVoxelLandError Error = VoxelLandM4Domain::Validate(Domain))
 	{
 		return Error;
@@ -76,7 +90,7 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, const FVoxelL
 	uint64 Hash = 0;
 	if (const FVoxelLandError Error =
 			VoxelLandM4HeightPrepass::Generate(Domain, Continental, ContinentalCurve, Mountain, MountainCurve, Peaks,
-				PeaksCurve, BaseQ8, WorldSeed, StageId, Salt, DropletCount, Erosion, Grid, Hash, IsCancelled))
+				PeaksCurve, BaseQ8, WorldSeed, StageId, Salt, DropletCount, Erosion, Grid, Hash, IsCancelled, Lease))
 	{
 		return Error;
 	}

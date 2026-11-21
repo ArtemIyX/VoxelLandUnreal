@@ -8,6 +8,7 @@
 #include "Data/Structs/VoxelLandProgramDraft.h"
 #include "Data/Structs/VoxelLandZoneProfile.h"
 #include "Generation/VoxelLandGeneratorSettings.h"
+#include "Data/Structs/VoxelLandM4OverhangConfig.h"
 
 class IVoxelLandOperator;
 class FVoxelLandOperatorRegistrySnapshot;
@@ -48,6 +49,11 @@ public:
 	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	// Explicit, independently seeded 3D Perlin detail; disabled is bit-identical.
+	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		const FVoxelLandM4OverhangConfig& Overhang,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
     // Proof-only hint; chunk sampling still runs and remains authoritative.
     EVoxelLandChunkClassification ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const;
@@ -76,9 +82,10 @@ public:
 private:
 	static FVoxelLandError CreateInternal(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		const FVoxelLandM4OverhangConfig* Overhang,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError GenerateM4Density(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset,
-		TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
+		FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const;
 	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const;
 	FVoxelLandError GenerateExpandedDensity(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const;
@@ -92,6 +99,8 @@ private:
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> M4HeightGrid;
 	bool bM4NormalizeSlope = false;
+	FVoxelLandM4OverhangConfig M4Overhang;
+	int32 M4OverhangSeed = 0;
 	FVoxelLandZoneProfile Profile;
 	FVoxelLandBackendOptions Options;
 	bool bSmoothEnabled = false;

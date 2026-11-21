@@ -13,6 +13,13 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 	TFunctionRef<bool()> IsCancelled)
 {
+	return Create(InOriginX, InOriginY, InCellsX, InCellsY, InSpacingCm, HeightsQ8, OutGrid, IsCancelled, nullptr);
+}
+
+bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCellsX, int32 InCellsY, int64 InSpacingCm,
+	TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease)
+{
 	if (IsCancelled() || InCellsX < 1 || InCellsY < 1 || InCellsX > 1024 || InCellsY > 1024 || InSpacingCm <= 0)
 	{
 		return false;
@@ -75,6 +82,7 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	{
 		return false;
 	}
+	Grid->GridLease = MoveTemp(Lease);
 	OutGrid = MoveTemp(Grid);
 	return true;
 }

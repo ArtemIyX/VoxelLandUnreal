@@ -7,6 +7,7 @@
 
 class FVoxelLandM4CurveLut;
 class FVoxelLandM4HeightGrid;
+class FVoxelLandM4GridLease;
 
 /** An opt-in, finite control-map to height prepass. This is not graph compilation,
  * world initialization, or a cache dependency key. Each LUT output is a signed
@@ -31,4 +32,11 @@ VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Dom
 	int32 BaseQ8, uint64 WorldSeed, const FGuid& StageId, uint32 Salt, int32 DropletCount,
 	const FVoxelLandM4ErosionSettings& Erosion, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 	uint64& OutHash, TFunctionRef<bool()> IsCancelled);
+VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain,
+	TConstArrayView<uint16> Continental, const FVoxelLandM4CurveLut& ContinentalCurve, TConstArrayView<uint16> Mountain,
+	const FVoxelLandM4CurveLut& MountainCurve, TConstArrayView<uint16> Peaks, const FVoxelLandM4CurveLut& PeaksCurve,
+	int32 BaseQ8, uint64 WorldSeed, const FGuid& StageId, uint32 Salt, int32 DropletCount,
+	const FVoxelLandM4ErosionSettings& Erosion, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
+	uint64& OutHash, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease);
 }

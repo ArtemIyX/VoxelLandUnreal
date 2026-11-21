@@ -2,6 +2,7 @@
 #include "Generation/VoxelLandM4Control.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
 #include "Generation/VoxelLandM4Slope.h"
+#include "Generation/VoxelLandM4Overhang.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "../VoxelLandNativeNoise.h"
 #include "HAL/PlatformTLS.h"
@@ -107,13 +108,27 @@ EVoxelLandNoiseBackend FVoxelLandWorkerContext::GetNoiseBackend() const
 FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& Settings,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
-	return CreateInternal(Settings, nullptr, false, OutGenerator);
+	return CreateInternal(Settings, nullptr, false, nullptr, OutGenerator);
 }
 
 FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
+	return CreateM4HeightField(
+		Settings, MoveTemp(HeightGrid), bNormalizeSlope, FVoxelLandM4OverhangConfig{}, OutGenerator);
+}
+
+FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	const FVoxelLandM4OverhangConfig& Overhang,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	if (!VoxelLandM4Overhang::IsValid(Overhang.Displacement) || !FMath::IsFinite(Overhang.FrequencyPerCm)
+		|| Overhang.FrequencyPerCm <= 0.f || Overhang.FrequencyPerCm > 1.f || !Overhang.NodeId.IsValid())
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 overhang configuration"));
+	}
 	if (!HeightGrid)
 	{
 		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height grid is required"));
@@ -132,7 +147,7 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 	}
 	// Build locally so failure never changes a caller's existing generator.
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
-	if (FVoxelLandError Error = CreateInternal(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Result))
+	if (FVoxelLandError Error = CreateInternal(Settings, MoveTemp(HeightGrid), bNormalizeSlope, &Overhang, Result))
 	{
 		return Error;
 	}
@@ -142,6 +157,7 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 
 FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSettings& Settings,
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	const FVoxelLandM4OverhangConfig* Overhang,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
 	OutGenerator.Reset();
@@ -165,6 +181,13 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	Result->Program = Program;
 	Result->M4HeightGrid = MoveTemp(HeightGrid);
 	Result->bM4NormalizeSlope = bNormalizeSlope;
+	if (Overhang)
+	{
+		Result->M4Overhang = *Overhang;
+		const uint32 Bits =
+			uint32(VoxelLandDeterminism::DeriveNodeSeed(Settings.WorldSeed, Overhang->NodeId, Overhang->Salt));
+		Result->M4OverhangSeed = Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll);
+	}
 	Result->Profile = Profile;
 	Result->Options = Options;
 	const FVoxelLandProgramDraft& D = Program->GetData();
@@ -385,8 +408,36 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	W.VM = SelectedVM;
 	if (M4HeightGrid)
 	{
-		// The transitional source never evaluates pure VM instructions or noise.
-		// Keep the thread-affine context for output hashing and Smooth scratch only.
+		// Native noise resources are created and destroyed on this worker's thread.
+		if (M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
+		{
+			VoxelLandNative::EBackend Backend = VoxelLandNative::EBackend::Auto;
+			if (Options.Noise == EVoxelLandNoiseBackend::Scalar)
+			{
+				Backend = VoxelLandNative::EBackend::Scalar;
+			}
+			else if (Options.Noise == EVoxelLandNoiseBackend::SSE2)
+			{
+				Backend = VoxelLandNative::EBackend::SSE2;
+			}
+			else if (Options.Noise != EVoxelLandNoiseBackend::Auto)
+			{
+				return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown noise backend"));
+			}
+			VoxelLandNative::FConfig Config;
+			Config.Family = EVoxelLandNoiseFamily::Perlin;
+			Config.bUnitScale = true;
+			TArray<VoxelLandNative::FConfig> Configs;
+			Configs.Add(Config);
+			FString Error;
+			W.Noise = VoxelLandNative::FWorker::Create(Backend, Configs, Error);
+			if (!W.Noise)
+			{
+				return NativeError(Error);
+			}
+			W.NoiseBackend = W.Noise->GetBackend() == VoxelLandNative::EBackend::SSE2 ? EVoxelLandNoiseBackend::SSE2
+																					  : EVoxelLandNoiseBackend::Scalar;
+		}
 		OutWorker = MoveTemp(Worker);
 		return {};
 	}
@@ -921,6 +972,13 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 	{
 		return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field footprint overflows"));
 	}
+	// Native noise receives exact integer centimeter positions converted to float.
+	if (M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0
+		&& (MinX < -16777216 || MaxX > 16777216 || MinY < -16777216 || MaxY > 16777216))
+	{
+		return Fail(
+			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 overhang coordinates exceed exact float lattice"));
+	}
 	int32 Check = 0;
 	if (!M4HeightGrid->Sample(MinX, MinY, Check) || !M4HeightGrid->Sample(MaxX, MaxY, Check))
 	{
@@ -938,7 +996,7 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset,
-	TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const
+	FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const
 {
 	if (FVoxelLandError Error = ValidateM4Footprint(Key, Axis, Offset))
 	{
@@ -1005,6 +1063,26 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 			{
 				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 			}
+			float NX[37], NY[37], NZ[37], Noise[37];
+			const bool bOverhang = M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0;
+			if (bOverhang)
+			{
+				if (!Worker.Impl || !Worker.Impl->Noise)
+				{
+					return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("M4 overhang worker missing"));
+				}
+				for (int32 X = 0; X < Axis; ++X)
+				{
+					NX[X] = float((BaseX + Offset + X) * VoxelSize) * M4Overhang.FrequencyPerCm;
+					NY[X] = float((BaseY + Offset + Y) * VoxelSize) * M4Overhang.FrequencyPerCm;
+					NZ[X] = float(ZCm) * M4Overhang.FrequencyPerCm;
+				}
+				FString Error;
+				if (!Worker.Impl->Noise->Sample(0, true, M4OverhangSeed, Axis, NX, NY, NZ, Noise, Error))
+				{
+					return NativeError(Error);
+				}
+			}
 			for (int32 X = 0; X < Axis; ++X)
 			{
 				const int32 Column = X + Axis * Y;
@@ -1018,6 +1096,17 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 						return Fail(EVoxelLandErrorCode::InvalidMathDomain,
 							TEXT("M4 slope stencil is outside its supported range"));
 					}
+				}
+				if (bOverhang)
+				{
+					int32 NoiseQ = 0, DeltaQ8 = 0;
+					if (!VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ)
+						|| !VoxelLandM4Overhang::DisplacementQ8(
+							M4Overhang.Displacement, ZCm * 256 - Center, NoiseQ, DeltaQ8))
+					{
+						return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 overhang result"));
+					}
+					DensityQ8 += DeltaQ8;
 				}
 				// Q8 cm -> 1/1024 voxel. Integer division rounds nearest, ties away.
 				const int64 Numerator = DensityQ8 * 4;
@@ -1069,7 +1158,7 @@ FVoxelLandError FVoxelLandGenerator::GeneratePureChunkCancellable(const FVoxelLa
 	Chunk->Density.Reserve(FVoxelLandChunkData::SampleCount);
 	if (M4HeightGrid)
 	{
-		if (FVoxelLandError Error = GenerateM4Density(Key, 35, -1, Chunk->Density, IsCancelled))
+		if (FVoxelLandError Error = GenerateM4Density(Key, 35, -1, Worker, Chunk->Density, IsCancelled))
 		{
 			return Error;
 		}

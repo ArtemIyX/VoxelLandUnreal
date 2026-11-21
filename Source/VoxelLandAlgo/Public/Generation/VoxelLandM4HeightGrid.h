@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Generation/VoxelLandM4GridLease.h"
 
 /** Immutable bounded Q8 height snapshot for the M4 prepass foundation.
  * This record does not configure or enable a production world domain.
@@ -27,6 +28,11 @@ public:
 		TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 		TFunctionRef<bool()> IsCancelled);
 
+	// The immutable snapshot retains Lease until its final reader releases it.
+	static bool Create(int64 OriginX, int64 OriginY, int32 CellsX, int32 CellsY, int64 SpacingCm,
+		TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
+		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease);
+
 	/** Samples integer world centimeters inside the inclusive grid bounds.
 	 * The four-corner bilinear expression is rounded once, ties away from zero.
 	 * Failure, including a query outside the bounds, leaves OutHeightQ8 unchanged.
@@ -42,5 +48,7 @@ private:
 	int64 SpacingCm = 0;
 	int32 CellsX = 0;
 	int32 CellsY = 0;
+	// Declared before Heights so its destructor runs after the grid allocation is released.
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> GridLease;
 	TArray<int32> Heights;
 };

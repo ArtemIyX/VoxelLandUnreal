@@ -188,7 +188,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateExpandedDensity(const FVoxelLandChu
 {
 	if (M4HeightGrid)
 	{
-		return GenerateM4Density(Key, ExpandedAxis, -2, Worker.SmoothScratch, IsCancelled);
+		return GenerateM4Density(Key, ExpandedAxis, -2, Worker, Worker.SmoothScratch, IsCancelled);
 	}
 	TArray<int16>& Expanded = Worker.SmoothScratch;
     Expanded.Reset();

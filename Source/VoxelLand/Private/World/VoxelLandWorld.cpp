@@ -362,6 +362,12 @@ bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 	{
 		return false;
 	}
+	if (const FVoxelLandError DemandError = State->Generator->ValidateM4ChunkDemand(Key))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("VoxelLand rejected chunk (%d,%d,%d): %s"), Key.Coordinate.X, Key.Coordinate.Y,
+			Key.Coordinate.Z, *DemandError.Message);
+		return false;
+	}
 	FRecord& Record = State->Records.FindOrAdd(Key);
 	Record.bExplicit = true;
 	Record.bFailed = false;
@@ -585,6 +591,7 @@ void AVoxelLandWorld::UpdateDemand()
 	State->LastVertical = V;
 	State->LastLimit = Limit;
 	TArray<FVoxelLandChunkKey> Candidates;
+	int32 RejectedM4Demand = 0;
 	for (int32 Z = -V; Z <= V; ++Z)
 	{
 		for (int32 Y = -H; Y <= H; ++Y)
@@ -595,10 +602,22 @@ void AVoxelLandWorld::UpdateDemand()
 				Key.Coordinate = NewChunk + FIntVector(X, Y, Z);
 				if (VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate))
 				{
-					Candidates.Add(Key);
+					if (State->Generator->ValidateM4ChunkDemand(Key))
+					{
+						++RejectedM4Demand;
+					}
+					else
+					{
+						Candidates.Add(Key);
+					}
 				}
 			}
 		}
+	}
+	if (RejectedM4Demand > 0)
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("VoxelLand skipped %d camera-demand chunks outside supported M4 bounds"),
+			RejectedM4Demand);
 	}
 	const FVector Forward = State->ViewVelocity.GetSafeNormal();
 	Candidates.Sort([NewChunk, Forward](const FVoxelLandChunkKey& A, const FVoxelLandChunkKey& B) {

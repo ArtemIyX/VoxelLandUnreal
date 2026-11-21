@@ -4,6 +4,7 @@
 #include "Data/Structs/VoxelLandGraphLinkRecord.h"
 #include "Data/Structs/VoxelLandGraphNodeRecord.h"
 #include "Data/Structs/VoxelLandGraphParameter.h"
+#include "Data/Structs/VoxelLandGraphFunctionSnapshot.h"
 
 // Record copy captured on the game thread; workers never access the source asset.
 struct VOXELLANDDATA_API FVoxelLandGraphSnapshot
@@ -12,4 +13,5 @@ struct VOXELLANDDATA_API FVoxelLandGraphSnapshot
 	TArray<FVoxelLandGraphParameter> Parameters;
 	TArray<FVoxelLandGraphNodeRecord> Nodes;
 	TArray<FVoxelLandGraphLinkRecord> Links;
+	TArray<FVoxelLandGraphFunctionSnapshot> Functions;
 };

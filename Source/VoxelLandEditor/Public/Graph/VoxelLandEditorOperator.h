@@ -32,5 +32,6 @@ public:
     static bool FindPresentation(const FGuid& OperatorId, int32 Version, FVoxelLandEditorOperatorPresentation& OutPresentation);
     static void GetPresentations(TArray<FVoxelLandEditorOperatorPresentation>& OutPresentations);
     static uint64 GetRevision();
+    static void NotifyFunctionChanged();
     static void Clear();
 };

@@ -4,6 +4,7 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "AssetTypeActions_Base.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Graph/VoxelLandGraphPinFactory.h"
 #include "Graph/VoxelLandWorldSettingsDetails.h"
@@ -61,6 +62,13 @@ public:
     }
 private:
     TArray<TWeakPtr<FVoxelLandGraphToolkit>> Editors;
+};
+class FVoxelLandFunctionAssetActions : public FVoxelLandGraphAssetActions
+{
+public:
+    virtual FText GetName() const override { return LOCTEXT("FunctionAsset", "VoxelLand Graph Function"); }
+    virtual UClass* GetSupportedClass() const override { return UVoxelLandGraphFunction::StaticClass(); }
+    virtual FColor GetTypeColor() const override { return FColor(130, 85, 173); }
 };
 }
 void FVoxelLandEditorModule::StartupModule()
@@ -120,19 +128,36 @@ void FVoxelLandEditorModule::StartupModule()
     IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
     GraphAssetActions = MakeShared<FVoxelLandGraphAssetActions>();
     AssetTools.RegisterAssetTypeActions(GraphAssetActions.ToSharedRef());
+    FunctionAssetActions = MakeShared<FVoxelLandFunctionAssetActions>();
+    AssetTools.RegisterAssetTypeActions(FunctionAssetActions.ToSharedRef());
     PreSaveHandle = FCoreUObjectDelegates::OnObjectPreSave.AddRaw(this, &FVoxelLandEditorModule::OnObjectPreSave);
+    FunctionPropertyHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FVoxelLandEditorModule::OnFunctionPropertyChanged);
+    FunctionTransactionHandle = FCoreUObjectDelegates::OnObjectTransacted.AddRaw(this, &FVoxelLandEditorModule::OnFunctionTransacted);
+    FunctionReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddRaw(this, &FVoxelLandEditorModule::OnFunctionObjectsReplaced);
 }
 void FVoxelLandEditorModule::ShutdownModule()
 {
     FCoreUObjectDelegates::OnObjectPreSave.Remove(PreSaveHandle);
+    FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(FunctionPropertyHandle);
+    FCoreUObjectDelegates::OnObjectTransacted.Remove(FunctionTransactionHandle);
+    FCoreUObjectDelegates::OnObjectsReplaced.Remove(FunctionReplacedHandle);
     if (GraphAssetActions.IsValid())
     {
         StaticCastSharedPtr<FVoxelLandGraphAssetActions>(GraphAssetActions)->StopEditors();
+    }
+    if (FunctionAssetActions.IsValid())
+    {
+        StaticCastSharedPtr<FVoxelLandFunctionAssetActions>(FunctionAssetActions)->StopEditors();
     }
     if (GraphAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
     {
         FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(GraphAssetActions.ToSharedRef());
     }
+    if (FunctionAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
+    {
+        FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(FunctionAssetActions.ToSharedRef());
+    }
+    FunctionAssetActions.Reset();
     GraphAssetActions.Reset();
     if (FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
     {
@@ -149,10 +174,37 @@ void FVoxelLandEditorModule::ShutdownModule()
         Style.Reset();
     }
 }
+void FVoxelLandEditorModule::OnFunctionPropertyChanged(UObject* Object, FPropertyChangedEvent&)
+{
+    if (IsInGameThread() && Object && (Object->IsA<UVoxelLandGraphFunction>() || Object->GetTypedOuter<UVoxelLandGraphFunction>()))
+    {
+        FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+    }
+}
+void FVoxelLandEditorModule::OnFunctionTransacted(UObject* Object, const FTransactionObjectEvent&)
+{
+    if (IsInGameThread() && Object && (Object->IsA<UVoxelLandGraphFunction>() || Object->GetTypedOuter<UVoxelLandGraphFunction>()))
+    {
+        FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+    }
+}
+void FVoxelLandEditorModule::OnFunctionObjectsReplaced(const TMap<UObject*, UObject*>& Replacements)
+{
+    if (!IsInGameThread()) { return; }
+    for (const auto& Entry : Replacements)
+    {
+        if ((Entry.Key && (Entry.Key->IsA<UVoxelLandGraphFunction>() || Entry.Key->GetTypedOuter<UVoxelLandGraphFunction>())) ||
+            (Entry.Value && (Entry.Value->IsA<UVoxelLandGraphFunction>() || Entry.Value->GetTypedOuter<UVoxelLandGraphFunction>())))
+        {
+            FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+            return;
+        }
+    }
+}
 void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveContext Context)
 {
     UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Object);
-    if (!Graph || !Context.IsFirstConcurrentSave())
+    if (!Graph || Graph->IsA<UVoxelLandGraphFunction>() || !Context.IsFirstConcurrentSave())
     {
         return;
     }

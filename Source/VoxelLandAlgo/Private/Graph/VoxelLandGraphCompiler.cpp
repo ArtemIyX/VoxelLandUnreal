@@ -1,4 +1,6 @@
 #include "Graph/VoxelLandGraphCompiler.h"
+#include "Graph/VoxelLandGraphFunctionFlatten.h"
+#include "Data/VoxelLandGraphFunctionId.h"
 #include "Graph/VoxelLandProgramOptimizer.h"
 
 #include "Data/Enums/VoxelLandBuiltinNode.h"
@@ -1027,6 +1029,27 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot, c
 {
     OutDraft = FVoxelLandProgramDraft();
     OutDiagnostic = FVoxelLandGraphDiagnostic();
+    const bool bHasCalls = Snapshot.Nodes.ContainsByPredicate([](const FVoxelLandGraphNodeRecord& Node)
+    {
+        return Node.OperatorId == VoxelLandGraphFunctionCallId() || !Node.FunctionPath.IsNull();
+    });
+    if (bHasCalls || !Snapshot.Functions.IsEmpty())
+    {
+        FVoxelLandGraphSnapshot Expanded;
+        TMap<FGuid, FGuid> OriginCalls;
+        TMap<FGuid, FString> OriginDescriptions;
+        if (!FVoxelLandGraphFunctionFlatten::Expand(Snapshot, Expanded, OutDiagnostic, OriginCalls, OriginDescriptions))
+        {
+            return false;
+        }
+        FCompiler Compiler(Expanded, Providers, OutDiagnostic);
+        if (!Compiler.Run(OutDraft))
+        {
+            FVoxelLandGraphFunctionFlatten::TranslateDiagnostic(OutDiagnostic, OriginCalls, OriginDescriptions);
+            return false;
+        }
+        return true;
+    }
     FCompiler Compiler(Snapshot, Providers, OutDiagnostic);
     return Compiler.Run(OutDraft);
 }

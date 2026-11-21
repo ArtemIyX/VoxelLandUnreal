@@ -1,6 +1,7 @@
 #include "Data/Assets/VoxelLandWorldSettings.h"
 
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/Assets/VoxelLandGraphFunction.h"
 
 namespace
 {
@@ -91,7 +92,7 @@ bool ValidateOverride(const FVoxelLandParameterOverride& Override, const FVoxelL
 bool UVoxelLandWorldSettings::ValidateSettings(FString& OutError) const
 {
 	OutError.Reset();
-	if (FormatVersion != 1 || !Graph || Graph->SourceVersion != 1)
+	if (FormatVersion != 1 || !Graph || Graph->IsA<UVoxelLandGraphFunction>() || Graph->SourceVersion != 1)
 	{
 		OutError = TEXT("Missing graph or unsupported settings/graph version.");
 		return false;

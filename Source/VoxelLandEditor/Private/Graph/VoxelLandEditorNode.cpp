@@ -2,6 +2,8 @@
 #include "Graph/VoxelLandEditorFloat.h"
 #include "Graph/VoxelLandEditorOperator.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/VoxelLandGraphFunctionId.h"
+#include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "EdGraph/EdGraph.h"
 #include "ScopedTransaction.h"
@@ -91,7 +93,7 @@ FText UVoxelLandEditorNode::DisplayName(int32 InKind)
 }
 FText UVoxelLandEditorNode::GetNodeTitle(ENodeTitleType::Type) const
 {
-    if (Kind == 0)
+    if (Kind == 0 || Kind == int32(VoxelLandGraphFunctionCallId().D))
     {
         return ExternalTitle.IsEmpty() ? FText::FromString(FString::Printf(TEXT("External operator %s v%d"), *ExternalOperatorId.ToString(), OperatorVersion)) : ExternalTitle;
     }
@@ -99,6 +101,7 @@ FText UVoxelLandEditorNode::GetNodeTitle(ENodeTitleType::Type) const
 }
 FLinearColor UVoxelLandEditorNode::GetNodeTitleColor() const
 {
+    if (Kind == int32(VoxelLandGraphFunctionCallId().D)) { return FLinearColor(0.38f, 0.22f, 0.48f); }
     if (Kind == 0)
     {
         FVoxelLandEditorOperatorPresentation Presentation;
@@ -119,6 +122,10 @@ FLinearColor UVoxelLandEditorNode::GetNodeTitleColor() const
 }
 FText UVoxelLandEditorNode::GetTooltipText() const
 {
+    if (Kind == int32(VoxelLandGraphFunctionCallId().D))
+    {
+        return LOCTEXT("FunctionCallTooltip", "Calls a reusable terrain graph function. Refresh its interface after changing the function inputs or output type.");
+    }
     if (Kind == 0)
     {
         FVoxelLandEditorOperatorPresentation Presentation;
@@ -158,6 +165,26 @@ FText UVoxelLandEditorNode::GetPinDisplayName(const UEdGraphPin* Pin) const
 }
 void UVoxelLandEditorNode::GetPinHoverText(const UEdGraphPin& Pin, FString& HoverTextOut) const
 {
+    if (Kind == int32(VoxelLandGraphFunctionCallId().D))
+    {
+        const UVoxelLandGraphFunction* Function = Cast<UVoxelLandGraphFunction>(FunctionPath.ResolveObject());
+        if (Pin.Direction == EGPD_Input && Function)
+        {
+            const FGuid InterfaceId = FunctionPinIds.FindRef(Pin.PinId);
+            const FVoxelLandGraphParameter* Parameter = Function->Parameters.FindByPredicate([InterfaceId](const FVoxelLandGraphParameter& Item)
+            {
+                return Item.Id == InterfaceId;
+            });
+            if (Parameter && !Parameter->Tooltip.IsEmpty())
+            {
+                HoverTextOut = Parameter->Tooltip.ToString();
+                return;
+            }
+        }
+        HoverTextOut = Pin.Direction == EGPD_Output ? TEXT("The function's typed result.") :
+            TEXT("Typed function input; an unconnected pin uses its displayed default.");
+        return;
+    }
     if (Kind == 0)
     {
         FVoxelLandEditorOperatorPresentation Presentation;
@@ -223,13 +250,17 @@ void UVoxelLandEditorNode::PinConnectionListChanged(UEdGraphPin*)
 }
 void UVoxelLandEditorNode::AllocateDefaultPins()
 {
-    if (Kind == 0)
+    if (Kind == 0 || Kind == int32(VoxelLandGraphFunctionCallId().D))
     {
         for (const FVoxelLandGraphPinRecord& Spec : ExternalPins)
         {
             const FName Category = Spec.Type == EVoxelLandGraphValueType::Float ? FloatPin :
                 Spec.Type == EVoxelLandGraphValueType::Int32 ? IntPin : BoolPin;
             UEdGraphPin* Pin = CreatePin(Spec.bOutput ? EGPD_Output : EGPD_Input, Category, FName(*Spec.Name));
+            if (Spec.InterfaceId.IsValid())
+            {
+                FunctionPinIds.Add(Pin->PinId, Spec.InterfaceId);
+            }
             if (!Spec.bOutput)
             {
                 if (Spec.Type == EVoxelLandGraphValueType::Float)
@@ -336,6 +367,187 @@ void UVoxelLandEditorNode::AllocateDefaultPins()
         GetGraph()->NotifyGraphChanged();
     }
 }
+void UVoxelLandEditorNode::AutowireNewNode(UEdGraphPin* FromPin)
+{
+    if (Kind != int32(VoxelLandGraphFunctionCallId().D) || !FromPin || !GetGraph() ||
+        !FromPin->GetOwningNode() || FromPin->GetOwningNode()->GetGraph() != GetGraph())
+    {
+        return;
+    }
+    const UEdGraphSchema* Schema = GetGraph()->GetSchema();
+    if (!Schema) { return; }
+    for (UEdGraphPin* Pin : Pins)
+    {
+        if (!Pin || Pin->Direction == FromPin->Direction || Pin->PinType.PinCategory != FromPin->PinType.PinCategory ||
+            Schema->CanCreateConnection(FromPin, Pin).Response != CONNECT_RESPONSE_MAKE)
+        {
+            continue;
+        }
+        GetGraph()->Modify();
+        Modify();
+        Pin->Modify();
+        FromPin->GetOwningNode()->Modify();
+        FromPin->Modify();
+        if (Schema->TryCreateConnection(FromPin, Pin))
+        {
+            return;
+        }
+    }
+}
+bool UVoxelLandEditorNode::ValidateFunctionInterface(const UVoxelLandGraphFunction* Function) const
+{
+    if (!Function || Function->SourceVersion != 1 || Function->Parameters.Num() > 63 ||
+        !Function->OutputNode.IsValid() || !Function->OutputPin.IsValid() ||
+        (Function->OutputType != EVoxelLandGraphValueType::Float && Function->OutputType != EVoxelLandGraphValueType::Int32 &&
+         Function->OutputType != EVoxelLandGraphValueType::Bool))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Cannot refresh function call: function or interface is invalid."));
+        return false;
+    }
+    TSet<FGuid> Ids;
+    for (const FVoxelLandGraphParameter& Parameter : Function->Parameters)
+    {
+        if (!Parameter.Id.IsValid() || Parameter.Name.IsEmpty() || Ids.Contains(Parameter.Id) ||
+            (Parameter.Type != EVoxelLandGraphValueType::Float && Parameter.Type != EVoxelLandGraphValueType::Int32 &&
+             Parameter.Type != EVoxelLandGraphValueType::Bool))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Cannot refresh function call: invalid input interface."));
+            return false;
+        }
+        Ids.Add(Parameter.Id);
+    }
+    const FVoxelLandGraphNodeRecord* FunctionOutput = Function->Nodes.FindByPredicate([Function](const FVoxelLandGraphNodeRecord& Node)
+    {
+        return Node.Id == Function->OutputNode;
+    });
+    if (!FunctionOutput || !FunctionOutput->Pins.ContainsByPredicate([Function](const FVoxelLandGraphPinRecord& Pin)
+        { return Pin.Id == Function->OutputPin && Pin.bOutput && Pin.Type == Function->OutputType; }))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Cannot refresh function call: selected output is missing or incompatible."));
+        return false;
+    }
+    return true;
+}
+void UVoxelLandEditorNode::RefreshFunctionInputs(const UVoxelLandGraphFunction& Function,
+    const TArray<UEdGraphPin*>& PreviousPins, TArray<UEdGraphPin*>& Ordered, TMap<FGuid, FGuid>& NewInterfaceIds)
+{
+    for (const FVoxelLandGraphParameter& Parameter : Function.Parameters)
+    {
+        UEdGraphPin* Pin = nullptr;
+        for (UEdGraphPin* Candidate : PreviousPins)
+        {
+            if (Candidate && Candidate->Direction == EGPD_Input && FunctionPinIds.FindRef(Candidate->PinId) == Parameter.Id)
+            {
+                Pin = Candidate;
+                break;
+            }
+        }
+        const FName Category = Parameter.Type == EVoxelLandGraphValueType::Float ? FloatPin :
+            Parameter.Type == EVoxelLandGraphValueType::Int32 ? IntPin : BoolPin;
+        if (!Pin)
+        {
+            Pin = CreatePin(EGPD_Input, Category, FName(*Parameter.Name));
+        }
+        const bool bTypeChanged = Pin->PinType.PinCategory != Category;
+        if (bTypeChanged)
+        {
+            for (UEdGraphPin* Linked : Pin->LinkedTo)
+            {
+                if (Linked && Linked->GetOwningNode()) { Linked->GetOwningNode()->Modify(); Linked->Modify(); }
+            }
+            Pin->Modify();
+            Pin->BreakAllPinLinks();
+            Pin->PinType.PinCategory = Category;
+        }
+        if (bTypeChanged || !PreviousPins.Contains(Pin))
+        {
+            Pin->DefaultValue = Parameter.Type == EVoxelLandGraphValueType::Float ? FVoxelLandEditorFloat::Format(Parameter.FloatDefault) :
+                Parameter.Type == EVoxelLandGraphValueType::Int32 ? LexToString(Parameter.IntDefault) :
+                Parameter.BoolDefault ? TEXT("true") : TEXT("false");
+            Pin->AutogeneratedDefaultValue = Pin->DefaultValue;
+        }
+        Pin->Modify();
+        Pin->PinName = FName(*Parameter.Name);
+        NewInterfaceIds.Add(Pin->PinId, Parameter.Id);
+        Ordered.Add(Pin);
+    }
+}
+void UVoxelLandEditorNode::RefreshFunctionOutput(const UVoxelLandGraphFunction& Function,
+    const TArray<UEdGraphPin*>& PreviousPins, TArray<UEdGraphPin*>& Ordered)
+{
+    UEdGraphPin* Output = nullptr;
+    for (UEdGraphPin* Candidate : PreviousPins)
+    {
+        if (Candidate && Candidate->Direction == EGPD_Output) { Output = Candidate; break; }
+    }
+    const FName OutputCategory = Function.OutputType == EVoxelLandGraphValueType::Float ? FloatPin :
+        Function.OutputType == EVoxelLandGraphValueType::Int32 ? IntPin : BoolPin;
+    if (!Output) { Output = CreatePin(EGPD_Output, OutputCategory, TEXT("Result")); }
+    if (Output->PinType.PinCategory != OutputCategory)
+    {
+        for (UEdGraphPin* Linked : Output->LinkedTo)
+        {
+            if (Linked && Linked->GetOwningNode()) { Linked->GetOwningNode()->Modify(); Linked->Modify(); }
+        }
+        Output->Modify();
+        Output->BreakAllPinLinks();
+        Output->PinType.PinCategory = OutputCategory;
+    }
+    Ordered.Add(Output);
+}
+void UVoxelLandEditorNode::RemoveOldFunctionPins(const TArray<UEdGraphPin*>& PreviousPins, const TArray<UEdGraphPin*>& Ordered)
+{
+    for (UEdGraphPin* OldPin : PreviousPins)
+    {
+        if (OldPin && !Ordered.Contains(OldPin))
+        {
+            for (UEdGraphPin* Linked : OldPin->LinkedTo)
+            {
+                if (Linked && Linked->GetOwningNode()) { Linked->GetOwningNode()->Modify(); Linked->Modify(); }
+            }
+            OldPin->Modify();
+            OldPin->BreakAllPinLinks();
+            RemovePin(OldPin);
+        }
+    }
+}
+void UVoxelLandEditorNode::UpdateFunctionPinTemplates()
+{
+    ExternalPins.Reset();
+    for (const UEdGraphPin* Pin : Pins)
+    {
+        FVoxelLandGraphPinRecord Spec;
+        Spec.InterfaceId = FunctionPinIds.FindRef(Pin->PinId);
+        Spec.Name = Pin->PinName.ToString();
+        Spec.bOutput = Pin->Direction == EGPD_Output;
+        Spec.Type = Pin->PinType.PinCategory == IntPin ? EVoxelLandGraphValueType::Int32 :
+            Pin->PinType.PinCategory == BoolPin ? EVoxelLandGraphValueType::Bool : EVoxelLandGraphValueType::Float;
+        if (Spec.Type == EVoxelLandGraphValueType::Float) { LexTryParseString(Spec.FloatDefault, *Pin->DefaultValue); }
+        else if (Spec.Type == EVoxelLandGraphValueType::Int32) { LexTryParseString(Spec.IntDefault, *Pin->DefaultValue); }
+        else { Spec.BoolDefault = Pin->DefaultValue.Equals(TEXT("true"), ESearchCase::IgnoreCase); }
+        ExternalPins.Add(MoveTemp(Spec));
+    }
+}
+void UVoxelLandEditorNode::RefreshFunctionInterface()
+{
+    if (Kind != int32(VoxelLandGraphFunctionCallId().D) || !GetGraph()) { return; }
+    const UVoxelLandGraphFunction* Function = Cast<UVoxelLandGraphFunction>(FunctionPath.TryLoad());
+    if (!ValidateFunctionInterface(Function)) { return; }
+    const FScopedTransaction Transaction(LOCTEXT("RefreshFunction", "Refresh function interface"));
+    Modify();
+    GetGraph()->Modify();
+    const TArray<UEdGraphPin*> PreviousPins = Pins;
+    TArray<UEdGraphPin*> Ordered;
+    TMap<FGuid, FGuid> NewInterfaceIds;
+    RefreshFunctionInputs(*Function, PreviousPins, Ordered, NewInterfaceIds);
+    RefreshFunctionOutput(*Function, PreviousPins, Ordered);
+    RemoveOldFunctionPins(PreviousPins, Ordered);
+    Pins = MoveTemp(Ordered);
+    FunctionPinIds = MoveTemp(NewInterfaceIds);
+    UpdateFunctionPinTemplates();
+    ExternalTitle = FText::FromString(Function->GetName());
+    GetGraph()->NotifyGraphChanged();
+}
 void UVoxelLandEditorNode::AddVariadicInput()
 {
     if (VariadicInputs >= 32)
@@ -407,6 +619,13 @@ void UVoxelLandEditorNode::MoveVariadicInput(FGuid PinId, int32 Direction)
 void UVoxelLandEditorNode::GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const
 {
     TWeakObjectPtr<UVoxelLandEditorNode> WeakNode(const_cast<UVoxelLandEditorNode*>(this));
+    if (Kind == int32(VoxelLandGraphFunctionCallId().D))
+    {
+        FToolMenuSection& Section = Menu->AddSection(TEXT("VoxelLandFunction"), LOCTEXT("FunctionSection", "Function"));
+        Section.AddMenuEntry(TEXT("RefreshFunction"), LOCTEXT("RefreshFunctionLabel", "Refresh function interface"),
+            LOCTEXT("RefreshFunctionTip", "Preserve matching pin IDs; removed or type-changed pins lose incompatible links."), FSlateIcon(),
+            FUIAction(FExecuteAction::CreateLambda([WeakNode]() { if (WeakNode.IsValid()) { WeakNode->RefreshFunctionInterface(); } })));
+    }
     if (Kind == int32(EVoxelLandBuiltinNode::Add) || Kind == int32(EVoxelLandBuiltinNode::Multiply))
     {
         FToolMenuSection& Section = Menu->AddSection(TEXT("VoxelLandInputs"), LOCTEXT("Inputs", "Inputs"));

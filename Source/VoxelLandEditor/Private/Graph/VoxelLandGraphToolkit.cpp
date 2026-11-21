@@ -14,9 +14,12 @@
 #include "Graph/VoxelLandPreviewViewport.h"
 #include "Graph/VoxelLandPreviewScene.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Assets/VoxelLandMaterialSetup.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/VoxelLandGraphFunctionCapture.h"
+#include "Data/VoxelLandGraphFunctionId.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
@@ -26,6 +29,7 @@
 #include "HAL/IConsoleManager.h"
 #include "AdvancedPreviewScene.h"
 #include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/Material.h"
 #include "PropertyCustomizationHelpers.h"
@@ -128,10 +132,38 @@ bool CopyPin(const UEdGraphPin& Pin, FVoxelLandGraphPinRecord& Record)
     }
     return true;
 }
+bool SamePinNames(const TArray<FVoxelLandGraphNodeRecord>& Left, const TArray<FVoxelLandGraphNodeRecord>& Right)
+{
+    TMap<FGuid, FString> Names;
+    int32 Count = 0;
+    for (const FVoxelLandGraphNodeRecord& Node : Left)
+    {
+        for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+        {
+            Names.Add(Pin.Id, Pin.Name);
+            ++Count;
+        }
+    }
+    int32 OtherCount = 0;
+    for (const FVoxelLandGraphNodeRecord& Node : Right)
+    {
+        for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+        {
+            const FString* Name = Names.Find(Pin.Id);
+            if (!Name || *Name != Pin.Name) { return false; }
+            ++OtherCount;
+        }
+    }
+    return Count == OtherCount && Names.Num() == Count;
+}
 void RestorePin(UVoxelLandEditorNode& Node, const FVoxelLandGraphPinRecord& Record)
 {
     UEdGraphPin* Pin = Node.CreatePin(Record.bOutput ? EGPD_Output : EGPD_Input, Category(Record.Type), FName(*Record.Name));
     Pin->PinId = Record.Id;
+    if (Record.InterfaceId.IsValid())
+    {
+        Node.FunctionPinIds.Add(Pin->PinId, Record.InterfaceId);
+    }
     if (Record.Type == EVoxelLandGraphValueType::Float)
     {
         Pin->DefaultValue = FVoxelLandEditorFloat::Format(Record.FloatDefault);
@@ -155,6 +187,7 @@ bool CaptureNode(const UVoxelLandEditorNode& Node, TArray<FVoxelLandGraphNodeRec
     Record.ParameterId = Node.ParameterId;
     Record.SeedSalt = Node.SeedSalt;
     Record.Configuration = Node.Configuration;
+    Record.FunctionPath = Node.FunctionPath;
     for (const UEdGraphPin* Pin : Node.Pins)
     {
         if (!Pin)
@@ -175,6 +208,7 @@ bool CaptureNode(const UVoxelLandEditorNode& Node, TArray<FVoxelLandGraphNodeRec
             PinRecord.bInvalidDefault = true;
             bValidDefaults = false;
         }
+        PinRecord.InterfaceId = Node.FunctionPinIds.FindRef(Pin->PinId);
         Record.Pins.Add(PinRecord);
         if (Pin->Direction == EGPD_Input)
         {
@@ -563,6 +597,10 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnGraph(const FSpawnTabArgs&)
             FrameSelection();
             return FReply::Handled();
         })]
+        + SVerticalBox::Slot().AutoHeight()[SNew(SComboButton)
+            .Visibility_Lambda([this] { return Asset && Asset->IsA<UVoxelLandGraphFunction>() ? EVisibility::Visible : EVisibility::Collapsed; })
+            .ButtonContent()[SNew(STextBlock).Text(LOCTEXT("FunctionOutput", "Set selected function output"))]
+            .OnGetMenuContent_Raw(this, &FVoxelLandGraphToolkit::BuildFunctionOutputMenu)]
         + SVerticalBox::Slot().FillHeight(1)[GraphWidget.ToSharedRef()]];
 }
 TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPalette(const FSpawnTabArgs&)
@@ -614,6 +652,10 @@ FReply FVoxelLandGraphToolkit::AddParameter(EVoxelLandGraphValueType Type)
         return Existing.Name.Equals(Parameter.Name, ESearchCase::IgnoreCase);
     }));
     Asset->Parameters.Add(MoveTemp(Parameter));
+    if (Asset->IsA<UVoxelLandGraphFunction>())
+    {
+        FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+    }
     Details->SetObject(Asset, true);
     GraphChanged(FEdGraphEditAction());
     return FReply::Handled();
@@ -689,6 +731,73 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
         + SVerticalBox::Slot().FillHeight(1)[PreviewViewport.ToSharedRef()]];
 }
 
+TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildFunctionOutputMenu()
+{
+    FMenuBuilder Menu(true, nullptr);
+    bool bHasOutput = false;
+    if (GraphWidget && Asset && Asset->IsA<UVoxelLandGraphFunction>())
+    {
+        for (UObject* Object : GraphWidget->GetSelectedNodes())
+        {
+            const UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(Object);
+            if (!Node) { continue; }
+            for (const UEdGraphPin* Pin : Node->Pins)
+            {
+                if (!Pin || Pin->Direction != EGPD_Output) { continue; }
+                bHasOutput = true;
+                const FString Label = FString::Printf(TEXT("%s - %s (%s)"),
+                    *Node->GetNodeTitle(ENodeTitleType::ListView).ToString(), *Node->GetPinDisplayName(Pin).ToString(),
+                    *Pin->PinType.PinCategory.ToString());
+                Menu.AddMenuEntry(FText::FromString(Label), LOCTEXT("FunctionOutputTip", "Use this output as the function result."),
+                    FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::SetFunctionOutput,
+                        Node->NodeGuid, Pin->PinId, PinType(*Pin))));
+            }
+        }
+    }
+    if (!bHasOutput)
+    {
+        Menu.AddMenuEntry(LOCTEXT("NoFunctionOutput", "Select a node with an output"), FText::GetEmpty(), FSlateIcon(),
+            FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([] { return false; })));
+    }
+    return Menu.MakeWidget();
+}
+void FVoxelLandGraphToolkit::SetFunctionOutput(FGuid NodeId, FGuid PinId, EVoxelLandGraphValueType Type)
+{
+    UVoxelLandGraphFunction* Function = Cast<UVoxelLandGraphFunction>(Asset);
+    if (!Function || bStopped || bPIE || bReloadPaused) { return; }
+    const UVoxelLandEditorNode* Node = nullptr;
+    if (Graph)
+    {
+        for (const UEdGraphNode* Candidate : Graph->Nodes)
+        {
+            if (Candidate && Candidate->NodeGuid == NodeId)
+            {
+                Node = Cast<UVoxelLandEditorNode>(Candidate);
+                break;
+            }
+        }
+    }
+    if (!Node) { return; }
+    UEdGraphPin* const* FoundPin = Node->Pins.FindByPredicate([PinId](const UEdGraphPin* Pin)
+    {
+        return Pin && Pin->PinId == PinId && Pin->Direction == EGPD_Output;
+    });
+    if (!FoundPin || PinType(**FoundPin) != Type) { return; }
+    const auto Provider = FVoxelLandOperatorRegistry::Resolve(Node->ExternalOperatorId, Node->OperatorVersion);
+    if (Node->Kind == int32(EVoxelLandBuiltinNode::SmoothDensity) || (Node->Kind == 0 && Provider && Provider->Stage() == EVoxelLandOperatorStage::OneCellFilter))
+    {
+        Status = TEXT("Error: a density filter cannot be a function output.");
+        return;
+    }
+    const FScopedTransaction Transaction(LOCTEXT("SetFunctionOutputTransaction", "Set function output"));
+    Function->Modify();
+    Function->OutputNode = NodeId;
+    Function->OutputPin = PinId;
+    Function->OutputType = Type;
+    Function->MarkPackageDirty();
+    FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+    Status = TEXT("Function output updated. Calling graphs will recompile when the function changes.");
+}
 TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildPreviewTargetMenu()
 {
     FMenuBuilder Menu(true, nullptr);
@@ -877,6 +986,15 @@ void FVoxelLandGraphToolkit::CreateMirror()
         Node->ParameterId = Record.ParameterId;
         Node->SeedSalt = Record.SeedSalt;
         Node->Configuration = Record.Configuration;
+        Node->FunctionPath = Record.FunctionPath;
+        if (Node->Kind == int32(VoxelLandGraphFunctionCallId().D))
+        {
+            Node->ExternalPins = Record.Pins;
+            if (const UVoxelLandGraphFunction* Function = Cast<UVoxelLandGraphFunction>(Node->FunctionPath.TryLoad()))
+            {
+                Node->ExternalTitle = FText::FromString(Function->GetName());
+            }
+        }
         Node->VariadicInputs = FMath::Max(2, Record.Pins.Num() - 1);
         Graph->AddNode(Node, false, false);
         for (const FVoxelLandGraphPinRecord& Pin : Record.Pins)
@@ -894,7 +1012,7 @@ void FVoxelLandGraphToolkit::CreateMirror()
             (*Source)->MakeLinkTo(*Target);
         }
     }
-    if (Asset->Nodes.IsEmpty())
+    if (Asset->Nodes.IsEmpty() && !Asset->IsA<UVoxelLandGraphFunction>())
     {
         UVoxelLandEditorNode* Output = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
         Output->Kind = int32(EVoxelLandBuiltinNode::DensityOutput);
@@ -929,6 +1047,22 @@ bool FVoxelLandGraphToolkit::CaptureMirrorSnapshot(FVoxelLandGraphSnapshot& Snap
     }
     return true;
 }
+bool FVoxelLandGraphToolkit::CaptureMirrorWithDependencies(FVoxelLandGraphSnapshot& Snapshot, bool& bValidDefaults,
+    FString& Error, FVoxelLandGraphDiagnostic* Diagnostic) const
+{
+    if (!CaptureMirrorSnapshot(Snapshot, bValidDefaults, Error, Diagnostic))
+    {
+        return false;
+    }
+    FVoxelLandGraphDiagnostic DependencyDiagnostic;
+    if (!FVoxelLandGraphFunctionCapture::Capture(Snapshot, DependencyDiagnostic))
+    {
+        Error = DependencyDiagnostic.Message;
+        if (Diagnostic) { *Diagnostic = MoveTemp(DependencyDiagnostic); }
+        return false;
+    }
+    return true;
+}
 bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagnostic* Diagnostic)
 {
     FVoxelLandGraphSnapshot Snapshot;
@@ -937,22 +1071,34 @@ bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagno
     {
         return false;
     }
-    const uint64 NewHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
+    const uint64 MirrorHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
     FVoxelLandGraphSnapshot Stored;
     Stored.SourceVersion = Asset->SourceVersion;
     Stored.Parameters = Asset->Parameters;
     Stored.Nodes = Asset->Nodes;
     Stored.Links = Asset->Links;
-    if (FVoxelLandProgramCodec::SourceFingerprint(Stored) != NewHash)
+    if (FVoxelLandProgramCodec::SourceFingerprint(Stored) != MirrorHash || !SamePinNames(Stored.Nodes, Snapshot.Nodes))
     {
         if (!GIsTransacting)
         {
             Asset->Modify();
         }
-        Asset->Nodes = MoveTemp(Snapshot.Nodes);
-        Asset->Links = MoveTemp(Snapshot.Links);
+        Asset->Nodes = Snapshot.Nodes;
+        Asset->Links = Snapshot.Links;
         Asset->MarkPackageDirty();
+        if (Asset->IsA<UVoxelLandGraphFunction>())
+        {
+            FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+        }
     }
+    FVoxelLandGraphDiagnostic DependencyDiagnostic;
+    if (!FVoxelLandGraphFunctionCapture::Capture(Snapshot, DependencyDiagnostic))
+    {
+        Error = DependencyDiagnostic.Message;
+        if (Diagnostic) { *Diagnostic = MoveTemp(DependencyDiagnostic); }
+        return false;
+    }
+    const uint64 NewHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
     if (NewHash != LastSourceHash)
     {
         LastSourceHash = NewHash;
@@ -965,6 +1111,10 @@ void FVoxelLandGraphToolkit::PostUndo(bool bSuccess)
 {
     if (bSuccess && !bStopped)
     {
+        if (Asset && Asset->IsA<UVoxelLandGraphFunction>())
+        {
+            FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+        }
         SynchronizeGraph();
         SynchronizePreviewSettings(true);
         if (PreviewDetails)
@@ -1026,6 +1176,10 @@ void FVoxelLandGraphToolkit::SynchronizeGraph()
 }
 void FVoxelLandGraphToolkit::PropertiesChanged(const FPropertyChangedEvent&)
 {
+    if (Asset && Asset->IsA<UVoxelLandGraphFunction>())
+    {
+        FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+    }
     if (PreviewDetails)
     {
         PreviewDetails->ForceRefresh();
@@ -1050,6 +1204,12 @@ void FVoxelLandGraphToolkit::RequestCompile()
         return;
     }
     CompileDue = 0.0;
+    if (Asset && Asset->IsA<UVoxelLandGraphFunction>())
+    {
+        CancelPreview();
+        Status = TEXT("Function source: choose an output and preview it through a calling graph.");
+        return;
+    }
     if (SemanticChangeTime <= 0.0)
     {
         SemanticChangeTime = FPlatformTime::Seconds();
@@ -1072,7 +1232,7 @@ void FVoxelLandGraphToolkit::RequestCompile()
     FVoxelLandGraphSnapshot Snapshot;
     bool bValidDefaults = true;
     const bool bSnapshotValid = PreviewNodeId.IsValid()
-        ? CaptureMirrorSnapshot(Snapshot, bValidDefaults, Error, &Diagnostic) && bValidDefaults
+        ? CaptureMirrorWithDependencies(Snapshot, bValidDefaults, Error, &Diagnostic) && bValidDefaults
         : Asset->CaptureSnapshot(Snapshot, Diagnostic);
     if (!bSnapshotValid)
     {
@@ -1290,7 +1450,17 @@ void FVoxelLandGraphToolkit::PasteNodes()
             if (Pin)
             {
                 Pin->Modify();
+                const FGuid OldPinId = Pin->PinId;
                 Pin->PinId = FGuid::NewGuid();
+                if (UVoxelLandEditorNode* TerrainNode = Cast<UVoxelLandEditorNode>(Node))
+                {
+                    if (const FGuid* InterfaceId = TerrainNode->FunctionPinIds.Find(OldPinId))
+                    {
+                        const FGuid Value = *InterfaceId;
+                        TerrainNode->FunctionPinIds.Remove(OldPinId);
+                        TerrainNode->FunctionPinIds.Add(Pin->PinId, Value);
+                    }
+                }
             }
         }
         Node->NodePosX += 32;
@@ -1710,7 +1880,7 @@ void FVoxelLandGraphToolkit::StartPreview()
     FVoxelLandGraphSnapshot Snapshot;
     bool bValidDefaults = true;
     const bool bSnapshotValid = PreviewNodeId.IsValid()
-        ? CaptureMirrorSnapshot(Snapshot, bValidDefaults, Error) && bValidDefaults
+        ? CaptureMirrorWithDependencies(Snapshot, bValidDefaults, Error) && bValidDefaults
         : Asset->CaptureSnapshot(Snapshot, Error);
     if (!bSnapshotValid)
     {
@@ -1956,6 +2126,79 @@ void FVoxelLandGraphToolkit::ProcessPreviewWork()
         StartPreview();
     }
 }
+void FVoxelLandGraphToolkit::PollFunctionDependencies()
+{
+    if (!Asset || !Graph || bStopped || bPIE || bReloadPaused)
+    {
+        return;
+    }
+    const double Now = FPlatformTime::Seconds();
+    if (Now < NextDependencyPoll) { return; }
+    NextDependencyPoll = Now + 0.5;
+    bool bHasCall = false;
+    for (const UEdGraphNode* GraphNode : Graph->Nodes)
+    {
+        const UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(GraphNode);
+        if (Node && Node->Kind == int32(VoxelLandGraphFunctionCallId().D))
+        {
+            bHasCall = true;
+            break;
+        }
+    }
+    if (!bHasCall) { DependencyError.Reset(); return; }
+    FVoxelLandGraphSnapshot Snapshot;
+    FVoxelLandGraphDiagnostic Diagnostic;
+    FString Error;
+    bool bValidDefaults = true;
+    if (!CaptureMirrorWithDependencies(Snapshot, bValidDefaults, Error, &Diagnostic) || !bValidDefaults)
+    {
+        if (Error != DependencyError)
+        {
+            DependencyError = Error;
+            ErrorDiagnostic = MoveTemp(Diagnostic);
+            ++Revision;
+            CancelPreview();
+            CompileDue = 0.0;
+            Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
+        }
+        return;
+    }
+    const uint64 Hash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
+    if (Hash != LastSourceHash || !DependencyError.IsEmpty())
+    {
+        DependencyError.Reset();
+        LastSourceHash = Hash;
+        ++Revision;
+        CancelPreview();
+        SemanticChangeTime = Now;
+        if (Asset->IsA<UVoxelLandGraphFunction>())
+        {
+            FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
+            Status = TEXT("Function dependency changed; refresh any incompatible call interfaces.");
+        }
+        else
+        {
+            CompileDue = Now + 0.2;
+            Status = TEXT("Stale: function dependency changed.");
+        }
+    }
+}
+void FVoxelLandGraphToolkit::PollFunctionPalette()
+{
+    if (!PaletteWidget || FPlatformTime::Seconds() < NextPalettePoll) { return; }
+    NextPalettePoll = FPlatformTime::Seconds() + 1.0;
+    FAssetRegistryModule& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    TArray<FAssetData> Assets;
+    Registry.Get().GetAssetsByClass(UVoxelLandGraphFunction::StaticClass()->GetClassPathName(), Assets);
+    TArray<FString> Paths;
+    for (const FAssetData& Item : Assets) { Paths.Add(Item.GetSoftObjectPath().ToString()); }
+    Paths.Sort();
+    if (Paths != FunctionAssetPaths)
+    {
+        FunctionAssetPaths = MoveTemp(Paths);
+        PaletteWidget->RefreshAllActions(true, false);
+    }
+}
 bool FVoxelLandGraphToolkit::PollJobs(float)
 {
     if (bStopped)
@@ -1963,12 +2206,19 @@ bool FVoxelLandGraphToolkit::PollJobs(float)
         return false;
     }
     WorkerTasks.RemoveAll([](const TFuture<void>& Task) { return Task.IsReady(); });
+    PollFunctionPalette();
     const uint64 CurrentPresentationRevision = FVoxelLandEditorOperatorRegistry::GetRevision();
     if (PaletteWidget && PresentationRevision != CurrentPresentationRevision)
     {
         PresentationRevision = CurrentPresentationRevision;
         PaletteWidget->RefreshAllActions(true, false);
     }
+    if ((CompileWork && CompileWork->Done.Load()) || (PreviewWork && PreviewWork->Done.Load()) || PreviewFence)
+    {
+        // Recheck dependencies immediately before accepting async work or a render fence.
+        NextDependencyPoll = 0.0;
+    }
+    PollFunctionDependencies();
     ProcessCompileWork();
     ProcessPreviewWork();
     PollPreviewFence();

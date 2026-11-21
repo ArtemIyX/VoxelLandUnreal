@@ -12,6 +12,10 @@ struct VOXELLANDDATA_API FVoxelLandGraphPinRecord
 	UPROPERTY()
 	FGuid Id;
 
+	// Stable function interface identity; invalid for ordinary node pins.
+	UPROPERTY()
+	FGuid InterfaceId;
+
 	UPROPERTY()
 	FString Name;
 

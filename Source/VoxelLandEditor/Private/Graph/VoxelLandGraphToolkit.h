@@ -111,6 +111,8 @@ private:
     bool CaptureMirror(FString& Error, FVoxelLandGraphDiagnostic* Diagnostic = nullptr);
     bool CaptureMirrorSnapshot(FVoxelLandGraphSnapshot& Snapshot, bool& bValidDefaults, FString& Error,
         FVoxelLandGraphDiagnostic* Diagnostic = nullptr) const;
+    bool CaptureMirrorWithDependencies(FVoxelLandGraphSnapshot& Snapshot, bool& bValidDefaults, FString& Error,
+        FVoxelLandGraphDiagnostic* Diagnostic = nullptr) const;
     void GraphChanged(const FEdGraphEditAction& Action);
     void SynchronizeGraph();
     void PropertiesChanged(const FPropertyChangedEvent& Event);
@@ -131,6 +133,8 @@ private:
     bool BuildPreviewProfile(const FVoxelLandSerializedProgram& Payload, FVoxelLandZoneProfile& Profile, FString& Error) const;
     bool BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& Snapshot, FString& Error) const;
     TSharedRef<SWidget> BuildPreviewTargetMenu();
+    TSharedRef<SWidget> BuildFunctionOutputMenu();
+    void SetFunctionOutput(FGuid NodeId, FGuid PinId, EVoxelLandGraphValueType Type);
     void SelectPreviewTarget(FGuid NodeId, FGuid PinId, FString Label);
     FReply ReturnToRootPreview();
     void CancelPreview();
@@ -159,6 +163,8 @@ private:
     bool ResolveDiagnosticTarget(UEdGraphNode*& OutNode, UEdGraphPin*& OutPin) const;
     FReply AddParameter(EVoxelLandGraphValueType Type);
     bool PollJobs(float DeltaTime);
+    void PollFunctionDependencies();
+    void PollFunctionPalette();
     void ProcessCompileWork();
     void ProcessPreviewWork();
     void PollPreviewFence();
@@ -203,6 +209,10 @@ private:
     TSharedPtr<FVoxelLandPreviewFence> PreviewFence;
     double SemanticChangeTime = 0.0;
     double CompileDue = 0.0;
+    double NextDependencyPoll = 0.0;
+    double NextPalettePoll = 0.0;
+    TArray<FString> FunctionAssetPaths;
+    FString DependencyError;
     bool bCompileRequested = false;
     bool bPreviewRequested = false;
     bool bStopped = false;

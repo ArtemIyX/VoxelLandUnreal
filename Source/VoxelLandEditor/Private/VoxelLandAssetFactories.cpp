@@ -1,5 +1,6 @@
 #include "VoxelLandAssetFactories.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Assets/VoxelLandMaterialSetup.h"
 
@@ -12,6 +13,16 @@ UVoxelLandTerrainGraphFactory::UVoxelLandTerrainGraphFactory()
 UObject* UVoxelLandTerrainGraphFactory::FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject*, FFeedbackContext*)
 {
     return NewObject<UVoxelLandTerrainGraph>(Parent, InClass, Name, Flags | RF_Transactional);
+}
+UVoxelLandGraphFunctionFactory::UVoxelLandGraphFunctionFactory()
+{
+    SupportedClass = UVoxelLandGraphFunction::StaticClass();
+    bCreateNew = true;
+    bEditAfterNew = true;
+}
+UObject* UVoxelLandGraphFunctionFactory::FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject*, FFeedbackContext*)
+{
+    return NewObject<UVoxelLandGraphFunction>(Parent, InClass, Name, Flags | RF_Transactional);
 }
 UVoxelLandWorldSettingsFactory::UVoxelLandWorldSettingsFactory()
 {

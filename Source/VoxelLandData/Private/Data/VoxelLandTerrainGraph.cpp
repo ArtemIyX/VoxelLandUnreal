@@ -1,5 +1,6 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/VoxelLandGraphCycle.h"
+#include "Data/VoxelLandGraphFunctionCapture.h"
 
 namespace
 {
@@ -185,5 +186,10 @@ bool UVoxelLandTerrainGraph::CaptureSnapshot(FVoxelLandGraphSnapshot& OutSnapsho
     OutSnapshot.Parameters = Parameters;
     OutSnapshot.Nodes = Nodes;
     OutSnapshot.Links = Links;
+    if (!FVoxelLandGraphFunctionCapture::Capture(OutSnapshot, OutDiagnostic))
+    {
+        OutSnapshot = FVoxelLandGraphSnapshot();
+        return false;
+    }
     return true;
 }

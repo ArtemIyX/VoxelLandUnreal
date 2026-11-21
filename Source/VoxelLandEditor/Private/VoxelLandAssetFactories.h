@@ -14,6 +14,15 @@ public:
 };
 
 UCLASS()
+class UVoxelLandGraphFunctionFactory : public UFactory
+{
+    GENERATED_BODY()
+public:
+    UVoxelLandGraphFunctionFactory();
+    virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
+};
+
+UCLASS()
 class UVoxelLandWorldSettingsFactory : public UFactory
 {
     GENERATED_BODY()

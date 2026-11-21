@@ -1,5 +1,7 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Graph/VoxelLandGraphCompiler.h"
+#include "Graph/VoxelLandGraphFunctionFlatten.h"
+#include "Data/VoxelLandGraphFunctionId.h"
 #include "Operators/VoxelLandOperator.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Generation/VoxelLandGenerator.h"
@@ -88,6 +90,48 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
     {
         WriteGuid(W, Link.SourceNode); WriteGuid(W, Link.SourcePin);
         WriteGuid(W, Link.TargetNode); WriteGuid(W, Link.TargetPin);
+    }
+    // Preserve the v1 byte stream exactly for graphs without function calls.
+    const bool bHasFunctionCalls = Snapshot.Nodes.ContainsByPredicate([](const FVoxelLandGraphNodeRecord& Node)
+    {
+        return !Node.FunctionPath.IsNull();
+    });
+    if (bHasFunctionCalls || !Snapshot.Functions.IsEmpty())
+    {
+        W.U32(0x31464c56); // Versioned function dependency extension.
+        W.U32(Nodes.Num());
+        for (const FVoxelLandGraphNodeRecord& Node : Nodes)
+        {
+            WriteGuid(W, Node.Id);
+            W.String(Node.FunctionPath.ToString());
+            W.U32(Node.Pins.Num());
+            for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+            {
+                WriteGuid(W, Pin.InterfaceId);
+            }
+        }
+        TArray<FVoxelLandGraphFunctionSnapshot> Functions = Snapshot.Functions;
+        Functions.Sort([](const FVoxelLandGraphFunctionSnapshot& A, const FVoxelLandGraphFunctionSnapshot& B)
+        {
+            return A.AssetPath < B.AssetPath;
+        });
+        W.U32(Functions.Num());
+        for (const FVoxelLandGraphFunctionSnapshot& Function : Functions)
+        {
+            W.String(Function.AssetPath);
+            W.U32(uint32(Function.SourceVersion));
+            W.U8(uint8(Function.OutputType));
+            WriteGuid(W, Function.OutputNode);
+            WriteGuid(W, Function.OutputPin);
+            FVoxelLandGraphSnapshot FunctionSource;
+            FunctionSource.SourceVersion = Function.SourceVersion;
+            FunctionSource.Parameters = Function.Inputs;
+            FunctionSource.Nodes = Function.Nodes;
+            FunctionSource.Links = Function.Links;
+            const uint64 FunctionHash = SourceFingerprint(FunctionSource);
+            W.U32(uint32(FunctionHash));
+            W.U32(uint32(FunctionHash >> 32));
+        }
     }
     return FXxHash64::HashBuffer(W.Bytes.GetData(), W.Bytes.Num()).Hash;
 }
@@ -236,6 +280,19 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
 {
     OutProgram.Reset();
     OutError.Reset();
+    const bool bHasFunctions = !Source.Functions.IsEmpty() || Source.Nodes.ContainsByPredicate([](const FVoxelLandGraphNodeRecord& Node)
+    {
+        return Node.OperatorId == VoxelLandGraphFunctionCallId() || !Node.FunctionPath.IsNull();
+    });
+    if (bHasFunctions)
+    {
+        FVoxelLandGraphDiagnostic Diagnostic;
+        if (!FVoxelLandGraphFunctionFlatten::ValidateSource(Source, Diagnostic))
+        {
+            OutError = Diagnostic.Message;
+            return false;
+        }
+    }
     if (Payload.ProgramVersion >= 2 && Payload.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion))
     {
         OutError = TEXT("Compiled graph has an incompatible compiler semantic version; recompile and save the graph");

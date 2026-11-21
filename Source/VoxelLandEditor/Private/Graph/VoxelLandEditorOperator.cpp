@@ -120,6 +120,11 @@ bool FVoxelLandEditorOperatorRegistry::FindPresentation(const FGuid& OperatorId,
     OutPresentation = *Found;
     return true;
 }
+void FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged()
+{
+    check(IsInGameThread());
+    ++PresentationRevision;
+}
 void FVoxelLandEditorOperatorRegistry::GetPresentations(TArray<FVoxelLandEditorOperatorPresentation>& OutRegistryPresentations)
 {
     OutRegistryPresentations.Reset();

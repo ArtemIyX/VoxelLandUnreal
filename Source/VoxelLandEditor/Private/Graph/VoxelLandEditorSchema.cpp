@@ -4,6 +4,7 @@
 #include "Misc/DefaultValueHelper.h"
 #include "ScopedTransaction.h"
 #include "Graph/VoxelLandEditorNode.h"
+#include "Graph/VoxelLandBuiltinPresentationCatalog.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Data/VoxelLandBuiltinCatalog.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
@@ -207,35 +208,7 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
         {
             continue;
         }
-        FText Category = LOCTEXT("Math", "Math and control");
-        if (Kind <= int32(EVoxelLandBuiltinNode::FloatParameter) || (Kind >= int32(EVoxelLandBuiltinNode::IntConstant) && Kind <= int32(EVoxelLandBuiltinNode::BoolParameter)))
-        {
-            Category = LOCTEXT("Inputs", "Inputs and output");
-        }
-        else if (Kind >= int32(EVoxelLandBuiltinNode::Union) && Kind <= int32(EVoxelLandBuiltinNode::HeightToDensity))
-        {
-            Category = LOCTEXT("TerrainAndCsg", "Terrain and CSG");
-        }
-        else if (Kind >= int32(EVoxelLandBuiltinNode::IntToFloat) && Kind <= int32(EVoxelLandBuiltinNode::SelectBool))
-        {
-            Category = LOCTEXT("TypedControl", "Typed control");
-        }
-        else if (Kind == int32(EVoxelLandBuiltinNode::SmoothDensity))
-        {
-            Category = LOCTEXT("Filters", "Density filters");
-        }
-        else if (Kind >= int32(EVoxelLandBuiltinNode::RerouteFloat))
-        {
-            Category = LOCTEXT("Reroutes", "Organization");
-        }
-        else if (Kind >= int32(EVoxelLandBuiltinNode::Perlin2))
-        {
-            Category = LOCTEXT("Noise", "Noise");
-        }
-        else if (Kind >= int32(EVoxelLandBuiltinNode::Plane))
-        {
-            Category = LOCTEXT("Shapes", "Shapes");
-        }
+        const FText Category = FVoxelLandBuiltinPresentationCatalog::Category(Builtin);
         UVoxelLandEditorNode* Template = NewObject<UVoxelLandEditorNode>(ContextMenuBuilder.OwnerOfTemporaries);
         Template->Kind = Kind;
         TSharedPtr<FEdGraphSchemaAction_NewNode> Action = MakeShared<FEdGraphSchemaAction_NewNode>(

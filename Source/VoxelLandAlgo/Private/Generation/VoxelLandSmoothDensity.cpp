@@ -77,6 +77,11 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 	FVoxelLandWorkerContext& Worker, bool bEnabled, float Strength,
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const
 {
+	if (M4Unlimited)
+	{
+		return SmoothError(EVoxelLandErrorCode::InvalidContext,
+			TEXT("M4 local terrain uses its configured filter through GenerateChunkCancellable"));
+	}
 	if (!M4HeightGrid)
 	{
 		OutChunk.Reset();

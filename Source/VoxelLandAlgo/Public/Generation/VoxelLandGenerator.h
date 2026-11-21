@@ -14,6 +14,8 @@ class IVoxelLandOperator;
 class FVoxelLandOperatorRegistrySnapshot;
 class FVoxelLandWorkerContext;
 class FVoxelLandM4HeightGrid;
+struct FVoxelLandM4UnlimitedConfig;
+struct FVoxelLandM4SmoothSettings;
 struct FVoxelLandWorkerContextImpl;
 
 // Copies and validates the draft before publishing it. Safe to share across workers.
@@ -53,6 +55,15 @@ public:
 	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		const FVoxelLandM4OverhangConfig& Overhang,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	// Explicit final filter independent of the control graph. Its version is validated.
+	static FVoxelLandError CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4SmoothSettings& Smooth,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	// M4 without global erosion; bounded by the VM's exact integer coordinate range.
+	static FVoxelLandError CreateM4Unlimited(const FVoxelLandGeneratorSettings& Settings,
+		const FVoxelLandM4UnlimitedConfig& Config,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
     // Proof-only hint; chunk sampling still runs and remains authoritative.
@@ -98,6 +109,8 @@ private:
 	FVoxelLandGenerator& operator=(const FVoxelLandGenerator&) = delete;
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> M4HeightGrid;
+	TSharedPtr<const FVoxelLandM4UnlimitedConfig, ESPMode::ThreadSafe> M4Unlimited;
+	TSharedPtr<const FVoxelLandGeneratorSettings, ESPMode::ThreadSafe> M4UnlimitedSettings;
 	bool bM4NormalizeSlope = false;
 	FVoxelLandM4OverhangConfig M4Overhang;
 	int32 M4OverhangSeed = 0;

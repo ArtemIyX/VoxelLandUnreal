@@ -6,6 +6,7 @@
 #include "Data/Structs/VoxelLandProgramDraft.h"
 
 class FVoxelLandGenerator;
+class FVoxelLandWorkerContext;
 class IVoxelLandOperatorWorker;
 namespace VoxelLandNative
 {
@@ -31,6 +32,8 @@ struct FVoxelLandWorkerContextImpl
 	TArray<int32> OperatorSimdIntScratch;
 	TArray<int16> Quantized;
 	TArray<uint8> HashBytes;
+	// Child workers are created and destroyed on the same thread as this context.
+	TUniquePtr<FVoxelLandWorkerContext> M4UnlimitedWorkers[3];
 
 	FVoxelLandError InitializeNoise(const FVoxelLandProgramDraft& Program, const FVoxelLandBackendOptions& Options,
 		const TArray<float>& FloatParameters, const TArray<int32>& IntParameters);

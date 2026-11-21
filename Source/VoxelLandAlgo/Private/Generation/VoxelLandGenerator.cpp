@@ -3,6 +3,10 @@
 #include "Generation/VoxelLandM4HeightGrid.h"
 #include "Generation/VoxelLandM4Slope.h"
 #include "Generation/VoxelLandM4Overhang.h"
+#include "Generation/VoxelLandM4ControlGrid.h"
+#include "Generation/VoxelLandM4Unlimited.h"
+#include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
+#include "Data/Structs/VoxelLandM4SmoothSettings.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "../VoxelLandNativeNoise.h"
 #include "HAL/PlatformTLS.h"
@@ -151,6 +155,87 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 	{
 		return Error;
 	}
+	OutGenerator = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4SmoothSettings& Smooth,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	if (Smooth.Version != 1 || !FMath::IsFinite(Smooth.Strength) || Smooth.Strength < 0.f || Smooth.Strength > 1.f)
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
+	}
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+	if (FVoxelLandError Error = CreateM4HeightField(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Overhang, Result))
+	{
+		return Error;
+	}
+	// Result has not been published and was created as a mutable generator.
+	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
+	Mutable->bSmoothEnabled = Smooth.bEnabled;
+	Mutable->SmoothStrength = Smooth.Strength;
+	OutGenerator = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGeneratorSettings& Settings,
+	const FVoxelLandM4UnlimitedConfig& Config, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	if (IsInGameThread())
+	{
+		return Fail(
+			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("M4 local generator setup requires a worker thread"));
+	}
+	const float Size = Settings.Profile.VoxelSizeCm;
+	if (!FMath::IsFinite(Size) || Size < 1.f || Size > 134217.f || FMath::FloorToDouble(double(Size)) != double(Size)
+		|| !Settings.Program || Settings.Program->GetData().ExternalFilterIndex != INDEX_NONE
+		|| !Settings.Program->GetData().ExternalOperators.IsEmpty())
+	{
+		return Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local terrain settings or unsupported provider"));
+	}
+	if (!VoxelLandM4Overhang::IsValid(Config.Overhang.Displacement) || !FMath::IsFinite(Config.Overhang.FrequencyPerCm)
+		|| Config.Overhang.FrequencyPerCm <= 0.f || Config.Overhang.FrequencyPerCm > 1.f
+		|| !Config.Overhang.NodeId.IsValid())
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local overhang settings"));
+	}
+	if (Config.SmoothOverride.IsSet()
+		&& (Config.SmoothOverride->Version != 1 || !FMath::IsFinite(Config.SmoothOverride->Strength)
+			|| Config.SmoothOverride->Strength < 0.f || Config.SmoothOverride->Strength > 1.f))
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
+	}
+	const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Controls[] = {
+		Config.ContinentalGenerator, Config.MountainGenerator, Config.PeaksGenerator};
+	if (!Config.ContinentalCurve || !Config.MountainCurve || !Config.PeaksCurve)
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local control curves are required"));
+	}
+	for (const auto& Control : Controls)
+	{
+		if (!Control || Control->M4HeightGrid || Control->M4Unlimited)
+		{
+			return Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local controls must be ordinary VM generators"));
+		}
+		if (FVoxelLandError Error = VoxelLandM4ControlGrid::ValidateProgram(Control->GetProgram()))
+		{
+			return Error;
+		}
+	}
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+	if (FVoxelLandError Error = CreateInternal(Settings, nullptr, false, nullptr, Result))
+	{
+		return Error;
+	}
+	// CreateInternal allocates a mutable object; no reference has been published.
+	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
+	Mutable->M4Unlimited = MakeShared<FVoxelLandM4UnlimitedConfig, ESPMode::ThreadSafe>(Config);
+	Mutable->M4UnlimitedSettings = MakeShared<FVoxelLandGeneratorSettings, ESPMode::ThreadSafe>(Settings);
 	OutGenerator = MoveTemp(Result);
 	return {};
 }
@@ -406,6 +491,20 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	W.Owner = AsShared();
 	W.Thread = FPlatformTLS::GetCurrentThreadId();
 	W.VM = SelectedVM;
+	if (M4Unlimited)
+	{
+		const FVoxelLandGenerator* Controls[] = {M4Unlimited->ContinentalGenerator.Get(),
+			M4Unlimited->MountainGenerator.Get(), M4Unlimited->PeaksGenerator.Get()};
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			if (FVoxelLandError Error = Controls[Index]->CreateWorker(W.M4UnlimitedWorkers[Index]))
+			{
+				return Error;
+			}
+		}
+		OutWorker = MoveTemp(Worker);
+		return {};
+	}
 	if (M4HeightGrid)
 	{
 		// Native noise resources are created and destroyed on this worker's thread.
@@ -822,7 +921,7 @@ FVoxelLandError FVoxelLandWorkerContextImpl::QuantizeOutput(int32 N, float Voxel
 FVoxelLandError FVoxelLandGenerator::EvaluateToWorkerBuffer(
     TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const
 {
-	if (M4HeightGrid)
+	if (M4HeightGrid || M4Unlimited)
 	{
 		return Fail(
 			EVoxelLandErrorCode::InvalidContext, TEXT("M4 height fields require exact chunk lattice coordinates"));
@@ -929,7 +1028,32 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
-    if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
+	if (M4Unlimited)
+	{
+		if (IsInGameThread())
+		{
+			return Fail(
+				EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("M4 local generation requires a worker thread"));
+		}
+		if (!Worker.Impl || Worker.Impl->Owner.Get() != this
+			|| Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId() || !Worker.Impl->M4UnlimitedWorkers[0]
+			|| !Worker.Impl->M4UnlimitedWorkers[1] || !Worker.Impl->M4UnlimitedWorkers[2])
+		{
+			return Fail(EVoxelLandErrorCode::InvalidContext,
+				TEXT("M4 local worker belongs to a different generator or thread"));
+		}
+		if (FVoxelLandError Error = ValidateM4ChunkDemand(Key))
+		{
+			return Error;
+		}
+		return VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, M4Unlimited->Overhang,
+			M4Unlimited->bNormalizeSlope, M4Unlimited->BaseQ8, *M4Unlimited->ContinentalGenerator,
+			*Worker.Impl->M4UnlimitedWorkers[0], *M4Unlimited->ContinentalCurve, *M4Unlimited->MountainGenerator,
+			*Worker.Impl->M4UnlimitedWorkers[1], *M4Unlimited->MountainCurve, *M4Unlimited->PeaksGenerator,
+			*Worker.Impl->M4UnlimitedWorkers[2], *M4Unlimited->PeaksCurve, Key, OutChunk, IsCancelled,
+			M4Unlimited->SmoothOverride);
+	}
+	if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
     {
         return GenerateExternalFilteredChunkCancellable(Key, Worker, OutChunk, IsCancelled);
     }
@@ -942,6 +1066,29 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 
 FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const
 {
+	if (M4Unlimited)
+	{
+		if (Key.LOD != 0)
+		{
+			return Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 local terrain supports only LOD 0"));
+		}
+		const int64 Size = int64(Profile.VoxelSizeCm);
+		const int64 X = int64(Key.Coordinate.X) * 32, Y = int64(Key.Coordinate.Y) * 32,
+					Z = int64(Key.Coordinate.Z) * 32;
+		int64 MinX = 0, MaxX = 0, MinY = 0, MaxY = 0, MinZ = 0, MaxZ = 0;
+		if (!VoxelLandM4Control::LatticePositionCm(X - 3, Size, MinX)
+			|| !VoxelLandM4Control::LatticePositionCm(X + 35, Size, MaxX)
+			|| !VoxelLandM4Control::LatticePositionCm(Y - 3, Size, MinY)
+			|| !VoxelLandM4Control::LatticePositionCm(Y + 35, Size, MaxY)
+			|| !VoxelLandM4Control::LatticePositionCm(Z - 2, Size, MinZ)
+			|| !VoxelLandM4Control::LatticePositionCm(Z + 34, Size, MaxZ) || MinX < -16777216 || MaxX > 16777216
+			|| MinY < -16777216 || MaxY > 16777216 || MinZ < -2000000 || MaxZ > 2000000)
+		{
+			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate,
+				TEXT("M4 local terrain demand exceeds supported exact coordinates"));
+		}
+		return {};
+	}
 	if (!M4HeightGrid)
 	{
 		return {};

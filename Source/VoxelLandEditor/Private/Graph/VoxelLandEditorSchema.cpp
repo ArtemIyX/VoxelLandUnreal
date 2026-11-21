@@ -5,6 +5,7 @@
 #include "ScopedTransaction.h"
 #include "Graph/VoxelLandEditorNode.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/VoxelLandBuiltinCatalog.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/VoxelLandGraphFunctionId.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -196,8 +197,11 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
         LOCTEXT("Organization", "Organization"), LOCTEXT("Comment", "Comment"), LOCTEXT("CommentTip", "Add an editor-only comment."), 0);
     Comment->NodeTemplate = NewObject<UEdGraphNode_Comment>(ContextMenuBuilder.OwnerOfTemporaries);
     ContextMenuBuilder.AddAction(Comment);
-    for (int32 Kind = int32(EVoxelLandBuiltinNode::DensityOutput); Kind <= int32(EVoxelLandBuiltinNode::SmoothDensity); ++Kind)
+    TArray<EVoxelLandBuiltinNode> Builtins;
+    FVoxelLandBuiltinCatalog::GetKinds(Builtins);
+    for (EVoxelLandBuiltinNode Builtin : Builtins)
     {
+        const int32 Kind = int32(Builtin);
         if (ContextMenuBuilder.CurrentGraph && ContextMenuBuilder.CurrentGraph->GetOuter()->IsA<UVoxelLandGraphFunction>() &&
             (Kind == int32(EVoxelLandBuiltinNode::DensityOutput) || Kind == int32(EVoxelLandBuiltinNode::SmoothDensity)))
         {

@@ -21,6 +21,14 @@ FVoxelLandProgramDraft M4ControlGridTestProgram(EVoxelLandOpcode Position)
 	Draft.Instructions = {Load, Store};
 	return Draft;
 }
+
+FVoxelLandError M4ControlGridValidateOffThread(
+	const FVoxelLandProgramDraft& Draft, TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram)
+{
+	return Async(EAsyncExecution::ThreadPool, [&Draft, &OutProgram] {
+		return FVoxelLandProgram::Validate(Draft, OutProgram);
+	}).Get();
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -28,15 +36,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FVoxelLandM4ControlGridValidationTest::RunTest(const FString& Parameters)
 {
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
-	FVoxelLandError Error = FVoxelLandProgram::Validate(M4ControlGridTestProgram(EVoxelLandOpcode::LoadX), Program);
+	FVoxelLandError Error = M4ControlGridValidateOffThread(M4ControlGridTestProgram(EVoxelLandOpcode::LoadX), Program);
 	if (!TestFalse(TEXT("2D program validates"), bool(Error)) || !Program)
 	{
+		AddError(FString::Printf(TEXT("2D program validation failed: %s"), *Error.Message));
 		return false;
 	}
 	TestFalse(TEXT("X program accepted as 2D"), bool(VoxelLandM4ControlGrid::ValidateProgram(*Program)));
-	Error = FVoxelLandProgram::Validate(M4ControlGridTestProgram(EVoxelLandOpcode::LoadZ), Program);
+	Error = M4ControlGridValidateOffThread(M4ControlGridTestProgram(EVoxelLandOpcode::LoadZ), Program);
 	if (!TestFalse(TEXT("3D program validates for existing VM"), bool(Error)) || !Program)
 	{
+		AddError(FString::Printf(TEXT("3D program validation failed: %s"), *Error.Message));
 		return false;
 	}
 	Error = VoxelLandM4ControlGrid::ValidateProgram(*Program);
@@ -48,9 +58,10 @@ bool FVoxelLandM4ControlGridValidationTest::RunTest(const FString& Parameters)
 	Filtered.SmoothFilter.bPresent = true;
 	Filtered.SmoothFilter.Enabled.Index = 0;
 	Filtered.SmoothFilter.Strength.Index = 1;
-	Error = FVoxelLandProgram::Validate(Filtered, Program);
+	Error = M4ControlGridValidateOffThread(Filtered, Program);
 	if (!TestFalse(TEXT("filtered VM program validates"), bool(Error)) || !Program)
 	{
+		AddError(FString::Printf(TEXT("filtered program validation failed: %s"), *Error.Message));
 		return false;
 	}
 	TestTrue(TEXT("filter rejected even if not executed by raw VM"),

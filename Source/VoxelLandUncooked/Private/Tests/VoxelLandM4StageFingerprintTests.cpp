@@ -119,7 +119,8 @@ bool FVoxelLandM4StageFingerprintDependenciesTest::RunTest(const FString& Parame
 	TestTrue(TEXT("failure retains old bytes"), Reordered == Sentinel);
 	TestEqual(TEXT("failure retains old hash"), ReorderedHash, uint64(123));
 	Semantics[0].SemanticsVersion = 1;
-	Semantics.Add(Semantics[0]);
+	const FVoxelLandM4StageFingerprintNode DuplicateSemantic = Semantics[0];
+	Semantics.Add(DuplicateSemantic);
 	Error = VoxelLandM4StageFingerprint::Build(
 		Nodes, Outputs, TEXT("height"), Semantics, Context, Reordered, ReorderedHash);
 	TestTrue(TEXT("duplicate semantic records rejected"), bool(Error));

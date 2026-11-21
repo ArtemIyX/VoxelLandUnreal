@@ -146,7 +146,8 @@ bool FVoxelLandM4GraphDimensionRejectTest::RunTest(const FString& Parameters)
 	Broken.Links[0].SourceNode = Add.Id;
 	Reject(TEXT("incorrect pin ownership rejected"), Broken, Add.Id);
 	Broken = Snapshot;
-	Broken.Links.Add(Broken.Links[0]);
+	const FVoxelLandGraphLinkRecord DuplicateLink = Broken.Links[0];
+	Broken.Links.Add(DuplicateLink);
 	Reject(TEXT("multiple sources to input rejected"), Broken, Add.Id);
 	Broken = Snapshot;
 	Broken.Nodes[0].Pins[0].bInvalidDefault = true;

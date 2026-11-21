@@ -39,6 +39,26 @@ public:
 	 */
 	bool Sample(int64 WorldX, int64 WorldY, int32& OutHeightQ8) const;
 
+	// Inclusive sample-grid bounds in integer centimeters. Range covers the
+	// immutable stored heights only; it excludes subsequent overhang and filters.
+	void GetBoundsCm(int64& OutMinX, int64& OutMinY, int64& OutMaxX, int64& OutMaxY) const
+	{
+		OutMinX = OriginX;
+		OutMinY = OriginY;
+		OutMaxX = EndX;
+		OutMaxY = EndY;
+	}
+	void GetHeightRangeQ8(int32& OutMinimum, int32& OutMaximum) const
+	{
+		OutMinimum = MinimumHeightQ8;
+		OutMaximum = MaximumHeightQ8;
+	}
+	// Cache producers may publish only a grid that retains their exact lease.
+	bool RetainsLease(const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& Lease) const
+	{
+		return Lease.IsValid() && GridLease == Lease;
+	}
+
 private:
 	FVoxelLandM4HeightGrid() = default;
 	int64 OriginX = 0;
@@ -48,6 +68,8 @@ private:
 	int64 SpacingCm = 0;
 	int32 CellsX = 0;
 	int32 CellsY = 0;
+	int32 MinimumHeightQ8 = 0;
+	int32 MaximumHeightQ8 = 0;
 	// Declared before Heights so its destructor runs after the grid allocation is released.
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> GridLease;
 	TArray<int32> Heights;

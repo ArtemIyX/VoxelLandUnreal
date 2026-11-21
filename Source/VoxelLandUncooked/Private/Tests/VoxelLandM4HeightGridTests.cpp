@@ -20,6 +20,12 @@ bool FVoxelLandM4HeightGridSampleTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	Source[0] = 999;
+	int64 MinX = 0, MinY = 0, MaxX = 0, MaxY = 0;
+	Grid->GetBoundsCm(MinX, MinY, MaxX, MaxY);
+	TestTrue(TEXT("inclusive bounds retain origin and endpoint"), MinX == -15 && MinY == -10 && MaxX == 5 && MaxY == 0);
+	int32 MinimumHeight = 0, MaximumHeight = 0;
+	Grid->GetHeightRangeQ8(MinimumHeight, MaximumHeight);
+	TestTrue(TEXT("height range is immutable source range"), MinimumHeight == -100 && MaximumHeight == 300);
 	int32 Height = 0;
 	TestTrue(TEXT("negative origin is included"), Grid->Sample(-15, -10, Height));
 	TestEqual(TEXT("snapshot owns original input"), Height, -100);

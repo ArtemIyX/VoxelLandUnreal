@@ -5,6 +5,7 @@
 #include "Data/Assets/VoxelLandMaterialSetup.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
@@ -13,6 +14,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandWorld.h"
+#include "World/VoxelLandM4Preparation.h"
 
 namespace
 {
@@ -70,12 +72,14 @@ void M4RuntimeSetCurve(FVoxelLandM4ControlConfig& Channel)
 class FM4RuntimeCommand final : public IAutomationLatentCommand
 {
 public:
-	FM4RuntimeCommand(
-		FAutomationTestBase* InTest, UWorld* InWorld, AVoxelLandWorld* InActor, UVoxelLandM4WorldConfig* InConfig)
+	FM4RuntimeCommand(FAutomationTestBase* InTest, UWorld* InWorld, AVoxelLandWorld* InActor,
+		UVoxelLandM4WorldConfig* InConfig, IConsoleVariable* InBudget, int32 InPreviousBudget)
 		: Test(InTest)
 		, World(InWorld)
 		, Actor(InActor)
 		, Config(InConfig)
+		, Budget(InBudget)
+		, PreviousBudget(InPreviousBudget)
 		, Start(FPlatformTime::Seconds())
 	{
 	}
@@ -91,6 +95,24 @@ public:
 		Actor->Tick(0.016f);
 		if (Actor->bInitializing)
 		{
+			return false;
+		}
+		if (Phase == -1)
+		{
+			Test->TestFalse(TEXT("zero producer budget publishes no world"), Actor->HasWorldStateForTests());
+			Test->TestTrue(TEXT("asynchronous budget rejection is explained"),
+				Actor->LastInitializationError.Contains(TEXT("budget")));
+			RestoreBudget();
+			if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
+			{
+				Test->AddError(TEXT("M4 initialization did not start after budget restoration"));
+				Cleanup();
+				return true;
+			}
+			// A material-only edit must not invalidate density while work is pending.
+			Config->MaterialSetup = TSoftObjectPtr<UVoxelLandMaterialSetup>(
+				FSoftObjectPath(TEXT("/Game/VoxelLandTests/ChangedMaterial.ChangedMaterial")));
+			Phase = 0;
 			return false;
 		}
 		if (Phase == 0)
@@ -160,8 +182,17 @@ public:
 	}
 
 private:
+	void RestoreBudget()
+	{
+		if (Budget)
+		{
+			Budget->SetWithCurrentPriority(PreviousBudget);
+			Budget = nullptr;
+		}
+	}
 	void Cleanup()
 	{
+		RestoreBudget();
 		if (IsValid(Actor))
 		{
 			Actor->Shutdown();
@@ -184,8 +215,10 @@ private:
 	UWorld* World;
 	AVoxelLandWorld* Actor;
 	UVoxelLandM4WorldConfig* Config;
+	IConsoleVariable* Budget;
+	int32 PreviousBudget;
 	double Start;
-	int32 Phase = 0;
+	int32 Phase = -1;
 };
 }
 
@@ -224,6 +257,10 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 	Config->OriginXCm = Config->OriginYCm = -25600;
 	Config->GridSpacingCm = 6400;
 	Config->bGlobalErosion = false;
+	// Use a fresh prepass identity so another test's retained cache cannot
+	// satisfy the zero-budget miss without invoking producer admission.
+	const FGuid UniqueSeed = FGuid::NewGuid();
+	Config->Seed = int64((uint64(UniqueSeed.A) << 32 | UniqueSeed.B) & uint64(MAX_int64));
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 	if (!World)
 	{
@@ -260,15 +297,10 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 	}
 	const int32 PreviousBudget = Budget->GetInt();
 	Budget->SetWithCurrentPriority(0);
-	const bool bAdmittedWithoutBudget = Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue);
-	const FString BudgetError = Actor->LastInitializationError;
-	Budget->SetWithCurrentPriority(PreviousBudget);
-	TestFalse(TEXT("zero process budget rejects initialization"), bAdmittedWithoutBudget);
-	TestTrue(TEXT("budget rejection is explained"), BudgetError.Contains(TEXT("budget")));
-	TestFalse(TEXT("budget rejection publishes no world"), Actor->HasWorldStateForTests());
 	if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
 	{
-		AddError(FString::Printf(TEXT("Could not start M4 initialization: %s"), *Actor->LastInitializationError));
+		Budget->SetWithCurrentPriority(PreviousBudget);
+		AddError(FString::Printf(TEXT("Could not dispatch budget-miss request: %s"), *Actor->LastInitializationError));
 		Actor->Shutdown();
 		World->DestroyWorld(false);
 		GEngine->DestroyWorldContext(World);
@@ -276,11 +308,107 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 		Config->RemoveFromRoot();
 		return false;
 	}
-	// No completion is pumped until the latent command ticks. A presentation-only
-	// edit in that interval must not invalidate the density initialization.
-	Config->MaterialSetup = TSoftObjectPtr<UVoxelLandMaterialSetup>(
-		FSoftObjectPath(TEXT("/Game/VoxelLandTests/ChangedMaterial.ChangedMaterial")));
-	ADD_LATENT_AUTOMATION_COMMAND(FM4RuntimeCommand(this, World, Actor, Config));
+	ADD_LATENT_AUTOMATION_COMMAND(FM4RuntimeCommand(this, World, Actor, Config, Budget, PreviousBudget));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4RuntimeSharedPrepassTest, "VoxelLand.M4.Runtime.SharedPrepass", M4RuntimeFlags)
+bool FVoxelLandM4RuntimeSharedPrepassTest::RunTest(const FString& Parameters)
+{
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	Config->AddToRoot();
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
+	FString Error;
+	if (!M4RuntimeMakeProgram(*Graph, Error))
+	{
+		AddError(FString::Printf(TEXT("Could not create compiled graph: %s"), *Error));
+		Config->RemoveFromRoot();
+		return false;
+	}
+	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
+	M4RuntimeSetCurve(Config->Continental);
+	M4RuntimeSetCurve(Config->Mountain);
+	M4RuntimeSetCurve(Config->Peaks);
+	TArray<int32> Samples;
+	Samples.Init(0, 4097);
+	Config->CellsX = Config->CellsY = 8;
+	Config->OriginXCm = Config->OriginYCm = -25600;
+	Config->GridSpacingCm = 6400;
+	Config->bGlobalErosion = false;
+	const FGuid UniqueSeed = FGuid::NewGuid();
+	Config->Seed = int64((uint64(UniqueSeed.A) << 32 | UniqueSeed.B) & uint64(MAX_int64));
+	if (!VoxelLandM4Preparation::EnsureCoordinatorReady())
+	{
+		AddError(FString::Printf(TEXT("Could not prepare shared prepass fixture: %s"), *Error));
+		Config->RemoveFromRoot();
+		return false;
+	}
+	const auto ValidationLease = VoxelLandM4Preparation::ReserveValidation();
+	if (!TestTrue(TEXT("shared prepass validation admitted"), ValidationLease.IsValid()))
+	{
+		Config->RemoveFromRoot();
+		return false;
+	}
+	FVoxelLandM4WorldSnapshot Snapshot;
+	if (!Config->SetBakedCurves(Samples, Samples, Samples, 1, Error) || !Config->CaptureSnapshot(Snapshot, Error))
+	{
+		AddError(FString::Printf(TEXT("Could not capture shared prepass fixture: %s"), *Error));
+		Config->RemoveFromRoot();
+		return false;
+	}
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> First, Second;
+	const auto Prepare = [&Error, &ValidationLease](const FVoxelLandM4WorldSnapshot& Input,
+							 TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& Output) {
+		return Async(EAsyncExecution::ThreadPool, [&Input, &Output, &Error, &ValidationLease] {
+			return VoxelLandM4Preparation::Prepare(
+				Input, nullptr, ValidationLease, [] { return false; }, Output, Error);
+		}).Get();
+	};
+	const bool FirstOk = Prepare(Snapshot, First);
+	TestTrue(TEXT("first validated request succeeds"), FirstOk);
+	// Final smoothing is downstream of the global grid and must not invalidate
+	// a proven upstream match. Each consumer still gets its own generator.
+	FVoxelLandM4WorldSnapshot Downstream = Snapshot;
+	Downstream.Smooth.bEnabled = true;
+	Downstream.Smooth.Strength = 0.5f;
+	const bool SecondOk = Prepare(Downstream, Second);
+	TestTrue(TEXT("second validated request succeeds"), SecondOk);
+	if (FirstOk && SecondOk && First && Second)
+	{
+		TestTrue(TEXT("matching prepass shares immutable grid"),
+			First->GetM4HeightGrid().IsValid() && First->GetM4HeightGrid() == Second->GetM4HeightGrid());
+		TestTrue(TEXT("downstream generators remain distinct"), First != Second);
+	}
+	FVoxelLandM4WorldSnapshot Stale = Snapshot;
+	++Stale.Peaks.Payload.SourceFingerprint;
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Previous = First;
+	TestFalse(TEXT("stale program is rejected before a cache hit"), Prepare(Stale, Previous));
+	TestTrue(TEXT("failed request leaves previous generator unchanged"), Previous == First);
+	Config->RemoveFromRoot();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4RuntimeValidationAdmissionTest, "VoxelLand.M4.Runtime.ValidationAdmission", M4RuntimeFlags)
+bool FVoxelLandM4RuntimeValidationAdmissionTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("coordinator initialized"), VoxelLandM4Preparation::EnsureCoordinatorReady()))
+	{
+		return false;
+	}
+	TArray<TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>> Permits;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		Permits.Add(VoxelLandM4Preparation::ReserveValidation());
+		if (!TestTrue(TEXT("bounded validation slot admitted"), Permits.Last().IsValid()))
+		{
+			return false;
+		}
+	}
+	TestFalse(TEXT("fifth validation slot rejected"), VoxelLandM4Preparation::ReserveValidation().IsValid());
+	Permits.Pop();
+	TestTrue(TEXT("releasing a permit restores capacity"), VoxelLandM4Preparation::ReserveValidation().IsValid());
 	return true;
 }
 

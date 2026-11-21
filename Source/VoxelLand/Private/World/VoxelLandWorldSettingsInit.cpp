@@ -1,5 +1,7 @@
 #include "World/VoxelLandWorld.h"
 #include "World/VoxelLandM4Preparation.h"
+#include "World/VoxelLandM4PrepassCoordinator.h"
+#include "World/VoxelLandM4PrepassIdentity.h"
 
 #include "Async/Async.h"
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
@@ -196,8 +198,11 @@ struct FM4BudgetState
 {
 	FCriticalSection Mutex;
 	int64 Reserved = 0;
+	int32 Validating = 0;
 	void* RuntimeHandle = nullptr;
 	void* AlgoHandle = nullptr;
+	TSharedPtr<FM4PrepassCoordinator, ESPMode::ThreadSafe> Coordinator;
+	bool bCoordinatorStopped = false;
 };
 FM4BudgetState& M4BudgetState()
 {
@@ -213,6 +218,20 @@ public:
 		FM4BudgetState& State = M4BudgetState();
 		FScopeLock Lock(&State.Mutex);
 		State.Reserved -= Bytes;
+	}
+};
+// Snapshot inputs are independently bounded before capture. A small fixed
+// number of validation permits prevents unbounded metadata allocations while
+// allowing matching consumers to reach key-first producer admission. This is
+// an admission bound, not a claim of measured allocator/backend bytes.
+class FM4ValidationReservation final : public FVoxelLandM4GridLease
+{
+public:
+	~FM4ValidationReservation() override
+	{
+		FM4BudgetState& State = M4BudgetState();
+		FScopeLock Lock(&State.Mutex);
+		--State.Validating;
 	}
 };
 #if !IS_MONOLITHIC
@@ -237,18 +256,17 @@ void* PinM4Module(const FName Name)
 #endif
 }
 #endif
-TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ReserveM4Budget()
+bool EnsureM4ModulesPinnedLocked(FM4BudgetState& State)
 {
-	FM4BudgetState& State = M4BudgetState();
-	FScopeLock Lock(&State.Mutex);
-	const int64 Limit = int64(FMath::Max(0, CVarVoxelLandM4BudgetMiB.GetValueOnAnyThread())) * 1024 * 1024;
-	if (State.Reserved > Limit || FM4GridReservation::Bytes > Limit - State.Reserved)
-	{
-		return nullptr;
-	}
 #if !IS_MONOLITHIC
 	if (!State.RuntimeHandle || !State.AlgoHandle)
 	{
+		// Module manager access is restricted to the game thread. Worker-side
+		// budget reservations may only use pins acquired before dispatch.
+		if (!IsInGameThread())
+		{
+			return false;
+		}
 		void* Runtime = PinM4Module(TEXT("VoxelLand"));
 		void* Algo = PinM4Module(TEXT("VoxelLandAlgo"));
 		if (!Runtime || !Algo)
@@ -261,14 +279,29 @@ TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ReserveM4Budget()
 			{
 				FPlatformProcess::FreeDllHandle(Algo);
 			}
-			return nullptr;
+			return false;
 		}
-		// Keep both references until process exit: the last immutable grid and
-		// its reservation can be released on any thread after world shutdown.
 		State.RuntimeHandle = Runtime;
 		State.AlgoHandle = Algo;
 	}
 #endif
+	return true;
+}
+TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ReserveM4Budget()
+{
+	FM4BudgetState& State = M4BudgetState();
+	FScopeLock Lock(&State.Mutex);
+	const int64 Limit = int64(FMath::Max(0, CVarVoxelLandM4BudgetMiB.GetValueOnAnyThread())) * 1024 * 1024;
+	if (State.Reserved > Limit || FM4GridReservation::Bytes > Limit - State.Reserved)
+	{
+		return nullptr;
+	}
+	// Keep both module references until process exit: the last immutable grid
+	// and its reservation can be released on any thread after world shutdown.
+	if (!EnsureM4ModulesPinnedLocked(State))
+	{
+		return nullptr;
+	}
 	State.Reserved += FM4GridReservation::Bytes;
 	return MakeShared<FM4GridReservation, ESPMode::ThreadSafe>();
 }
@@ -344,11 +377,13 @@ class FM4InitializationRequest final : public FInitializationRequest
 {
 public:
 	FM4InitializationRequest(UVoxelLandM4WorldConfig& Config, FVoxelLandM4WorldSnapshot&& InSnapshot,
-		FIntVector InStartup, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InLease)
+		FIntVector InStartup, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InLease,
+		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InValidationLease)
 		: WeakConfig(&Config)
 		, Continental(Config.Continental.Graph)
 		, Mountain(Config.Mountain.Graph)
 		, Peaks(Config.Peaks.Graph)
+		, ValidationLease(MoveTemp(InValidationLease))
 		, Snapshot(MoveTemp(InSnapshot))
 		, Startup(InStartup)
 		, Lease(MoveTemp(InLease))
@@ -445,7 +480,7 @@ public:
 			return Cancel->Load();
 		};
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
-		if (!VoxelLandM4Preparation::Prepare(Snapshot, Lease, IsCancelled, Result, OutError))
+		if (!VoxelLandM4Preparation::Prepare(Snapshot, Lease, ValidationLease, IsCancelled, Result, OutError))
 		{
 			return;
 		}
@@ -486,6 +521,8 @@ public:
 private:
 	TWeakObjectPtr<UVoxelLandM4WorldConfig> WeakConfig;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> Continental, Mountain, Peaks;
+	// Declared before Snapshot so admission remains held until its memory is freed.
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease;
 	FVoxelLandM4WorldSnapshot Snapshot;
 	FIntVector Startup;
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
@@ -518,6 +555,67 @@ UMaterialInterface* ResolveM4TerrainMaterial(const UVoxelLandM4WorldConfig& Sett
 #endif
 }
 
+void VoxelLandM4Preparation::StartCoordinator()
+{
+	check(IsInGameThread());
+	FM4BudgetState& State = M4BudgetState();
+	FScopeLock Lock(&State.Mutex);
+	State.bCoordinatorStopped = false;
+}
+
+bool VoxelLandM4Preparation::EnsureCoordinatorReady()
+{
+	if (!IsInGameThread())
+	{
+		return false;
+	}
+	FM4BudgetState& State = M4BudgetState();
+	FScopeLock Lock(&State.Mutex);
+	if (State.bCoordinatorStopped || !EnsureM4ModulesPinnedLocked(State))
+	{
+		return false;
+	}
+	if (!State.Coordinator)
+	{
+		State.Coordinator = MakeShared<FM4PrepassCoordinator, ESPMode::ThreadSafe>();
+	}
+	return true;
+}
+
+TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> VoxelLandM4Preparation::ReserveValidation()
+{
+	if (!IsInGameThread())
+	{
+		return nullptr;
+	}
+	FM4BudgetState& State = M4BudgetState();
+	FScopeLock Lock(&State.Mutex);
+	if (State.bCoordinatorStopped || State.Validating >= 4 || !EnsureM4ModulesPinnedLocked(State))
+	{
+		return nullptr;
+	}
+	++State.Validating;
+	return MakeShared<FM4ValidationReservation, ESPMode::ThreadSafe>();
+}
+
+void VoxelLandM4Preparation::ShutdownCoordinator()
+{
+	check(IsInGameThread());
+	TSharedPtr<FM4PrepassCoordinator, ESPMode::ThreadSafe> Coordinator;
+	{
+		FM4BudgetState& State = M4BudgetState();
+		FScopeLock Lock(&State.Mutex);
+		State.bCoordinatorStopped = true;
+		Coordinator = MoveTemp(State.Coordinator);
+	}
+	// Never hold the budget lock while joining producer threads or releasing
+	// cached grids: their leases acquire that same lock during destruction.
+	if (Coordinator)
+	{
+		Coordinator->Shutdown();
+	}
+}
+
 TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> VoxelLandM4Preparation::Reserve()
 {
 	if (!IsInGameThread())
@@ -531,7 +629,17 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& Lease, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError)
 {
-	if (IsInGameThread() || !Lease.IsValid())
+	return Prepare(Snapshot, Lease, nullptr, IsCancelled, OutGenerator, OutError);
+}
+
+bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& Lease,
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& ValidationLease,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
+	FString& OutError)
+{
+	if (IsInGameThread()
+		|| (!Lease.IsValid() && (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite || !ValidationLease.IsValid())))
 	{
 		OutError = TEXT("M4 preparation requires a worker thread and resource reservation");
 		return false;
@@ -585,7 +693,6 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Programs[3];
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generators[3];
 	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> Curves[3];
-	TUniquePtr<FVoxelLandWorkerContext> Workers[3];
 	FVoxelLandZoneProfile Profiles[3];
 	// Stable channel namespaces keep reused graphs independent. Version 1.
 	const FGuid ChannelIds[] = {
@@ -619,11 +726,6 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		if (!FVoxelLandM4CurveLut::Create(
 				Channels[Index]->CookedCurve.SamplesQ8, -512000000, 512000000, Curves[Index], OutError))
 		{
-			return false;
-		}
-		if (const FVoxelLandError Failure = Generators[Index]->CreateWorker(Workers[Index]))
-		{
-			OutError = Failure.Message;
 			return false;
 		}
 	}
@@ -661,15 +763,123 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	else
 	{
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
-		uint64 GridHash = 0;
-		if (const FVoxelLandError Failure =
-				VoxelLandM4ControlPipeline::Generate(Snapshot.Domain, *Generators[0], *Workers[0], *Curves[0],
-					*Generators[1], *Workers[1], *Curves[1], *Generators[2], *Workers[2], *Curves[2],
-					Snapshot.BaseHeightQ8, uint64(Snapshot.Seed), Snapshot.ErosionStageId, uint32(Snapshot.ErosionSalt),
-					Snapshot.DropletCount, Snapshot.Erosion, Grid, GridHash, IsCancelled, Lease))
+		if (Lease.IsValid())
 		{
-			OutError = Failure.Message;
-			return false;
+			// Compatibility path: a caller which already reserved a lease expects
+			// that exact lease to be retained by its resulting grid.
+			TUniquePtr<FVoxelLandWorkerContext> W0, W1, W2;
+			if (const FVoxelLandError Failure = Generators[0]->CreateWorker(W0))
+			{
+				OutError = Failure.Message;
+				return false;
+			}
+			if (const FVoxelLandError Failure = Generators[1]->CreateWorker(W1))
+			{
+				OutError = Failure.Message;
+				return false;
+			}
+			if (const FVoxelLandError Failure = Generators[2]->CreateWorker(W2))
+			{
+				OutError = Failure.Message;
+				return false;
+			}
+			uint64 Hash = 0;
+			if (const FVoxelLandError Failure = VoxelLandM4ControlPipeline::Generate(Snapshot.Domain, *Generators[0],
+					*W0, *Curves[0], *Generators[1], *W1, *Curves[1], *Generators[2], *W2, *Curves[2],
+					Snapshot.BaseHeightQ8, uint64(Snapshot.Seed), Snapshot.ErosionStageId, uint32(Snapshot.ErosionSalt),
+					Snapshot.DropletCount, Snapshot.Erosion, Grid, Hash, IsCancelled, Lease))
+			{
+				OutError = Failure.Message;
+				return false;
+			}
+		}
+		else
+		{
+			TArray<uint8> Key;
+			if (const FVoxelLandError Failure =
+					VoxelLandM4PrepassIdentity::BuildCandidate(Snapshot, *Programs[0], *Programs[1], *Programs[2], Key))
+			{
+				OutError = Failure.Message;
+				return false;
+			}
+			TSharedPtr<FM4PrepassCoordinator, ESPMode::ThreadSafe> Coordinator;
+			{
+				FM4BudgetState& State = M4BudgetState();
+				FScopeLock Lock(&State.Mutex);
+				if (!State.bCoordinatorStopped)
+				{
+					Coordinator = State.Coordinator;
+				}
+			}
+			if (!Coordinator)
+			{
+				OutError = TEXT("M4 shared prepass coordinator is unavailable");
+				return false;
+			}
+			// Producer owns only immutable non-UObject state. Each producer creates
+			// and destroys its three thread-affine workers on its own thread.
+			const auto ProducerSnapshot = MakeShared<FVoxelLandM4WorldSnapshot, ESPMode::ThreadSafe>(Snapshot);
+			const auto G0 = Generators[0], G1 = Generators[1], G2 = Generators[2];
+			const auto C0 = Curves[0], C1 = Curves[1], C2 = Curves[2];
+			FM4PrepassCoordinator::FProducer Produce = [ProducerSnapshot, G0, G1, G2, C0, C1, C2](
+														   const FM4PrepassCoordinator::FLease& ProducerLease,
+														   TFunctionRef<bool()> ProducerCancelled,
+														   FM4PrepassCoordinator::FGrid& Grid, FString& Error) {
+				TUniquePtr<FVoxelLandWorkerContext> W0, W1, W2;
+				if (ProducerCancelled())
+				{
+					return false;
+				}
+				if (const FVoxelLandError Failure = G0->CreateWorker(W0))
+				{
+					Error = Failure.Message;
+					return false;
+				}
+				if (const FVoxelLandError Failure = G1->CreateWorker(W1))
+				{
+					Error = Failure.Message;
+					return false;
+				}
+				if (const FVoxelLandError Failure = G2->CreateWorker(W2))
+				{
+					Error = Failure.Message;
+					return false;
+				}
+				uint64 Hash = 0;
+				const auto& S = *ProducerSnapshot;
+				if (const FVoxelLandError Failure = VoxelLandM4ControlPipeline::Generate(S.Domain, *G0, *W0, *C0, *G1,
+						*W1, *C1, *G2, *W2, *C2, S.BaseHeightQ8, uint64(S.Seed), S.ErosionStageId,
+						uint32(S.ErosionSalt), S.DropletCount, S.Erosion, Grid, Hash, ProducerCancelled, ProducerLease))
+				{
+					Error = Failure.Message;
+					return false;
+				}
+				return !ProducerCancelled();
+			};
+			const TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> Subscription =
+				Coordinator->Subscribe(Key, [] { return ReserveM4Budget(); }, MoveTemp(Produce), OutError);
+			if (!Subscription)
+			{
+				return false;
+			}
+			while (!Subscription->IsFinished())
+			{
+				if (IsCancelled())
+				{
+					Subscription->Cancel();
+					return false;
+				}
+				FPlatformProcess::SleepNoStats(0.005f);
+			}
+			if (IsCancelled())
+			{
+				Subscription->Cancel();
+				return false;
+			}
+			if (!Subscription->ReadResult(Grid, OutError))
+			{
+				return false;
+			}
 		}
 		if (IsCancelled())
 		{
@@ -785,11 +995,30 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		LastInitializationError = TEXT("M4 world settings are missing");
 		return false;
 	}
-	// Reserve before capturing potentially large graph snapshots or launching work.
-	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = VoxelLandM4Preparation::Reserve();
-	if (!Lease)
+	// Finite requests must be able to join an existing prepass before a new
+	// 128 MiB producer reservation is attempted. Input capture is independently
+	// bounded by the asset's preflight limits. Unlimited mode has no shared
+	// global prepass and retains its original admission path.
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
+	if (Settings->bUnlimited)
+	{
+		Lease = VoxelLandM4Preparation::Reserve();
+	}
+	else if (!VoxelLandM4Preparation::EnsureCoordinatorReady())
+	{
+		LastInitializationError = TEXT("M4 shared prepass coordinator is unavailable");
+		return false;
+	}
+	if (Settings->bUnlimited && !Lease)
 	{
 		LastInitializationError = TEXT("M4 prepass process budget is exhausted");
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease =
+		VoxelLandM4Preparation::ReserveValidation();
+	if (!ValidationLease)
+	{
+		LastInitializationError = TEXT("M4 snapshot validation capacity is exhausted");
 		return false;
 	}
 	FVoxelLandM4WorldSnapshot Snapshot;
@@ -802,7 +1031,7 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 	VerticalRadius = Snapshot.VerticalRadius;
 	const TSharedRef<FM4InitializationRequest, ESPMode::ThreadSafe> Request =
 		MakeShared<FM4InitializationRequest, ESPMode::ThreadSafe>(
-			*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease));
+			*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease));
 	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
 		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
 	PendingInitialization = Job;

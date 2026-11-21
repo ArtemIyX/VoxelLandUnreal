@@ -89,6 +89,9 @@ public:
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
+	// Finite M4 height grids remain immutable and retain their resource lease.
+	// Returns null for M3 and chunk-local M4 generators.
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> GetM4HeightGrid() const { return M4HeightGrid; }
 
 private:
 	static FVoxelLandError CreateInternal(const FVoxelLandGeneratorSettings& Settings,

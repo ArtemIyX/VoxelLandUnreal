@@ -2,13 +2,14 @@
 
 #include "VoxelLand.h"
 #include "World/VoxelLandWorld.h"
+#include "World/VoxelLandM4Preparation.h"
 #include "UObject/UObjectIterator.h"
 
 #define LOCTEXT_NAMESPACE "FVoxelLandModule"
 
 void FVoxelLandModule::StartupModule()
 {
-	// This code will execute after your module is loaded into memory; the exact timing is specified in the .uplugin file per-module
+	VoxelLandM4Preparation::StartCoordinator();
 }
 
 void FVoxelLandModule::ShutdownModule()
@@ -21,6 +22,7 @@ void FVoxelLandModule::ShutdownModule()
 			It->Shutdown();
 		}
 	}
+	VoxelLandM4Preparation::ShutdownCoordinator();
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -46,6 +46,8 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 		return false;
 	}
 	const int32 Width = InCellsX + 1;
+	int32 MinimumHeight = MAX_int32;
+	int32 MaximumHeight = MIN_int32;
 	for (int32 Y = 0; Y <= InCellsY; ++Y)
 	{
 		if (IsCancelled())
@@ -59,6 +61,8 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 			{
 				return false;
 			}
+			MinimumHeight = FMath::Min(MinimumHeight, Height);
+			MaximumHeight = FMath::Max(MaximumHeight, Height);
 		}
 	}
 	TSharedPtr<FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid = MakeShareable(new FVoxelLandM4HeightGrid());
@@ -69,6 +73,8 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	Grid->SpacingCm = InSpacingCm;
 	Grid->CellsX = InCellsX;
 	Grid->CellsY = InCellsY;
+	Grid->MinimumHeightQ8 = MinimumHeight;
+	Grid->MaximumHeightQ8 = MaximumHeight;
 	Grid->Heights.Reserve(int32(Count));
 	for (int32 Y = 0; Y <= InCellsY; ++Y)
 	{

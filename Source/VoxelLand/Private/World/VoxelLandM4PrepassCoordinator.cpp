@@ -221,38 +221,47 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 	State->Tasks.Add(NewEntry);
 	++State->Active;
 	const TSharedRef<FM4PrepassCoordinatorState, ESPMode::ThreadSafe> SharedState = State;
-	NewEntry->Task = Async(EAsyncExecution::Thread, [SharedState, NewEntry, Builder = MoveTemp(Produce)]() mutable {
-		FGrid Grid;
-		FString Error;
-		const auto IsCancelled = [NewEntry]() {
-			return NewEntry->Cancelled.Load();
-		};
-		const bool bSuccess = Builder(NewEntry->Lease, IsCancelled, Grid, Error);
-		// Destroy producer-owned snapshots and worker captures on the producer
-		// thread, before its future becomes ready and its admission is reaped.
-		Builder.Reset();
-		FScopeLock CompletionLock(&SharedState->Mutex);
-		if (bSuccess && Grid && Grid->RetainsLease(NewEntry->Lease) && !NewEntry->Cancelled.Load()
-		    && !SharedState->bStopped)
-		{
-			NewEntry->Grid = MoveTemp(Grid);
-		}
-		else
-		{
-			NewEntry->Error =
-				Error.IsEmpty() ? TEXT("M4 prepass failed, cancelled, or did not retain its lease") : MoveTemp(Error);
-		}
-		NewEntry->bFinished = true;
-		--SharedState->Active;
-		if (!NewEntry->Grid || NewEntry->bAbandoned || SharedState->bStopped)
-		{
-			SharedState->Entries.Remove(NewEntry);
-			// This entry cannot be joined again. Drop potentially large key
-			// bytes before signalling task completion and releasing admission.
-			NewEntry->Key.Empty();
-		}
-		M4CoordinatorPrune(*SharedState);
-	});
+	NewEntry->Task = Async(EAsyncExecution::Thread,
+		[SharedState, Entry = TSharedPtr<FM4PrepassCoordinatorEntry, ESPMode::ThreadSafe>(NewEntry),
+			Builder = MoveTemp(Produce)]() mutable {
+			FGrid Grid;
+			FString Error;
+			// Async signals its future before destroying the stored callable. Do not
+			// retain a shared entry in either capture after producer completion.
+			FM4PrepassCoordinatorEntry* const EntryPtr = Entry.Get();
+			const auto IsCancelled = [EntryPtr]() {
+				return EntryPtr->Cancelled.Load();
+			};
+			const bool bSuccess = Builder(Entry->Lease, IsCancelled, Grid, Error);
+			// Destroy producer-owned snapshots and worker captures on the producer
+			// thread, before its future becomes ready and its admission is reaped.
+			Builder.Reset();
+			{
+				FScopeLock CompletionLock(&SharedState->Mutex);
+				if (bSuccess && Grid && Grid->RetainsLease(Entry->Lease) && !Entry->Cancelled.Load()
+					&& !SharedState->bStopped)
+				{
+					Entry->Grid = MoveTemp(Grid);
+				}
+				else
+				{
+					Entry->Error = Error.IsEmpty() ? TEXT("M4 prepass failed, cancelled, or did not retain its lease")
+												   : MoveTemp(Error);
+				}
+				Entry->bFinished = true;
+				--SharedState->Active;
+				if (!Entry->Grid || Entry->bAbandoned || SharedState->bStopped)
+				{
+					SharedState->Entries.Remove(Entry);
+					// This entry cannot be joined again. Drop potentially large key
+					// bytes before signalling task completion and releasing admission.
+					Entry->Key.Empty();
+				}
+				M4CoordinatorPrune(*SharedState);
+			}
+			Grid.Reset();
+			Entry.Reset();
+		});
 	return MakeShareable(new FM4PrepassSubscription(State, NewEntry));
 }
 

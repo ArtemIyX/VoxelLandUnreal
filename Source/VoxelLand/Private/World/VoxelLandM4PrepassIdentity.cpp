@@ -116,13 +116,21 @@ bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& C
 		M4IdentityFloat(W, P.FloatDefault);
 		W.U32(uint32(P.IntDefault));
 	}
-	W.U32(uint32(Channel.Overrides.Num()));
 	TArray<const FVoxelLandParameterOverride*> Overrides;
 	Overrides.Reserve(Channel.Overrides.Num());
 	for (const FVoxelLandParameterOverride& O : Channel.Overrides)
 	{
-		Overrides.Add(&O);
+		// Version 4 is used only for prepass reuse. The serialized parameter
+		// table corresponds to the compiled program's reachable parameter slots.
+		// All authored overrides have already been validated above.
+		if (EncodingVersion < 4
+			|| Channel.Payload.Parameters.ContainsByPredicate(
+				[&O](const FVoxelLandSerializedParameter& P) { return P.Id == O.ParameterId; }))
+		{
+			Overrides.Add(&O);
+		}
 	}
+	W.U32(uint32(Overrides.Num()));
 	if (EncodingVersion >= 2)
 	{
 		Overrides.Sort([](const FVoxelLandParameterOverride& A, const FVoxelLandParameterOverride& B) {
@@ -197,8 +205,8 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 	{
 		EncodingVersion = Snapshot.HeightStage.Version == 1 ? 3u : 2u;
 	}
-	if ((EncodingVersion != 1 && EncodingVersion != 2 && EncodingVersion != 3)
-		|| (Snapshot.HeightStage.Version == 1 && EncodingVersion != 3)
+	if ((EncodingVersion != 1 && EncodingVersion != 2 && EncodingVersion != 3 && EncodingVersion != 4)
+		|| (Snapshot.HeightStage.Version == 1 && EncodingVersion != 3 && EncodingVersion != 4)
 		|| (Snapshot.HeightStage.Version == 0 && EncodingVersion == 3)
 		|| Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite || VoxelLandM4Domain::Validate(Snapshot.Domain)
 		|| Snapshot.FormatVersion != 1 || Snapshot.BaseHeightQ8 < -512000000 || Snapshot.BaseHeightQ8 > 512000000)

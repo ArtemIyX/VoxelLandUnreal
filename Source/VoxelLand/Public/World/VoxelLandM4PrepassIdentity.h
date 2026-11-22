@@ -19,7 +19,9 @@ namespace VoxelLandM4PrepassIdentity
 // Compare the complete byte array, never a hash alone. OutBytes is unchanged on
 // failure. Version 0 selects the current encoding for the supplied stage;
 // version 1 preserves legacy override order, version 2 sorts override IDs,
-// and version 3 additionally binds the graph height-stage version. The bytes
+// version 3 additionally binds the graph height-stage version, and version 4
+// excludes overrides for parameters absent from that channel's compiled program.
+// Versions 1-3 remain available for saved-world identity compatibility. The bytes
 // are process-local until all algorithm/backend versions are
 // explicitly bound to a persistent world format.
 VOXELLAND_API FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot,

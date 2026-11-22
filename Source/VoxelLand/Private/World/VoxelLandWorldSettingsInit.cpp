@@ -861,8 +861,8 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		else
 		{
 			TArray<uint8> Key;
-			if (const FVoxelLandError Failure = VoxelLandM4PrepassIdentity::BuildCandidate(Snapshot, *Programs[0],
-					*Programs[1], *Programs[2], Key, Snapshot.HeightStage.Version == 1 ? 3u : 2u))
+			if (const FVoxelLandError Failure = VoxelLandM4PrepassIdentity::BuildCandidate(
+					Snapshot, *Programs[0], *Programs[1], *Programs[2], Key, 4u))
 			{
 				OutError = Failure.Message;
 				return false;

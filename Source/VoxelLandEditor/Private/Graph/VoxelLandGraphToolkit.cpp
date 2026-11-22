@@ -32,6 +32,7 @@
 #include "Data/VoxelLandGraphFunctionId.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
+#include "Generation/VoxelLandM4ControlGrid.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Generation/VoxelLandMeshing.h"
@@ -82,6 +83,24 @@ namespace
 {
 DECLARE_MULTICAST_DELEGATE_OneParam(FM4ControlGraphChanged, UVoxelLandTerrainGraph*);
 FM4ControlGraphChanged M4ControlGraphChanged;
+void M4ClearNamedPrograms(UVoxelLandM4ControlGraph* Graph)
+{
+	if (!Graph)
+	{
+		return;
+	}
+	const bool bHadPrograms = !Graph->ContinentalProgram.Instructions.IsEmpty()
+						   || !Graph->MountainProgram.Instructions.IsEmpty()
+						   || !Graph->PeaksProgram.Instructions.IsEmpty();
+	Graph->ContinentalProgram = {};
+	Graph->MountainProgram = {};
+	Graph->PeaksProgram = {};
+	if (bHadPrograms)
+	{
+		Graph->MarkPackageDirty();
+		M4ControlGraphChanged.Broadcast(Graph);
+	}
+}
 TAutoConsoleVariable<int32> CVarVoxelLandPreviewGPUUploadTiming(
 	TEXT("VoxelLand.Preview.GPUUploadTiming"), 0,
 	TEXT("Observe preview buffer upload GPU fences on supported D3D12 editor previews."), ECVF_Default);
@@ -500,6 +519,9 @@ public:
 	uint64 TargetRevision = 0;
 	uint64 SourceHash = 0;
 	bool bNodePreview = false;
+	bool bNamedM4 = false;
+	FGuid NamedOutputIds[3];
+	FVoxelLandSerializedProgram NamedPrograms[3];
 	FVoxelLandGraphSnapshot Snapshot;
 	bool bSuccess = false;
 	FString Error;
@@ -1937,6 +1959,7 @@ void FVoxelLandGraphToolkit::RequestCompile()
 	FVoxelLandGraphDiagnostic Diagnostic;
 	if (!PreviewNodeId.IsValid() && !CaptureMirror(Error, &Diagnostic))
 	{
+		M4ClearNamedPrograms(Cast<UVoxelLandM4ControlGraph>(Asset));
 		ErrorDiagnostic = MoveTemp(Diagnostic);
 		Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
 		return;
@@ -1945,16 +1968,68 @@ void FVoxelLandGraphToolkit::RequestCompile()
 	{
 		if (UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset))
 		{
-			if (!VoxelLandM4Editor::CompileNamedGraph(*Named, Error))
+			FVoxelLandGraphSnapshot Source;
+			FVoxelLandGraphSnapshot Projections[3];
+			const EVoxelLandM4ControlChannel Channels[] = {EVoxelLandM4ControlChannel::Continental,
+				EVoxelLandM4ControlChannel::Mountain, EVoxelLandM4ControlChannel::Peaks};
+			bool bCaptured = Named->CaptureSnapshot(Source, Error);
+			for (int32 I = 0; bCaptured && I < 3; ++I)
 			{
+				bCaptured = Named->ProjectSnapshot(Source, Channels[I], Projections[I], Error);
+			}
+			if (!bCaptured)
+			{
+				M4ClearNamedPrograms(Named);
 				Status = FString::Printf(TEXT("Error; M4 preview stale: %s"), *Error);
 				return;
 			}
-			Status = TEXT("M4 control outputs compiled. Select an M4 config to preview terrain.");
-			if (bM4Preview)
+			const TSharedRef<FVoxelLandCompileWork, ESPMode::ThreadSafe> Work =
+				MakeShared<FVoxelLandCompileWork, ESPMode::ThreadSafe>();
+			Work->Revision = Revision;
+			Work->TargetRevision = PreviewTargetRevision;
+			Work->SourceHash = FVoxelLandProgramCodec::SourceFingerprint(Source);
+			Work->bNamedM4 = true;
+			for (int32 I = 0; I < 3; ++I)
 			{
-				StartM4Preview();
+				Work->NamedOutputIds[I] = Named->GetOutputId(Channels[I]);
 			}
+			CompileWork = Work;
+			Status = TEXT("Compiling M4 control outputs; prior preview is stale.");
+			WorkerTasks.Add(Async(EAsyncExecution::ThreadPool,
+				[P0 = MoveTemp(Projections[0]), P1 = MoveTemp(Projections[1]), P2 = MoveTemp(Projections[2]), Work]() {
+					const double Started = FPlatformTime::Seconds();
+					const FVoxelLandGraphSnapshot* Inputs[] = {&P0, &P1, &P2};
+					Work->bSuccess = true;
+					for (int32 I = 0; I < 3; ++I)
+					{
+						FVoxelLandProgramDraft Draft;
+						TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+						if (!FVoxelLandGraphCompiler::Compile(*Inputs[I], Draft, Work->Error))
+						{
+							Work->bSuccess = false;
+							break;
+						}
+						if (const FVoxelLandError Failure = FVoxelLandProgram::Validate(Draft, Program))
+						{
+							Work->Error = Failure.Message;
+							Work->bSuccess = false;
+							break;
+						}
+						if (const FVoxelLandError Failure = VoxelLandM4ControlGrid::ValidateProgram(*Program))
+						{
+							Work->Error = Failure.Message;
+							Work->bSuccess = false;
+							break;
+						}
+						if (!FVoxelLandProgramCodec::Pack(*Inputs[I], *Program, Work->NamedPrograms[I], Work->Error))
+						{
+							Work->bSuccess = false;
+							break;
+						}
+					}
+					Work->CompileMs = (FPlatformTime::Seconds() - Started) * 1000.0;
+					Work->Done.Store(true);
+				}));
 			return;
 		}
 	}
@@ -3565,10 +3640,53 @@ void FVoxelLandGraphToolkit::ProcessCompileWork()
 		return;
 	}
 	const TSharedPtr<FVoxelLandCompileWork, ESPMode::ThreadSafe> Finished = MoveTemp(CompileWork);
-	if (!bPIE && Finished->Revision == Revision && Finished->TargetRevision == PreviewTargetRevision && !
-	    bCompileRequested)
+	bool bNamedStillCurrent = true;
+	UVoxelLandM4ControlGraph* Named = Finished->bNamedM4 ? Cast<UVoxelLandM4ControlGraph>(Asset) : nullptr;
+	if (Finished->bNamedM4)
 	{
-		if (Finished->bSuccess)
+		FVoxelLandGraphSnapshot Current;
+		FString CaptureError;
+		bNamedStillCurrent = Named && Named->CaptureSnapshot(Current, CaptureError)
+						  && FVoxelLandProgramCodec::SourceFingerprint(Current) == Finished->SourceHash
+						  && Named->ContinentalOutputId == Finished->NamedOutputIds[0]
+						  && Named->MountainOutputId == Finished->NamedOutputIds[1]
+						  && Named->PeaksOutputId == Finished->NamedOutputIds[2];
+	}
+	if (!bStopped && !bPIE && !bReloadPaused && bNamedStillCurrent && Finished->Revision == Revision
+		&& Finished->TargetRevision == PreviewTargetRevision && !bCompileRequested)
+	{
+		if (Finished->bNamedM4)
+		{
+			FVoxelLandSerializedProgram* Outputs[] = {
+				&Named->ContinentalProgram, &Named->MountainProgram, &Named->PeaksProgram};
+			bool bChanged = false;
+			for (int32 I = 0; I < 3; ++I)
+			{
+				FVoxelLandSerializedProgram NewValue =
+					Finished->bSuccess ? MoveTemp(Finished->NamedPrograms[I]) : FVoxelLandSerializedProgram();
+				bChanged |= !FVoxelLandSerializedProgram::StaticStruct()->CompareScriptStruct(Outputs[I], &NewValue, 0);
+				*Outputs[I] = MoveTemp(NewValue);
+			}
+			if (bChanged)
+			{
+				Named->MarkPackageDirty();
+				M4ControlGraphChanged.Broadcast(Named);
+			}
+			LastCompileMs = Finished->CompileMs;
+			if (!Finished->bSuccess)
+			{
+				Status = FString::Printf(TEXT("Error; M4 preview stale: %s"), *Finished->Error);
+			}
+			else if (bM4Preview)
+			{
+				StartM4Preview();
+			}
+			else
+			{
+				Status = TEXT("M4 control outputs compiled. Select an M4 config to preview terrain.");
+			}
+		}
+		else if (Finished->bSuccess)
 		{
 			ErrorDiagnostic = FVoxelLandGraphDiagnostic();
 			if (Finished->bNodePreview)
@@ -3589,6 +3707,10 @@ void FVoxelLandGraphToolkit::ProcessCompileWork()
 			ErrorDiagnostic = Finished->Diagnostic;
 			Status = FString::Printf(TEXT("Error; preview stale: %s"), *Finished->Error);
 		}
+	}
+	if (Finished->bNamedM4 && !bNamedStillCurrent && !bStopped && !bPIE && !bReloadPaused && !bCompileRequested)
+	{
+		Status = TEXT("Stale M4 compile discarded: control source or output IDs changed.");
 	}
 	if (bCompileRequested && !bPIE)
 	{

@@ -89,8 +89,8 @@ void M4IdentityProgram(FCanonicalWriter& W, const FVoxelLandProgramDraft& D)
 	}
 }
 
-bool M4IdentityChannel(
-	FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel, const FVoxelLandProgram& Program)
+bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel,
+	const FVoxelLandProgram& Program, uint32 EncodingVersion)
 {
 	FString OverrideError;
 	if (!VoxelLandM4OverrideValidation::Validate(Channel, OverrideError)
@@ -116,8 +116,35 @@ bool M4IdentityChannel(
 		W.U32(uint32(P.IntDefault));
 	}
 	W.U32(uint32(Channel.Overrides.Num()));
+	TArray<const FVoxelLandParameterOverride*> Overrides;
+	Overrides.Reserve(Channel.Overrides.Num());
 	for (const FVoxelLandParameterOverride& O : Channel.Overrides)
 	{
+		Overrides.Add(&O);
+	}
+	if (EncodingVersion == 2)
+	{
+		Overrides.Sort([](const FVoxelLandParameterOverride& A, const FVoxelLandParameterOverride& B) {
+			const FGuid& X = A.ParameterId;
+			const FGuid& Y = B.ParameterId;
+			if (X.A != Y.A)
+			{
+				return X.A < Y.A;
+			}
+			if (X.B != Y.B)
+			{
+				return X.B < Y.B;
+			}
+			if (X.C != Y.C)
+			{
+				return X.C < Y.C;
+			}
+			return X.D < Y.D;
+		});
+	}
+	for (const FVoxelLandParameterOverride* Entry : Overrides)
+	{
+		const FVoxelLandParameterOverride& O = *Entry;
 		if (!O.ParameterId.IsValid())
 		{
 			return false;
@@ -158,10 +185,11 @@ bool M4IdentityChannel(
 }
 
 FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const FVoxelLandProgram& Continental,
-	const FVoxelLandProgram& Mountain, const FVoxelLandProgram& Peaks, TArray<uint8>& OutBytes)
+	const FVoxelLandProgram& Mountain, const FVoxelLandProgram& Peaks, TArray<uint8>& OutBytes, uint32 EncodingVersion)
 {
-	if (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite || VoxelLandM4Domain::Validate(Snapshot.Domain)
-		|| Snapshot.FormatVersion != 1 || Snapshot.BaseHeightQ8 < -512000000 || Snapshot.BaseHeightQ8 > 512000000)
+	if ((EncodingVersion != 1 && EncodingVersion != 2) || Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite
+		|| VoxelLandM4Domain::Validate(Snapshot.Domain) || Snapshot.FormatVersion != 1
+		|| Snapshot.BaseHeightQ8 < -512000000 || Snapshot.BaseHeightQ8 > 512000000)
 	{
 		return M4IdentityFailure(TEXT("Invalid finite M4 prepass identity inputs"));
 	}
@@ -180,7 +208,7 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 	W.U8('L');
 	W.U8('P');
 	W.U8('K');
-	W.U32(1); // candidate encoding
+	W.U32(EncodingVersion); // candidate encoding
 	W.U32(1); // three-channel height-combination and CPU prepass algorithm
 	M4IdentityU64(W, uint64(Snapshot.Seed));
 	M4IdentityU64(W, uint64(Snapshot.Domain.OriginXCm));
@@ -202,8 +230,9 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 		M4IdentityU64(W, uint64(Snapshot.Erosion.TalusQ8));
 		M4IdentityU64(W, uint64(Snapshot.Erosion.MaxTransferQ8));
 	}
-	if (!M4IdentityChannel(W, Snapshot.Continental, Continental) || !M4IdentityChannel(W, Snapshot.Mountain, Mountain)
-		|| !M4IdentityChannel(W, Snapshot.Peaks, Peaks))
+	if (!M4IdentityChannel(W, Snapshot.Continental, Continental, EncodingVersion)
+		|| !M4IdentityChannel(W, Snapshot.Mountain, Mountain, EncodingVersion)
+		|| !M4IdentityChannel(W, Snapshot.Peaks, Peaks, EncodingVersion))
 	{
 		return M4IdentityFailure(TEXT("Unsupported or invalid M4 control identity inputs"));
 	}

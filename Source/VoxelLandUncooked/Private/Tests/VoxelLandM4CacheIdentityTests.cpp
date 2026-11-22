@@ -19,6 +19,7 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 	bool bSuccess = false, bStable = false, bIgnoresDownstream = false;
 	bool bSeedChanged = false, bCurveChanged = false, bProgramChanged = false, bDomainChanged = false;
 	bool bInvalidPreserves = false, bErosionChanged = false;
+	bool bCanonicalOrder = false, bLegacyOrder = false, bUnknownVersion = false;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandProgramDraft Draft;
 		Draft.RegisterCount = 1;
@@ -41,12 +42,37 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 			Channel->CookedCurve.BakeVersion = 1;
 			Channel->CookedCurve.SamplesQ8.Init(0, 4097);
 		}
+		FVoxelLandGraphParameter First, Second;
+		First.Id = FGuid(1, 2, 3, 4);
+		First.Name = TEXT("First");
+		Second.Id = FGuid(2, 2, 3, 4);
+		Second.Name = TEXT("Second");
+		S.Continental.Source.Parameters = {First, Second};
+		FVoxelLandParameterOverride A, B;
+		A.ParameterId = First.Id;
+		A.FloatValue = 0.25f;
+		B.ParameterId = Second.Id;
+		B.FloatValue = 0.5f;
+		S.Continental.Overrides = {A, B};
 		TArray<uint8> Base, Other;
 		auto Build = [&](TArray<uint8>& Out) {
 			return VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Out);
 		};
 		bSuccess = !Build(Base) && !Base.IsEmpty();
 		bStable = !Build(Other) && Other == Base;
+		TArray<uint8> Legacy, ReorderedLegacy;
+		const bool bLegacyBuilt =
+			!VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Legacy, 1);
+		Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
+		bCanonicalOrder = !Build(Other) && Other == Base;
+		bLegacyOrder = bLegacyBuilt
+					&& !VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, ReorderedLegacy, 1)
+					&& Legacy != ReorderedLegacy;
+		TArray<uint8> UnknownSentinel = {42};
+		bUnknownVersion =
+			bool(VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, UnknownSentinel, 3))
+			&& UnknownSentinel.Num() == 1 && UnknownSentinel[0] == 42;
+		Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
 		S.bOverhangEnabled = true;
 		S.OverhangAmplitudeQ8 = 128;
 		S.Smooth.bEnabled = true;
@@ -76,6 +102,9 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 	}).Get();
 	TestTrue(TEXT("candidate can be built from validated programs"), bSuccess);
 	TestTrue(TEXT("same inputs yield exact same bytes"), bStable);
+	TestTrue(TEXT("v2 candidate ignores override order"), bCanonicalOrder);
+	TestTrue(TEXT("v1 candidate preserves order sensitivity"), bLegacyOrder);
+	TestTrue(TEXT("unknown version leaves output unchanged"), bUnknownVersion);
 	TestTrue(TEXT("downstream overhang and smoothing do not alter prepass identity"), bIgnoresDownstream);
 	TestTrue(TEXT("seed changes identity"), bSeedChanged);
 	TestTrue(TEXT("curve sample changes identity"), bCurveChanged);

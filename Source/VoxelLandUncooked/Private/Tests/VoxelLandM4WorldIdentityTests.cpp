@@ -25,7 +25,8 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 {
 	bool bBuilt = false, bStable = false, bSeed = false, bShape = false, bDetail = false;
 	bool bMaterial = false, bUnlimited = false, bVersion = false, bCorrupt = false, bRoundTrip = false;
-	bool bInvalidOverride = false;
+	bool bInvalidOverride = false, bLegacyExact = false, bLegacyMatch = false;
+	bool bCanonicalReordered = false, bLegacyOrderSensitive = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4WorldSnapshot S;
@@ -52,6 +53,21 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 		{
 			C->Source.Nodes = {Constant, Output};
 			C->Source.Links = {Link};
+			if (C == &S.Continental)
+			{
+				FVoxelLandGraphParameter FirstParameter, SecondParameter;
+				FirstParameter.Id = FGuid(1, 0, 0, 0);
+				FirstParameter.Name = TEXT("First");
+				SecondParameter.Id = FGuid(2, 0, 0, 0);
+				SecondParameter.Name = TEXT("Second");
+				C->Source.Parameters = {FirstParameter, SecondParameter};
+				FVoxelLandParameterOverride FirstOverride, SecondOverride;
+				FirstOverride.ParameterId = FirstParameter.Id;
+				FirstOverride.FloatValue = 0.25f;
+				SecondOverride.ParameterId = SecondParameter.Id;
+				SecondOverride.FloatValue = -0.5f;
+				C->Overrides = {FirstOverride, SecondOverride};
+			}
 			FVoxelLandProgramDraft Draft;
 			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 			if (!FVoxelLandGraphCompiler::Compile(C->Source, Draft, Error)
@@ -81,13 +97,35 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 			return;
 		}
 		bStable = VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+		// In sorted order, the v1 and v2 payloads differ only in the two
+		// little-endian encoding fields. This reconstructs the legacy v1
+		// envelope independently of the compatibility capture function.
+		FVoxelLandM4IdentityRecord LegacyFixture = Record;
+		if (Record.FormatVersion == 2 && LegacyFixture.CanonicalBytes.Num() > 41 && LegacyFixture.CanonicalBytes[4] == 2
+			&& LegacyFixture.CanonicalBytes[37] == 2)
+		{
+			LegacyFixture.FormatVersion = 1;
+			LegacyFixture.CanonicalBytes[4] = 1;
+			LegacyFixture.CanonicalBytes[37] = 1;
+			const uint64 Hash =
+				FXxHash64::HashBuffer(LegacyFixture.CanonicalBytes.GetData(), LegacyFixture.CanonicalBytes.Num()).Hash;
+			FMemory::Memcpy(&LegacyFixture.FingerprintBits, &Hash, sizeof(Hash));
+			FVoxelLandM4IdentityRecord ActualLegacy;
+			bLegacyExact = VoxelLandM4WorldIdentity::CaptureVersion(S, 1, ActualLegacy, Error)
+						&& ActualLegacy.CanonicalBytes == LegacyFixture.CanonicalBytes;
+			bLegacyMatch = VoxelLandM4WorldIdentity::Matches(LegacyFixture, S, Error);
+			Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
+			bCanonicalReordered = VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+			bLegacyOrderSensitive = !VoxelLandM4WorldIdentity::Matches(LegacyFixture, S, Error);
+			Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
+		}
 		FVoxelLandParameterOverride Unknown;
 		Unknown.ParameterId = FGuid(9, 9, 9, 9);
 		S.Continental.Overrides.Add(Unknown);
 		FVoxelLandM4IdentityRecord Invalid;
 		bInvalidOverride = !VoxelLandM4WorldIdentity::Capture(S, Invalid, Error)
 						&& !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
-		S.Continental.Overrides.Reset();
+		S.Continental.Overrides.Pop();
 		TArray<uint8> Stored;
 		FMemoryWriter Writer(Stored);
 		FVoxelLandM4IdentityRecord::StaticStruct()->SerializeItem(Writer, &Record, nullptr);
@@ -120,6 +158,10 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	}).Get();
 	TestTrue(FString::Printf(TEXT("identity captures: %s"), *Error), bBuilt);
 	TestTrue(TEXT("identical inputs match"), bStable);
+	TestTrue(TEXT("v1 bytes preserve legacy encoding"), bLegacyExact);
+	TestTrue(TEXT("legacy identity still matches"), bLegacyMatch);
+	TestTrue(TEXT("v2 identity ignores override order"), bCanonicalReordered);
+	TestTrue(TEXT("v1 identity retains original override order"), bLegacyOrderSensitive);
 	TestTrue(TEXT("capture and matching reject unknown overrides"), bInvalidOverride);
 	TestTrue(TEXT("serialized identity matches after round trip"), bRoundTrip);
 	TestTrue(TEXT("seed changes reject reuse"), bSeed);

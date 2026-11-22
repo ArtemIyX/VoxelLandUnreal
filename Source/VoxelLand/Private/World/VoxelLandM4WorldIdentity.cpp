@@ -57,12 +57,12 @@ bool M4WorldIdentityCurveValid(const FVoxelLandM4ControlSnapshot& C)
 }
 }
 
-bool VoxelLandM4WorldIdentity::Capture(
-	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
+bool VoxelLandM4WorldIdentity::CaptureVersion(
+	const FVoxelLandM4WorldSnapshot& S, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if (IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1 || S.VoxelSizeCm > 2000000
-		|| (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && S.VoxelSizeCm > 134217)
+	if ((Version != 1 && Version != 2) || IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1
+		|| S.VoxelSizeCm > 2000000 || (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && S.VoxelSizeCm > 134217)
 		|| VoxelLandM4Domain::Validate(S.Domain) || S.Smooth.Version != 1 || !FMath::IsFinite(S.Smooth.Strength)
 		|| S.Smooth.Strength < 0.f || S.Smooth.Strength > 1.f || S.OverhangAmplitudeQ8 < 0
 		|| S.OverhangAmplitudeQ8 > 128000 || S.OverhangBandQ8 < 1 || S.OverhangBandQ8 > 1280000
@@ -109,7 +109,7 @@ bool VoxelLandM4WorldIdentity::Capture(
 	}
 	TArray<uint8> Candidate;
 	if (const FVoxelLandError Failure = VoxelLandM4PrepassIdentity::BuildCandidate(
-			KeySnapshot, *Programs[0], *Programs[1], *Programs[2], Candidate))
+			KeySnapshot, *Programs[0], *Programs[1], *Programs[2], Candidate, uint32(Version)))
 	{
 		Error = Failure.Message;
 		return false;
@@ -119,7 +119,7 @@ bool VoxelLandM4WorldIdentity::Capture(
 	W.U8('L');
 	W.U8('W');
 	W.U8('I');
-	W.U32(1); // identity encoding
+	W.U32(uint32(Version)); // identity encoding
 	W.U32(1); // channel seed namespaces and height combination
 	W.U32(1); // control quantization, curve lookup and bilinear interpolation
 	W.U32(1); // height-to-density / slope normalization
@@ -163,23 +163,31 @@ bool VoxelLandM4WorldIdentity::Capture(
 		return false;
 	}
 	FVoxelLandM4IdentityRecord Result;
+	Result.FormatVersion = Version;
 	Result.CanonicalBytes = MoveTemp(W.Bytes);
 	Result.FingerprintBits = M4WorldIdentityHash(Result.CanonicalBytes);
 	Out = MoveTemp(Result);
 	return true;
 }
 
+bool VoxelLandM4WorldIdentity::Capture(
+	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
+{
+	return CaptureVersion(S, 2, Out, Error);
+}
+
 bool VoxelLandM4WorldIdentity::Matches(
 	const FVoxelLandM4IdentityRecord& Record, const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error)
 {
-	if (Record.FormatVersion != 1 || Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > 8 * 1024 * 1024
+	if ((Record.FormatVersion != 1 && Record.FormatVersion != 2) || Record.CanonicalBytes.Num() < 8
+		|| Record.CanonicalBytes.Num() > 8 * 1024 * 1024
 		|| Record.FingerprintBits != M4WorldIdentityHash(Record.CanonicalBytes))
 	{
 		Error = TEXT("Unsupported or corrupt M4 identity record");
 		return false;
 	}
 	FVoxelLandM4IdentityRecord Current;
-	if (!Capture(Snapshot, Current, Error))
+	if (!CaptureVersion(Snapshot, Record.FormatVersion, Current, Error))
 	{
 		return false;
 	}

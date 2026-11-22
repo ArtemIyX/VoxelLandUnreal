@@ -1,9 +1,117 @@
 #include "Data/Assets/VoxelLandM4ControlGraph.h"
 
 #include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/VoxelLandGraphCycle.h"
 #if WITH_EDITOR
 #include "UObject/ObjectSaveContext.h"
 #endif
+
+namespace
+{
+bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& Error)
+{
+	if (Source.SourceVersion != 1 || Source.Nodes.Num() > 128 || Source.Links.Num() > 2048
+		|| Source.Parameters.Num() > 128 || Source.Functions.Num() > 128)
+	{
+		Error = TEXT("M4 control source exceeds projection limits or has an unsupported version.");
+		return false;
+	}
+	int64 TotalNodes = Source.Nodes.Num();
+	int64 TotalLinks = Source.Links.Num();
+	int64 TotalPins = 0;
+	for (const FVoxelLandGraphNodeRecord& Node : Source.Nodes)
+	{
+		TotalPins += Node.Pins.Num();
+	}
+	for (const FVoxelLandGraphFunctionSnapshot& Function : Source.Functions)
+	{
+		TotalNodes += Function.Nodes.Num();
+		TotalLinks += Function.Links.Num();
+		if (Function.Inputs.Num() > 128 || Function.AssetPath.Len() > 2048)
+		{
+			Error = TEXT("M4 function dependency exceeds projection limits.");
+			return false;
+		}
+		for (const FVoxelLandGraphNodeRecord& Node : Function.Nodes)
+		{
+			TotalPins += Node.Pins.Num();
+		}
+	}
+	if (TotalNodes > 128 || TotalLinks > 2048 || TotalPins > 1024)
+	{
+		Error = TEXT("M4 graph and function dependencies exceed projection limits.");
+		return false;
+	}
+	TMap<FGuid, const FVoxelLandGraphNodeRecord*> Nodes;
+	TMap<FGuid, const FVoxelLandGraphPinRecord*> Pins;
+	TMap<FGuid, FGuid> Owners;
+	int64 ConfigBytes = 0;
+	for (const FVoxelLandGraphNodeRecord& Node : Source.Nodes)
+	{
+		ConfigBytes += Node.Configuration.Num();
+		if (!Node.Id.IsValid() || !Node.OperatorId.IsValid() || Node.OperatorVersion < 1 || Nodes.Contains(Node.Id)
+			|| Node.Pins.Num() > 64 || Node.Configuration.Num() > 65536 || ConfigBytes > 1048576)
+		{
+			Error = TEXT("Invalid or duplicate M4 graph node or configuration.");
+			return false;
+		}
+		Nodes.Add(Node.Id, &Node);
+		for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+		{
+			if (!Pin.Id.IsValid() || Pins.Contains(Pin.Id) || Pin.bInvalidDefault || !FMath::IsFinite(Pin.FloatDefault)
+				|| (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
+					&& Pin.Type != EVoxelLandGraphValueType::Bool))
+			{
+				Error = TEXT("Invalid or duplicate M4 graph pin.");
+				return false;
+			}
+			Pins.Add(Pin.Id, &Pin);
+			Owners.Add(Pin.Id, Node.Id);
+		}
+	}
+	TSet<FGuid> ConnectedInputs;
+	for (const FVoxelLandGraphLinkRecord& Link : Source.Links)
+	{
+		const auto SourcePin = Pins.Find(Link.SourcePin);
+		const auto TargetPin = Pins.Find(Link.TargetPin);
+		const auto SourceOwner = Owners.Find(Link.SourcePin);
+		const auto TargetOwner = Owners.Find(Link.TargetPin);
+		if (!Nodes.Contains(Link.SourceNode) || !Nodes.Contains(Link.TargetNode) || !SourcePin || !TargetPin
+			|| !SourceOwner || !TargetOwner || *SourceOwner != Link.SourceNode || *TargetOwner != Link.TargetNode
+			|| !(*SourcePin)->bOutput || (*TargetPin)->bOutput || (*SourcePin)->Type != (*TargetPin)->Type
+			|| ConnectedInputs.Contains(Link.TargetPin))
+		{
+			Error = TEXT("Invalid M4 graph link or duplicate input connection.");
+			return false;
+		}
+		ConnectedInputs.Add(Link.TargetPin);
+	}
+	FGuid Node, Pin;
+	if (FVoxelLandGraphCycle::Find(Source.Nodes, Source.Links, Node, Pin))
+	{
+		Error = TEXT("M4 control graph contains a cycle.");
+		return false;
+	}
+	return true;
+}
+
+bool M4ProjectionTerminalValid(const FVoxelLandGraphNodeRecord& Node, int32 Inputs)
+{
+	if (Node.OperatorVersion != 1 || !Node.Configuration.IsEmpty() || !Node.FunctionPath.IsNull()
+		|| Node.Pins.Num() != Inputs)
+	{
+		return false;
+	}
+	for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+	{
+		if (Pin.bOutput || Pin.Type != EVoxelLandGraphValueType::Float)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+}
 
 #if WITH_EDITOR
 void UVoxelLandM4ControlGraph::Serialize(FArchive& Ar)
@@ -67,6 +175,10 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 	EVoxelLandM4ControlChannel Channel, FVoxelLandGraphSnapshot& OutProjection, FString& OutError) const
 {
 	OutError.Reset();
+	if (!M4ProjectionValidateSource(Source, OutError))
+	{
+		return false;
+	}
 	if (HeightOutputId.IsValid())
 	{
 		const int32 PinIndex = Channel == EVoxelLandM4ControlChannel::Continental ? 0
@@ -91,19 +203,10 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 				Height = &Node;
 			}
 		}
-		if (!Height || PinIndex == INDEX_NONE || Height->OperatorVersion != 1 || Height->Pins.Num() != 3
-			|| !Height->Configuration.IsEmpty())
+		if (!Height || PinIndex == INDEX_NONE || !M4ProjectionTerminalValid(*Height, 3))
 		{
 			OutError = TEXT("Missing or unsupported M4 height output.");
 			return false;
-		}
-		for (const FVoxelLandGraphPinRecord& Pin : Height->Pins)
-		{
-			if (Pin.bOutput || Pin.Type != EVoxelLandGraphValueType::Float)
-			{
-				OutError = TEXT("M4 height output requires three float inputs.");
-				return false;
-			}
 		}
 		const FGuid SelectedPin = Height->Pins[PinIndex].Id;
 		FVoxelLandGraphSnapshot Projection = Source;
@@ -134,8 +237,18 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 	TSet<FGuid> Terminals;
 	for (const FVoxelLandGraphNodeRecord& Node : Source.Nodes)
 	{
+		if (Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::M4HeightOutput))
+		{
+			OutError = TEXT("M4 height output cannot be mixed with legacy named outputs.");
+			return false;
+		}
 		if (Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput))
 		{
+			if (!M4ProjectionTerminalValid(Node, 1))
+			{
+				OutError = TEXT("Invalid M4 named output terminal.");
+				return false;
+			}
 			if (Node.Id != ContinentalOutputId && Node.Id != MountainOutputId && Node.Id != PeaksOutputId)
 			{
 				OutError = TEXT("M4 graph has an unassigned density output.");

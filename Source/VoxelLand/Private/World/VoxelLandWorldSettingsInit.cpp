@@ -13,6 +13,7 @@
 #endif
 #include "Data/Assets/VoxelLandMaterialSetup.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
@@ -726,6 +727,10 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
 	FString& OutError)
 {
+	if (!VoxelLandM4HeightStageValidation::Validate(Snapshot, OutError))
+	{
+		return false;
+	}
 	if (IsInGameThread()
 		|| (!Lease.IsValid() && (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite || !ValidationLease.IsValid())))
 	{
@@ -869,8 +874,8 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		else
 		{
 			TArray<uint8> Key;
-			if (const FVoxelLandError Failure =
-					VoxelLandM4PrepassIdentity::BuildCandidate(Snapshot, *Programs[0], *Programs[1], *Programs[2], Key))
+			if (const FVoxelLandError Failure = VoxelLandM4PrepassIdentity::BuildCandidate(Snapshot, *Programs[0],
+					*Programs[1], *Programs[2], Key, Snapshot.HeightStage.Version == 1 ? 3u : 2u))
 			{
 				OutError = Failure.Message;
 				return false;

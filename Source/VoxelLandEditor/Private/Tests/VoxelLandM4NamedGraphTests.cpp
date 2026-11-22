@@ -12,6 +12,9 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandM4Preparation.h"
+#include "World/VoxelLandM4WorldIdentity.h"
+#include "Data/Structs/VoxelLandM4IdentityRecord.h"
+#include "Data/VoxelLandM4HeightStageValidation.h"
 
 namespace
 {
@@ -170,6 +173,128 @@ bool FVoxelLandM4NamedGraphTest::RunTest(const FString& Parameters)
 	Graph->MountainOutputId = Graph->ContinentalOutputId;
 	TestFalse(TEXT("duplicate named output rejected"), VoxelLandM4Editor::CompileNamedGraph(*Graph, Error));
 	TestTrue(TEXT("failed compilation clears old named programs"), Graph->ContinentalProgram.Instructions.IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4HeightOutputTest, "VoxelLand.M4.Editor.HeightOutput", M4NamedGraphFlags)
+bool FVoxelLandM4HeightOutputTest::RunTest(const FString& Parameters)
+{
+	UVoxelLandM4ControlGraph* Graph = NewObject<UVoxelLandM4ControlGraph>();
+	FGuid Unused[3];
+	M4NamedAppendChannel(*Graph, 0, -1.f, Unused[0]);
+	M4NamedAppendChannel(*Graph, 1, 0.f, Unused[1]);
+	M4NamedAppendChannel(*Graph, 2, 1.f, Unused[2]);
+	Graph->Nodes.RemoveAll([](const FVoxelLandGraphNodeRecord& Node) {
+		return Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+	});
+	FVoxelLandGraphNodeRecord Height;
+	Height.Id = FGuid(500, 0, 0, 1);
+	Height.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::M4HeightOutput);
+	Height.Pins.SetNum(3);
+	for (int32 I = 0; I < 3; ++I)
+	{
+		Height.Pins[I].Id = FGuid(501, 0, 0, I + 1);
+		Graph->Links[I].TargetNode = Height.Id;
+		Graph->Links[I].TargetPin = Height.Pins[I].Id;
+	}
+	Graph->HeightOutputId = Height.Id;
+	Graph->Nodes.Add(Height);
+	FString Error;
+	if (!TestTrue(TEXT("three-input height output compiles"), VoxelLandM4Editor::CompileNamedGraph(*Graph, Error)))
+	{
+		AddError(Error);
+		return false;
+	}
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
+	FVoxelLandM4CurveAuthoringKey First, Last;
+	Last.InputQ16 = 65535;
+	Last.OutputQ8 = 25600;
+	Config->Continental.CurveKeys = Config->Mountain.CurveKeys = Config->Peaks.CurveKeys = {First, Last};
+	Config->CellsX = Config->CellsY = 8;
+	Config->OriginXCm = Config->OriginYCm = -25600;
+	Config->GridSpacingCm = 6400;
+	Config->bGlobalErosion = false;
+	if (!TestTrue(TEXT("height-stage config bakes"), VoxelLandM4Editor::BakeWorldConfig(*Config, Error)))
+	{
+		AddError(Error);
+		return false;
+	}
+	FVoxelLandM4WorldSnapshot Snapshot;
+	if (!TestTrue(TEXT("height-stage snapshot captures"), Config->CaptureSnapshot(Snapshot, Error)))
+	{
+		AddError(Error);
+		return false;
+	}
+	TestEqual(TEXT("height-stage manifest version"), Snapshot.HeightStage.Version, 1);
+	TestTrue(TEXT("height-stage manifest references output"), Snapshot.HeightStage.OutputNodeId == Height.Id);
+	TestTrue(TEXT("height-stage manifest matches its projections"),
+		VoxelLandM4HeightStageValidation::Validate(Snapshot, Error));
+	TestTrue(TEXT("authored config matches stage snapshot"), Config->MatchesSnapshot(Snapshot));
+	FVoxelLandM4WorldSnapshot Broken = Snapshot;
+	Broken.HeightStage.OutputNodeId = FGuid(2, 3, 4, 5);
+	TestFalse(TEXT("tampered output identity rejected"), VoxelLandM4HeightStageValidation::Validate(Broken, Error));
+	Broken = Snapshot;
+	Broken.Mountain.Source.Nodes.Last().Pins[0].Id = Broken.Continental.Source.Nodes.Last().Pins[0].Id;
+	TestFalse(TEXT("duplicate projected inputs rejected"), VoxelLandM4HeightStageValidation::Validate(Broken, Error));
+	auto Lease = VoxelLandM4Preparation::Reserve();
+	if (!TestTrue(TEXT("finite admission available"), Lease.IsValid()))
+	{
+		return false;
+	}
+	FVoxelLandM4IdentityRecord Identity;
+	bool bLegacyRejected = false;
+	int16 FiniteDensity = 0;
+	const bool bFinite = Async(EAsyncExecution::ThreadPool, [&] {
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+		FVoxelLandM4IdentityRecord Old;
+		bLegacyRejected = !VoxelLandM4WorldIdentity::CaptureVersion(Snapshot, 3, Old, Error);
+		TUniquePtr<FVoxelLandWorkerContext> Worker;
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
+		FVoxelLandChunkKey Key;
+		if (!VoxelLandM4WorldIdentity::Capture(Snapshot, Identity, Error)
+			|| !VoxelLandM4WorldIdentity::Matches(Identity, Snapshot, Error)
+			|| !VoxelLandM4Preparation::Prepare(
+				Snapshot, Lease, [] { return false; }, Generator, Error)
+			|| Generator->CreateWorker(Worker) || Generator->GenerateChunk(Key, *Worker, Chunk) || !Chunk)
+		{
+			return false;
+		}
+		FiniteDensity = Chunk->Density[1 + 35 * (1 + 35)];
+		return true;
+	}).Get();
+	TestTrue(TEXT("height output runs in finite mode"), bFinite);
+	TestEqual(TEXT("height combines all three graph inputs through curves"), int32(FiniteDensity), -1536);
+	TestTrue(TEXT("old identity cannot silently ignore new stage"), bLegacyRejected);
+	TestEqual(TEXT("new stage uses world identity version 4"), Identity.FormatVersion, 4);
+	Lease.Reset();
+	Config->bUnlimited = true;
+	if (!TestTrue(TEXT("height output captures unlimited mode"), Config->CaptureSnapshot(Snapshot, Error)))
+	{
+		return false;
+	}
+	Lease = VoxelLandM4Preparation::Reserve();
+	if (!TestTrue(TEXT("unlimited admission available"), Lease.IsValid()))
+	{
+		return false;
+	}
+	int16 UnlimitedDensity = 0;
+	const bool bUnlimited = Async(EAsyncExecution::ThreadPool, [&] {
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+		TUniquePtr<FVoxelLandWorkerContext> Worker;
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
+		FVoxelLandChunkKey Key;
+		if (!VoxelLandM4Preparation::Prepare(
+				Snapshot, Lease, [] { return false; }, Generator, Error)
+			|| Generator->CreateWorker(Worker) || Generator->GenerateChunk(Key, *Worker, Chunk) || !Chunk)
+		{
+			return false;
+		}
+		UnlimitedDensity = Chunk->Density[1 + 35 * (1 + 35)];
+		return true;
+	}).Get();
+	TestTrue(TEXT("height output generates unlimited chunk"), bUnlimited);
+	TestEqual(TEXT("unlimited height uses the same graph combination"), int32(UnlimitedDensity), -1536);
 	return true;
 }
 #endif

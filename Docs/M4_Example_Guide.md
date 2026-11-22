@@ -8,11 +8,11 @@ After building an editor target, launch Unreal Editor with `-VoxelLandCreateM4Ex
 
 In a fresh editor process, pass `-VoxelLandVerifyM4Examples` and run `VoxelLand.M4.Example.VerifyAssets` to check that the saved assets, graph layouts, references, configuration, and baked curves reopen. `VoxelLand.M4.Example.Authoring` exercises transient creation and curve staleness without writing packages. These tests have not been run for this revision.
 
-## Use one named control graph
+## Use one graph-authored height output
 
-Create a **VoxelLand M4 Control Graph** asset to author all three controls in one graph. A new graph starts with Continental, Mountain and Peaks output nodes. Connect each output to a 2D control expression; expressions may share upstream nodes. Assign that same graph to the Continental, Mountain and Peaks controls of the M4 world config, and edit the three curves on the config as usual. The graph compiles and cooks each named output as a separate control program with the existing independent channel seed namespaces.
+Create a **VoxelLand M4 Control Graph** asset. A new graph starts with an **M4 Height Output** node containing named Continental, Mountain and Peaks inputs. Connect each input to a 2D control expression; expressions may share upstream nodes. Assign this same graph to all three controls in the M4 world config and edit the three curves on the config. Each input is compiled as its own program with an independent channel seed namespace. The fixed version 1 height stage adds the configured base height and the three curve outputs in continental, mountain, peaks order before erosion; it does not support arbitrary height arithmetic.
 
-To replace an output node, add a Density Output node, right-click it and choose **Use as Continental Output**, **Use as Mountain Output**, or **Use as Peaks Output**. Each channel must reference a different output and every Density Output in this graph must have a name; remove any unused output node. Invalid connections, cycles, 3D controls and filters prevent a successful compile. Save the graph and config after editing. Old single-output graphs and three-graph configs continue to work. This provides named control outputs; the height combination, erosion and density stages remain configured by the world config rather than authored as graph nodes.
+To replace the height node, add an **M4 Height Output**, right-click it and choose **Use as Height Output**. A graph using this node must contain exactly one height output and no legacy Density Output nodes. Invalid connections, cycles, 3D controls and filters prevent compilation. Save both graph and config after editing. Existing M3 single-output graphs and earlier M4 graphs with three named Density Outputs continue to work. The earlier three-output graph mode and the new height-output mode cannot be mixed within one graph.
 
 ## Create the assets manually
 

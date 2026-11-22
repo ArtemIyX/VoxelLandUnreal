@@ -17,6 +17,10 @@ public:
 	virtual void PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext) override;
 	void SetCookPreparationResult(bool bSucceeded) { bCookPreparationSucceeded = bSucceeded; }
 #endif
+	// When set, this terminal's three inputs define all named control outputs.
+	// Empty preserves the earlier three-terminal asset format.
+	UPROPERTY(VisibleAnywhere, Category = "VoxelLand|M4|Outputs")
+	FGuid HeightOutputId;
 	UPROPERTY(VisibleAnywhere, Category = "VoxelLand|M4|Outputs")
 	FGuid ContinentalOutputId;
 	UPROPERTY(VisibleAnywhere, Category = "VoxelLand|M4|Outputs")

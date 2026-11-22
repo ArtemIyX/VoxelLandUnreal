@@ -181,6 +181,27 @@ void UVoxelLandEditorSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeCo
 	UVoxelLandM4ControlGraph* Named = OutputNode && OutputNode->GetGraph()
 										? Cast<UVoxelLandM4ControlGraph>(OutputNode->GetGraph()->GetOuter())
 										: nullptr;
+	if (Named && OutputNode->Kind == int32(EVoxelLandBuiltinNode::M4HeightOutput))
+	{
+		TWeakObjectPtr<UVoxelLandM4ControlGraph> WeakGraph = Named;
+		TWeakObjectPtr<UEdGraph> WeakEditorGraph = OutputNode->GetGraph();
+		const FGuid NodeId = OutputNode->NodeGuid;
+		Section.AddMenuEntry(TEXT("M4AssignHeight"), LOCTEXT("AssignHeight", "Use as Height Output"), FText(),
+			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([WeakGraph, WeakEditorGraph, NodeId] {
+				UVoxelLandM4ControlGraph* Graph = WeakGraph.Get();
+				UEdGraph* EditorGraph = WeakEditorGraph.Get();
+				if (!Graph || !EditorGraph)
+				{
+					return;
+				}
+				const FScopedTransaction Transaction(LOCTEXT("AssignM4Height", "Assign M4 height output"));
+				Graph->Modify();
+				Graph->HeightOutputId = NodeId;
+				Graph->MarkPackageDirty();
+				EditorGraph->NotifyGraphChanged();
+				Graph->PostEditChange();
+			})));
+	}
 	if (Named && OutputNode->Kind == int32(EVoxelLandBuiltinNode::DensityOutput))
 	{
 		TWeakObjectPtr<UVoxelLandM4ControlGraph> WeakGraph = Named;
@@ -195,6 +216,7 @@ void UVoxelLandEditorSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeCo
 			}
 			const FScopedTransaction Transaction(LOCTEXT("AssignM4Output", "Assign M4 control output"));
 			Graph->Modify();
+			Graph->HeightOutputId.Invalidate();
 			// Assigning a node to another channel clears its old role.
 			if (Graph->ContinentalOutputId == NodeId)
 			{
@@ -276,6 +298,12 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
 	for (EVoxelLandBuiltinNode Builtin : Builtins)
 	{
 		const int32 Kind = int32(Builtin);
+		if (Builtin == EVoxelLandBuiltinNode::M4HeightOutput
+			&& (!ContextMenuBuilder.CurrentGraph
+				|| !ContextMenuBuilder.CurrentGraph->GetOuter()->IsA<UVoxelLandM4ControlGraph>()))
+		{
+			continue;
+		}
 		if (ContextMenuBuilder.CurrentGraph && ContextMenuBuilder.CurrentGraph->GetOuter()->IsA<
 			    UVoxelLandGraphFunction>() &&
 		    (Kind == int32(EVoxelLandBuiltinNode::DensityOutput) || Kind ==

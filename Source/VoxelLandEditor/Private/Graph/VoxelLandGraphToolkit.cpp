@@ -1687,30 +1687,14 @@ void FVoxelLandGraphToolkit::CreateMirror()
 	if (Asset->Nodes.IsEmpty() && !Asset->IsA<UVoxelLandGraphFunction>())
 	{
 		UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset);
-		const int32 Count = Named ? 3 : 1;
-		for (int32 Index = 0; Index < Count; ++Index)
+		UVoxelLandEditorNode* Output = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
+		Output->Kind = int32(Named ? EVoxelLandBuiltinNode::M4HeightOutput : EVoxelLandBuiltinNode::DensityOutput);
+		Output->CreateNewGuid();
+		Graph->AddNode(Output, false, false);
+		Output->AllocateDefaultPins();
+		if (Named)
 		{
-			UVoxelLandEditorNode* Output = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
-			Output->Kind = int32(EVoxelLandBuiltinNode::DensityOutput);
-			Output->CreateNewGuid();
-			Output->NodePosY = Index * 180;
-			Graph->AddNode(Output, false, false);
-			Output->AllocateDefaultPins();
-			if (Named)
-			{
-				if (Index == 0)
-				{
-					Named->ContinentalOutputId = Output->NodeGuid;
-				}
-				else if (Index == 1)
-				{
-					Named->MountainOutputId = Output->NodeGuid;
-				}
-				else
-				{
-					Named->PeaksOutputId = Output->NodeGuid;
-				}
-			}
+			Named->HeightOutputId = Output->NodeGuid;
 		}
 	}
 	Asset->MarkPackageDirty();
@@ -1801,7 +1785,18 @@ bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagno
 		return false;
 	}
 	const uint64 NewHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
-	if (NewHash != LastSourceHash)
+	bool bM4OutputChanged = false;
+	if (const UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset))
+	{
+		const FGuid Current[] = {
+			Named->HeightOutputId, Named->ContinentalOutputId, Named->MountainOutputId, Named->PeaksOutputId};
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			bM4OutputChanged |= LastM4OutputIds[Index] != Current[Index];
+			LastM4OutputIds[Index] = Current[Index];
+		}
+	}
+	if (NewHash != LastSourceHash || bM4OutputChanged)
 	{
 		LastSourceHash = NewHash;
 		++Revision;
@@ -3648,9 +3643,9 @@ void FVoxelLandGraphToolkit::ProcessCompileWork()
 		FString CaptureError;
 		bNamedStillCurrent = Named && Named->CaptureSnapshot(Current, CaptureError)
 						  && FVoxelLandProgramCodec::SourceFingerprint(Current) == Finished->SourceHash
-						  && Named->ContinentalOutputId == Finished->NamedOutputIds[0]
-						  && Named->MountainOutputId == Finished->NamedOutputIds[1]
-						  && Named->PeaksOutputId == Finished->NamedOutputIds[2];
+						  && Named->GetOutputId(EVoxelLandM4ControlChannel::Continental) == Finished->NamedOutputIds[0]
+						  && Named->GetOutputId(EVoxelLandM4ControlChannel::Mountain) == Finished->NamedOutputIds[1]
+						  && Named->GetOutputId(EVoxelLandM4ControlChannel::Peaks) == Finished->NamedOutputIds[2];
 	}
 	if (!bStopped && !bPIE && !bReloadPaused && bNamedStillCurrent && Finished->Revision == Revision
 		&& Finished->TargetRevision == PreviewTargetRevision && !bCompileRequested)

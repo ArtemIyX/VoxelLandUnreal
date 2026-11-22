@@ -8,7 +8,9 @@ static FText ExplicitTitle(EVoxelLandBuiltinNode Kind)
     switch (Kind)
     {
     case EVoxelLandBuiltinNode::DensityOutput: return LOCTEXT("TitleDensityOutput", "Density Output");
-    case EVoxelLandBuiltinNode::PositionX: return LOCTEXT("TitlePositionX", "Position X");
+	case EVoxelLandBuiltinNode::M4HeightOutput:
+		return LOCTEXT("TitleM4HeightOutput", "M4 Height Output");
+	case EVoxelLandBuiltinNode::PositionX: return LOCTEXT("TitlePositionX", "Position X");
     case EVoxelLandBuiltinNode::PositionY: return LOCTEXT("TitlePositionY", "Position Y");
     case EVoxelLandBuiltinNode::PositionZ: return LOCTEXT("TitlePositionZ", "Position Z");
     case EVoxelLandBuiltinNode::FloatConstant: return LOCTEXT("TitleFloatConstant", "Float Constant");
@@ -67,7 +69,10 @@ static FText ExplicitDescription(EVoxelLandBuiltinNode Kind)
     switch (Kind)
     {
     case EVoxelLandBuiltinNode::DensityOutput: return LOCTEXT("DescriptionDensityOutput", "Final signed density in centimeters. Negative is solid; positive is empty. A graph requires exactly one output.");
-    case EVoxelLandBuiltinNode::PositionX: return LOCTEXT("DescriptionPositionX", "World-space X coordinate in centimeters.");
+	case EVoxelLandBuiltinNode::M4HeightOutput:
+		return LOCTEXT("DescriptionM4HeightOutput",
+			"Three normalized control inputs feed their world-config curves, then combine in fixed order with base height before erosion.");
+	case EVoxelLandBuiltinNode::PositionX: return LOCTEXT("DescriptionPositionX", "World-space X coordinate in centimeters.");
     case EVoxelLandBuiltinNode::PositionY: return LOCTEXT("DescriptionPositionY", "World-space Y coordinate in centimeters.");
     case EVoxelLandBuiltinNode::PositionZ: return LOCTEXT("DescriptionPositionZ", "World-space Z coordinate in centimeters.");
     case EVoxelLandBuiltinNode::FloatConstant: return LOCTEXT("DescriptionFloatConstant", "A constant floating-point value.");
@@ -126,7 +131,8 @@ static FText ExplicitCategory(EVoxelLandBuiltinNode Kind)
     switch (Kind)
     {
     case EVoxelLandBuiltinNode::DensityOutput:
-    case EVoxelLandBuiltinNode::PositionX:
+	case EVoxelLandBuiltinNode::M4HeightOutput:
+	case EVoxelLandBuiltinNode::PositionX:
     case EVoxelLandBuiltinNode::PositionY:
     case EVoxelLandBuiltinNode::PositionZ:
     case EVoxelLandBuiltinNode::FloatConstant:
@@ -232,7 +238,8 @@ static FLinearColor ExplicitTitleColor(EVoxelLandBuiltinNode Kind)
     switch (Kind)
     {
     case EVoxelLandBuiltinNode::DensityOutput:
-        return FLinearColor(0.55f, 0.16f, 0.13f);
+	case EVoxelLandBuiltinNode::M4HeightOutput:
+		return FLinearColor(0.55f, 0.16f, 0.13f);
     case EVoxelLandBuiltinNode::SmoothDensity:
         return FLinearColor(0.15f, 0.38f, 0.46f);
     case EVoxelLandBuiltinNode::Perlin2:

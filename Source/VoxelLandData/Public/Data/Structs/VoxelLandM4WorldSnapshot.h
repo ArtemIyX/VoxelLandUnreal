@@ -6,6 +6,7 @@
 #include "Data/Structs/VoxelLandM4ErosionSettings.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
 #include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
+#include "Data/Structs/VoxelLandM4HeightStageManifest.h"
 #include "VoxelLandM4WorldSnapshot.generated.h"
 
 // Plain immutable-by-convention worker input. Source graph identities are checked
@@ -16,6 +17,8 @@ struct VOXELLANDDATA_API FVoxelLandM4WorldSnapshot
 	GENERATED_BODY()
 	UPROPERTY()
 	int32 FormatVersion = 1;
+	UPROPERTY()
+	FVoxelLandM4HeightStageManifest HeightStage;
 	UPROPERTY()
 	FVoxelLandM4ControlSnapshot Continental;
 	UPROPERTY()

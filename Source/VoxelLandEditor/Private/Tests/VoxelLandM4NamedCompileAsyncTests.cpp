@@ -37,7 +37,7 @@ public:
 					&& Graph->PeaksProgram.Instructions.IsEmpty());
 			Test->TestTrue(TEXT("discard is reported as stale"),
 				Toolkit->GetStatusForTests().Contains(TEXT("stale"), ESearchCase::IgnoreCase));
-			Graph->ContinentalOutputId = Original;
+			Graph->HeightOutputId = Original;
 			Toolkit->RequestCompileForTests();
 			if (!Test->TestTrue(TEXT("current named compile is queued"), Toolkit->HasCompileWorkForTests()))
 			{
@@ -84,7 +84,7 @@ bool FVoxelLandM4NamedCompileAsyncTest::RunTest(const FString& Parameters)
 	Graph->AddToRoot();
 	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
 	Toolkit->InitializeForTests(Graph);
-	const FGuid Original = Graph->ContinentalOutputId;
+	const FGuid Original = Graph->HeightOutputId;
 	Toolkit->RequestCompileForTests();
 	if (!TestTrue(TEXT("named compile returns with queued work"), Toolkit->HasCompileWorkForTests()))
 	{
@@ -94,7 +94,7 @@ bool FVoxelLandM4NamedCompileAsyncTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	// Change without pumping completion, even if the worker already completed.
-	Graph->ContinentalOutputId = FGuid(1, 2, 3, 4);
+	Graph->HeightOutputId = FGuid(1, 2, 3, 4);
 	ADD_LATENT_AUTOMATION_COMMAND(FM4NamedCompileAsyncCommand(this, Graph, Toolkit, Original));
 	return true;
 }

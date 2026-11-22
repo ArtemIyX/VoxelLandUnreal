@@ -1,4 +1,5 @@
 #include "World/VoxelLandM4SavedWorldPreflight.h"
+#include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Data/Structs/VoxelLandM4SavedWorld.h"
 
 namespace
@@ -91,8 +92,7 @@ bool VoxelLandM4SavedWorldPreflight::ValidateSnapshot(const FVoxelLandM4WorldSna
 		Error = TEXT("M4 saved world snapshot exceeds admission limits");
 		return false;
 	}
-	Error.Reset();
-	return true;
+	return VoxelLandM4HeightStageValidation::Validate(S, Error);
 }
 bool VoxelLandM4SavedWorldPreflight::Validate(const FVoxelLandM4SavedWorld& Saved, FString& Error)
 {

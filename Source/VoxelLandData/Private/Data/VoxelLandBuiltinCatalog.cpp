@@ -91,7 +91,13 @@ bool FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode Kind, FVoxelLandBuilti
         AddPin(Spec, TEXT("Density"), EType::Float);
         bHasOutput = false;
         break;
-    case EVoxelLandBuiltinNode::PositionX:
+	case EVoxelLandBuiltinNode::M4HeightOutput:
+		AddPin(Spec, TEXT("Continental"), EType::Float);
+		AddPin(Spec, TEXT("Mountain"), EType::Float);
+		AddPin(Spec, TEXT("Peaks"), EType::Float);
+		bHasOutput = false;
+		break;
+	case EVoxelLandBuiltinNode::PositionX:
     case EVoxelLandBuiltinNode::PositionY:
     case EVoxelLandBuiltinNode::PositionZ:
         break;
@@ -290,8 +296,9 @@ bool ValidateBuiltinPins(const FVoxelLandBuiltinNodeSpec& Spec, FString& Error)
             }
         }
     }
-    const int32 ExpectedOutputs = Spec.Kind == EVoxelLandBuiltinNode::DensityOutput ? 0 : 1;
-    if (Outputs != ExpectedOutputs || (Outputs == 1 && !Spec.Pins.Last().bOutput))
+	const int32 ExpectedOutputs =
+		Spec.Kind == EVoxelLandBuiltinNode::DensityOutput || Spec.Kind == EVoxelLandBuiltinNode::M4HeightOutput ? 0 : 1;
+	if (Outputs != ExpectedOutputs || (Outputs == 1 && !Spec.Pins.Last().bOutput))
     {
         Error = TEXT("invalid output pin definition");
         return false;

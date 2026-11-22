@@ -3,6 +3,7 @@
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/Structs/VoxelLandM4IdentityRecord.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4Domain.h"
 #include "Graph/VoxelLandProgramCodec.h"
@@ -39,8 +40,9 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 	const FVoxelLandM4WorldSnapshot& S, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if ((Version != 1 && Version != 2 && Version != 3) || IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1
-		|| S.VoxelSizeCm > 2000000 || (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && S.VoxelSizeCm > 134217)
+	if ((Version != 1 && Version != 2 && Version != 3 && Version != 4) || (Version < 4 && S.HeightStage.Version != 0)
+		|| IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1 || S.VoxelSizeCm > 2000000
+		|| (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && S.VoxelSizeCm > 134217)
 		|| VoxelLandM4Domain::Validate(S.Domain) || S.Smooth.Version != 1 || !FMath::IsFinite(S.Smooth.Strength)
 		|| S.Smooth.Strength < 0.f || S.Smooth.Strength > 1.f || S.OverhangAmplitudeQ8 < 0
 		|| S.OverhangAmplitudeQ8 > 128000 || S.OverhangBandQ8 < 1 || S.OverhangBandQ8 > 1280000
@@ -52,6 +54,10 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		|| !S.HeightDetail.NodeId.IsValid())
 	{
 		Error = TEXT("Invalid or unsupported M4 identity inputs, or capture was called on the game thread");
+		return false;
+	}
+	if (!VoxelLandM4HeightStageValidation::Validate(S, Error))
+	{
 		return false;
 	}
 	const FVoxelLandM4ControlSnapshot* Channels[] = {&S.Continental, &S.Mountain, &S.Peaks};
@@ -85,8 +91,8 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		KeySnapshot.Domain.GridSpacingCm = 1;
 	}
 	TArray<uint8> Candidate;
-	if (const FVoxelLandError Failure = VoxelLandM4PrepassIdentity::BuildCandidate(
-			KeySnapshot, *Programs[0], *Programs[1], *Programs[2], Candidate, Version == 1 ? 1u : 2u))
+	if (const FVoxelLandError Failure = VoxelLandM4PrepassIdentity::BuildCandidate(KeySnapshot, *Programs[0],
+			*Programs[1], *Programs[2], Candidate, S.HeightStage.Version == 1 ? 3u : (Version == 1 ? 1u : 2u)))
 	{
 		Error = Failure.Message;
 		return false;
@@ -144,6 +150,14 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 			M4WorldIdentityU64(W, uint64(Channel->Payload.SourceFingerprint));
 		}
 	}
+	if (Version >= 4)
+	{
+		W.U32(uint32(S.HeightStage.Version));
+		M4WorldIdentityGuid(W, S.HeightStage.OutputNodeId);
+		M4WorldIdentityGuid(W, S.HeightStage.ContinentalInputId);
+		M4WorldIdentityGuid(W, S.HeightStage.MountainInputId);
+		M4WorldIdentityGuid(W, S.HeightStage.PeaksInputId);
+	}
 	if (W.Bytes.Num() > 8 * 1024 * 1024)
 	{
 		Error = TEXT("M4 world identity exceeds its supported size");
@@ -160,13 +174,14 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 bool VoxelLandM4WorldIdentity::Capture(
 	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
-	return CaptureVersion(S, 3, Out, Error);
+	return CaptureVersion(S, S.HeightStage.Version == 1 ? 4 : 3, Out, Error);
 }
 
 bool VoxelLandM4WorldIdentity::Matches(
 	const FVoxelLandM4IdentityRecord& Record, const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error)
 {
-	if ((Record.FormatVersion != 1 && Record.FormatVersion != 2 && Record.FormatVersion != 3)
+	if ((Record.FormatVersion != 1 && Record.FormatVersion != 2 && Record.FormatVersion != 3
+			&& Record.FormatVersion != 4)
 		|| Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > 8 * 1024 * 1024
 		|| Record.FingerprintBits != M4WorldIdentityHash(Record.CanonicalBytes))
 	{

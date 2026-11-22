@@ -3,6 +3,7 @@
 
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4ControlGrid.h"
 #include "Generation/VoxelLandM4Domain.h"
@@ -122,7 +123,7 @@ bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& C
 	{
 		Overrides.Add(&O);
 	}
-	if (EncodingVersion == 2)
+	if (EncodingVersion >= 2)
 	{
 		Overrides.Sort([](const FVoxelLandParameterOverride& A, const FVoxelLandParameterOverride& B) {
 			const FGuid& X = A.ParameterId;
@@ -187,9 +188,16 @@ bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& C
 FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const FVoxelLandProgram& Continental,
 	const FVoxelLandProgram& Mountain, const FVoxelLandProgram& Peaks, TArray<uint8>& OutBytes, uint32 EncodingVersion)
 {
-	if ((EncodingVersion != 1 && EncodingVersion != 2) || Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite
-		|| VoxelLandM4Domain::Validate(Snapshot.Domain) || Snapshot.FormatVersion != 1
-		|| Snapshot.BaseHeightQ8 < -512000000 || Snapshot.BaseHeightQ8 > 512000000)
+	FString StageError;
+	if (!VoxelLandM4HeightStageValidation::Validate(Snapshot, StageError))
+	{
+		return M4IdentityFailure(*StageError);
+	}
+	if ((EncodingVersion != 1 && EncodingVersion != 2 && EncodingVersion != 3)
+		|| (Snapshot.HeightStage.Version == 1 && EncodingVersion != 3)
+		|| (Snapshot.HeightStage.Version == 0 && EncodingVersion == 3)
+		|| Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite || VoxelLandM4Domain::Validate(Snapshot.Domain)
+		|| Snapshot.FormatVersion != 1 || Snapshot.BaseHeightQ8 < -512000000 || Snapshot.BaseHeightQ8 > 512000000)
 	{
 		return M4IdentityFailure(TEXT("Invalid finite M4 prepass identity inputs"));
 	}
@@ -210,6 +218,10 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 	W.U8('K');
 	W.U32(EncodingVersion); // candidate encoding
 	W.U32(1); // three-channel height-combination and CPU prepass algorithm
+	if (EncodingVersion >= 3)
+	{
+		W.U32(uint32(Snapshot.HeightStage.Version));
+	}
 	M4IdentityU64(W, uint64(Snapshot.Seed));
 	M4IdentityU64(W, uint64(Snapshot.Domain.OriginXCm));
 	M4IdentityU64(W, uint64(Snapshot.Domain.OriginYCm));

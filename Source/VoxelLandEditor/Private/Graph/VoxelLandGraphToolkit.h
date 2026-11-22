@@ -307,6 +307,7 @@ private:
 	bool bHasPreviewSettingsSnapshot = false;
 	uint64 Revision = 0;
 	uint64 LastSourceHash = 0;
+	FGuid LastM4OutputIds[4];
 	uint64 PresentationRevision = 0;
 	FVoxelLandGraphDiagnostic ErrorDiagnostic;
 	double LastCompileMs = 0.0;

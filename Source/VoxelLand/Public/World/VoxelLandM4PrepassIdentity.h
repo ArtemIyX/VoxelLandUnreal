@@ -18,7 +18,7 @@ namespace VoxelLandM4PrepassIdentity
 // overhang, presentation, camera and material settings are deliberately omitted.
 // Compare the complete byte array, never a hash alone. OutBytes is unchanged on
 // failure. Version 1 preserves authored override order for existing world
-// identities; version 2 sorts unique override IDs for canonical order. The bytes are process-local until all algorithm/backend versions are
+// identities; version 2 sorts unique override IDs; version 3 binds the graph height-stage version. The bytes are process-local until all algorithm/backend versions are
 // explicitly bound to a persistent world format.
 VOXELLAND_API FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot,
 	const FVoxelLandProgram& Continental, const FVoxelLandProgram& Mountain, const FVoxelLandProgram& Peaks,

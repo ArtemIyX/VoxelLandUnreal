@@ -559,13 +559,40 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 	}
 	// Check all three graphs before capturing any: a later oversized channel must
 	// not cause earlier snapshot copies or function loads as a side effect.
+	FVoxelLandM4WorldSnapshot S;
+	const UVoxelLandM4ControlGraph* HeightGraph = Cast<UVoxelLandM4ControlGraph>(Continental.Graph);
+	const UVoxelLandM4ControlGraph* MountainGraph = Cast<UVoxelLandM4ControlGraph>(Mountain.Graph);
+	const UVoxelLandM4ControlGraph* PeaksGraph = Cast<UVoxelLandM4ControlGraph>(Peaks.Graph);
+	const bool bAnyHeightOutput = (HeightGraph && HeightGraph->HeightOutputId.IsValid())
+							   || (MountainGraph && MountainGraph->HeightOutputId.IsValid())
+							   || (PeaksGraph && PeaksGraph->HeightOutputId.IsValid());
+	if (bAnyHeightOutput)
+	{
+		if (!HeightGraph || HeightGraph != MountainGraph || HeightGraph != PeaksGraph
+			|| !HeightGraph->HeightOutputId.IsValid())
+		{
+			OutError = TEXT("A graph height output requires the same M4 graph for all three controls.");
+			return false;
+		}
+		const FVoxelLandGraphNodeRecord* HeightNode = HeightGraph->Nodes.FindByPredicate(
+			[HeightGraph](const FVoxelLandGraphNodeRecord& Node) { return Node.Id == HeightGraph->HeightOutputId; });
+		if (!HeightNode || HeightNode->Pins.Num() != 3)
+		{
+			OutError = TEXT("M4 height output is missing its three inputs.");
+			return false;
+		}
+		S.HeightStage.Version = 1;
+		S.HeightStage.OutputNodeId = HeightGraph->HeightOutputId;
+		S.HeightStage.ContinentalInputId = HeightNode->Pins[0].Id;
+		S.HeightStage.MountainInputId = HeightNode->Pins[1].Id;
+		S.HeightStage.PeaksInputId = HeightNode->Pins[2].Id;
+	}
 	if (!M4AssetWithinCaptureLimits(Continental, EVoxelLandM4ControlChannel::Continental, OutError)
 		|| !M4AssetWithinCaptureLimits(Mountain, EVoxelLandM4ControlChannel::Mountain, OutError)
 		|| !M4AssetWithinCaptureLimits(Peaks, EVoxelLandM4ControlChannel::Peaks, OutError))
 	{
 		return false;
 	}
-	FVoxelLandM4WorldSnapshot S;
 	if (!M4AssetCaptureControl(Continental, EVoxelLandM4ControlChannel::Continental, S.Continental, OutError)
 		|| !M4AssetCaptureControl(Mountain, EVoxelLandM4ControlChannel::Mountain, S.Mountain, OutError)
 		|| !M4AssetCaptureControl(Peaks, EVoxelLandM4ControlChannel::Peaks, S.Peaks, OutError))
@@ -611,8 +638,20 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 
 bool UVoxelLandM4WorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S) const
 {
-	return IsInGameThread() && FormatVersion == S.FormatVersion && Seed == S.Seed && VoxelSizeCm == S.VoxelSizeCm
-		&& BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
+	if (!IsInGameThread())
+	{
+		return false;
+	}
+	const UVoxelLandM4ControlGraph* C = Cast<UVoxelLandM4ControlGraph>(Continental.Graph);
+	const UVoxelLandM4ControlGraph* M = Cast<UVoxelLandM4ControlGraph>(Mountain.Graph);
+	const UVoxelLandM4ControlGraph* P = Cast<UVoxelLandM4ControlGraph>(Peaks.Graph);
+	const bool bAnyHeight =
+		(C && C->HeightOutputId.IsValid()) || (M && M->HeightOutputId.IsValid()) || (P && P->HeightOutputId.IsValid());
+	const bool bStageMatches = bAnyHeight ? C && C == M && C == P && S.HeightStage.Version == 1
+												&& C->HeightOutputId == S.HeightStage.OutputNodeId
+										  : S.HeightStage.Version == 0 && !S.HeightStage.OutputNodeId.IsValid();
+	return bStageMatches && IsInGameThread() && FormatVersion == S.FormatVersion && Seed == S.Seed
+		&& VoxelSizeCm == S.VoxelSizeCm && BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
 		&& HeightDetail.bEnabled == S.HeightDetail.bEnabled
 		&& HeightDetail.AlgorithmVersion == S.HeightDetail.AlgorithmVersion
 		&& HeightDetail.AmplitudeQ8 == S.HeightDetail.AmplitudeQ8

@@ -2,7 +2,6 @@
 #include "Async/Async.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Data/Enums/VoxelLandM4DomainMode.h"
-#include "Data/Enums/VoxelLandM4UnlimitedBackend.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/Structs/VoxelLandM4IdentityRecord.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
@@ -109,7 +108,6 @@ TArray<uint8> M4SerializationReference(const FVoxelLandM4WorldSnapshot& S, int32
 	Guid(S.HeightStage.ContinentalInputId);
 	Guid(S.HeightStage.MountainInputId);
 	Guid(S.HeightStage.PeaksInputId);
-	U8(uint8(S.UnlimitedBackend));
 	U32(1);
 	U32(1);
 
@@ -179,8 +177,6 @@ bool FVoxelLandM4IdentitySerializationTest::RunTest(const FString& Parameters)
 		for (int32 Mode = 0; Mode < 2; ++Mode)
 		{
 			S.Domain.Mode = Mode == 0 ? EVoxelLandM4DomainMode::Finite : EVoxelLandM4DomainMode::Unlimited;
-			S.UnlimitedBackend =
-				Mode == 0 ? EVoxelLandM4UnlimitedBackend::LegacyFloat : EVoxelLandM4UnlimitedBackend::FixedLattice;
 			S.bOverhangEnabled = Mode != 0;
 			S.OverhangAmplitudeQ8 = Mode != 0 ? 256 : 0;
 			FVoxelLandM4IdentityRecord Captured;
@@ -244,8 +240,6 @@ bool FVoxelLandM4IdentitySerializationTest::RunTest(const FString& Parameters)
 		for (int32 Mode = 0; Mode < 2; ++Mode)
 		{
 			S.Domain.Mode = Mode == 0 ? EVoxelLandM4DomainMode::Finite : EVoxelLandM4DomainMode::Unlimited;
-			S.UnlimitedBackend =
-				Mode == 0 ? EVoxelLandM4UnlimitedBackend::LegacyFloat : EVoxelLandM4UnlimitedBackend::FixedLattice;
 			S.bOverhangEnabled = Mode != 0;
 			S.OverhangAmplitudeQ8 = Mode != 0 ? 256 : 0;
 			FVoxelLandM4IdentityRecord Captured;

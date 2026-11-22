@@ -82,7 +82,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4FixedLatticeTest, "VoxelLand.M4.Fix
 bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 {
 	FString Failure;
-	bool bLegacyRejected = false, bPositiveSeam = false, bNegativeSeam = false, bRepeat = false, bUnsupported = false;
+	bool bFarDemandAccepted = false, bPositiveSeam = false, bNegativeSeam = false, bRepeat = false, bUnsupported = false;
 	bool bCancelPreserved = false, bYSeam = false, bZSeam = false, bFarPositive = false, bFarNegative = false;
 	bool bShapedX = false, bShapedNegative = false, bShapedY = false, bShapedZ = false;
 	bool bZeroIdentity = false, bBadFrequency = false;
@@ -143,13 +143,7 @@ bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 		Smooth.bEnabled = true;
 		Smooth.Strength = 0.5f;
 		Config.SmoothOverride = Smooth;
-		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Legacy, Fixed;
-		if (const FVoxelLandError E = FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Legacy))
-		{
-			Failure = E.Message;
-			return false;
-		}
-		Config.Backend = EVoxelLandM4UnlimitedBackend::FixedLattice;
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Fixed;
 		if (const FVoxelLandError E = FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Fixed))
 		{
 			Failure = E.Message;
@@ -157,7 +151,7 @@ bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 		}
 		FVoxelLandChunkKey Positive;
 		Positive.Coordinate.X = 5243;
-		bLegacyRejected = bool(Legacy->ValidateM4ChunkDemand(Positive)) && !Fixed->ValidateM4ChunkDemand(Positive);
+		bFarDemandAccepted = !Fixed->ValidateM4ChunkDemand(Positive);
 		TUniquePtr<FVoxelLandWorkerContext> Worker;
 		if (const FVoxelLandError E = Fixed->CreateWorker(Worker))
 		{
@@ -286,7 +280,7 @@ bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 		AddError(Failure);
 		return false;
 	}
-	TestTrue(TEXT("legacy boundary preserved; v2 accepts farther coordinates"), bLegacyRejected);
+	TestTrue(TEXT("fixed lattice accepts far supported demand"), bFarDemandAccepted);
 	TestTrue(TEXT("positive boundary halo is seamless"), bPositiveSeam);
 	TestTrue(TEXT("negative boundary halo is seamless"), bNegativeSeam);
 	TestTrue(TEXT("far positive halo is seamless"), bFarPositive);

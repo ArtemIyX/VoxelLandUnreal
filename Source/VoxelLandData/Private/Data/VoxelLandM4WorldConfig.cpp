@@ -594,13 +594,10 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
 		OutError = TEXT("M4 erosion configuration is invalid.");
 		return false;
 	}
-	if ((UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
-			&& UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
-		|| (UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
-			&& (!bUnlimited || bGlobalErosion
-				|| (bOverhangEnabled && OverhangAmplitudeQ8 != 0 && double(OverhangFrequencyPerCm) * 16777216.0 < 0.5)
-				|| (HeightDetail.bEnabled && HeightDetail.AmplitudeQ8 != 0
-					&& double(HeightDetail.FrequencyPerCm) * 16777216.0 < 0.5))))
+	if (bUnlimited && ((bOverhangEnabled && OverhangAmplitudeQ8 != 0
+			&& double(OverhangFrequencyPerCm) * 16777216.0 < 0.5)
+		|| (HeightDetail.bEnabled && HeightDetail.AmplitudeQ8 != 0
+			&& double(HeightDetail.FrequencyPerCm) * 16777216.0 < 0.5)))
 	{
 		OutError = TEXT(
 			"M4 fixed lattice requires unlimited mode, no global erosion and representable Q24 shaping frequencies.");
@@ -665,7 +662,6 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
 	S.Seed = Seed;
 	S.VoxelSizeCm = VoxelSizeCm;
 	S.BaseHeightQ8 = BaseHeightQ8;
-	S.UnlimitedBackend = UnlimitedBackend;
 	S.Domain.Mode = bUnlimited ? EVoxelLandM4DomainMode::Unlimited : EVoxelLandM4DomainMode::Finite;
 	S.Domain.bGlobalErosion = bGlobalErosion;
 	S.Domain.OriginXCm = OriginXCm;
@@ -746,7 +742,7 @@ bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
 	const bool bStageMatches = bAnyHeight ? C && C == M && C == P && S.HeightStage.Version == 1
 												&& C->HeightOutputId == S.HeightStage.OutputNodeId
 										  : S.HeightStage.Version == 0 && !S.HeightStage.OutputNodeId.IsValid();
-	return bStageMatches && IsInGameThread() && UnlimitedBackend == S.UnlimitedBackend
+	return bStageMatches && IsInGameThread()
 		&& FormatVersion == S.FormatVersion && Seed == S.Seed && VoxelSizeCm == S.VoxelSizeCm
 		&& BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
 		&& HeightDetail.bEnabled == S.HeightDetail.bEnabled

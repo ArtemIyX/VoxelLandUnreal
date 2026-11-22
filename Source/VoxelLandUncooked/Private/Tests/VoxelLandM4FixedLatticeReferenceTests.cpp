@@ -258,7 +258,6 @@ bool FVoxelLandM4FixedReferenceTest::RunTest(const FString& Parameters)
 			return false;
 		}
 		FVoxelLandM4UnlimitedConfig Config;
-		Config.Backend = EVoxelLandM4UnlimitedBackend::FixedLattice;
 		Config.ContinentalGenerator = Config.MountainGenerator = Config.PeaksGenerator = FbmGenerator;
 		Config.ContinentalCurve = Config.MountainCurve = Config.PeaksCurve = Curve;
 		Config.bNormalizeSlope = true;

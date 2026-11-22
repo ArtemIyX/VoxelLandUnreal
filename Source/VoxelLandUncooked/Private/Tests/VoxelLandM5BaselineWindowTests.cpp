@@ -217,8 +217,9 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 
 		FVoxelLandProgramDraft ControlDraft;
 		ControlDraft.RegisterCount = 1;
+		ControlDraft.Constants = {0.25f};
 		FVoxelLandInstruction XInput, ControlStore;
-		XInput.Op = EVoxelLandOpcode::LoadX;
+		XInput.Op = EVoxelLandOpcode::LoadConstant;
 		ControlStore.Op = EVoxelLandOpcode::StoreDensity;
 		ControlDraft.Instructions = {XInput, ControlStore};
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> ControlProgram;
@@ -313,7 +314,6 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 			Failure = TEXT("fixed-lattice control generator failed");
 			return false;
 		}
-		Local.Backend = EVoxelLandM4UnlimitedBackend::FixedLattice;
 		Local.ContinentalGenerator = Local.MountainGenerator = Local.PeaksGenerator = FixedControl;
 		if (FVoxelLandGenerator::CreateM4Unlimited(Settings, Local, FixedGenerator) || !FixedGenerator)
 		{

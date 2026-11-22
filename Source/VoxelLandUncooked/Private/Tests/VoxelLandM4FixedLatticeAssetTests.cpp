@@ -26,7 +26,6 @@ bool FVoxelLandM4FixedLatticeAssetTest::RunTest(const FString& Parameters)
 	}
 	Config->bUnlimited = true;
 	Config->bGlobalErosion = false;
-	Config->UnlimitedBackend = EVoxelLandM4UnlimitedBackend::FixedLattice;
 	Config->bOverhangEnabled = true;
 	Config->OverhangAmplitudeQ8 = 256;
 	Config->HeightDetail.bEnabled = true;

@@ -15,19 +15,32 @@ constexpr EAutomationTestFlags M4UnlimitedFlags =
 FVoxelLandProgramDraft M4UnlimitedControl(bool bX, float Constant)
 {
 	FVoxelLandProgramDraft Draft;
-	Draft.RegisterCount = bX ? 2 : 1;
-	Draft.Constants = {Constant};
-	FVoxelLandInstruction Input, Load, Multiply, Store;
-	Input.Op = EVoxelLandOpcode::LoadX;
-	Load.Op = EVoxelLandOpcode::LoadConstant;
-	Load.Dst = bX ? 1 : 0;
-	Multiply.Op = EVoxelLandOpcode::Multiply;
-	Multiply.A = 0;
-	Multiply.B = 1;
-	Multiply.Dst = 0;
+	Draft.RegisterCount = bX ? 3 : 1;
+	Draft.Constants = bX ? TArray<float>({Constant, 1.f, 0.5f, 2.f}) : TArray<float>({Constant});
+	FVoxelLandInstruction Input, Load, NoiseOp, Store;
+	Input.Op = bX ? EVoxelLandOpcode::LoadX : EVoxelLandOpcode::LoadConstant;
+	Load.Op = EVoxelLandOpcode::LoadY;
+	Load.Dst = 1;
+	NoiseOp.Op = EVoxelLandOpcode::Value2;
+	NoiseOp.A = 0;
+	NoiseOp.B = 1;
+	NoiseOp.Dst = 2;
+	if (bX)
+	{
+		FVoxelLandSeedSlot Seed;
+		Seed.NodeId = FGuid(1, 2, 3, 4);
+		Draft.Seeds.Add(Seed);
+		FVoxelLandNoiseConfig Noise;
+		Noise.Frequency.Index = 0;
+		Noise.Octaves.Index = 1;
+		Noise.Gain.Index = 2;
+		Noise.Lacunarity.Index = 3;
+		Draft.Noise.Add(Noise);
+	}
 	Store.Op = EVoxelLandOpcode::StoreDensity;
-	Draft.Instructions = bX ? TArray<FVoxelLandInstruction>({Input, Load, Multiply, Store})
-							: TArray<FVoxelLandInstruction>({Load, Store});
+	Store.A = bX ? 2 : 0;
+	Draft.Instructions = bX ? TArray<FVoxelLandInstruction>({Input, Load, NoiseOp, Store})
+							: TArray<FVoxelLandInstruction>({Input, Store});
 	return Draft;
 }
 
@@ -137,9 +150,8 @@ bool FVoxelLandM4UnlimitedChunkTest::RunTest(const FString& Parameters)
 				auto Generate = [&](const FVoxelLandChunkKey& K,
 									TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& Out,
 									TFunctionRef<bool()> Cancel) {
-					return VoxelLandM4Unlimited::GenerateChunk(Final, Overhang, Slope != 0, 0, *Controls[0],
-						*Workers[0], *Curve, *Controls[1], *Workers[1], *Curve, *Controls[2], *Workers[2], *Curve, K,
-						Out, Cancel);
+					return VoxelLandM4Unlimited::GenerateChunk(Final, Overhang, Slope != 0, 0, *Controls[0], *Curve,
+						*Controls[1], *Curve, *Controls[2], *Curve, K, Out, Cancel);
 				};
 				TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Base, Again;
 				if (Generate(Key, Base, [] { return false; }) || !Base)
@@ -233,7 +245,7 @@ bool FVoxelLandM4UnlimitedChunkTest::RunTest(const FString& Parameters)
 				const FVoxelLandError CancelError = Generate(Key, Prior, [&Checks] { return ++Checks >= 4; });
 				CancelledPreserved |= CancelError.Code == EVoxelLandErrorCode::Cancelled && Prior == Base;
 				FVoxelLandChunkKey Far = Key;
-				Far.Coordinate.X = 100000;
+				Far.Coordinate.X = MAX_int32;
 				IntegratedRangeRejected &=
 					LocalGenerator->ValidateM4ChunkDemand(Far).Code == EVoxelLandErrorCode::NonFiniteCoordinate;
 				Prior = Base;

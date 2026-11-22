@@ -725,14 +725,11 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		OutError = TEXT("Unsupported M4 domain mode");
 		return false;
 	}
-	if ((Snapshot.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
-	     && Snapshot.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
-	    || (Snapshot.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
-	        && (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Unlimited || Snapshot.Domain.bGlobalErosion
-	            || (Snapshot.bOverhangEnabled && Snapshot.OverhangAmplitudeQ8 != 0
-	                && !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Snapshot.OverhangFrequencyPerCm))
-	            || (Snapshot.HeightDetail.bEnabled && Snapshot.HeightDetail.AmplitudeQ8 != 0
-	                && !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Snapshot.HeightDetail.FrequencyPerCm)))))
+	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
+		&& ((Snapshot.bOverhangEnabled && Snapshot.OverhangAmplitudeQ8 != 0
+				&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Snapshot.OverhangFrequencyPerCm))
+			|| (Snapshot.HeightDetail.bEnabled && Snapshot.HeightDetail.AmplitudeQ8 != 0
+				&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Snapshot.HeightDetail.FrequencyPerCm))))
 	{
 		OutError = TEXT(
 			"M4 fixed lattice requires unlimited mode, no global erosion and representable Q24 shaping frequencies");
@@ -816,7 +813,6 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
 	{
 		FVoxelLandM4UnlimitedConfig Unlimited;
-		Unlimited.Backend = Snapshot.UnlimitedBackend;
 		Unlimited.ContinentalGenerator = Generators[0];
 		Unlimited.MountainGenerator = Generators[1];
 		Unlimited.PeaksGenerator = Generators[2];

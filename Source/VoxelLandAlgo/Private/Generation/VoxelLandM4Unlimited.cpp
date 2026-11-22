@@ -2,7 +2,6 @@
 
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4Control.h"
-#include "Generation/VoxelLandM4ControlGrid.h"
 #include "Generation/VoxelLandM4FixedLattice.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
 #include "Generation/VoxelLandM4HeightPrepass.h"
@@ -20,16 +19,13 @@ FVoxelLandError M4UnlimitedError(EVoxelLandErrorCode Code, const TCHAR* Message)
 }
 }
 
-static FVoxelLandError GenerateChunkInternal(const FVoxelLandGeneratorSettings& FinalSettings,
+FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	const FVoxelLandM4OverhangConfig& Overhang, bool bNormalizeSlope, int32 BaseQ8,
-	const FVoxelLandGenerator& ContinentalGenerator, FVoxelLandWorkerContext* ContinentalWorker,
-	const FVoxelLandM4CurveLut& ContinentalCurve, const FVoxelLandGenerator& MountainGenerator,
-	FVoxelLandWorkerContext* MountainWorker, const FVoxelLandM4CurveLut& MountainCurve,
-	const FVoxelLandGenerator& PeaksGenerator, FVoxelLandWorkerContext* PeaksWorker,
-	const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
+	const FVoxelLandGenerator& ContinentalGenerator, const FVoxelLandM4CurveLut& ContinentalCurve,
+	const FVoxelLandGenerator& MountainGenerator, const FVoxelLandM4CurveLut& MountainCurve,
+	const FVoxelLandGenerator& PeaksGenerator, const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
-	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail,
-	bool bFixedLattice)
+	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail)
 {
 	if (Key.LOD != 0)
 	{
@@ -68,20 +64,11 @@ static FVoxelLandError GenerateChunkInternal(const FVoxelLandGeneratorSettings& 
 	Region.GridSpacingCm = SizeCm;
 	TArray<uint16> Continental, Mountain, Peaks;
 	const FVoxelLandGenerator* Generators[] = {&ContinentalGenerator, &MountainGenerator, &PeaksGenerator};
-	FVoxelLandWorkerContext* Workers[] = {ContinentalWorker, MountainWorker, PeaksWorker};
 	TArray<uint16>* Outputs[] = {&Continental, &Mountain, &Peaks};
 	for (int32 Index = 0; Index < 3; ++Index)
 	{
-		if (!bFixedLattice && !Workers[Index])
-		{
-			return M4UnlimitedError(EVoxelLandErrorCode::InvalidContext, TEXT("M4 local control worker missing"));
-		}
-		const FVoxelLandError Error = bFixedLattice
-			                              ? VoxelLandM4FixedLattice::Evaluate(*Generators[Index], OriginX, OriginY,
-				                              SizeCm, Cells, Cells, *Outputs[Index], IsCancelled)
-			                              : VoxelLandM4ControlGrid::Evaluate(*Generators[Index], *Workers[Index],
-				                              OriginX,
-				                              OriginY, SizeCm, Cells, Cells, *Outputs[Index], IsCancelled);
+		const FVoxelLandError Error = VoxelLandM4FixedLattice::Evaluate(
+			*Generators[Index], OriginX, OriginY, SizeCm, Cells, Cells, *Outputs[Index], IsCancelled);
 		if (Error)
 		{
 			return Error;
@@ -107,7 +94,7 @@ static FVoxelLandError GenerateChunkInternal(const FVoxelLandGeneratorSettings& 
 	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 	FVoxelLandGeneratorSettings ShapingSettings = FinalSettings;
-	ShapingSettings.bM4FixedLatticeShaping = bFixedLattice;
+	ShapingSettings.bM4FixedLatticeShaping = true;
 	const FVoxelLandError CreateError =
 		SmoothOverride.IsSet()
 			? FVoxelLandGenerator::CreateM4HeightField(ShapingSettings, Grid, bNormalizeSlope,
@@ -136,31 +123,4 @@ static FVoxelLandError GenerateChunkInternal(const FVoxelLandGeneratorSettings& 
 	return {};
 }
 
-FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
-	const FVoxelLandM4OverhangConfig& Overhang, bool bNormalizeSlope, int32 BaseQ8,
-	const FVoxelLandGenerator& ContinentalGenerator, FVoxelLandWorkerContext& ContinentalWorker,
-	const FVoxelLandM4CurveLut& ContinentalCurve, const FVoxelLandGenerator& MountainGenerator,
-	FVoxelLandWorkerContext& MountainWorker, const FVoxelLandM4CurveLut& MountainCurve,
-	const FVoxelLandGenerator& PeaksGenerator, FVoxelLandWorkerContext& PeaksWorker,
-	const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
-	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
-	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail)
-{
-	return GenerateChunkInternal(FinalSettings, Overhang, bNormalizeSlope, BaseQ8, ContinentalGenerator,
-		&ContinentalWorker, ContinentalCurve, MountainGenerator, &MountainWorker, MountainCurve, PeaksGenerator,
-		&PeaksWorker, PeaksCurve, Key, OutChunk, IsCancelled, SmoothOverride, HeightDetail, false);
-}
-
-FVoxelLandError GenerateFixedChunk(const FVoxelLandGeneratorSettings& FinalSettings,
-	const FVoxelLandM4OverhangConfig& Overhang, bool bNormalizeSlope, int32 BaseQ8,
-	const FVoxelLandGenerator& ContinentalGenerator, const FVoxelLandM4CurveLut& ContinentalCurve,
-	const FVoxelLandGenerator& MountainGenerator, const FVoxelLandM4CurveLut& MountainCurve,
-	const FVoxelLandGenerator& PeaksGenerator, const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
-	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
-	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail)
-{
-	return GenerateChunkInternal(FinalSettings, Overhang, bNormalizeSlope, BaseQ8, ContinentalGenerator, nullptr,
-		ContinentalCurve, MountainGenerator, nullptr, MountainCurve, PeaksGenerator, nullptr, PeaksCurve, Key, OutChunk,
-		IsCancelled, SmoothOverride, HeightDetail, true);
-}
 }

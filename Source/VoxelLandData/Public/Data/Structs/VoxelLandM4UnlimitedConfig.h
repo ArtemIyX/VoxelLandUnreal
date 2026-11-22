@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
-#include "Data/Enums/VoxelLandM4UnlimitedBackend.h"
 #include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
 
@@ -19,11 +18,10 @@ struct FVoxelLandM4UnlimitedConfig
 	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> ContinentalCurve;
 	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> MountainCurve;
 	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> PeaksCurve;
-	EVoxelLandM4UnlimitedBackend Backend = EVoxelLandM4UnlimitedBackend::LegacyFloat;
 	int32 BaseQ8 = 0;
 	bool bNormalizeSlope = false;
 	FVoxelLandM4OverhangConfig Overhang;
 	FVoxelLandM4HeightDetailConfig HeightDetail;
-	// Unset preserves the final program's legacy filter behavior.
+	// Unset uses the final program's filter settings.
 	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride;
 };

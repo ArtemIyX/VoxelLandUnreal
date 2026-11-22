@@ -89,7 +89,6 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 			return false;
 		}
 		FVoxelLandM4UnlimitedConfig Local;
-		Local.Backend = EVoxelLandM4UnlimitedBackend::FixedLattice;
 		Local.ContinentalGenerator = Local.MountainGenerator = Local.PeaksGenerator = Control;
 		Local.ContinentalCurve = Local.MountainCurve = Local.PeaksCurve = Curve;
 		return !FVoxelLandGenerator::CreateM4Unlimited(Settings, Local, UnlimitedGenerator);

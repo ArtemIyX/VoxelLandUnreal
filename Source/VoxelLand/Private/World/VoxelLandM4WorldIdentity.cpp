@@ -96,10 +96,8 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 {
 	Error.Reset();
 	if (Version != 1
-		|| (S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
-			&& S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
-		|| (S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
-			&& (S.Domain.Mode != EVoxelLandM4DomainMode::Unlimited || S.Domain.bGlobalErosion
+		|| (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
+			&& (S.Domain.bGlobalErosion
 				|| (S.bOverhangEnabled && S.OverhangAmplitudeQ8 != 0
 					&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(S.OverhangFrequencyPerCm))
 				|| (S.HeightDetail.bEnabled && S.HeightDetail.AmplitudeQ8 != 0
@@ -139,7 +137,7 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		{
 			return false;
 		}
-		if (S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice)
+		if (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
 		{
 			FVoxelLandGeneratorSettings Settings;
 			Settings.Program = Programs[I];
@@ -244,7 +242,6 @@ bool VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(const FVoxelLandM4Wo
 	M4WorldIdentityGuid(W, S.HeightStage.ContinentalInputId);
 	M4WorldIdentityGuid(W, S.HeightStage.MountainInputId);
 	M4WorldIdentityGuid(W, S.HeightStage.PeaksInputId);
-	W.U8(uint8(S.UnlimitedBackend));
 	W.U32(1); // fixed-lattice numeric/noise contract
 	W.U32(1); // fixed-lattice 2D/3D shaping contract
 

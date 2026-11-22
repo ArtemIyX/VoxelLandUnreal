@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "Data/Structs/VoxelLandM4ControlConfig.h"
-#include "Data/Enums/VoxelLandM4UnlimitedBackend.h"
 #include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 #include "Data/Structs/VoxelLandM5CaveSettings.h"
 #include "VoxelLandM4WorldConfig.generated.h"
@@ -12,8 +11,7 @@ class UVoxelLandMaterialSetup;
 struct FVoxelLandM4WorldSnapshot;
 struct FVoxelLandM5WorldSnapshot;
 
-// M4 authoring configuration. It is separate from M3 world settings so
-// old assets and their serialized program identity remain unchanged.
+// M4 authoring configuration.
 UCLASS(BlueprintType)
 class VOXELLANDDATA_API UVoxelLandM4WorldConfig : public UDataAsset
 {
@@ -100,9 +98,6 @@ public:
 	// Unlimited mode evaluates controls per chunk and requires global erosion off.
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")
 	bool bUnlimited = false;
-	// Fixed lattice v2 uses a distinct terrain appearance and restricted graphs.
-	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")
-	EVoxelLandM4UnlimitedBackend UnlimitedBackend = EVoxelLandM4UnlimitedBackend::LegacyFloat;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")
 	int64 OriginXCm = -819200;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")

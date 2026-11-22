@@ -9,6 +9,31 @@
 #include "Data/Structs/VoxelLandGraphFunctionSnapshot.h"
 #include "Data/Structs/VoxelLandWorldCommonSnapshot.h"
 #include "UObject/StrongObjectPtr.h"
+#if WITH_EDITOR
+#include "UObject/ObjectSaveContext.h"
+#endif
+
+void UVoxelLandWorldDefinition::Serialize(FArchive& Ar)
+{
+	Super::Serialize(Ar);
+#if WITH_EDITOR
+	EnforceCookPreparation(Ar);
+#endif
+}
+
+#if WITH_EDITOR
+void UVoxelLandWorldDefinition::EnforceCookPreparation(FArchive& Ar) const
+{
+	const FObjectSavePackageSerializeContext* Context = Ar.GetArchiveState().GetSavePackageSerializeContext();
+	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
+		&& Context->GetPhase() == EObjectSaveContextPhase::Write)
+	{
+		// Current world definitions have no cooked generator reconstruction path.
+		// Do not publish a valid-looking but unusable world into a cooked build.
+		Ar.SetError();
+	}
+}
+#endif
 
 #if WITH_DEV_AUTOMATION_TESTS
 namespace

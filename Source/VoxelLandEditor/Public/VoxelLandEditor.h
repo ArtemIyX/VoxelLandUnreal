@@ -10,6 +10,7 @@ public:
 	virtual void ShutdownModule() override;
 	// Open Slate widgets/toolkits must not outlive a dynamically unloaded code image.
 	virtual bool SupportsDynamicReloading() override { return false; }
+
 private:
 	void OnObjectPreSave(UObject* Object, class FObjectPreSaveContext Context);
 	void OnFunctionPropertyChanged(UObject* Object, struct FPropertyChangedEvent& Event);
@@ -24,4 +25,6 @@ private:
 	TSharedPtr<class IAssetTypeActions> GraphAssetActions;
 	TSharedPtr<class IAssetTypeActions> FunctionAssetActions;
 	TSharedPtr<class IAssetTypeActions> M4ControlGraphAssetActions;
+	TSharedPtr<class IAssetTypeActions> FiniteWorldAssetActions;
+	TSharedPtr<class IAssetTypeActions> InfiniteWorldAssetActions;
 };

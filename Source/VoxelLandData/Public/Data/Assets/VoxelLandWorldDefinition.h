@@ -22,6 +22,12 @@ class VOXELLANDDATA_API UVoxelLandWorldDefinition : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	virtual void Serialize(FArchive& Ar) override;
+#if WITH_EDITOR
+	// A world definition is not cookable until its complete cooked generation
+	// and reconstruction path is implemented. Editor saves remain available.
+	void EnforceCookPreparation(FArchive& Ar) const;
+#endif
 	virtual EVoxelLandWorldKind GetWorldKind() const
 		PURE_VIRTUAL(UVoxelLandWorldDefinition::GetWorldKind, return EVoxelLandWorldKind::Finite;);
 

@@ -1,5 +1,8 @@
 #include "VoxelLandEditor.h"
 #include "VoxelLandM4EditorBake.h"
+#include "VoxelLandFiniteWorldAssetActions.h"
+#include "VoxelLandInfiniteWorldAssetActions.h"
+#include "VoxelLandWorldEditorValidation.h"
 #include "Operators/VoxelLandOperator.h"
 #include "AssetToolsModule.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -8,6 +11,10 @@
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/Assets/VoxelLandM4ControlGraph.h"
+#include "Data/Assets/VoxelLandFiniteWorld.h"
+#include "Data/Assets/VoxelLandInfiniteWorld.h"
+#include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
+#include "Data/Structs/VoxelLandInfiniteWorldSnapshot.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Graph/VoxelLandGraphPinFactory.h"
@@ -21,8 +28,10 @@
 #include "Generation/VoxelLandM4FixedLattice.h"
 #include "World/VoxelLandM4OverrideValidation.h"
 #include "Generation/VoxelLandM4CurveBake.h"
+#include "Generation/VoxelLandM5Budget.h"
 #include "Async/Async.h"
 #include "UObject/ObjectSaveContext.h"
+#include "UObject/StrongObjectPtr.h"
 #include "VoxelLandAlgo.h"
 #include "Operators/VoxelLandSquareOperator.h"
 #include "Operators/VoxelLandExampleFilterOperator.h"
@@ -47,21 +56,23 @@ bool CompileNamedGraph(UVoxelLandM4ControlGraph& Graph, FString& Error)
 	const EVoxelLandM4ControlChannel Channels[] = {EVoxelLandM4ControlChannel::Continental,
 		EVoxelLandM4ControlChannel::Mountain, EVoxelLandM4ControlChannel::Peaks};
 	bool bCaptured = Graph.CaptureSnapshot(Source, Error);
+	bCaptured = bCaptured && VoxelLandWorldEditorValidation::CanValidateSynchronously(Source, Error);
 	for (int32 Index = 0; bCaptured && Index < 3; ++Index)
 	{
 		bCaptured = Graph.ProjectSnapshot(Source, Channels[Index], Projections[Index], Error);
 	}
 	FVoxelLandSerializedProgram Programs[3];
 	const bool bCompiled = bCaptured && Async(EAsyncExecution::ThreadPool, [&Projections, &Programs, &Error] {
+		const FVoxelLandOperatorRegistrySnapshot Providers;
 		for (int32 Index = 0; Index < 3; ++Index)
 		{
 			FVoxelLandProgramDraft Draft;
 			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
-			if (!FVoxelLandGraphCompiler::Compile(Projections[Index], Draft, Error))
+			if (!FVoxelLandGraphCompiler::Compile(Projections[Index], Providers, Draft, Error))
 			{
 				return false;
 			}
-			if (const FVoxelLandError Failure = FVoxelLandProgram::Validate(Draft, Program))
+			if (const FVoxelLandError Failure = FVoxelLandProgram::Validate(Draft, Providers, Program))
 			{
 				Error = Failure.Message;
 				return false;
@@ -136,14 +147,23 @@ bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 		Config.ClearBakedCurves();
 		return false;
 	}
+	for (const FVoxelLandM4ControlSnapshot* Channel : {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks})
+	{
+		if (!VoxelLandWorldEditorValidation::CanValidateSynchronously(Channel->Source, Error))
+		{
+			Config.ClearBakedCurves();
+			return false;
+		}
+	}
 	TArray<int32> Baked[3];
 	const bool bBaked = Async(EAsyncExecution::ThreadPool, [&Snapshot, &Baked, &Error]() {
+		const FVoxelLandOperatorRegistrySnapshot Providers;
 		const FVoxelLandM4ControlSnapshot* Channels[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
 		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Channels); ++Index)
 		{
 			const FVoxelLandM4ControlSnapshot& Channel = *Channels[Index];
 			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
-			if (!FVoxelLandProgramCodec::Load(Channel.Source, Channel.Payload, Program, Error))
+			if (!FVoxelLandProgramCodec::Load(Channel.Source, Channel.Payload, Providers, Program, Error))
 			{
 				return false;
 			}
@@ -152,7 +172,7 @@ bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 				Error = Validation.Message;
 				return false;
 			}
-			if (Snapshot.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice)
+			if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
 			{
 				if (!VoxelLandM4OverrideValidation::Validate(Channel, Error))
 				{
@@ -273,12 +293,14 @@ void FVoxelLandEditorModule::StartupModule()
 		AddIcon(TEXT("VoxelLandTerrainGraph"), TEXT("TerrainGraph"));
 		AddIcon(TEXT("VoxelLandWorldSettings"), TEXT("WorldSettings"));
 		AddIcon(TEXT("VoxelLandM4WorldConfig"), TEXT("WorldSettings"));
+		AddIcon(TEXT("VoxelLandFiniteWorld"), TEXT("WorldSettings"));
+		AddIcon(TEXT("VoxelLandInfiniteWorld"), TEXT("WorldSettings"));
 		AddIcon(TEXT("VoxelLandMaterialSetup"), TEXT("MaterialSetup"));
 		FSlateStyleRegistry::RegisterSlateStyle(*Style);
 	}
-	FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor")).RegisterCustomClassLayout(
-		TEXT("VoxelLandWorldSettings"),
-		FOnGetDetailCustomizationInstance::CreateStatic(&FVoxelLandWorldSettingsDetails::MakeInstance));
+	FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"))
+		.RegisterCustomClassLayout(TEXT("VoxelLandWorldSettings"),
+			FOnGetDetailCustomizationInstance::CreateStatic(&FVoxelLandWorldSettingsDetails::MakeInstance));
 	PinFactory = MakeShared<FVoxelLandGraphPinFactory>();
 	FEdGraphUtilities::RegisterVisualPinFactory(PinFactory);
 	FModuleManager::LoadModuleChecked<FVoxelLandAlgoModule>(TEXT("VoxelLandAlgo"));
@@ -302,14 +324,14 @@ void FVoxelLandEditorModule::StartupModule()
 	Filter.OperatorId = VoxelLandExampleFilterOperatorId();
 	Filter.Category = LOCTEXT("FilterExtensions", "C++ filters");
 	Filter.DisplayName = LOCTEXT("ExampleFilter", "Example X Average Filter");
-	Filter.Tooltip = LOCTEXT("ExampleFilterTooltip",
-		"One-cell quantized three-sample average along X; connect directly to Density Output.");
+	Filter.Tooltip = LOCTEXT(
+		"ExampleFilterTooltip", "One-cell quantized three-sample average along X; connect directly to Density Output.");
 	FVoxelLandGraphPinRecord Density;
 	Density.Name = TEXT("Density");
 	Density.Type = EVoxelLandGraphValueType::Float;
 	Filter.Inputs.Add(MoveTemp(Density));
-	Filter.InputTooltips.Add(LOCTEXT("ExampleFilterInputTip",
-		"Source density in centimeters; negative values represent solid terrain."));
+	Filter.InputTooltips.Add(
+		LOCTEXT("ExampleFilterInputTip", "Source density in centimeters; negative values represent solid terrain."));
 	Filter.OutputTooltip = LOCTEXT("ExampleFilterOutputTip", "Quantized density averaged along the X axis.");
 	if (!FVoxelLandEditorOperatorRegistry::Register(Filter, Error))
 	{
@@ -322,13 +344,17 @@ void FVoxelLandEditorModule::StartupModule()
 	AssetTools.RegisterAssetTypeActions(FunctionAssetActions.ToSharedRef());
 	M4ControlGraphAssetActions = MakeShared<FVoxelLandM4ControlGraphAssetActions>();
 	AssetTools.RegisterAssetTypeActions(M4ControlGraphAssetActions.ToSharedRef());
+	FiniteWorldAssetActions = MakeShared<FVoxelLandFiniteWorldAssetActions>();
+	AssetTools.RegisterAssetTypeActions(FiniteWorldAssetActions.ToSharedRef());
+	InfiniteWorldAssetActions = MakeShared<FVoxelLandInfiniteWorldAssetActions>();
+	AssetTools.RegisterAssetTypeActions(InfiniteWorldAssetActions.ToSharedRef());
 	PreSaveHandle = FCoreUObjectDelegates::OnObjectPreSave.AddRaw(this, &FVoxelLandEditorModule::OnObjectPreSave);
-	FunctionPropertyHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this,
-		&FVoxelLandEditorModule::OnFunctionPropertyChanged);
-	FunctionTransactionHandle = FCoreUObjectDelegates::OnObjectTransacted.AddRaw(this,
-		&FVoxelLandEditorModule::OnFunctionTransacted);
-	FunctionReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddRaw(this,
-		&FVoxelLandEditorModule::OnFunctionObjectsReplaced);
+	FunctionPropertyHandle =
+		FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FVoxelLandEditorModule::OnFunctionPropertyChanged);
+	FunctionTransactionHandle =
+		FCoreUObjectDelegates::OnObjectTransacted.AddRaw(this, &FVoxelLandEditorModule::OnFunctionTransacted);
+	FunctionReplacedHandle =
+		FCoreUObjectDelegates::OnObjectsReplaced.AddRaw(this, &FVoxelLandEditorModule::OnFunctionObjectsReplaced);
 }
 
 void FVoxelLandEditorModule::ShutdownModule()
@@ -337,6 +363,20 @@ void FVoxelLandEditorModule::ShutdownModule()
 	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(FunctionPropertyHandle);
 	FCoreUObjectDelegates::OnObjectTransacted.Remove(FunctionTransactionHandle);
 	FCoreUObjectDelegates::OnObjectsReplaced.Remove(FunctionReplacedHandle);
+	if (FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
+	{
+		IAssetTools& AssetTools = FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+		if (FiniteWorldAssetActions.IsValid())
+		{
+			AssetTools.UnregisterAssetTypeActions(FiniteWorldAssetActions.ToSharedRef());
+		}
+		if (InfiniteWorldAssetActions.IsValid())
+		{
+			AssetTools.UnregisterAssetTypeActions(InfiniteWorldAssetActions.ToSharedRef());
+		}
+	}
+	FiniteWorldAssetActions.Reset();
+	InfiniteWorldAssetActions.Reset();
 	if (GraphAssetActions.IsValid())
 	{
 		StaticCastSharedPtr<FVoxelLandGraphAssetActions>(GraphAssetActions)->QuiesceEditors();
@@ -351,13 +391,15 @@ void FVoxelLandEditorModule::ShutdownModule()
 	}
 	if (GraphAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
 	{
-		FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(
-			GraphAssetActions.ToSharedRef());
+		FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools"))
+			.Get()
+			.UnregisterAssetTypeActions(GraphAssetActions.ToSharedRef());
 	}
 	if (FunctionAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
 	{
-		FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(
-			FunctionAssetActions.ToSharedRef());
+		FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools"))
+			.Get()
+			.UnregisterAssetTypeActions(FunctionAssetActions.ToSharedRef());
 	}
 	if (M4ControlGraphAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
 	{
@@ -370,8 +412,8 @@ void FVoxelLandEditorModule::ShutdownModule()
 	GraphAssetActions.Reset();
 	if (FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
 	{
-		FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor")).UnregisterCustomClassLayout(
-			TEXT("VoxelLandWorldSettings"));
+		FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"))
+			.UnregisterCustomClassLayout(TEXT("VoxelLandWorldSettings"));
 	}
 	FEdGraphUtilities::UnregisterVisualPinFactory(PinFactory);
 	PinFactory.Reset();
@@ -387,8 +429,8 @@ void FVoxelLandEditorModule::ShutdownModule()
 
 void FVoxelLandEditorModule::OnFunctionPropertyChanged(UObject* Object, FPropertyChangedEvent&)
 {
-	if (IsInGameThread() && Object && (Object->IsA<UVoxelLandGraphFunction>() || Object->GetTypedOuter<
-		                                   UVoxelLandGraphFunction>()))
+	if (IsInGameThread() && Object
+		&& (Object->IsA<UVoxelLandGraphFunction>() || Object->GetTypedOuter<UVoxelLandGraphFunction>()))
 	{
 		FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
 	}
@@ -396,8 +438,8 @@ void FVoxelLandEditorModule::OnFunctionPropertyChanged(UObject* Object, FPropert
 
 void FVoxelLandEditorModule::OnFunctionTransacted(UObject* Object, const FTransactionObjectEvent&)
 {
-	if (IsInGameThread() && Object && (Object->IsA<UVoxelLandGraphFunction>() || Object->GetTypedOuter<
-		                                   UVoxelLandGraphFunction>()))
+	if (IsInGameThread() && Object
+		&& (Object->IsA<UVoxelLandGraphFunction>() || Object->GetTypedOuter<UVoxelLandGraphFunction>()))
 	{
 		FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
 	}
@@ -405,13 +447,17 @@ void FVoxelLandEditorModule::OnFunctionTransacted(UObject* Object, const FTransa
 
 void FVoxelLandEditorModule::OnFunctionObjectsReplaced(const TMap<UObject*, UObject*>& Replacements)
 {
-	if (!IsInGameThread()) { return; }
+	if (!IsInGameThread())
+	{
+		return;
+	}
 	for (const auto& Entry : Replacements)
 	{
-		if ((Entry.Key && (Entry.Key->IsA<UVoxelLandGraphFunction>() || Entry.Key->GetTypedOuter<
-			                   UVoxelLandGraphFunction>())) ||
-		    (Entry.Value && (Entry.Value->IsA<UVoxelLandGraphFunction>() || Entry.Value->GetTypedOuter<
-			                     UVoxelLandGraphFunction>())))
+		if ((Entry.Key
+				&& (Entry.Key->IsA<UVoxelLandGraphFunction>() || Entry.Key->GetTypedOuter<UVoxelLandGraphFunction>()))
+			|| (Entry.Value
+				&& (Entry.Value->IsA<UVoxelLandGraphFunction>()
+					|| Entry.Value->GetTypedOuter<UVoxelLandGraphFunction>())))
 		{
 			FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
 			return;
@@ -421,6 +467,72 @@ void FVoxelLandEditorModule::OnFunctionObjectsReplaced(const TMap<UObject*, UObj
 
 void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveContext Context)
 {
+	if (UVoxelLandWorldDefinition* World = Cast<UVoxelLandWorldDefinition>(Object))
+	{
+		TStrongObjectPtr<UVoxelLandWorldDefinition> WorldGuard(World);
+		if (!Context.IsFirstConcurrentSave())
+		{
+			return;
+		}
+		FString Error;
+		FVoxelLandWorldCommonSnapshot Common;
+		bool bCaptured = false;
+		if (const UVoxelLandFiniteWorld* Finite = Cast<UVoxelLandFiniteWorld>(World))
+		{
+			FVoxelLandFiniteWorldSnapshot Snapshot;
+			bCaptured = Finite->CaptureSnapshot(Snapshot, Error);
+			if (bCaptured)
+			{
+				Common = MoveTemp(Snapshot.Common);
+			}
+		}
+		else if (const UVoxelLandInfiniteWorld* Infinite = Cast<UVoxelLandInfiniteWorld>(World))
+		{
+			FVoxelLandInfiniteWorldSnapshot Snapshot;
+			bCaptured = Infinite->CaptureSnapshot(Snapshot, Error);
+			if (bCaptured)
+			{
+				Common = MoveTemp(Snapshot.Common);
+			}
+		}
+		else
+		{
+			Error = TEXT("Unsupported world definition type.");
+		}
+		bool bValid = false;
+		if (bCaptured && VoxelLandWorldEditorValidation::CanValidateSynchronously(Common, Error))
+		{
+			const EVoxelLandWorldKind Kind = World->GetWorldKind();
+			bValid = Async(EAsyncExecution::ThreadPool, [&Common, Kind, &Error]() {
+				TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+				if (!FVoxelLandM5Budget::TryCreate(64 * 1024 * 1024, 1000000000, Budget))
+				{
+					Error = TEXT("Unable to allocate the world-validation budget.");
+					return false;
+				}
+				// The save path waits on this worker, so it must not run any provider
+				// callbacks that could wait on the game thread. The preflight accepts
+				// only built-ins, and an empty frozen registry prevents accidental
+				// provider dispatch even if a builtin ID was registered externally.
+				const FVoxelLandOperatorRegistrySnapshot Providers;
+				return VoxelLandWorldEditorValidation::ValidateSnapshot(
+					Common, Kind, Providers, Budget.ToSharedRef(), [] { return false; }, Error);
+			}).Get();
+		}
+		if (!bValid)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("VoxelLand world %s validation incomplete or invalid: %s"),
+				*World->GetPathName(), *Error);
+		}
+		if (Context.IsCooking())
+		{
+			// Serialize rejects the actual cooker write even if the graph check
+			// succeeds: cooked world reconstruction is not implemented yet.
+			UE_LOG(LogTemp, Error, TEXT("VoxelLand world %s cannot cook: cooked world generation is not implemented."),
+				*World->GetPathName());
+		}
+		return;
+	}
 	if (UVoxelLandM4WorldConfig* Config = Cast<UVoxelLandM4WorldConfig>(Object))
 	{
 		if (!Context.IsFirstConcurrentSave())
@@ -491,11 +603,12 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 	FString Error;
 	FVoxelLandGraphSnapshot Snapshot;
 	bool bOk = Graph->CaptureSnapshot(Snapshot, Error);
+	bOk = bOk && VoxelLandWorldEditorValidation::CanValidateSynchronously(Snapshot, Error);
 	FVoxelLandSerializedProgram Payload;
 	if (bOk)
 	{
 		TFuture<bool> Work = Async(EAsyncExecution::ThreadPool, [&Snapshot, &Payload, &Error]() {
-			const FVoxelLandOperatorRegistrySnapshot Providers = FVoxelLandOperatorRegistry::Snapshot();
+			const FVoxelLandOperatorRegistrySnapshot Providers;
 			FVoxelLandProgramDraft Draft;
 			if (!FVoxelLandGraphCompiler::Compile(Snapshot, Providers, Draft, Error))
 			{

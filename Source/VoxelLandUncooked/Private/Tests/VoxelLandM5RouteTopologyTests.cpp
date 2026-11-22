@@ -49,6 +49,12 @@ FVoxelLandM5CavePlan RouteFixture()
 {
 	FVoxelLandM5CavePlan P;
 	P.Region.X = -1;
+	P.Bounds.MinInclusive.X = -1870;
+	P.Bounds.MaxExclusive.X = 130;
+	P.Bounds.MinInclusive.Y = -1000;
+	P.Bounds.MaxExclusive.Y = 1000;
+	P.Bounds.MinInclusive.Z = -1000;
+	P.Bounds.MaxExclusive.Z = 1000;
 	FVoxelLandM5Chamber A;
 	A.bHasId = true;
 	A.Id = 0;
@@ -172,6 +178,7 @@ FVoxelLandM5CavePlan FullRouteFixture()
 	Portal.bHasId = true;
 	Portal.Id = 0xcd359f8c604b6336ULL;
 	Portal.CenterCm.X = 130;
+	Portal.RadiusCm = 400;
 	Portal.Key.WorldSeed = 42;
 	Portal.Key.StageId = FGuid(1, 2, 3, 4);
 	Portal.Key.RegionA.X = -1;
@@ -195,11 +202,21 @@ FVoxelLandM5CavePlan FullRouteFixture()
 	P.Segments[3].StartCm.Z = 100;
 	return P;
 }
-FVoxelLandM5Diagnostic ValidateFixture(
-	const FVoxelLandM5CavePlan& Plan, TFunctionRef<bool()> Cancel, int64 Work = 10000000, bool bStructureOnly = false)
+FVoxelLandM5Diagnostic ValidateFixture(const FVoxelLandM5CavePlan& Plan, TFunctionRef<bool()> Cancel,
+	int64 Work = 10000000, bool bStructureOnly = false, int64 OriginX = 130)
 {
 	FVoxelLandM5CaveSettings S;
 	S.StageId = FGuid(1, 2, 3, 4);
+	S.PlanningMode = EVoxelLandM5PlanningMode::Regional;
+	S.RegionSizeCm = 2000;
+	S.RegionOriginXCm = OriginX;
+	S.RegionOriginYCm = -1000;
+	S.Bounds.MinInclusive.X = OriginX - 2000;
+	S.Bounds.MaxExclusive.X = OriginX + 2000;
+	S.Bounds.MinInclusive.Y = -1000;
+	S.Bounds.MaxExclusive.Y = 3000;
+	S.Bounds.MinInclusive.Z = -1000;
+	S.Bounds.MaxExclusive.Z = 1000;
 	S.Limits.MaxValidationWork = Work;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!FVoxelLandM5Budget::TryCreate(S.Limits.MaxBytes, Work, Budget))
@@ -283,6 +300,38 @@ bool FVoxelLandM5RouteTopologyTest::RunTest(const FString& Parameters)
 	Missing = Full;
 	Missing.Portals[0].Key.Salt = 1;
 	Expected(TEXT("foreign portal key rejected"), Missing, EVoxelLandM5ErrorCode::InvalidInput);
+	Missing = Full;
+	Missing.Portals[0].CenterCm.X = 129;
+	Expected(TEXT("off-face portal rejected on negative side"), Missing, EVoxelLandM5ErrorCode::OutOfDomain);
+	Missing = Full;
+	Missing.Portals[0].CenterCm.X = 131;
+	Expected(TEXT("off-face portal rejected on positive side"), Missing, EVoxelLandM5ErrorCode::OutOfDomain);
+	Missing = Full;
+	Missing.Portals[0].CenterCm.Y = 700;
+	Expected(TEXT("portal radius must fit the tangential region"), Missing, EVoxelLandM5ErrorCode::OutOfDomain);
+	Missing = Full;
+	Missing.Portals[0].RadiusCm = 0;
+	Expected(TEXT("zero portal radius rejected"), Missing, EVoxelLandM5ErrorCode::InvalidInput);
+	Missing = Full;
+	Missing.Portals[0].CenterCm.X = MAX_int64;
+	Expected(TEXT("portal extent arithmetic overflow rejected"), Missing, EVoxelLandM5ErrorCode::InvalidInput);
+	Missing = Full;
+	Missing.Bounds.MinInclusive.X = -1871;
+	Expected(TEXT("candidate bounds must match its grid region"), Missing, EVoxelLandM5ErrorCode::InconsistentTopology);
+	Missing = Full;
+	Missing.Portals[0].CenterCm.X = -130;
+	Missing.Segments[3].EndCm.X = -130;
+	Missing.Bounds.MinInclusive.X = -2130;
+	Missing.Bounds.MaxExclusive.X = -130;
+	TestTrue(TEXT("correct negative shared face is accepted structurally"),
+		ValidateFixture(Missing, Never, 10000000, true, -130).Code == EVoxelLandM5ErrorCode::None);
+	Missing = Full;
+	Missing.Region.X = MAX_int64 - 1;
+	Missing.Portals[0].Key.RegionA.X = MAX_int64 - 1;
+	Missing.Portals[0].Key.RegionB.X = MAX_int64;
+	Missing.Portals[0].Id = 0xd2e7d91b751ada66ULL; // Independent SHA-256 packet vector.
+	TestTrue(TEXT("region multiplication overflow is rejected"),
+		ValidateFixture(Missing, Never, 10000000, true).Code == EVoxelLandM5ErrorCode::OutOfDomain);
 	Missing = Full;
 	Missing.Entrances[0].OutsideFeetAnchorCm.X = 71;
 	Missing.Routes[2].Legs[0].StartFeetCm.X = 71;

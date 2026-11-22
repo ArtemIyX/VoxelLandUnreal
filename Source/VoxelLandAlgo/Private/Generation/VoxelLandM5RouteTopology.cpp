@@ -45,6 +45,49 @@ bool FeatureIsNode(const FVoxelLandM5RouteFeatureRef& Ref, const FVoxelLandM5End
 		|| (Ref.Kind == EVoxelLandM5RouteFeatureKind::Portal && Endpoint.Kind == EVoxelLandM5EndpointKind::Portal)
 		|| (Ref.Kind == EVoxelLandM5RouteFeatureKind::Junction && Endpoint.Kind == EVoxelLandM5EndpointKind::Junction);
 }
+
+// Logical coordinates are bounded independently of render origin. Full voxel
+// size/grid compatibility is verified by M5 world-identity validation; this
+// function does not receive an M4 voxel size and cannot replace that check.
+bool RegionBoundsForPortal(
+	const FVoxelLandM5CaveSettings& Settings, const FVoxelLandM5RegionCoord& Region, FVoxelLandM5Bounds& Out)
+{
+	using namespace VoxelLand::M5::CheckedMath;
+	constexpr int64 Limit = 1048576;
+	const auto& Domain = Settings.Bounds;
+	if (Settings.PlanningMode != EVoxelLandM5PlanningMode::Regional || Settings.RegionSizeCm <= 0
+		|| Settings.RegionSizeCm > 2 * Limit || Settings.RegionOriginXCm < -Limit || Settings.RegionOriginXCm > Limit
+		|| Settings.RegionOriginYCm < -Limit || Settings.RegionOriginYCm > Limit || Domain.MinInclusive.X < -Limit
+		|| Domain.MinInclusive.Y < -Limit || Domain.MinInclusive.Z < -Limit || Domain.MaxExclusive.X > Limit + 1
+		|| Domain.MaxExclusive.Y > Limit + 1 || Domain.MaxExclusive.Z > Limit + 1
+		|| Domain.MinInclusive.X >= Domain.MaxExclusive.X || Domain.MinInclusive.Y >= Domain.MaxExclusive.Y
+		|| Domain.MinInclusive.Z >= Domain.MaxExclusive.Z)
+	{
+		return false;
+	}
+	int64 X, Y, XEnd, YEnd, MinXOffset, MaxXOffset, MinYOffset, MaxYOffset;
+	if (!TrySubtract(Domain.MinInclusive.X, Settings.RegionOriginXCm, MinXOffset)
+		|| !TrySubtract(Domain.MaxExclusive.X, Settings.RegionOriginXCm, MaxXOffset)
+		|| !TrySubtract(Domain.MinInclusive.Y, Settings.RegionOriginYCm, MinYOffset)
+		|| !TrySubtract(Domain.MaxExclusive.Y, Settings.RegionOriginYCm, MaxYOffset)
+		|| MinXOffset % Settings.RegionSizeCm != 0 || MaxXOffset % Settings.RegionSizeCm != 0
+		|| MinYOffset % Settings.RegionSizeCm != 0 || MaxYOffset % Settings.RegionSizeCm != 0
+		|| !TryMultiply(Region.X, Settings.RegionSizeCm, X) || !TryAdd(X, Settings.RegionOriginXCm, X)
+		|| !TryMultiply(Region.Y, Settings.RegionSizeCm, Y) || !TryAdd(Y, Settings.RegionOriginYCm, Y)
+		|| !TryAdd(X, Settings.RegionSizeCm, XEnd) || !TryAdd(Y, Settings.RegionSizeCm, YEnd)
+		|| X < Domain.MinInclusive.X || XEnd > Domain.MaxExclusive.X || Y < Domain.MinInclusive.Y
+		|| YEnd > Domain.MaxExclusive.Y)
+	{
+		return false;
+	}
+	FVoxelLandM5Bounds Bounds = Domain;
+	Bounds.MinInclusive.X = X;
+	Bounds.MinInclusive.Y = Y;
+	Bounds.MaxExclusive.X = XEnd;
+	Bounds.MaxExclusive.Y = YEnd;
+	Out = Bounds;
+	return true;
+}
 }
 
 FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVoxelLandM5CaveSettings& Settings,
@@ -330,6 +373,40 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVo
 		{
 			return Failure(
 				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid full portal key"), Portal.bHasId, Portal.Id);
+		}
+		FVoxelLandM5Bounds A, B;
+		if (!RegionBoundsForPortal(Settings, K.RegionA, A) || !RegionBoundsForPortal(Settings, K.RegionB, B))
+		{
+			return Failure(
+				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Portal regions exceed the supported grid"), true, Portal.Id);
+		}
+		const FVoxelLandM5Bounds& Own = SameRegion(Region, K.RegionA) ? A : B;
+		if (!SamePoint(Plan.Bounds.MinInclusive, Own.MinInclusive)
+			|| !SamePoint(Plan.Bounds.MaxExclusive, Own.MaxExclusive))
+		{
+			return Failure(EVoxelLandM5ErrorCode::InconsistentTopology,
+				TEXT("Plan bounds do not match its regional grid"), true, Portal.Id);
+		}
+		const int64 Radius = Portal.RadiusCm;
+		const auto& P = Portal.CenterCm;
+		int64 XMin, XMax, YMin, YMax, ZMin, ZMax;
+		if (Radius <= 0 || Radius < Settings.Topology.MinTunnelRadiusCm || Radius > Settings.Topology.MaxTunnelRadiusCm
+			|| !TrySubtract(P.X, Radius, XMin) || !TryAdd(P.X, Radius, XMax) || !TrySubtract(P.Y, Radius, YMin)
+			|| !TryAdd(P.Y, Radius, YMax) || !TrySubtract(P.Z, Radius, ZMin) || !TryAdd(P.Z, Radius, ZMax))
+		{
+			return Failure(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid portal radius or extent"), true, Portal.Id);
+		}
+		const auto& Domain = Settings.Bounds;
+		if (XMin < Domain.MinInclusive.X || XMax >= Domain.MaxExclusive.X || YMin < Domain.MinInclusive.Y
+			|| YMax >= Domain.MaxExclusive.Y || ZMin < Domain.MinInclusive.Z || ZMax >= Domain.MaxExclusive.Z
+			|| (K.Axis == EVoxelLandM5PortalAxis::X ? (A.MaxExclusive.X != B.MinInclusive.X || P.X != A.MaxExclusive.X
+														  || YMin < A.MinInclusive.Y || YMax >= A.MaxExclusive.Y)
+													: (A.MaxExclusive.Y != B.MinInclusive.Y || P.Y != A.MaxExclusive.Y
+														  || XMin < A.MinInclusive.X || XMax >= A.MaxExclusive.X)))
+		{
+			return Failure(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Portal geometry does not fit the shared face"),
+				true, Portal.Id);
 		}
 	}
 	for (const auto& Connection : Plan.Connections)

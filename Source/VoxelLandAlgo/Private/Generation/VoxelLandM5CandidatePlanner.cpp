@@ -1,5 +1,7 @@
 #include "Generation/VoxelLandM5CandidatePlanner.h"
 
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5RegionalSeed.h"
 #include "Generation/VoxelLandM5Seed.h"
@@ -189,8 +191,42 @@ bool AddPortal(const FVoxelLandM5CaveSettings& S, int64 Seed, const FVoxelLandM5
 }
 }
 
+bool FVoxelLandM5CandidateResult::MatchesSource(
+	const FVoxelLandM5CaveSettings& S, int64 Seed, const FVoxelLandM5RegionCoord& Region) const
+{
+	const auto& A = SourceSettings;
+	const auto SamePoint = [](const FVoxelLandM5PointCm& X, const FVoxelLandM5PointCm& Y) {
+		return X.X == Y.X && X.Y == Y.Y && X.Z == Y.Z;
+	};
+	return SourceSeed == Seed && SourceRegion.X == Region.X && SourceRegion.Y == Region.Y && A.bEnabled == S.bEnabled
+		&& A.StageId == S.StageId && A.Salt == S.Salt && A.PlanningMode == S.PlanningMode
+		&& SamePoint(A.Bounds.MinInclusive, S.Bounds.MinInclusive)
+		&& SamePoint(A.Bounds.MaxExclusive, S.Bounds.MaxExclusive) && A.RegionSizeCm == S.RegionSizeCm
+		&& A.RegionOriginXCm == S.RegionOriginXCm && A.RegionOriginYCm == S.RegionOriginYCm
+		&& A.RoofThicknessCm == S.RoofThicknessCm && A.Capsule.StandingHeightCm == S.Capsule.StandingHeightCm
+		&& A.Capsule.RadiusCm == S.Capsule.RadiusCm && A.Capsule.MaxSlopeDegrees == S.Capsule.MaxSlopeDegrees
+		&& A.Capsule.MaxStepCm == S.Capsule.MaxStepCm && A.Capsule.ClearanceMarginCm == S.Capsule.ClearanceMarginCm
+		&& A.Topology.MinChambers == S.Topology.MinChambers && A.Topology.MaxChambers == S.Topology.MaxChambers
+		&& A.Topology.EntranceCount == S.Topology.EntranceCount && A.Topology.MinLoops == S.Topology.MinLoops
+		&& A.Topology.MaxLoops == S.Topology.MaxLoops && A.Topology.MinTunnelRadiusCm == S.Topology.MinTunnelRadiusCm
+		&& A.Topology.MaxTunnelRadiusCm == S.Topology.MaxTunnelRadiusCm
+		&& A.Topology.MinChamberRadiusCm == S.Topology.MinChamberRadiusCm
+		&& A.Topology.MaxChamberRadiusCm == S.Topology.MaxChamberRadiusCm && A.Pockets.bEnabled == S.Pockets.bEnabled
+		&& A.Pockets.LatticeSpacingCm == S.Pockets.LatticeSpacingCm && A.Pockets.ThresholdQ16 == S.Pockets.ThresholdQ16
+		&& A.Pockets.AmplitudeCm == S.Pockets.AmplitudeCm && A.Pockets.MinDepthCm == S.Pockets.MinDepthCm
+		&& A.Pockets.MaxDepthCm == S.Pockets.MaxDepthCm && A.Pockets.bAllowAttachment == S.Pockets.bAllowAttachment
+		&& A.Pockets.bAllowEnclosedVoids == S.Pockets.bAllowEnclosedVoids && A.Pockets.Salt == S.Pockets.Salt
+		&& A.Protection.bProtectAll == S.Protection.bProtectAll
+		&& A.Protection.bRequireMask == S.Protection.bRequireMask && A.Water.Policy == S.Water.Policy
+		&& A.Water.LevelCm == S.Water.LevelCm && A.Limits.MaxCandidates == S.Limits.MaxCandidates
+		&& A.Limits.MaxEdges == S.Limits.MaxEdges && A.Limits.MaxSegments == S.Limits.MaxSegments
+		&& A.Limits.MaxAttempts == S.Limits.MaxAttempts && A.Limits.MaxBytes == S.Limits.MaxBytes
+		&& A.Limits.MaxValidationWork == S.Limits.MaxValidationWork;
+}
+
 FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5CaveSettings& S, int64 Seed,
-	const FVoxelLandM5RegionCoord& Region, TFunctionRef<bool()> IsCancelled, FVoxelLandM5CavePlan& Out)
+	const FVoxelLandM5RegionCoord& Region, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>& Out)
 {
 	const auto Cancelled = [&IsCancelled]() {
 		return IsCancelled();
@@ -212,6 +248,16 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	{
 		return Failure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid cave candidate settings or budgets"));
 	}
+	// A looser shared budget would allow the sum of candidate, entrance and
+	// validation work (or their simultaneously live outputs) to exceed the
+	// authored per-plan limits. Reject it before allocating or charging work.
+	int64 SharedMaxBytes = 0, SharedMaxWork = 0;
+	Budget->GetLimits(SharedMaxBytes, SharedMaxWork);
+	if (SharedMaxBytes > L.MaxBytes || SharedMaxWork > L.MaxValidationWork)
+	{
+		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared budget exceeds authored per-plan limits"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	FVoxelLandM5CavePlan Scratch;
 	Scratch.Region = Region;
 	if (S.PlanningMode == EVoxelLandM5PlanningMode::Regional)
@@ -263,6 +309,37 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	if (MaxPairs > L.MaxEdges || NeededBytes > L.MaxBytes)
 	{
 		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Candidate graph exceeds edge or memory budget"));
+	}
+	// Reserve for the candidate's complete lifetime, including the returned
+	// output arrays. On every failure Scratch is destroyed before Lease.
+	if (!Budget->TryReserveBytes(NeededBytes, Lease))
+	{
+		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared candidate memory budget exceeded"));
+	}
+	// Precharge an upper bound before dispatch. One unit covers one bounded
+	// comparison, disjoint-set step, cancellation point, or fixed-size SHA
+	// packet operation. Random rejection is bounded to MaxDraws. Sort uses a
+	// conservative quadratic comparison bound; no comparator can bypass budget.
+	int64 Attempts, AttemptWork, SortWork, EdgeWork, RadiusWork, NodeWork, Work = 1024;
+	int64 PairSquare, NodeSquare;
+	if (!TryMultiplyNonNegative(L.MaxCandidates, L.MaxAttempts, Attempts)
+		|| !TryMultiplyNonNegative(Attempts, int64(4 * (2 * MaxDraws + 1)) + MaxNodes + 8, AttemptWork)
+		|| !TryMultiplyNonNegative(MaxPairs, MaxPairs, PairSquare) || !TryMultiplyNonNegative(PairSquare, 8, SortWork)
+		|| !TryMultiplyNonNegative(MaxPairs, int64(2 * MaxNodes + 32), EdgeWork)
+		|| !TryMultiplyNonNegative(MaxSelected + 2, int64(2 * MaxDraws + 1), RadiusWork)
+		|| !TryMultiplyNonNegative(MaxNodes, MaxNodes, NodeSquare) || !TryMultiplyNonNegative(NodeSquare, 8, NodeWork)
+		|| !TryAdd(Work, AttemptWork, Work) || !TryAdd(Work, SortWork, Work) || !TryAdd(Work, EdgeWork, Work)
+		|| !TryAdd(Work, RadiusWork, Work) || !TryAdd(Work, NodeWork, Work))
+	{
+		return Failure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Candidate work estimate overflow"));
+	}
+	if (L.MaxValidationWork < 0 || Work > L.MaxValidationWork)
+	{
+		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Candidate stage work limit exceeded"));
+	}
+	if (!Budget->TryChargeWork(Work))
+	{
+		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared candidate work budget exceeded"));
 	}
 	TArray<FCandidateNode> Nodes;
 	Nodes.Reserve(MaxNodes);
@@ -532,6 +609,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	{
 		return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 	}
-	Out = MoveTemp(Scratch);
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result =
+		MakeShareable(new FVoxelLandM5CandidateResult(Budget, S, Seed, Region, MoveTemp(Scratch), MoveTemp(Lease)));
+	Out = MoveTemp(Result);
 	return {};
 }

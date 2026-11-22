@@ -1,6 +1,9 @@
 #include "Generation/VoxelLandM5EntrancePlanner.h"
 
 #include "Generation/VoxelLandM5CheckedMath.h"
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5RegionalSeed.h"
 #include "Generation/VoxelLandM5Seed.h"
 
@@ -122,18 +125,35 @@ template <typename T> bool M5EntranceNextId(const TArray<T>& Items, TFunctionRef
 }
 
 FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5CaveSettings& S, int64 Seed,
-	const FVoxelLandM5CavePlan& Candidate,
-	TFunctionRef<bool(int64, int64, int32, int64&, int64&, int64&, int32&, bool&, bool&)> QuerySurface,
-	TFunctionRef<bool()> IsCancelled, FVoxelLandM5CavePlan& Out)
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> CandidateResult,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<FVoxelLandM5Diagnostic(TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, int64, int64, int32,
+		int64&, int64&, int64&, int32&, bool&, bool&)>
+		QuerySurface,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>& Out)
 {
 	if (IsCancelled())
 	{
 		return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
 	}
+	if (!CandidateResult->UsesBudget(*Budget)
+		|| !CandidateResult->MatchesSource(S, Seed, CandidateResult->GetPlan().Region))
+	{
+		return M5EntranceError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate budget or source descriptor mismatch"));
+	}
+	const FVoxelLandM5CavePlan& Candidate = CandidateResult->GetPlan();
 	const auto& T = S.Topology;
 	const auto& L = S.Limits;
 	const auto& Capsule = S.Capsule;
 	const FVoxelLandM5Bounds& B = Candidate.Bounds;
+	int64 BudgetMaxBytes = 0, BudgetMaxWork = 0;
+	Budget->GetLimits(BudgetMaxBytes, BudgetMaxWork);
+	if (BudgetMaxBytes > L.MaxBytes || BudgetMaxWork > L.MaxValidationWork)
+	{
+		return M5EntranceError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Shared budget limits exceed authored per-plan limits"));
+	}
 	if (!S.bEnabled || !S.StageId.IsValid() || !M5EntranceBoundsValid(B)
 		|| (S.PlanningMode != EVoxelLandM5PlanningMode::Finite && S.PlanningMode != EVoxelLandM5PlanningMode::Regional)
 		|| Candidate.Chambers.IsEmpty() || !Candidate.Entrances.IsEmpty() || T.EntranceCount < 0
@@ -189,15 +209,18 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Candidate region does not match its bounds"));
 		}
 	}
-	// Bound all duplicate checks and worst-case ID searches before allocation.
+	// Precharge a conservative upper bound for comparisons, cancellation points,
+	// bounded SHA packet operations and plan copying. Each of two samplers can
+	// consume 64 draws, each with a SHA and cancellation check, plus a final
+	// check. The trusted surface provider charges its own work separately.
 	const int64 ChamberCount = Candidate.Chambers.Num();
 	const int64 SegmentCount = Candidate.Segments.Num();
 	const int64 Work =
-		ChamberCount * ChamberCount + ExistingEdges * ExistingEdges + SegmentCount * SegmentCount
+		1024 + 8 * (ChamberCount * ChamberCount + ExistingEdges * ExistingEdges + SegmentCount * SegmentCount)
 		+ int64(T.EntranceCount)
-			  * ((ExistingEdges + T.EntranceCount) * (ExistingEdges + T.EntranceCount)
-				  + 2 * (SegmentCount + 2 * int64(T.EntranceCount)) * (SegmentCount + 2 * int64(T.EntranceCount))
-				  + int64(L.MaxAttempts) * (ChamberCount + 129));
+			  * (8 * (ExistingEdges + T.EntranceCount) * (ExistingEdges + T.EntranceCount)
+				  + 16 * (SegmentCount + 2 * int64(T.EntranceCount)) * (SegmentCount + 2 * int64(T.EntranceCount))
+				  + int64(L.MaxAttempts) * (2 * (2 * int64(M5EntranceMaxDraws) + 1) + 16 * ChamberCount + 32));
 	if (Work > L.MaxValidationWork)
 	{
 		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance work exceeds budget"));
@@ -219,6 +242,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 	if (Bytes > L.MaxBytes)
 	{
 		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance scratch exceeds memory budget"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	if (!Budget->TryReserveBytes(Bytes, Lease))
+	{
+		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance memory admission failed"));
+	}
+	if (!Budget->TryChargeWork(Work))
+	{
+		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance work admission failed"));
 	}
 	if (!M5EntranceIdsValid(Candidate.Chambers, IsCancelled) || !M5EntranceIdsValid(Candidate.Connections, IsCancelled)
 		|| !M5EntranceIdsValid(Candidate.Segments, IsCancelled))
@@ -280,11 +312,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			int32 Slope = 0;
 			int64 MinSurfaceZ = 0, MaxSurfaceZ = 0;
 			bool bProtected = false, bFlooded = false;
-			if (!QuerySurface(Surface.X, Surface.Y, int32(QueryRadius), Surface.Z, MinSurfaceZ, MaxSurfaceZ, Slope,
-					bProtected, bFlooded))
+			const FVoxelLandM5Diagnostic SurfaceError = QuerySurface(Budget, Surface.X, Surface.Y, int32(QueryRadius),
+				Surface.Z, MinSurfaceZ, MaxSurfaceZ, Slope, bProtected, bFlooded);
+			if (SurfaceError.Code != EVoxelLandM5ErrorCode::None)
 			{
-				return M5EntranceError(
-					EVoxelLandM5ErrorCode::Unproven, TEXT("Final-surface footprint unavailable or ambiguous"));
+				return SurfaceError;
 			}
 			if (Slope < 0 || Slope > 90 || Surface.Z < -M5EntranceCoordinateLimit
 				|| Surface.Z > M5EntranceCoordinateLimit || MinSurfaceZ < -M5EntranceCoordinateLimit
@@ -398,6 +430,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 	{
 		return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
 	}
-	Out = MoveTemp(Scratch);
+	TSharedPtr<FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result = MakeShareable(
+		new FVoxelLandM5CandidateResult(Budget, S, Seed, Candidate.Region, MoveTemp(Scratch), MoveTemp(Lease)));
+	Out = MoveTemp(Result);
 	return {};
 }

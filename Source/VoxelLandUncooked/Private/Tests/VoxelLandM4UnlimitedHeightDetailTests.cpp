@@ -125,7 +125,6 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 		{
 			return false;
 		}
-		FVoxelLandM4OverhangConfig Overhang;
 		FVoxelLandM4HeightDetailConfig Detail;
 		Detail.bEnabled = true;
 		Detail.AmplitudeQ8 = 128000;
@@ -142,12 +141,19 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 					return false;
 				}
 				Final.Profile.VoxelSizeCm = 100.f;
+				FVoxelLandM4UnlimitedConfig Config;
+				Config.ContinentalGenerator = Controls[0];
+				Config.MountainGenerator = Controls[1];
+				Config.PeaksGenerator = Controls[2];
+				Config.ContinentalCurve = Curve;
+				Config.MountainCurve = Curve;
+				Config.PeaksCurve = Curve;
+				Config.bNormalizeSlope = Slope != 0;
+				Config.HeightDetail = Detail;
 				auto Generate = [&](const FVoxelLandChunkKey& K,
 									TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& Out,
 									TFunctionRef<bool()> Cancel) {
-					return VoxelLandM4Unlimited::GenerateChunk(Final, Overhang, Slope != 0, 0, *Controls[0],
-						*Workers[0], *Curve, *Controls[1], *Workers[1], *Curve, *Controls[2], *Workers[2], *Curve, K,
-						Out, Cancel, TOptional<FVoxelLandM4SmoothSettings>(), Detail);
+					return VoxelLandM4Unlimited::GenerateChunk(Final, Config, K, Out, Cancel);
 				};
 				TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Base, Again;
 				const FVoxelLandError FirstError = Generate(Key, Base, [] { return false; });
@@ -161,23 +167,13 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 					return false;
 				}
 				TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Plain;
-				if (VoxelLandM4Unlimited::GenerateChunk(Final, Overhang, Slope != 0, 0, *Controls[0], *Workers[0],
-						*Curve, *Controls[1], *Workers[1], *Curve, *Controls[2], *Workers[2], *Curve, Key, Plain,
-						[] { return false; }))
+				FVoxelLandM4UnlimitedConfig PlainConfig = Config;
+				PlainConfig.HeightDetail = FVoxelLandM4HeightDetailConfig();
+				if (VoxelLandM4Unlimited::GenerateChunk(Final, PlainConfig, Key, Plain, [] { return false; }))
 				{
 					return false;
 				}
 				DetailChangesOutput &= Plain->Density != Base->Density;
-				FVoxelLandM4UnlimitedConfig Config;
-				Config.ContinentalGenerator = Controls[0];
-				Config.MountainGenerator = Controls[1];
-				Config.PeaksGenerator = Controls[2];
-				Config.ContinentalCurve = Curve;
-				Config.MountainCurve = Curve;
-				Config.PeaksCurve = Curve;
-				Config.bNormalizeSlope = Slope != 0;
-				Config.Overhang = Overhang;
-				Config.HeightDetail = Detail;
 				TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> LocalGenerator;
 				if (FVoxelLandGenerator::CreateM4Unlimited(Final, Config, LocalGenerator) || !LocalGenerator)
 				{

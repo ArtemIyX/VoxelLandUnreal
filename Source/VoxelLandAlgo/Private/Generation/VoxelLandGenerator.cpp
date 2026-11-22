@@ -1129,11 +1129,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 		{
 			return Error;
 		}
-		return VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, M4Unlimited->Overhang,
-			M4Unlimited->bNormalizeSlope, M4Unlimited->BaseQ8, *M4Unlimited->ContinentalGenerator,
-			*M4Unlimited->ContinentalCurve, *M4Unlimited->MountainGenerator, *M4Unlimited->MountainCurve,
-			*M4Unlimited->PeaksGenerator, *M4Unlimited->PeaksCurve, Key, OutChunk, IsCancelled,
-			M4Unlimited->SmoothOverride, M4Unlimited->HeightDetail);
+		return VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, *M4Unlimited, Key, OutChunk, IsCancelled);
 	}
 	if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
 	{

@@ -20,12 +20,8 @@ FVoxelLandError M4UnlimitedError(EVoxelLandErrorCode Code, const TCHAR* Message)
 }
 
 FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
-	const FVoxelLandM4OverhangConfig& Overhang, bool bNormalizeSlope, int32 BaseQ8,
-	const FVoxelLandGenerator& ContinentalGenerator, const FVoxelLandM4CurveLut& ContinentalCurve,
-	const FVoxelLandGenerator& MountainGenerator, const FVoxelLandM4CurveLut& MountainCurve,
-	const FVoxelLandGenerator& PeaksGenerator, const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
-	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
-	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail)
+	const FVoxelLandM4UnlimitedConfig& Config, const FVoxelLandChunkKey& Key,
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled)
 {
 	if (Key.LOD != 0)
 	{
@@ -34,7 +30,7 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	}
 	const double VoxelSize = double(FinalSettings.Profile.VoxelSizeCm);
 	if (!FMath::IsFinite(VoxelSize) || VoxelSize < 1.0 || VoxelSize > 134217.0
-	    || FMath::FloorToDouble(VoxelSize) != VoxelSize || !FinalSettings.Program)
+		|| FMath::FloorToDouble(VoxelSize) != VoxelSize || !FinalSettings.Program)
 	{
 		return M4UnlimitedError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local voxel size or final program"));
@@ -43,6 +39,12 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	{
 		return M4UnlimitedError(EVoxelLandErrorCode::Cancelled, TEXT("M4 local terrain cancelled"));
 	}
+	if (!Config.ContinentalGenerator || !Config.MountainGenerator || !Config.PeaksGenerator || !Config.ContinentalCurve
+		|| !Config.MountainCurve || !Config.PeaksCurve)
+	{
+		return M4UnlimitedError(EVoxelLandErrorCode::InvalidParameter,
+			TEXT("M4 local terrain requires all three control generators and curves"));
+	}
 	// Always cover the largest supported footprint: stored [-1,33], plus a
 	// one-cell Smooth Density halo and one-voxel height-gradient stencil.
 	constexpr int32 Start = -3;
@@ -50,7 +52,7 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	const int64 SizeCm = int64(VoxelSize);
 	int64 OriginX = 0, OriginY = 0;
 	if (!VoxelLandM4Control::LatticePositionCm(int64(Key.Coordinate.X) * 32 + Start, SizeCm, OriginX)
-	    || !VoxelLandM4Control::LatticePositionCm(int64(Key.Coordinate.Y) * 32 + Start, SizeCm, OriginY))
+		|| !VoxelLandM4Control::LatticePositionCm(int64(Key.Coordinate.Y) * 32 + Start, SizeCm, OriginY))
 	{
 		return M4UnlimitedError(
 			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 local terrain coordinate overflows"));
@@ -63,7 +65,8 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	Region.CellsY = Cells;
 	Region.GridSpacingCm = SizeCm;
 	TArray<uint16> Continental, Mountain, Peaks;
-	const FVoxelLandGenerator* Generators[] = {&ContinentalGenerator, &MountainGenerator, &PeaksGenerator};
+	const FVoxelLandGenerator* Generators[] = {
+		Config.ContinentalGenerator.Get(), Config.MountainGenerator.Get(), Config.PeaksGenerator.Get()};
 	TArray<uint16>* Outputs[] = {&Continental, &Mountain, &Peaks};
 	for (int32 Index = 0; Index < 3; ++Index)
 	{
@@ -76,8 +79,9 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	}
 
 	TArray<int32> Heights;
-	if (const FVoxelLandError Error = VoxelLandM4HeightPrepass::BuildBaseHeights(Region, Continental, ContinentalCurve,
-		Mountain, MountainCurve, Peaks, PeaksCurve, BaseQ8, Heights, IsCancelled))
+	if (const FVoxelLandError Error =
+			VoxelLandM4HeightPrepass::BuildBaseHeights(Region, Continental, *Config.ContinentalCurve, Mountain,
+				*Config.MountainCurve, Peaks, *Config.PeaksCurve, Config.BaseQ8, Heights, IsCancelled))
 	{
 		return Error;
 	}
@@ -96,11 +100,11 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	FVoxelLandGeneratorSettings ShapingSettings = FinalSettings;
 	ShapingSettings.bM4FixedLatticeShaping = true;
 	const FVoxelLandError CreateError =
-		SmoothOverride.IsSet()
-			? FVoxelLandGenerator::CreateM4HeightField(ShapingSettings, Grid, bNormalizeSlope,
-				Overhang, SmoothOverride.GetValue(), HeightDetail, Generator)
+		Config.SmoothOverride.IsSet()
+			? FVoxelLandGenerator::CreateM4HeightField(ShapingSettings, Grid, Config.bNormalizeSlope, Config.Overhang,
+				  Config.SmoothOverride.GetValue(), Config.HeightDetail, Generator)
 			: FVoxelLandGenerator::CreateM4HeightField(
-				ShapingSettings, Grid, bNormalizeSlope, Overhang, HeightDetail, Generator);
+				  ShapingSettings, Grid, Config.bNormalizeSlope, Config.Overhang, Config.HeightDetail, Generator);
 	if (CreateError)
 	{
 		return CreateError;

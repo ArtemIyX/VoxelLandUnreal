@@ -310,6 +310,8 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 {
 	check(IsInGameThread());
 	SetActorTickEnabled(false);
+	M4RejectedCameraDemandCount = 0;
+	M4FirstCameraDemandRejection.Reset();
 	++ConfigurationEpoch;
 	StopDemo();
 	StopPendingInitialization();
@@ -592,6 +594,7 @@ void AVoxelLandWorld::UpdateDemand()
 	State->LastLimit = Limit;
 	TArray<FVoxelLandChunkKey> Candidates;
 	int32 RejectedM4Demand = 0;
+	FString FirstM4Rejection;
 	for (int32 Z = -V; Z <= V; ++Z)
 	{
 		for (int32 Y = -H; Y <= H; ++Y)
@@ -602,9 +605,14 @@ void AVoxelLandWorld::UpdateDemand()
 				Key.Coordinate = NewChunk + FIntVector(X, Y, Z);
 				if (VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate))
 				{
-					if (State->Generator->ValidateM4ChunkDemand(Key))
+					if (const FVoxelLandError Error = State->Generator->ValidateM4ChunkDemand(Key))
 					{
 						++RejectedM4Demand;
+						if (FirstM4Rejection.IsEmpty())
+						{
+							FirstM4Rejection = FString::Printf(TEXT("Chunk (%d, %d, %d): %s"), Key.Coordinate.X,
+								Key.Coordinate.Y, Key.Coordinate.Z, *Error.Message);
+						}
 					}
 					else
 					{
@@ -614,6 +622,8 @@ void AVoxelLandWorld::UpdateDemand()
 			}
 		}
 	}
+	M4RejectedCameraDemandCount = RejectedM4Demand;
+	M4FirstCameraDemandRejection = MoveTemp(FirstM4Rejection);
 	if (RejectedM4Demand > 0)
 	{
 		UE_LOG(LogTemp, Verbose, TEXT("VoxelLand skipped %d camera-demand chunks outside supported M4 bounds"),

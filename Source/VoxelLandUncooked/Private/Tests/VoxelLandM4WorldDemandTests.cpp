@@ -14,6 +14,7 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 {
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> M4Generator;
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> M3Generator;
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> WiderM4Generator;
 	const bool bGenerated = Async(EAsyncExecution::ThreadPool, [&]() {
 		FVoxelLandProgramDraft Draft;
 		Draft.FormatVersion = 2;
@@ -42,7 +43,16 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 		{
 			return false;
 		}
-		return !FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, false, M4Generator);
+		if (FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, false, M4Generator))
+		{
+			return false;
+		}
+		Heights.Init(0, 201 * 201);
+		if (!FVoxelLandM4HeightGrid::Create(-10000, -10000, 200, 200, 100, Heights, Grid))
+		{
+			return false;
+		}
+		return !FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, false, WiderM4Generator);
 	}).Get();
 	if (!TestTrue(TEXT("M3 and M4 generators created off thread"), bGenerated) || !GEngine)
 	{
@@ -77,6 +87,23 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("camera excludes outside chunk"), Actor->IsChunkDemanded(FIntVector(1, 0, 0)));
 	TestFalse(TEXT("camera excludes negative outside chunk"), Actor->IsChunkDemanded(FIntVector(-2, 0, 0)));
 	TestEqual(TEXT("camera selects only supported XY columns"), Actor->GetDemandedChunkCount(), 20);
+	TestTrue(TEXT("out-of-domain camera demand is reported"), Actor->M4RejectedCameraDemandCount > 0);
+	TestTrue(TEXT("boundary rejection includes an actionable reason"),
+		Actor->M4FirstCameraDemandRejection.Contains(TEXT("outside the height grid")));
+	Actor->Initialize(WiderM4Generator);
+	TestEqual(TEXT("reinitialization clears old boundary count"), Actor->M4RejectedCameraDemandCount, 0);
+	TestTrue(TEXT("reinitialization clears old boundary reason"), Actor->M4FirstCameraDemandRejection.IsEmpty());
+	Actor->SetTestViewLocation(FVector::ZeroVector);
+	Actor->Tick(0.016f);
+	TestEqual(TEXT("interior camera has no rejected chunks"), Actor->M4RejectedCameraDemandCount, 0);
+	Actor->SetTestViewLocation(FVector(9600, 0, 0));
+	Actor->Tick(0.016f);
+	TestTrue(TEXT("moving to the edge reports rejected chunks"), Actor->M4RejectedCameraDemandCount > 0);
+	TestFalse(TEXT("edge has a rejection reason"), Actor->M4FirstCameraDemandRejection.IsEmpty());
+	Actor->SetTestViewLocation(FVector::ZeroVector);
+	Actor->Tick(0.016f);
+	TestEqual(TEXT("moving inward clears boundary count"), Actor->M4RejectedCameraDemandCount, 0);
+	TestTrue(TEXT("moving inward clears boundary reason"), Actor->M4FirstCameraDemandRejection.IsEmpty());
 	Actor->Initialize(M3Generator);
 	TestTrue(TEXT("M3 keeps its existing unrestricted demand"), Actor->RequestDataChunk(FIntVector(1, 0, 0)));
 	Actor->Shutdown();

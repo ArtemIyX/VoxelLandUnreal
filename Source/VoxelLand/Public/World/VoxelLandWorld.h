@@ -78,6 +78,12 @@ public:
 	bool bInitializing = false;
 	UPROPERTY(BlueprintReadOnly, Category = "VoxelLand|Initialization")
 	FString LastInitializationError;
+	// Last completed camera-demand update. Nonzero means some requested chunks
+	// could not be generated within the active M4 field's supported bounds.
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "VoxelLand|Streaming")
+	int32 M4RejectedCameraDemandCount = 0;
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "VoxelLand|Streaming")
+	FString M4FirstCameraDemandRejection;
 	// Optional demonstration, started explicitly by a manager or test setup after BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Demo")
 	void StartDemo();

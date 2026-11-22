@@ -2935,7 +2935,7 @@ void M4InspectionAppendOverrides(FString& Out, const TCHAR* Label, const FVoxelL
 bool FVoxelLandGraphToolkit::IsM4PreviewCurrent(const FVoxelLandPreviewWork& Work) const
 {
 	UVoxelLandM4WorldConfig* Config = Work.M4Config.Get();
-	if (!Config || Config != M4PreviewConfig || !Work.M4Snapshot || !Config->MatchesSnapshot(*Work.M4Snapshot)
+	if (!Config || Config != M4PreviewConfig || !Work.M4Snapshot || !Config->MatchesPreviewSnapshot(*Work.M4Snapshot)
 		|| Config->Continental.Graph != Work.M4Continental.Get() || Config->Mountain.Graph != Work.M4Mountain.Get()
 		|| Config->Peaks.Graph != Work.M4Peaks.Get())
 	{
@@ -2954,9 +2954,7 @@ bool FVoxelLandGraphToolkit::IsM4PreviewCurrent(const FVoxelLandPreviewWork& Wor
 	{
 		if (!M4PreviewSourceEqual(A[Index]->Source, B[Index]->Source)
 			|| !FVoxelLandSerializedProgram::StaticStruct()->CompareScriptStruct(
-				&A[Index]->Payload, &B[Index]->Payload, 0)
-			|| !FVoxelLandM4CookedCurve::StaticStruct()->CompareScriptStruct(
-				&A[Index]->CookedCurve, &B[Index]->CookedCurve, 0))
+				&A[Index]->Payload, &B[Index]->Payload, 0))
 		{
 			return false;
 		}

@@ -4,6 +4,7 @@
 #include "../VoxelLandM4EditorBake.h"
 #include "Async/Async.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Data/Assets/VoxelLandMaterialSetup.h"
 #include "Editor.h"
 #include "ScopedTransaction.h"
@@ -423,9 +424,9 @@ public:
 				return true;
 			}
 			FString Error;
-			Test->TestFalse(TEXT("saved LUT stays stale until save"), Config->ValidateBakedCurves(Error));
-			Test->TestEqual(
-				TEXT("preview does not write asset LUT"), Config->Continental.CookedCurve.SamplesHash, SavedHash);
+			Test->TestTrue(TEXT("saved LUT remains valid after save"), Config->ValidateBakedCurves(Error));
+			Test->TestNotEqual(
+				TEXT("save published the new LUT"), Config->Continental.CookedCurve.SamplesHash, SavedHash);
 			Toolkit->StartM4PreviewForTests(Config);
 			++Config->Continental.CurveKeys.Last().OutputQ8;
 			Phase = 1;
@@ -496,6 +497,20 @@ bool FVoxelLandM4LiveCurvePreviewTest::RunTest(const FString& Parameters)
 		Config->RemoveFromRoot();
 		return false;
 	}
+	TestFalse(TEXT("asset LUT remains stale before save"), Config->ValidateBakedCurves(Error));
+	TestEqual(TEXT("preview does not synchronously overwrite asset LUT"), Config->Continental.CookedCurve.SamplesHash,
+		SavedHash);
+	FVoxelLandM4WorldSnapshot BeforeSave;
+	if (!TestTrue(TEXT("capture in-flight authored settings"), Config->CaptureSnapshot(BeforeSave, Error))
+		|| !TestTrue(TEXT("save-time curve bake succeeds"), VoxelLandM4Editor::BakeWorldConfig(*Config, Error)))
+	{
+		AddError(Error);
+		Toolkit->Stop();
+		Config->RemoveFromRoot();
+		return false;
+	}
+	TestFalse(TEXT("strict runtime identity sees changed LUT"), Config->MatchesSnapshot(BeforeSave));
+	TestTrue(TEXT("preview identity ignores only LUT replacement"), Config->MatchesPreviewSnapshot(BeforeSave));
 	ADD_LATENT_AUTOMATION_COMMAND(FM4LiveCurvePreviewCommand(this, Config, Toolkit, SavedHash));
 	return true;
 }

@@ -331,7 +331,8 @@ bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, EVoxelLandM
 	return true;
 }
 
-bool M4AssetSameControl(const FVoxelLandM4ControlConfig& A, const FVoxelLandM4ControlSnapshot& B)
+bool M4AssetSameControl(
+	const FVoxelLandM4ControlConfig& A, const FVoxelLandM4ControlSnapshot& B, bool bCompareBakedCurves)
 {
 	if (!A.Graph || A.Overrides.Num() != B.Overrides.Num() || A.CurveKeys.Num() != B.CurveKeys.Num())
 	{
@@ -375,6 +376,10 @@ bool M4AssetSameControl(const FVoxelLandM4ControlConfig& A, const FVoxelLandM4Co
 		{
 			return false;
 		}
+	}
+	if (!bCompareBakedCurves)
+	{
+		return true;
 	}
 	if (A.CookedCurve.BakeVersion != B.CookedCurve.BakeVersion || A.CookedCurve.SamplesHash != B.CookedCurve.SamplesHash
 		|| A.CookedCurve.SamplesQ8 != B.CookedCurve.SamplesQ8
@@ -651,6 +656,17 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 
 bool UVoxelLandM4WorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S) const
 {
+	return MatchesSnapshotInternal(S, true);
+}
+#if WITH_EDITOR
+bool UVoxelLandM4WorldConfig::MatchesPreviewSnapshot(const FVoxelLandM4WorldSnapshot& S) const
+{
+	return MatchesSnapshotInternal(S, false);
+}
+#endif
+bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
+	const FVoxelLandM4WorldSnapshot& S, bool bCompareBakedCurves) const
+{
 	if (!IsInGameThread())
 	{
 		return false;
@@ -684,6 +700,7 @@ bool UVoxelLandM4WorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S
 		&& OverhangBandQ8 == S.OverhangBandQ8 && OverhangFrequencyPerCm == S.OverhangFrequencyPerCm
 		&& OverhangNodeId == S.OverhangNodeId && OverhangSalt == S.OverhangSalt
 		&& HorizontalRadius == S.HorizontalRadius && VerticalRadius == S.VerticalRadius
-		&& M4AssetSameControl(Continental, S.Continental) && M4AssetSameControl(Mountain, S.Mountain)
-		&& M4AssetSameControl(Peaks, S.Peaks);
+		&& M4AssetSameControl(Continental, S.Continental, bCompareBakedCurves)
+		&& M4AssetSameControl(Mountain, S.Mountain, bCompareBakedCurves)
+		&& M4AssetSameControl(Peaks, S.Peaks, bCompareBakedCurves);
 }

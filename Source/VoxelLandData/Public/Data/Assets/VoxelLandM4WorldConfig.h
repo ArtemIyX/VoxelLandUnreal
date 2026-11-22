@@ -35,6 +35,15 @@ public:
 	// or graph contents. Caller must verify graph inputs and refresh the current
 	// material separately on the game thread before publishing.
 	bool MatchesSnapshot(const FVoxelLandM4WorldSnapshot& Snapshot) const;
+#if WITH_EDITOR
+	// Preview must independently rebake and validate captured keys; this check
+	// ignores only persisted LUT cache bytes and never validates graph programs.
+	bool MatchesPreviewSnapshot(const FVoxelLandM4WorldSnapshot& Snapshot) const;
+#endif
+private:
+	bool MatchesSnapshotInternal(const FVoxelLandM4WorldSnapshot& Snapshot, bool bCompareBakedCurves) const;
+
+public:
 	// Replaces all three baked curves atomically after validation.
 	bool SetBakedCurves(TConstArrayView<int32> ContinentalSamples, TConstArrayView<int32> MountainSamples,
 		TConstArrayView<int32> PeaksSamples, int32 BakeVersion, FString& OutError);

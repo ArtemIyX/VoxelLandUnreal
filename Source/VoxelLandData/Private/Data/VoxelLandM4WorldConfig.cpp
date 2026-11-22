@@ -27,7 +27,8 @@ void UVoxelLandM4WorldConfig::EnforceCookPreparation(FArchive& Ar) const
 	// may serialize the object but are not the package writer's error channel.
 	const FObjectSavePackageSerializeContext* Context = Ar.GetArchiveState().GetSavePackageSerializeContext();
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
-	    && Context->GetPhase() == EObjectSaveContextPhase::Write && !bCookPreparationSucceeded)
+		&& Context->GetPhase() == EObjectSaveContextPhase::Write
+		&& (!bCookPreparationSucceeded || Caves.bEnabled || Caves.Pockets.bEnabled))
 	{
 		Ar.SetError();
 	}
@@ -70,7 +71,7 @@ private:
 	bool VisitGraph(const UVoxelLandTerrainGraph& Graph, int32 Depth)
 	{
 		if (Depth > 16 || Graph.SourceVersion != 1 || Graph.Parameters.Num() > 128
-		    || TotalNodes + Graph.Nodes.Num() > 128 || TotalLinks + Graph.Links.Num() > 2048)
+			|| TotalNodes + Graph.Nodes.Num() > 128 || TotalLinks + Graph.Links.Num() > 2048)
 		{
 			return Fail(TEXT("M4 control function dependencies exceed graph limits."));
 		}
@@ -164,11 +165,11 @@ bool M4AssetWithinCaptureLimits(
 	const UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(&Graph);
 	const FVoxelLandSerializedProgram& Payload = Named ? Named->GetProgram(Channel) : Graph.CompiledProgram;
 	if (Graph.Nodes.Num() > 128 || Graph.Links.Num() > 2048 || Graph.Parameters.Num() > 128
-	    || Control.Overrides.Num() > 128 || Control.CurveKeys.Num() > 4097 || Payload.Instructions.Num() > 2048
-	    || Control.CookedCurve.SourceKeys.Num() > 4097 || Control.CookedCurve.SamplesQ8.Num() > 4097
-	    || Payload.Constants.Num() > 4096 || Payload.Parameters.Num() > 128 || Payload.Seeds.Num() > 256
-	    || Payload.Noise.Num() > 256 || !Payload.ExternalOperators.IsEmpty()
-	    || Payload.ExternalFilterIndex != INDEX_NONE)
+		|| Control.Overrides.Num() > 128 || Control.CurveKeys.Num() > 4097 || Payload.Instructions.Num() > 2048
+		|| Control.CookedCurve.SourceKeys.Num() > 4097 || Control.CookedCurve.SamplesQ8.Num() > 4097
+		|| Payload.Constants.Num() > 4096 || Payload.Parameters.Num() > 128 || Payload.Seeds.Num() > 256
+		|| Payload.Noise.Num() > 256 || !Payload.ExternalOperators.IsEmpty()
+		|| Payload.ExternalFilterIndex != INDEX_NONE)
 	{
 		Error = TEXT("M4 control exceeds capture limits or uses an unsupported external operator.");
 		return false;
@@ -206,7 +207,7 @@ bool M4AssetParameterValid(const FVoxelLandGraphParameter& P)
 	{
 		const TCHAR C = P.Name[I];
 		if (!((C >= TEXT('A') && C <= TEXT('Z')) || (C >= TEXT('a') && C <= TEXT('z')) || C == TEXT('_')
-		      || (I > 0 && C >= TEXT('0') && C <= TEXT('9'))))
+				|| (I > 0 && C >= TEXT('0') && C <= TEXT('9'))))
 		{
 			return false;
 		}
@@ -215,9 +216,9 @@ bool M4AssetParameterValid(const FVoxelLandGraphParameter& P)
 	{
 		case EVoxelLandGraphValueType::Float:
 			return FMath::IsFinite(P.FloatDefault)
-			       && (!P.bHasRange
-			           || (FMath::IsFinite(P.FloatMin) && FMath::IsFinite(P.FloatMax) && P.FloatMin <= P.FloatMax
-			               && P.FloatDefault >= P.FloatMin && P.FloatDefault <= P.FloatMax));
+				&& (!P.bHasRange
+					|| (FMath::IsFinite(P.FloatMin) && FMath::IsFinite(P.FloatMax) && P.FloatMin <= P.FloatMax
+						&& P.FloatDefault >= P.FloatMin && P.FloatDefault <= P.FloatMax));
 		case EVoxelLandGraphValueType::Int32:
 			return !P.bHasRange || (P.IntMin <= P.IntMax && P.IntDefault >= P.IntMin && P.IntDefault <= P.IntMax);
 		case EVoxelLandGraphValueType::Bool:
@@ -238,8 +239,8 @@ bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, EVoxelLandM
 	const UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Control.Graph);
 	const FVoxelLandSerializedProgram& Payload = Named ? Named->GetProgram(Channel) : Control.Graph->CompiledProgram;
 	if (Control.Graph->Parameters.Num() > 4096 || Control.Overrides.Num() > 4096 || Payload.Instructions.Num() > 8192
-	    || Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096
-	    || Payload.Noise.Num() > 4096 || Payload.ExternalOperators.Num() > 4096)
+		|| Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096
+		|| Payload.Noise.Num() > 4096 || Payload.ExternalOperators.Num() > 4096)
 	{
 		Error = TEXT("M4 control graph or cooked program exceeds record limits.");
 		return false;
@@ -255,7 +256,7 @@ bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, EVoxelLandM
 		}
 	}
 	if (Control.CurveKeys.Num() < 2 || Control.CurveKeys.Num() > 65536 || Control.CurveKeys[0].InputQ16 != 0
-	    || Control.CurveKeys.Last().InputQ16 != 65535)
+		|| Control.CurveKeys.Last().InputQ16 != 65535)
 	{
 		Error = TEXT("M4 curve needs ordered keys including input endpoints 0 and 65535.");
 		return false;
@@ -264,7 +265,7 @@ bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, EVoxelLandM
 	{
 		const FVoxelLandM4CurveAuthoringKey& K = Control.CurveKeys[I];
 		if (K.InputQ16 < 0 || K.InputQ16 > 65535 || int64(K.OutputQ8) < -M4AssetHeightLimit
-		    || int64(K.OutputQ8) > M4AssetHeightLimit || (I > 0 && Control.CurveKeys[I - 1].InputQ16 >= K.InputQ16))
+			|| int64(K.OutputQ8) > M4AssetHeightLimit || (I > 0 && Control.CurveKeys[I - 1].InputQ16 >= K.InputQ16))
 		{
 			Error = TEXT("M4 curve has duplicate, unordered or out-of-range keys.");
 			return false;
@@ -314,11 +315,11 @@ bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, EVoxelLandM
 	{
 		const FVoxelLandGraphParameter* const* P = Parameters.Find(O.ParameterId);
 		if (!P || Seen.Contains(O.ParameterId) || O.Type != (*P)->Type
-		    || (O.Type == EVoxelLandGraphValueType::Float
-		        && (!FMath::IsFinite(O.FloatValue)
-		            || ((*P)->bHasRange && (O.FloatValue < (*P)->FloatMin || O.FloatValue > (*P)->FloatMax))))
-		    || (O.Type == EVoxelLandGraphValueType::Int32 && (*P)->bHasRange
-		        && (O.IntValue < (*P)->IntMin || O.IntValue > (*P)->IntMax)))
+			|| (O.Type == EVoxelLandGraphValueType::Float
+				&& (!FMath::IsFinite(O.FloatValue)
+					|| ((*P)->bHasRange && (O.FloatValue < (*P)->FloatMin || O.FloatValue > (*P)->FloatMax))))
+			|| (O.Type == EVoxelLandGraphValueType::Int32 && (*P)->bHasRange
+				&& (O.IntValue < (*P)->IntMin || O.IntValue > (*P)->IntMax)))
 		{
 			Error = TEXT("M4 control override has an unknown or duplicate ID, incompatible type, or invalid value.");
 			return false;
@@ -384,15 +385,15 @@ bool M4AssetSameControl(
 		return true;
 	}
 	if (A.CookedCurve.BakeVersion != B.CookedCurve.BakeVersion || A.CookedCurve.SamplesHash != B.CookedCurve.SamplesHash
-	    || A.CookedCurve.SamplesQ8 != B.CookedCurve.SamplesQ8
-	    || A.CookedCurve.SourceKeys.Num() != B.CookedCurve.SourceKeys.Num())
+		|| A.CookedCurve.SamplesQ8 != B.CookedCurve.SamplesQ8
+		|| A.CookedCurve.SourceKeys.Num() != B.CookedCurve.SourceKeys.Num())
 	{
 		return false;
 	}
 	for (int32 I = 0; I < A.CookedCurve.SourceKeys.Num(); ++I)
 	{
 		if (A.CookedCurve.SourceKeys[I].InputQ16 != B.CookedCurve.SourceKeys[I].InputQ16
-		    || A.CookedCurve.SourceKeys[I].OutputQ8 != B.CookedCurve.SourceKeys[I].OutputQ8)
+			|| A.CookedCurve.SourceKeys[I].OutputQ8 != B.CookedCurve.SourceKeys[I].OutputQ8)
 		{
 			return false;
 		}
@@ -417,14 +418,14 @@ bool M4AssetCookedValid(const FVoxelLandM4ControlConfig& Control)
 {
 	const FVoxelLandM4CookedCurve& Cooked = Control.CookedCurve;
 	if (Cooked.BakeVersion != 1 || Cooked.SamplesQ8.Num() != 4097 || Cooked.SourceKeys.Num() < 2
-	    || Cooked.SourceKeys.Num() != Control.CurveKeys.Num())
+		|| Cooked.SourceKeys.Num() != Control.CurveKeys.Num())
 	{
 		return false;
 	}
 	for (int32 I = 0; I < Cooked.SourceKeys.Num(); ++I)
 	{
 		if (Cooked.SourceKeys[I].InputQ16 != Control.CurveKeys[I].InputQ16
-		    || Cooked.SourceKeys[I].OutputQ8 != Control.CurveKeys[I].OutputQ8)
+			|| Cooked.SourceKeys[I].OutputQ8 != Control.CurveKeys[I].OutputQ8)
 		{
 			return false;
 		}
@@ -444,7 +445,7 @@ bool UVoxelLandM4WorldConfig::ValidateBakedCurves(FString& OutError) const
 {
 	OutError.Reset();
 	if (!IsInGameThread() || !M4AssetCookedValid(Continental) || !M4AssetCookedValid(Mountain)
-	    || !M4AssetCookedValid(Peaks))
+		|| !M4AssetCookedValid(Peaks))
 	{
 		OutError = TEXT("M4 cooked curves are missing, stale or have an unsupported bake version.");
 		return false;
@@ -457,7 +458,7 @@ bool UVoxelLandM4WorldConfig::SetBakedCurves(
 {
 	OutError.Reset();
 	if (!IsInGameThread() || BakeVersion != 1 || C.Num() != 4097 || M.Num() != 4097 || P.Num() != 4097
-	    || !ValidateSettings(OutError))
+		|| !ValidateSettings(OutError))
 	{
 		if (OutError.IsEmpty())
 		{
@@ -513,51 +514,56 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 		OutError = TEXT("M4 settings must be captured on the game thread.");
 		return false;
 	}
+	if (Caves.bEnabled || Caves.Pockets.bEnabled)
+	{
+		OutError = TEXT("Enabled M5 caves or pockets require M5 initialization, which is not yet available.");
+		return false;
+	}
 	if (SmoothVersion != 1 || !FMath::IsFinite(SmoothStrength) || SmoothStrength < 0.f || SmoothStrength > 1.f)
 	{
 		OutError = TEXT("M4 smooth filter version or strength is invalid.");
 		return false;
 	}
 	if (HeightDetail.AlgorithmVersion != 1 || HeightDetail.AmplitudeQ8 < 0 || HeightDetail.AmplitudeQ8 > 1280000
-	    || !FMath::IsFinite(HeightDetail.FrequencyPerCm) || HeightDetail.FrequencyPerCm <= 0.f
-	    || HeightDetail.FrequencyPerCm > 1.f || !HeightDetail.NodeId.IsValid())
+		|| !FMath::IsFinite(HeightDetail.FrequencyPerCm) || HeightDetail.FrequencyPerCm <= 0.f
+		|| HeightDetail.FrequencyPerCm > 1.f || !HeightDetail.NodeId.IsValid())
 	{
 		OutError = TEXT("M4 height detail configuration is invalid.");
 		return false;
 	}
 	if (FormatVersion != 1 || VoxelSizeCm < 1 || VoxelSizeCm > 2000000 || (bUnlimited && VoxelSizeCm > 134217)
-	    || int64(BaseHeightQ8) < -M4AssetHeightLimit || int64(BaseHeightQ8) > M4AssetHeightLimit || HorizontalRadius < 1
-	    || HorizontalRadius > 8 || VerticalRadius < 1 || VerticalRadius > 4)
+		|| int64(BaseHeightQ8) < -M4AssetHeightLimit || int64(BaseHeightQ8) > M4AssetHeightLimit || HorizontalRadius < 1
+		|| HorizontalRadius > 8 || VerticalRadius < 1 || VerticalRadius > 4)
 	{
 		OutError = TEXT("M4 voxel size, base height or demand radii are invalid.");
 		return false;
 	}
 	if (!bUnlimited
-	    && (CellsX < 1 || CellsX > 1024 || CellsY < 1 || CellsY > 1024 || GridSpacingCm < 1 || GridSpacingCm > 134217
-	        || OriginXCm < -M4AssetExactFloatLimit || OriginYCm < -M4AssetExactFloatLimit
-	        || OriginXCm > M4AssetExactFloatLimit || OriginYCm > M4AssetExactFloatLimit
-	        || GridSpacingCm > (M4AssetExactFloatLimit - OriginXCm) / CellsX
-	        || GridSpacingCm > (M4AssetExactFloatLimit - OriginYCm) / CellsY))
+		&& (CellsX < 1 || CellsX > 1024 || CellsY < 1 || CellsY > 1024 || GridSpacingCm < 1 || GridSpacingCm > 134217
+			|| OriginXCm < -M4AssetExactFloatLimit || OriginYCm < -M4AssetExactFloatLimit
+			|| OriginXCm > M4AssetExactFloatLimit || OriginYCm > M4AssetExactFloatLimit
+			|| GridSpacingCm > (M4AssetExactFloatLimit - OriginXCm) / CellsX
+			|| GridSpacingCm > (M4AssetExactFloatLimit - OriginYCm) / CellsY))
 	{
 		OutError = TEXT(
 			"M4 domain, voxel size, base height or demand radii are invalid or outside exact control-grid coordinates.");
 		return false;
 	}
 	if (DropletCount < 0 || DropletCount > 65536 || MaxSteps < 0 || MaxSteps > 128 || ThermalIterations < 0
-	    || ThermalIterations > 32 || CapacityMaxQ8 < 0 || CapacityMaxQ8 > M4AssetHeightLimit || TalusQ8 < 0
-	    || TalusQ8 > M4AssetHeightLimit || MaxTransferQ8 < 0 || MaxTransferQ8 > M4AssetHeightLimit || ErosionSalt < 0
-	    || (bGlobalErosion && !ErosionStageId.IsValid()))
+		|| ThermalIterations > 32 || CapacityMaxQ8 < 0 || CapacityMaxQ8 > M4AssetHeightLimit || TalusQ8 < 0
+		|| TalusQ8 > M4AssetHeightLimit || MaxTransferQ8 < 0 || MaxTransferQ8 > M4AssetHeightLimit || ErosionSalt < 0
+		|| (bGlobalErosion && !ErosionStageId.IsValid()))
 	{
 		OutError = TEXT("M4 erosion configuration is invalid.");
 		return false;
 	}
 	if ((UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
-	     && UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
-	    || (UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
-	        && (!bUnlimited || bGlobalErosion
-	            || (bOverhangEnabled && OverhangAmplitudeQ8 != 0 && double(OverhangFrequencyPerCm) * 16777216.0 < 0.5)
-	            || (HeightDetail.bEnabled && HeightDetail.AmplitudeQ8 != 0
-	                && double(HeightDetail.FrequencyPerCm) * 16777216.0 < 0.5))))
+			&& UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
+		|| (UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
+			&& (!bUnlimited || bGlobalErosion
+				|| (bOverhangEnabled && OverhangAmplitudeQ8 != 0 && double(OverhangFrequencyPerCm) * 16777216.0 < 0.5)
+				|| (HeightDetail.bEnabled && HeightDetail.AmplitudeQ8 != 0
+					&& double(HeightDetail.FrequencyPerCm) * 16777216.0 < 0.5))))
 	{
 		OutError = TEXT(
 			"M4 fixed lattice requires unlimited mode, no global erosion and representable Q24 shaping frequencies.");
@@ -569,9 +575,9 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 		return false;
 	}
 	if (OverhangAmplitudeQ8 < 0 || OverhangAmplitudeQ8 > 128000 || OverhangBandQ8 < 1 || OverhangBandQ8 > 1280000
-	    || OverhangAmplitudeQ8 > OverhangBandQ8 || !FMath::IsFinite(OverhangFrequencyPerCm)
-	    || OverhangFrequencyPerCm <= 0.f || OverhangFrequencyPerCm > 1.f || OverhangSalt < 0
-	    || !OverhangNodeId.IsValid())
+		|| OverhangAmplitudeQ8 > OverhangBandQ8 || !FMath::IsFinite(OverhangFrequencyPerCm)
+		|| OverhangFrequencyPerCm <= 0.f || OverhangFrequencyPerCm > 1.f || OverhangSalt < 0
+		|| !OverhangNodeId.IsValid())
 	{
 		OutError = TEXT("M4 overhang configuration is invalid.");
 		return false;
@@ -583,12 +589,12 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 	const UVoxelLandM4ControlGraph* MountainGraph = Cast<UVoxelLandM4ControlGraph>(Mountain.Graph);
 	const UVoxelLandM4ControlGraph* PeaksGraph = Cast<UVoxelLandM4ControlGraph>(Peaks.Graph);
 	const bool bAnyHeightOutput = (HeightGraph && HeightGraph->HeightOutputId.IsValid())
-	                              || (MountainGraph && MountainGraph->HeightOutputId.IsValid())
-	                              || (PeaksGraph && PeaksGraph->HeightOutputId.IsValid());
+							   || (MountainGraph && MountainGraph->HeightOutputId.IsValid())
+							   || (PeaksGraph && PeaksGraph->HeightOutputId.IsValid());
 	if (bAnyHeightOutput)
 	{
 		if (!HeightGraph || HeightGraph != MountainGraph || HeightGraph != PeaksGraph
-		    || !HeightGraph->HeightOutputId.IsValid())
+			|| !HeightGraph->HeightOutputId.IsValid())
 		{
 			OutError = TEXT("A graph height output requires the same M4 graph for all three controls.");
 			return false;
@@ -607,14 +613,14 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 		S.HeightStage.PeaksInputId = HeightNode->Pins[2].Id;
 	}
 	if (!M4AssetWithinCaptureLimits(Continental, EVoxelLandM4ControlChannel::Continental, OutError)
-	    || !M4AssetWithinCaptureLimits(Mountain, EVoxelLandM4ControlChannel::Mountain, OutError)
-	    || !M4AssetWithinCaptureLimits(Peaks, EVoxelLandM4ControlChannel::Peaks, OutError))
+		|| !M4AssetWithinCaptureLimits(Mountain, EVoxelLandM4ControlChannel::Mountain, OutError)
+		|| !M4AssetWithinCaptureLimits(Peaks, EVoxelLandM4ControlChannel::Peaks, OutError))
 	{
 		return false;
 	}
 	if (!M4AssetCaptureControl(Continental, EVoxelLandM4ControlChannel::Continental, S.Continental, OutError)
-	    || !M4AssetCaptureControl(Mountain, EVoxelLandM4ControlChannel::Mountain, S.Mountain, OutError)
-	    || !M4AssetCaptureControl(Peaks, EVoxelLandM4ControlChannel::Peaks, S.Peaks, OutError))
+		|| !M4AssetCaptureControl(Mountain, EVoxelLandM4ControlChannel::Mountain, S.Mountain, OutError)
+		|| !M4AssetCaptureControl(Peaks, EVoxelLandM4ControlChannel::Peaks, S.Peaks, OutError))
 	{
 		return false;
 	}
@@ -669,7 +675,7 @@ bool UVoxelLandM4WorldConfig::MatchesPreviewSnapshot(const FVoxelLandM4WorldSnap
 bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
 	const FVoxelLandM4WorldSnapshot& S, bool bCompareBakedCurves) const
 {
-	if (!IsInGameThread())
+	if (!IsInGameThread() || Caves.bEnabled || Caves.Pockets.bEnabled)
 	{
 		return false;
 	}
@@ -678,35 +684,31 @@ bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
 	const UVoxelLandM4ControlGraph* P = Cast<UVoxelLandM4ControlGraph>(Peaks.Graph);
 	const bool bAnyHeight =
 		(C && C->HeightOutputId.IsValid()) || (M && M->HeightOutputId.IsValid()) || (P && P->HeightOutputId.IsValid());
-	const bool bStageMatches = bAnyHeight
-		                           ? C && C == M && C == P && S.HeightStage.Version == 1
-		                             && C->HeightOutputId == S.HeightStage.OutputNodeId
-		                           : S.HeightStage.Version == 0 && !S.HeightStage.OutputNodeId.IsValid();
+	const bool bStageMatches = bAnyHeight ? C && C == M && C == P && S.HeightStage.Version == 1
+												&& C->HeightOutputId == S.HeightStage.OutputNodeId
+										  : S.HeightStage.Version == 0 && !S.HeightStage.OutputNodeId.IsValid();
 	return bStageMatches && IsInGameThread() && UnlimitedBackend == S.UnlimitedBackend
-	       && FormatVersion == S.FormatVersion && Seed == S.Seed && VoxelSizeCm == S.VoxelSizeCm
-	       && BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
-	       && HeightDetail.bEnabled == S.HeightDetail.bEnabled
-	       && HeightDetail.AlgorithmVersion == S.HeightDetail.AlgorithmVersion
-	       && HeightDetail.AmplitudeQ8 == S.HeightDetail.AmplitudeQ8
-	       && HeightDetail.FrequencyPerCm == S.HeightDetail.FrequencyPerCm && HeightDetail.NodeId == S.HeightDetail.
-	       NodeId
-	       && HeightDetail.Salt == S.HeightDetail.Salt && SmoothVersion == int32(S.Smooth.Version)
-	       && bSmoothEnabled == S.Smooth.bEnabled && (!bSmoothEnabled || SmoothStrength == S.Smooth.Strength)
-	       && (bUnlimited
-		           ? S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
-		           : S.Domain.Mode == EVoxelLandM4DomainMode::Finite)
-	       && bGlobalErosion == S.Domain.bGlobalErosion && OriginXCm == S.Domain.OriginXCm
-	       && OriginYCm == S.Domain.OriginYCm && CellsX == S.Domain.CellsX && CellsY == S.Domain.CellsY
-	       && GridSpacingCm == S.Domain.GridSpacingCm && ErosionStageId == S.ErosionStageId && ErosionSalt == S.
-	       ErosionSalt
-	       && DropletCount == S.DropletCount && MaxSteps == S.Erosion.MaxSteps
-	       && ThermalIterations == S.Erosion.ThermalIterations && CapacityMaxQ8 == S.Erosion.CapacityMaxQ8
-	       && TalusQ8 == S.Erosion.TalusQ8 && MaxTransferQ8 == S.Erosion.MaxTransferQ8
-	       && bOverhangEnabled == S.bOverhangEnabled && OverhangAmplitudeQ8 == S.OverhangAmplitudeQ8
-	       && OverhangBandQ8 == S.OverhangBandQ8 && OverhangFrequencyPerCm == S.OverhangFrequencyPerCm
-	       && OverhangNodeId == S.OverhangNodeId && OverhangSalt == S.OverhangSalt
-	       && HorizontalRadius == S.HorizontalRadius && VerticalRadius == S.VerticalRadius
-	       && M4AssetSameControl(Continental, S.Continental, bCompareBakedCurves)
-	       && M4AssetSameControl(Mountain, S.Mountain, bCompareBakedCurves)
-	       && M4AssetSameControl(Peaks, S.Peaks, bCompareBakedCurves);
+		&& FormatVersion == S.FormatVersion && Seed == S.Seed && VoxelSizeCm == S.VoxelSizeCm
+		&& BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
+		&& HeightDetail.bEnabled == S.HeightDetail.bEnabled
+		&& HeightDetail.AlgorithmVersion == S.HeightDetail.AlgorithmVersion
+		&& HeightDetail.AmplitudeQ8 == S.HeightDetail.AmplitudeQ8
+		&& HeightDetail.FrequencyPerCm == S.HeightDetail.FrequencyPerCm && HeightDetail.NodeId == S.HeightDetail.NodeId
+		&& HeightDetail.Salt == S.HeightDetail.Salt && SmoothVersion == int32(S.Smooth.Version)
+		&& bSmoothEnabled == S.Smooth.bEnabled && (!bSmoothEnabled || SmoothStrength == S.Smooth.Strength)
+		&& (bUnlimited ? S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
+					   : S.Domain.Mode == EVoxelLandM4DomainMode::Finite)
+		&& bGlobalErosion == S.Domain.bGlobalErosion && OriginXCm == S.Domain.OriginXCm
+		&& OriginYCm == S.Domain.OriginYCm && CellsX == S.Domain.CellsX && CellsY == S.Domain.CellsY
+		&& GridSpacingCm == S.Domain.GridSpacingCm && ErosionStageId == S.ErosionStageId && ErosionSalt == S.ErosionSalt
+		&& DropletCount == S.DropletCount && MaxSteps == S.Erosion.MaxSteps
+		&& ThermalIterations == S.Erosion.ThermalIterations && CapacityMaxQ8 == S.Erosion.CapacityMaxQ8
+		&& TalusQ8 == S.Erosion.TalusQ8 && MaxTransferQ8 == S.Erosion.MaxTransferQ8
+		&& bOverhangEnabled == S.bOverhangEnabled && OverhangAmplitudeQ8 == S.OverhangAmplitudeQ8
+		&& OverhangBandQ8 == S.OverhangBandQ8 && OverhangFrequencyPerCm == S.OverhangFrequencyPerCm
+		&& OverhangNodeId == S.OverhangNodeId && OverhangSalt == S.OverhangSalt
+		&& HorizontalRadius == S.HorizontalRadius && VerticalRadius == S.VerticalRadius
+		&& M4AssetSameControl(Continental, S.Continental, bCompareBakedCurves)
+		&& M4AssetSameControl(Mountain, S.Mountain, bCompareBakedCurves)
+		&& M4AssetSameControl(Peaks, S.Peaks, bCompareBakedCurves);
 }

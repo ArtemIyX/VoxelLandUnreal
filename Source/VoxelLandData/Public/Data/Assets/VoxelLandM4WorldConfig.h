@@ -5,6 +5,7 @@
 #include "Data/Structs/VoxelLandM4ControlConfig.h"
 #include "Data/Enums/VoxelLandM4UnlimitedBackend.h"
 #include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
+#include "Data/Structs/VoxelLandM5CaveSettings.h"
 #include "VoxelLandM4WorldConfig.generated.h"
 
 class UVoxelLandMaterialSetup;
@@ -77,6 +78,10 @@ public:
 	float SmoothStrength = 0.5f;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Height Detail")
 	FVoxelLandM4HeightDetailConfig HeightDetail;
+	// Persist the disabled configuration without exposing unfinished controls.
+	// M4-only paths reject enabled stages until M5 initialization exists.
+	UPROPERTY()
+	FVoxelLandM5CaveSettings Caves;
 	// Unlimited mode evaluates controls per chunk and requires global erosion off.
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Domain")
 	bool bUnlimited = false;

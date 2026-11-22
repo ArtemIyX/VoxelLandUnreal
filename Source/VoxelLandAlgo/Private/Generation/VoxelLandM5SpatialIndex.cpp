@@ -1,5 +1,10 @@
 #include "Generation/VoxelLandM5SpatialIndex.h"
 
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5CheckedMath.h"
+#include "Generation/VoxelLandM5SpatialQueryResult.h"
+
 #include <cmath>
 
 namespace
@@ -26,13 +31,50 @@ bool M5IntersectsInclusive(const FBox3d& A, const FBox3d& B)
 }
 }
 
+FVoxelLandM5SpatialIndex::FVoxelLandM5SpatialIndex(TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
+	: Budget(MoveTemp(InBudget))
+	, Lease(MoveTemp(InLease))
+{
+}
+
 FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5InfluenceBounds> Entries, int32 MaxEntries,
-	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5SpatialIndex, ESPMode::ThreadSafe>& OutIndex)
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5SpatialIndex, ESPMode::ThreadSafe>& OutIndex)
 {
 	if (MaxEntries < 0 || MaxEntries > MaximumEntries || Entries.Num() > MaxEntries)
 	{
 		return M5SpatialIndexError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index entry budget exceeded"));
+	}
+	if (IsCancelled())
+	{
+		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
+	}
+	using namespace VoxelLand::M5::CheckedMath;
+	const int64 Count = Entries.Num();
+	int64 Bytes = 0, Work = 0, Square = 0, Linear = 0;
+	// Fourfold payload slack plus a fixed 16 KiB is a conservative accounting
+	// estimate for index/control blocks and array capacity. Allocator overhead
+	// and caller-owned input memory are not measured or proven bounded here.
+	// A square bound covers both duplicate comparisons and worst-case sorting.
+	if (!TryMultiplyNonNegative(Count, int64(sizeof(FVoxelLandM5InfluenceBounds)), Bytes)
+		|| !TryMultiplyNonNegative(Bytes, 4, Bytes) || !TryAdd(Bytes, 16384, Bytes)
+		|| !TryMultiplyNonNegative(Count, Count, Square) || !TryMultiplyNonNegative(Square, 2, Work)
+		|| !TryMultiplyNonNegative(Count, 8, Linear) || !TryAdd(Work, Linear, Work) || !TryAdd(Work, 16, Work))
+	{
+		return M5SpatialIndexError(EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index admission overflow"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Admission;
+	if (!Budget->TryReserveBytes(Bytes, Admission))
+	{
+		return M5SpatialIndexError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index memory budget exhausted"));
+	}
+	if (!Budget->TryChargeWork(Work))
+	{
+		return M5SpatialIndexError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index work budget exhausted"));
 	}
 	// Validate before allocating the index. The hard cap bounds this exhaustive
 	// duplicate check, and cancellation is observed inside the inner loop.
@@ -64,7 +106,8 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5Infl
 	{
 		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
 	}
-	TSharedPtr<FVoxelLandM5SpatialIndex, ESPMode::ThreadSafe> Candidate = MakeShareable(new FVoxelLandM5SpatialIndex());
+	TSharedPtr<FVoxelLandM5SpatialIndex, ESPMode::ThreadSafe> Candidate =
+		MakeShareable(new FVoxelLandM5SpatialIndex(Budget, MoveTemp(Admission)));
 	if (Entries.Num() > 0)
 	{
 		Candidate->EntriesById.Append(Entries.GetData(), Entries.Num());
@@ -80,12 +123,35 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5Infl
 	return {};
 }
 
-FVoxelLandError FVoxelLandM5SpatialIndex::Query(
-	const FBox3d& Bounds, TFunctionRef<bool()> IsCancelled, TArray<uint64>& OutIds) const
+FVoxelLandError FVoxelLandM5SpatialIndex::Query(const FBox3d& Bounds, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5SpatialQueryResult, ESPMode::ThreadSafe>& OutResult) const
 {
 	if (!M5ValidBounds(Bounds))
 	{
 		return M5SpatialIndexError(EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query has invalid bounds"));
+	}
+	if (IsCancelled())
+	{
+		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
+	}
+	using namespace VoxelLand::M5::CheckedMath;
+	int64 Bytes = 0, Work = 0;
+	if (!TryMultiplyNonNegative(EntriesById.Num(), int64(sizeof(uint64)), Bytes)
+		|| !TryMultiplyNonNegative(Bytes, 4, Bytes) || !TryAdd(Bytes, 4096, Bytes)
+		|| !TryMultiplyNonNegative(EntriesById.Num(), 4, Work) || !TryAdd(Work, 16, Work))
+	{
+		return M5SpatialIndexError(EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query admission overflow"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Admission;
+	if (!Budget->TryReserveBytes(Bytes, Admission))
+	{
+		return M5SpatialIndexError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query memory budget exhausted"));
+	}
+	if (!Budget->TryChargeWork(Work))
+	{
+		return M5SpatialIndexError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query work budget exhausted"));
 	}
 	TArray<uint64> Candidate;
 	for (int32 I = 0; I < EntriesById.Num(); ++I)
@@ -103,6 +169,12 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Query(
 	{
 		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
 	}
-	OutIds = MoveTemp(Candidate);
+	TSharedPtr<FVoxelLandM5SpatialQueryResult, ESPMode::ThreadSafe> Result =
+		MakeShareable(new FVoxelLandM5SpatialQueryResult(MoveTemp(Admission), MoveTemp(Candidate)));
+	if (IsCancelled())
+	{
+		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
+	}
+	OutResult = MoveTemp(Result);
 	return {};
 }

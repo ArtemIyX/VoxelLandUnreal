@@ -2,6 +2,7 @@
 
 #include "Data/Structs/VoxelLandM4SavedWorld.h"
 #include "World/VoxelLandM4WorldIdentity.h"
+#include "World/VoxelLandM4SavedWorldPreflight.h"
 
 bool VoxelLandM4SavedWorld::Capture(
 	const FVoxelLandM4WorldSnapshot& Snapshot, FVoxelLandM4SavedWorld& Out, FString& Error)
@@ -18,9 +19,8 @@ bool VoxelLandM4SavedWorld::Capture(
 
 bool VoxelLandM4SavedWorld::Restore(const FVoxelLandM4SavedWorld& Saved, FVoxelLandM4WorldSnapshot& Out, FString& Error)
 {
-	if (Saved.FormatVersion != 1)
+	if (!VoxelLandM4SavedWorldPreflight::Validate(Saved, Error))
 	{
-		Error = TEXT("Unsupported M4 saved-world version");
 		return false;
 	}
 	if (!VoxelLandM4WorldIdentity::Matches(Saved.Identity, Saved.Snapshot, Error))

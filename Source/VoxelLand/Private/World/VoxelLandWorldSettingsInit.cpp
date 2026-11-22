@@ -2,6 +2,8 @@
 #include "World/VoxelLandM4Preparation.h"
 #include "World/VoxelLandM4PrepassCoordinator.h"
 #include "World/VoxelLandM4PrepassIdentity.h"
+#include "World/VoxelLandM4SavedWorldPreflight.h"
+#include "World/VoxelLandM4WorldIdentity.h"
 
 #include "Async/Async.h"
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
@@ -12,6 +14,7 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/Structs/VoxelLandM4SavedWorld.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Hash/xxhash.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
@@ -404,8 +407,23 @@ public:
 		}
 	}
 
+	FM4InitializationRequest(const FVoxelLandM4SavedWorld& Saved, FIntVector InStartup,
+		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InLease,
+		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InValidationLease)
+		: ValidationLease(MoveTemp(InValidationLease))
+		, Snapshot(Saved.Snapshot)
+		, Startup(InStartup)
+		, Lease(MoveTemp(InLease))
+		, SavedIdentity(Saved.Identity)
+	{
+	}
+
 	bool IsCurrent() const override
 	{
+		if (SavedIdentity.IsSet())
+		{
+			return true; // Owned snapshot cannot be edited or reinstanced.
+		}
 		UVoxelLandM4WorldConfig* Config = WeakConfig.Get();
 		if (!Config || Config->Continental.Graph != Continental.Get() || Config->Mountain.Graph != Mountain.Get()
 			|| Config->Peaks.Graph != Peaks.Get() || !Config->MatchesSnapshot(Snapshot))
@@ -513,7 +531,12 @@ public:
 			return Cancel->Load();
 		};
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
-		if (!VoxelLandM4Preparation::Prepare(Snapshot, Lease, ValidationLease, IsCancelled, Result, OutError))
+		if (SavedIdentity.IsSet() && !VoxelLandM4WorldIdentity::Matches(SavedIdentity.GetValue(), Snapshot, OutError))
+		{
+			return;
+		}
+		if (Cancel->Load()
+			|| !VoxelLandM4Preparation::Prepare(Snapshot, Lease, ValidationLease, IsCancelled, Result, OutError))
 		{
 			return;
 		}
@@ -560,6 +583,7 @@ private:
 	FVoxelLandM4WorldSnapshot Snapshot;
 	FIntVector Startup;
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
+	TOptional<FVoxelLandM4IdentityRecord> SavedIdentity;
 };
 
 #if !UE_SERVER
@@ -1067,6 +1091,77 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 	const TSharedRef<FM4InitializationRequest, ESPMode::ThreadSafe> Request =
 		MakeShared<FM4InitializationRequest, ESPMode::ThreadSafe>(
 			*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease));
+	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
+		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
+	PendingInitialization = Job;
+#if WITH_EDITOR
+	InitPackageReloadHandle =
+		FCoreUObjectDelegates::OnPackageReloaded.AddUObject(this, &AVoxelLandWorld::HandleInitPackageReload);
+	InitObjectsReplacedHandle =
+		FCoreUObjectDelegates::OnObjectsReplaced.AddUObject(this, &AVoxelLandWorld::HandleInitObjectsReplaced);
+#endif
+	bInitializing = true;
+	SetActorTickEnabled(true);
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+	const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MoveTemp(InitReloadBarrierForTests);
+	InitializationTask = Async(EAsyncExecution::ThreadPool, [Job, Barrier]()
+#else
+	InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
+#endif
+		{
+			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+				,
+				Barrier
+#endif
+			);
+		});
+	return true;
+}
+
+bool AVoxelLandWorld::InitializeM4FromSavedWorld(const FVoxelLandM4SavedWorld& Saved, FIntVector StartupChunk)
+{
+	check(IsInGameThread());
+	UWorld* World = GetWorld();
+	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
+		|| World->bIsTearingDown || !HasActorBegunPlay())
+	{
+		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
+		return false;
+	}
+	Shutdown();
+	LastInitializationError.Reset();
+	// Bound all copied metadata before acquiring a job or duplicating the record.
+	if (!VoxelLandM4SavedWorldPreflight::Validate(Saved, LastInitializationError))
+	{
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
+	if (Saved.Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
+	{
+		Lease = VoxelLandM4Preparation::Reserve();
+		if (!Lease)
+		{
+			LastInitializationError = TEXT("M4 prepass process budget is exhausted");
+			return false;
+		}
+	}
+	else if (!VoxelLandM4Preparation::EnsureCoordinatorReady())
+	{
+		LastInitializationError = TEXT("M4 shared prepass coordinator is unavailable");
+		return false;
+	}
+	auto ValidationLease = VoxelLandM4Preparation::ReserveValidation();
+	if (!ValidationLease)
+	{
+		LastInitializationError = TEXT("M4 snapshot validation capacity is exhausted");
+		return false;
+	}
+	HorizontalRadius = Saved.Snapshot.HorizontalRadius;
+	VerticalRadius = Saved.Snapshot.VerticalRadius;
+	const TSharedRef<FM4InitializationRequest, ESPMode::ThreadSafe> Request =
+		MakeShared<FM4InitializationRequest, ESPMode::ThreadSafe>(
+			Saved, StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease));
 	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
 		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
 	PendingInitialization = Job;

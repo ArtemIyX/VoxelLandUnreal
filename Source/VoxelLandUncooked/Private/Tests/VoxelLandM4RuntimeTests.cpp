@@ -6,6 +6,7 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/Structs/VoxelLandM4SavedWorld.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
@@ -15,6 +16,7 @@
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandWorld.h"
 #include "World/VoxelLandM4Preparation.h"
+#include "World/VoxelLandM4SavedWorld.h"
 
 namespace
 {
@@ -164,19 +166,63 @@ public:
 			Phase = 3;
 			return false;
 		}
-		Test->TestFalse(TEXT("out-of-domain startup cannot publish world"), Actor->HasWorldStateForTests());
+		if (Phase == 3)
+		{
+			Test->TestFalse(TEXT("out-of-domain startup cannot publish world"), Actor->HasWorldStateForTests());
+			Test->TestTrue(TEXT("boundary rejection identifies startup"),
+				Actor->LastInitializationError.Contains(TEXT("startup")));
+			if (Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
+			{
+				Actor->CancelInitialization();
+				Test->TestFalse(TEXT("cancel detaches initialization"), Actor->bInitializing);
+				Test->TestFalse(TEXT("cancel cannot publish world"), Actor->HasWorldStateForTests());
+			}
+			else
+			{
+				Test->AddError(TEXT("M4 cancellation fixture did not start"));
+			}
+			FVoxelLandM4WorldSnapshot Snapshot;
+			FString Error;
+			if (!Config->CaptureSnapshot(Snapshot, Error)
+				|| !Async(
+					EAsyncExecution::ThreadPool, [&] { return VoxelLandM4SavedWorld::Capture(Snapshot, Saved, Error); })
+					.Get()
+				|| !Actor->InitializeM4FromSavedWorld(Saved, FIntVector::ZeroValue))
+			{
+				Test->AddError(FString::Printf(
+					TEXT("Could not start saved-world fixture: %s %s"), *Error, *Actor->LastInitializationError));
+				Cleanup();
+				return true;
+			}
+			++Saved.Snapshot.Seed; // The running job owns its captured copy.
+			Phase = 4;
+			return false;
+		}
+		if (Phase == 4)
+		{
+			if (Actor->HasWorldStateForTests() && !Actor->HasDataChunk(FIntVector::ZeroValue))
+			{
+				return false;
+			}
+			Test->TestTrue(
+				TEXT("saved world initializes independently of caller mutations"), Actor->HasWorldStateForTests());
+			Test->TestTrue(TEXT("saved startup chunk is available"), Actor->HasDataChunk(FIntVector::ZeroValue));
+			if (!Actor->InitializeM4FromSavedWorld(Saved, FIntVector::ZeroValue))
+			{
+				Test->AddError(TEXT("Tampered saved-world fixture did not dispatch"));
+				Cleanup();
+				return true;
+			}
+			Phase = 5;
+			return false;
+		}
+		Test->TestFalse(TEXT("tampered saved identity publishes no world"), Actor->HasWorldStateForTests());
 		Test->TestTrue(
-			TEXT("boundary rejection identifies startup"), Actor->LastInitializationError.Contains(TEXT("startup")));
-		if (Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
-		{
-			Actor->CancelInitialization();
-			Test->TestFalse(TEXT("cancel detaches initialization"), Actor->bInitializing);
-			Test->TestFalse(TEXT("cancel cannot publish world"), Actor->HasWorldStateForTests());
-		}
-		else
-		{
-			Test->AddError(TEXT("M4 cancellation fixture did not start"));
-		}
+			TEXT("tampered identity reports a mismatch"), Actor->LastInitializationError.Contains(TEXT("identity")));
+		Saved.Snapshot.HorizontalRadius = 0;
+		Test->TestFalse(TEXT("invalid saved startup radius rejected before dispatch"),
+			Actor->InitializeM4FromSavedWorld(Saved, FIntVector::ZeroValue));
+		Test->TestFalse(TEXT("preflight failure leaves no job"), Actor->bInitializing);
 		Cleanup();
 		return true;
 	}
@@ -211,6 +257,7 @@ private:
 			Config->RemoveFromRoot();
 		}
 	}
+	FVoxelLandM4SavedWorld Saved;
 	FAutomationTestBase* Test;
 	UWorld* World;
 	AVoxelLandWorld* Actor;

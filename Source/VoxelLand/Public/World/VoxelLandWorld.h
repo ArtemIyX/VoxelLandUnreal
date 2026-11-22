@@ -17,6 +17,7 @@ class UMaterialInterface;
 class FPackageReloadedEvent;
 enum class EPackageReloadPhase : uint8;
 #endif
+struct FVoxelLandM4SavedWorld;
 struct FVoxelLandWorldState;
 struct FVoxelLandTestBarrier;
 struct FVoxelLandReloadTestBarrier;
@@ -66,6 +67,9 @@ public:
 	// voxel.M4.PrepassBudgetMiB; actual allocator/backend usage is not measured.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk);
+	// The caller supplies an already-deserialized, trusted saved record. Material
+	// presentation remains under caller control. Validation runs asynchronously.
+	bool InitializeM4FromSavedWorld(const FVoxelLandM4SavedWorld& Saved, FIntVector StartupChunk);
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	void CancelInitialization();
 	UPROPERTY(BlueprintAssignable, Category = "VoxelLand|Initialization")

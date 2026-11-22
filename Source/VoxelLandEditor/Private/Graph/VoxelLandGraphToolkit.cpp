@@ -15,6 +15,7 @@
 #include "Graph/VoxelLandEditorOperator.h"
 #include "Graph/VoxelLandPreviewViewport.h"
 #include "Graph/VoxelLandM4Inspection.h"
+#include "Graph/VoxelLandM4InspectionReport.h"
 #include "Graph/VoxelLandM4StageMap.h"
 #include "Graph/VoxelLandPreviewScene.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
@@ -2181,6 +2182,9 @@ void FVoxelLandGraphToolkit::DuplicateSelected()
 
 void FVoxelLandGraphToolkit::CancelPreview()
 {
+	// A report can describe only the currently accepted inspection view.
+	// Semantic edits, cancellation, reload and PIE invalidate it immediately.
+	M4InspectionDetails.Reset();
 	PreviewFence.Reset();
 	++PreviewRevision;
 	bPreviewRequested = false;
@@ -2221,6 +2225,7 @@ void FVoxelLandGraphToolkit::ClearM4StageMap()
 	M4ControlsBrush.SetResourceObject(nullptr);
 	M4ControlsTexture = nullptr;
 	M4StageDiagnostics.Reset();
+	M4InspectionDetails.Reset();
 }
 
 void FVoxelLandGraphToolkit::ClearPreview()
@@ -3363,17 +3368,13 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Continental"), Snapshot.Continental);
 			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Mountain"), Snapshot.Mountain);
 			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Peaks"), Snapshot.Peaks);
-			M4InspectionDetails += FString::Printf(
-				TEXT(
-					"Descriptor: base=%d Q8 cm; domain origin=(%lld,%lld), cells=(%d,%d), spacing=%lld cm; slope=%d; smoothing=(v%u,%d,%.9g); erosion=(%d,seed %s,salt %d,droplets %d,steps %d,thermal %d,capacity %lld,talus %lld,transfer %lld); overhang=(%d,amp %d,band %d,freq %.9g,seed %s,salt %d)\n"),
-				Snapshot.BaseHeightQ8, Snapshot.Domain.OriginXCm, Snapshot.Domain.OriginYCm, Snapshot.Domain.CellsX,
-				Snapshot.Domain.CellsY, Snapshot.Domain.GridSpacingCm, int32(Snapshot.bNormalizeSlope),
-				Snapshot.Smooth.Version, int32(Snapshot.Smooth.bEnabled), double(Snapshot.Smooth.Strength),
-				int32(Snapshot.Domain.bGlobalErosion), *Snapshot.ErosionStageId.ToString(), Snapshot.ErosionSalt,
-				Snapshot.DropletCount, Snapshot.Erosion.MaxSteps, Snapshot.Erosion.ThermalIterations,
-				Snapshot.Erosion.CapacityMaxQ8, Snapshot.Erosion.TalusQ8, Snapshot.Erosion.MaxTransferQ8,
-				int32(Snapshot.bOverhangEnabled), Snapshot.OverhangAmplitudeQ8, Snapshot.OverhangBandQ8,
-				double(Snapshot.OverhangFrequencyPerCm), *Snapshot.OverhangNodeId.ToString(), Snapshot.OverhangSalt);
+			M4InspectionDetails += VoxelLandM4Inspection::DescribeSnapshot(Snapshot);
+			M4InspectionDetails +=
+				FString::Printf(TEXT("Control graph assets: continental=%s; mountain=%s; peaks=%s\n"),
+					*GetPathNameSafe(Finished.M4Continental.Get()), *GetPathNameSafe(Finished.M4Mountain.Get()),
+					*GetPathNameSafe(Finished.M4Peaks.Get()));
+			M4InspectionDetails += TEXT(
+				"Retain these graph/config assets, their function dependencies and exact source/dependency revisions; the printed hashes identify inputs but do not embed program or LUT bytes and are not a saved world.\n");
 			for (int32 Z = Finished.M4MinChunkZ; Z <= Finished.M4MaxChunkZ; ++Z)
 			{
 				for (int32 Y = -1; Y <= 1; ++Y)

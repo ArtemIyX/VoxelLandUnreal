@@ -108,6 +108,8 @@ public:
 	void PollJobsForTests() { PollJobs(0.0f); }
 	const FString& GetStatusForTests() const { return Status; }
 	const FString& GetM4StageInspectorForTests() const { return M4StageDiagnostics; }
+	void SetM4InspectionDetailsForTests(const FString& Value) { M4InspectionDetails = Value; }
+	const FString& GetM4InspectionDetailsForTests() const { return M4InspectionDetails; }
 	bool HasPreviewFenceForTests() const { return PreviewFence.IsValid(); }
 	void StartPreviewForTests() { StartPreview(); }
 	void StartM4PreviewForTests(UVoxelLandM4WorldConfig* Config)

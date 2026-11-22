@@ -313,4 +313,20 @@ bool FVoxelLandM4EditorValidationAdmissionTest::RunTest(const FString& Parameter
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4InspectionReportLifecycleTest, "VoxelLand.M4.Editor.InspectionReportLifecycle", M4EditorBakeFlags)
+bool FVoxelLandM4InspectionReportLifecycleTest::RunTest(const FString& Parameters)
+{
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>();
+	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+	Toolkit->InitializeForTests(Graph);
+	Toolkit->SetM4InspectionDetailsForTests(TEXT("old report"));
+	Toolkit->BeginPIEForTests();
+	TestTrue(TEXT("entering PIE invalidates the report"), Toolkit->GetM4InspectionDetailsForTests().IsEmpty());
+	Toolkit->SetM4InspectionDetailsForTests(TEXT("old report"));
+	Toolkit->Stop();
+	TestTrue(TEXT("closing invalidates the report"), Toolkit->GetM4InspectionDetailsForTests().IsEmpty());
+	return true;
+}
+
 #endif

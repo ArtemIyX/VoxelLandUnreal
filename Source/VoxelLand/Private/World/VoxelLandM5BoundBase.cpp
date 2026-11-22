@@ -1,0 +1,139 @@
+#include "World/VoxelLandM5BoundBase.h"
+
+#include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM4GridLease.h"
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Misc/ScopeLock.h"
+#include "UObject/StrongObjectPtr.h"
+#include "World/VoxelLandM4Preparation.h"
+
+namespace
+{
+// A logical per-capture allowance for snapshot and identity bookkeeping. It is
+// not a measurement or process-wide bound on M4 compiler/provider memory.
+constexpr int64 M5BoundBaseMetadataAllowance = 48ll * 1024 * 1024;
+
+FVoxelLandM5Diagnostic M5BoundBaseFailure(EVoxelLandM5ErrorCode Code, const FString& Message)
+{
+	FVoxelLandM5Diagnostic Failure;
+	Failure.Code = Code;
+	Failure.Stage = TEXT("M5.BoundBase");
+	Failure.Message = Message;
+	return Failure;
+}
+}
+
+FVoxelLandM5BaseCapture::FVoxelLandM5BaseCapture(TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InMetadataLease,
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>&& InGridLease,
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>&& InValidationLease,
+	FVoxelLandM5WorldSnapshot&& InSnapshot)
+	: Budget(MoveTemp(InBudget))
+	, MetadataLease(MoveTemp(InMetadataLease))
+	, GridLease(MoveTemp(InGridLease))
+	, ValidationLease(MoveTemp(InValidationLease))
+	, Snapshot(MoveTemp(InSnapshot))
+{
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandM4WorldConfig& Config,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture)
+{
+	if (!IsInGameThread())
+	{
+		return M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 base capture requires the game thread"));
+	}
+	// Graph capture may load assets and reenter game-thread code.
+	TStrongObjectPtr<UVoxelLandM4WorldConfig> ConfigGuard(&Config);
+	int64 MaxBytes = 0, MaxWork = 0;
+	InBudget->GetLimits(MaxBytes, MaxWork);
+	if (MaxBytes > Config.Caves.Limits.MaxBytes || MaxWork > Config.Caves.Limits.MaxValidationWork)
+	{
+		return M5BoundBaseFailure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 budget exceeds the authored limits"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Metadata;
+	if (!InBudget->TryReserveBytes(M5BoundBaseMetadataAllowance, Metadata))
+	{
+		return M5BoundBaseFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("M5 base metadata admission failed"));
+	}
+	// Reserve real M4 admission before capture. Prepare claims it once and is
+	// responsible for transferring or releasing it after the producer finishes.
+	auto GridLease = VoxelLandM4Preparation::Reserve();
+	if (!GridLease)
+	{
+		return M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("M4 preparation reservation unavailable"));
+	}
+	auto ValidationLease = VoxelLandM4Preparation::ReserveValidation();
+	if (!ValidationLease)
+	{
+		return M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("M4 snapshot validation permit unavailable"));
+	}
+	FVoxelLandM5WorldSnapshot Snapshot;
+	FString Error;
+	if (!Config.CaptureM5Snapshot(Snapshot, Error))
+	{
+		return M5BoundBaseFailure(EVoxelLandM5ErrorCode::InvalidInput, Error);
+	}
+	// Capture can reenter game-thread code. Compare the budget against the
+	// settings that were actually captured, not only the earlier live values.
+	if (MaxBytes > Snapshot.Caves.Limits.MaxBytes || MaxWork > Snapshot.Caves.Limits.MaxValidationWork)
+	{
+		return M5BoundBaseFailure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 budget exceeds captured limits"));
+	}
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandM5BaseCapture(
+		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot)));
+	OutCapture = MoveTemp(Result);
+	return {};
+}
+
+TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> FVoxelLandM5BaseCapture::ClaimGridLease() const
+{
+	FScopeLock Lock(&GridLeaseMutex);
+	return MoveTemp(GridLease);
+}
+
+FVoxelLandM5BoundBase::FVoxelLandM5BoundBase(TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> InCapture,
+	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> InGenerator, FVoxelLandM5IdentityRecord&& InIdentity)
+	: Capture(MoveTemp(InCapture))
+	, Generator(MoveTemp(InGenerator))
+	, Identity(MoveTemp(InIdentity))
+{
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5BoundBase::Prepare(
+	TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> InCapture, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5BoundBase, ESPMode::ThreadSafe>& OutBase)
+{
+	(void)OutBase; // No output may be published until shared accounting exists.
+	if (IsInGameThread())
+	{
+		return M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 base preparation requires a worker thread"));
+	}
+	// A capture has one reservation and may start only one producer. A finite
+	// success path must transfer it to its grid; a local path must retain it
+	// through actual producer completion and then release it. Neither path is
+	// enabled until the M4 identity/prepare work can debit the shared budget.
+	const auto ProducerLease = InCapture->ClaimGridLease();
+	if (!ProducerLease)
+	{
+		return M5BoundBaseFailure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 base capture was already consumed"));
+	}
+	if (IsCancelled())
+	{
+		return M5BoundBaseFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("M5 base preparation cancelled"));
+	}
+	if (!InCapture->Budget->TryChargeWork(1))
+	{
+		return M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("M5 base preparation work budget exhausted"));
+	}
+	return M5BoundBaseFailure(EVoxelLandM5ErrorCode::Unproven,
+		TEXT("M4 identity and preparation are not yet metered against the shared M5 budget"));
+}

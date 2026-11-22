@@ -2503,6 +2503,8 @@ void FVoxelLandGraphToolkit::MaterialSetupPropertyChanged(UObject* Object, FProp
 
 void FVoxelLandGraphToolkit::ApplyPreviewMaterial(UMaterialInterface* Material)
 {
+	// A material change alters the inspected image without regenerating terrain.
+	M4InspectionDetails.Reset();
 	SelectedPreviewMaterial = Material;
 #if WITH_DEV_AUTOMATION_TESTS
 	++MaterialApplyCountForTests;

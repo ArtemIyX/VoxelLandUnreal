@@ -26,7 +26,9 @@ public:
 	virtual void Serialize(FArchive& Ar) override;
 	// Captures the concrete asset's mode and inputs together on the game thread.
 	TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> CaptureSource(FString& OutError) const;
+	const TCHAR* GetPreparationBlocker() const;
 #if WITH_EDITOR
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
 	// A world definition is not cookable until its complete cooked generation
 	// and reconstruction path is implemented. Editor saves remain available.
 	void EnforceCookPreparation(FArchive& Ar) const;

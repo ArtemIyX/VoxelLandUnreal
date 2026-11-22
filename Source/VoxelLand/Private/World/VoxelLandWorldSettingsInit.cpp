@@ -15,6 +15,7 @@
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/Assets/VoxelLandWorldDefinition.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Data/Structs/VoxelLandM4SavedWorld.h"
@@ -1048,6 +1049,23 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
 				);
 		});
 	return true;
+}
+
+bool AVoxelLandWorld::InitializeFromWorldDefinition(UVoxelLandWorldDefinition* Definition)
+{
+	check(IsInGameThread());
+	const UWorld* World = GetWorld();
+	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
+		|| World->bIsTearingDown || !HasActorBegunPlay())
+	{
+		LastInitializationError = TEXT("World actor is not ready for explicit initialization.");
+		return false;
+	}
+	// Reject before loading dependencies or taking admission. The current
+	// generator cannot publish a certified field for either asset type.
+	LastInitializationError =
+		IsValid(Definition) ? Definition->GetPreparationBlocker() : TEXT("World definition is missing or invalid.");
+	return false;
 }
 
 bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk)

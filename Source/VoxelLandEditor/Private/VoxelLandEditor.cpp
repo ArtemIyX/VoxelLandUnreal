@@ -503,8 +503,8 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 		{
 			// Serialize rejects the actual cooker write even if the graph check
 			// succeeds: cooked world reconstruction is not implemented yet.
-			UE_LOG(LogTemp, Error, TEXT("VoxelLand world %s cannot cook: cooked world generation is not implemented."),
-				*World->GetPathName());
+			UE_LOG(LogTemp, Error, TEXT("VoxelLand world %s cannot cook. %s"), *World->GetPathName(),
+				World->GetPreparationBlocker());
 		}
 		return;
 	}

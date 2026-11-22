@@ -13,6 +13,7 @@
 #include "Data/Structs/VoxelLandWorldSourceSnapshot.h"
 #include "UObject/StrongObjectPtr.h"
 #if WITH_EDITOR
+#include "Misc/DataValidation.h"
 #include "UObject/ObjectSaveContext.h"
 #endif
 
@@ -46,6 +47,21 @@ TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandW
 	return nullptr;
 }
 
+const TCHAR* UVoxelLandWorldDefinition::GetPreparationBlocker() const
+{
+	if (IsA<UVoxelLandFiniteWorld>())
+	{
+		return TEXT("Finite world preparation is blocked on a metered bounded prepass and final-field certification. "
+					"Cooked reconstruction also requires a current descriptor.");
+	}
+	if (IsA<UVoxelLandInfiniteWorld>())
+	{
+		return TEXT("Infinite world preparation is blocked on metered local sampling and certified neighboring plan "
+					"sets. Cooked reconstruction also requires a current descriptor.");
+	}
+	return TEXT("Unsupported world definition type.");
+}
+
 void UVoxelLandWorldDefinition::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
@@ -55,6 +71,23 @@ void UVoxelLandWorldDefinition::Serialize(FArchive& Ar)
 }
 
 #if WITH_EDITOR
+EDataValidationResult UVoxelLandWorldDefinition::IsDataValid(FDataValidationContext& Context) const
+{
+	if (!IsInGameThread())
+	{
+		Context.AddWarning(FText::FromString(TEXT("World source validation requires the game thread.")));
+		return EDataValidationResult::NotValidated;
+	}
+	FString Error;
+	if (!CaptureSource(Error))
+	{
+		Context.AddError(FText::FromString(Error));
+		return EDataValidationResult::Invalid;
+	}
+	Context.AddWarning(FText::FromString(GetPreparationBlocker()));
+	return EDataValidationResult::NotValidated;
+}
+
 void UVoxelLandWorldDefinition::EnforceCookPreparation(FArchive& Ar) const
 {
 	const FObjectSavePackageSerializeContext* Context = Ar.GetArchiveState().GetSavePackageSerializeContext();

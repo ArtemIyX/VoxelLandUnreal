@@ -7,6 +7,7 @@
 
 class FVoxelLandGenerator;
 class UVoxelLandWorldSettings;
+class UVoxelLandWorldDefinition;
 class UVoxelLandM4WorldConfig;
 class UPrimitiveComponent;
 class FVoxelLandInitializationJob;
@@ -61,6 +62,10 @@ public:
 	// Copies settings on the game thread and initializes asynchronously. No work starts in BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool InitializeFromSettings(UVoxelLandWorldSettings* Settings);
+	// Synchronous rejection until certified preparation is available. The
+	// caller should read LastInitializationError when this returns false.
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
+	bool InitializeFromWorldDefinition(UVoxelLandWorldDefinition* Definition);
 	// Explicit M4 startup. The entire requested startup radius must fit the selected mode.
 	// Admission reserves a conservative 128 MiB estimate per retained grid under
 	// voxel.M4.PrepassBudgetMiB; actual allocator/backend usage is not measured.

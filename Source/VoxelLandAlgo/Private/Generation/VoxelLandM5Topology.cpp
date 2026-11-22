@@ -1,12 +1,44 @@
 #include "Generation/VoxelLandM5Topology.h"
 
 #include "Data/Enums/VoxelLandM5PortalAxis.h"
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5CandidateResult.h"
+#include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5Seed.h"
 
 namespace
 {
 constexpr int32 MaximumNodes = 65536;
 constexpr int32 MaximumConnections = 262144;
+
+// Stable insertion sort is used instead of an implementation-dependent sort:
+// each pass performs at most n(n-1)/2 comparisons and moves. Check cancellation
+// during the inner loop, including cases with an adversarial input order.
+template <typename T, typename TLess>
+bool M5TopologySort(TArray<T>& Values, TLess Less, TFunctionRef<bool()> IsCancelled)
+{
+	for (int32 I = 1; I < Values.Num(); ++I)
+	{
+		T Value = MoveTemp(Values[I]);
+		int32 J = I;
+		while (J > 0 && Less(Value, Values[J - 1]))
+		{
+			if (IsCancelled())
+			{
+				return false;
+			}
+			Values[J] = MoveTemp(Values[J - 1]);
+			--J;
+		}
+		Values[J] = MoveTemp(Value);
+		if (IsCancelled())
+		{
+			return false;
+		}
+	}
+	return true;
+}
 
 FVoxelLandM5Diagnostic M5TopologyError(
 	EVoxelLandM5ErrorCode Code, const TCHAR* Message, bool bHasId = false, uint64 Id = 0)
@@ -65,10 +97,14 @@ int32 M5FindNode(const TArray<FVoxelLandM5Endpoint>& Nodes, const FVoxelLandM5En
 	return First;
 }
 
-int32 M5Root(TArray<int32>& Parent, int32 Index)
+int32 M5Root(TArray<int32>& Parent, int32 Index, TFunctionRef<bool()> IsCancelled)
 {
 	while (Parent[Index] != Index)
 	{
+		if (IsCancelled())
+		{
+			return INDEX_NONE;
+		}
 		Parent[Index] = Parent[Parent[Index]];
 		Index = Parent[Index];
 	}
@@ -82,21 +118,33 @@ bool M5PortalKeyEqual(const FVoxelLandM5PortalKey& A, const FVoxelLandM5PortalKe
 }
 }
 
-FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CavePlan& Plan, int64 ExpectedWorldSeed,
-	const FGuid& ExpectedStageId, int64 ExpectedSalt, int32 MaxNodes, int32 MaxConnections,
-	TFunctionRef<bool()> IsCancelled)
+FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
 {
 	if (IsCancelled())
 	{
 		return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
 	}
+	if (!Candidate->UsesBudget(Budget.Get()) || !Candidate->MatchesSource(Settings, WorldSeed, Region))
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate provenance or budget mismatch"));
+	}
+	const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
+	if (!M5SameRegion(Plan.Region, Region))
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate region does not match provenance"));
+	}
 	const int64 NodeCount = static_cast<int64>(Plan.Chambers.Num()) + Plan.Entrances.Num() + Plan.Portals.Num();
-	if (MaxNodes < 1 || MaxNodes > MaximumNodes || MaxConnections < 0 || MaxConnections > MaximumConnections
-		|| NodeCount > MaxNodes || Plan.Connections.Num() > MaxConnections)
+	if (Settings.Limits.MaxCandidates < 1 || Settings.Limits.MaxEdges < 1 || Settings.Limits.MaxBytes < 1
+		|| Settings.Limits.MaxValidationWork < 1 || Settings.Topology.EntranceCount < 0 || NodeCount > MaximumNodes
+		|| Plan.Connections.Num() > MaximumConnections || Plan.Chambers.Num() > Settings.Limits.MaxCandidates
+		|| Plan.Connections.Num() > Settings.Limits.MaxEdges || Plan.Entrances.Num() > Settings.Topology.EntranceCount
+		|| Plan.Portals.Num() > 4)
 	{
 		return M5TopologyError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Topology count exceeds admission limit"));
 	}
-	if (!ExpectedStageId.IsValid())
+	if (!Settings.StageId.IsValid())
 	{
 		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Expected cave stage ID is invalid"));
 	}
@@ -104,6 +152,48 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveP
 	{
 		return M5TopologyError(
 			EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Topology requires a chamber and a route"));
+	}
+	int64 BudgetBytes = 0;
+	int64 BudgetWork = 0;
+	Budget->GetLimits(BudgetBytes, BudgetWork);
+	if (BudgetBytes > Settings.Limits.MaxBytes || BudgetWork > Settings.Limits.MaxValidationWork)
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Shared budget exceeds per-plan limits"));
+	}
+	// Four scratch arrays: nodes, parent, connections and canonical edges. Twice
+	// their payload accounts for capacity slack; 4096 further bytes cover the
+	// bounded SHA packet/digest and diagnostic scratch. Unreal allocator metadata
+	// is excluded, as documented by FVoxelLandM5Budget.
+	using namespace VoxelLand::M5::CheckedMath;
+	int64 NodeBytes = 0, EdgeBytes = 0, ScratchBytes = 0, Sum = 0, Square = 0, Work = 0, PortalWork = 0;
+	if (!TryMultiplyNonNegative(NodeCount, sizeof(FVoxelLandM5Endpoint) + sizeof(int32), NodeBytes)
+		|| !TryMultiplyNonNegative(Plan.Connections.Num(), sizeof(FVoxelLandM5Connection) + sizeof(uint64), EdgeBytes)
+		|| !TryAdd(NodeBytes, EdgeBytes, ScratchBytes) || !TryMultiplyNonNegative(ScratchBytes, 2, ScratchBytes)
+		|| !TryAdd(ScratchBytes, 4096, ScratchBytes) || !TryAdd(NodeCount, Plan.Connections.Num(), Sum)
+		|| !TryAdd(Sum, 1, Sum) || !TryMultiplyNonNegative(Sum, Sum, Square)
+		|| !TryMultiplyNonNegative(Square, 16, Work) || !TryMultiplyNonNegative(Plan.Portals.Num(), 1024, PortalWork)
+		|| !TryAdd(Work, PortalWork, Work) || !TryAdd(Work, 4096, Work))
+	{
+		return M5TopologyError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Topology admission arithmetic overflow"));
+	}
+	// Work units bound graph operations, not CPU instructions: each insertion
+	// sort uses <= n(n-1)/2 comparisons/moves, union/find uses <= nodes per
+	// edge, endpoint searches <= nodes per edge, plus linear scans. 16*(N+E+1)^2
+	// bounds all of these and their cancellation checks. SHA-256 of each fixed
+	// 77-byte packet needs two compression blocks, covered by 1024 per portal.
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> ScratchLease;
+	if (!Budget->TryReserveBytes(ScratchBytes, ScratchLease))
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Topology scratch admission failed"));
+	}
+	if (!Budget->TryChargeWork(Work))
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Topology work admission failed"));
+	}
+	if (IsCancelled())
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
 	}
 
 	TArray<FVoxelLandM5Endpoint> Nodes;
@@ -148,8 +238,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveP
 			return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
 		}
 		const FVoxelLandM5PortalKey& Key = Portal.Key;
-		if (!Portal.bHasId || Key.WorldSeed != ExpectedWorldSeed || Key.StageId != ExpectedStageId
-			|| Key.Salt != ExpectedSalt
+		if (!Portal.bHasId || Key.WorldSeed != WorldSeed || Key.StageId != Settings.StageId || Key.Salt != Settings.Salt
 			|| (!M5SameRegion(Plan.Region, Key.RegionA) && !M5SameRegion(Plan.Region, Key.RegionB)))
 		{
 			return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid portal key, ID or owning region"),
@@ -179,7 +268,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveP
 		}
 		AddNode(EVoxelLandM5EndpointKind::Portal, Portal.Id);
 	}
-	Nodes.Sort(M5LessEndpoint);
+	if (!M5TopologySort(Nodes, M5LessEndpoint, IsCancelled))
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
+	}
 	for (int32 I = 1; I < Nodes.Num(); ++I)
 	{
 		if (IsCancelled())
@@ -225,7 +317,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveP
 			return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Connection has no ID"));
 		}
 	}
-	Connections.Sort([](const FVoxelLandM5Connection& A, const FVoxelLandM5Connection& B) { return A.Id < B.Id; });
+	if (!M5TopologySort(
+			Connections, [](const FVoxelLandM5Connection& A, const FVoxelLandM5Connection& B) { return A.Id < B.Id; },
+			IsCancelled))
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
+	}
 	TArray<int32> Parent;
 	Parent.Reserve(Nodes.Num());
 	for (int32 I = 0; I < Nodes.Num(); ++I)
@@ -262,14 +359,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveP
 		const uint32 Low = static_cast<uint32>(FMath::Min(A, B));
 		const uint32 High = static_cast<uint32>(FMath::Max(A, B));
 		Edges.Add((static_cast<uint64>(Low) << 32) | High);
-		const int32 ARoot = M5Root(Parent, A);
-		const int32 BRoot = M5Root(Parent, B);
+		const int32 ARoot = M5Root(Parent, A, IsCancelled);
+		const int32 BRoot = M5Root(Parent, B, IsCancelled);
+		if (ARoot == INDEX_NONE || BRoot == INDEX_NONE)
+		{
+			return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
+		}
 		if (ARoot != BRoot)
 		{
 			Parent[FMath::Max(ARoot, BRoot)] = FMath::Min(ARoot, BRoot);
 		}
 	}
-	Edges.Sort();
+	if (!M5TopologySort(Edges, [](uint64 A, uint64 B) { return A < B; }, IsCancelled))
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
+	}
 	for (int32 I = 1; I < Edges.Num(); ++I)
 	{
 		if (IsCancelled())
@@ -320,14 +424,23 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveP
 				TEXT("Entrance connection is missing or unrelated"), true, Entrance.Id);
 		}
 	}
-	const int32 Root = M5Root(Parent, 0);
+	const int32 Root = M5Root(Parent, 0, IsCancelled);
+	if (Root == INDEX_NONE)
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
+	}
 	for (int32 I = 1; I < Parent.Num(); ++I)
 	{
 		if (IsCancelled())
 		{
 			return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
 		}
-		if (M5Root(Parent, I) != Root)
+		const int32 NodeRoot = M5Root(Parent, I, IsCancelled);
+		if (NodeRoot == INDEX_NONE)
+		{
+			return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
+		}
+		if (NodeRoot != Root)
 		{
 			return M5TopologyError(EVoxelLandM5ErrorCode::InconsistentTopology,
 				TEXT("Topology contains disconnected nodes"), true, Nodes[I].Id);

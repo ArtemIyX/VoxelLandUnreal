@@ -167,9 +167,22 @@ bool FVoxelLandM5EntranceFlatTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("repeat X"), Segment.EndCm.X, B.Segments[0].EndCm.X);
 	TestEqual(TEXT("repeat Y"), Segment.EndCm.Y, B.Segments[0].EndCm.Y);
 	TestEqual(TEXT("linked entrance ID"), A.Connections[0].End.Id, A.Entrances[0].Id);
-	TestTrue(TEXT("typed link connected"), VoxelLand::M5::Topology::Validate(A, 42, S.StageId, S.Salt, 8, 8, [] {
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> TopologyBudget;
+	if (!TestTrue(TEXT("topology budget"), FVoxelLandM5Budget::TryCreate(1000000, 1000000, TopologyBudget)))
+	{
 		return false;
-	}).Code == EVoxelLandM5ErrorCode::None);
+	}
+	const auto TopologyCandidate = FVoxelLandM5EntranceFixtureFactory::Create(TopologyBudget.ToSharedRef(), S, 42, A);
+	if (!TestTrue(TEXT("admit topology fixture"), TopologyCandidate.IsValid()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("typed link connected"), VoxelLand::M5::Topology::Validate(S, 42, A.Region,
+											   TopologyCandidate.ToSharedRef(), TopologyBudget.ToSharedRef(),
+											   [] {
+												   return false;
+											   }).Code
+											   == EVoxelLandM5ErrorCode::None);
 	return true;
 }
 

@@ -89,7 +89,7 @@ FVoxelLandM5CavePlan RouteFixture()
 		FVoxelLandM5RouteLeg Leg;
 		Leg.StartFeetCm.X = I * 10;
 		Leg.EndFeetCm.X = (I + 1) * 10;
-		Leg.Feature = R.CoveredFeatures[I];
+		Leg.Feature = R.CoveredFeatures[2];
 		R.Legs.Add(Leg);
 	}
 	P.Routes.Add(MoveTemp(R));
@@ -135,7 +135,7 @@ void AddCoveredRoute(FVoxelLandM5CavePlan& Plan, uint64 RouteId, uint64 Connecti
 		FVoxelLandM5RouteLeg Leg;
 		Leg.StartFeetCm.X = StartX + I * 10;
 		Leg.EndFeetCm.X = StartX + (I + 1) * 10;
-		Leg.Feature = R.CoveredFeatures[I];
+		Leg.Feature = R.CoveredFeatures[1];
 		R.Legs.Add(Leg);
 	}
 	Plan.Routes.Add(MoveTemp(R));
@@ -227,6 +227,11 @@ bool FVoxelLandM5RouteTopologyTest::RunTest(const FString& Parameters)
 	};
 	const auto Good = RouteFixture();
 	Expected(TEXT("structurally valid route remains unproven"), Good, EVoxelLandM5ErrorCode::Unproven);
+	auto Single = Good;
+	Single.Routes[0].Legs.SetNum(1);
+	Single.Routes[0].Legs[0].EndFeetCm.X = 40;
+	Expected(TEXT("one segment and one leg can cover both endpoint chambers and the connection"), Single,
+		EVoxelLandM5ErrorCode::Unproven);
 	const auto Full = FullRouteFixture();
 	Expected(TEXT("all structural features covered; geometry unproven"), Full, EVoxelLandM5ErrorCode::Unproven);
 	auto Missing = Full;

@@ -639,19 +639,24 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::Validate(const FVoxelLandM5
 				return Failure(EVoxelLandM5ErrorCode::InconsistentTopology,
 					TEXT("Feature has multiple coverage owners"), true, Ref.Id);
 			}
-			bool bReferenced = false;
-			for (const auto& Leg : Route.Legs)
+			// Nodes are covered by anchored endpoints; connections by their
+			// checked chains. Only segment coverage needs direct leg references.
+			if (Ref.Kind == EVoxelLandM5RouteFeatureKind::Segment)
 			{
-				if (IsCancelled())
+				bool bReferenced = false;
+				for (const auto& Leg : Route.Legs)
 				{
-					return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
+					if (IsCancelled())
+					{
+						return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
+					}
+					bReferenced |= SameRef(Ref, Leg.Feature);
 				}
-				bReferenced |= SameRef(Ref, Leg.Feature);
-			}
-			if (!bReferenced)
-			{
-				return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Covered feature has no route leg"),
-					true, Ref.Id);
+				if (!bReferenced)
+				{
+					return Failure(EVoxelLandM5ErrorCode::InconsistentTopology,
+						TEXT("Covered segment has no route leg"), true, Ref.Id);
+				}
 			}
 			if (Ref.Kind == EVoxelLandM5RouteFeatureKind::Entrance)
 			{
@@ -749,7 +754,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::Validate(const FVoxelLandM5
 				return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
 			}
 			const auto& Leg = Route.Legs[I];
-			if ((Leg.Transition != EVoxelLandM5RouteTransition::Walk
+			if (Leg.Feature.Kind != EVoxelLandM5RouteFeatureKind::Segment
+				|| (Leg.Transition != EVoxelLandM5RouteTransition::Walk
 					&& Leg.Transition != EVoxelLandM5RouteTransition::Step)
 				|| SamePoint(Leg.StartFeetCm, Leg.EndFeetCm)
 				|| (I && !SamePoint(Route.Legs[I - 1].EndFeetCm, Leg.StartFeetCm)))

@@ -6,7 +6,7 @@
 
 // Kind, signed region and plan-scoped ID together identify a feature. A portal
 // reference must additionally resolve and compare the full shared portal key.
-struct VOXELLANDDATA_API FVoxelLandM5RouteFeatureRef
+struct FVoxelLandM5RouteFeatureRef
 {
 	bool bValid = false;
 	EVoxelLandM5RouteFeatureKind Kind = EVoxelLandM5RouteFeatureKind::Chamber;

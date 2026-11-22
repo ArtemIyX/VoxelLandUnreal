@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM5Endpoint.h"
 
-struct VOXELLANDDATA_API FVoxelLandM5Connection
+struct FVoxelLandM5Connection
 {
 	bool bHasId = false;
 	uint64 Id = 0;

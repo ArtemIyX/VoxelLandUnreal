@@ -10,7 +10,7 @@
 // Neighboring legs must meet exactly or have an independently validated connector.
 // A step with bends is expressed as multiple explicit swept legs. This data alone
 // asserts neither support nor clearance and must not be treated as validation.
-struct VOXELLANDDATA_API FVoxelLandM5RouteLeg
+struct FVoxelLandM5RouteLeg
 {
 	FVoxelLandM5PointCm StartFeetCm;
 	FVoxelLandM5PointCm EndFeetCm;

@@ -13,7 +13,7 @@
 // junction's geometry center is separate from its feet anchor. Region ownership
 // is explicit on each endpoint and feature reference; the portal supplies its
 // complete shared key and both anchors. Cross-boundary continuity must be validated separately.
-struct VOXELLANDDATA_API FVoxelLandM5Route
+struct FVoxelLandM5Route
 {
 	bool bHasId = false;
 	uint64 Id = 0;

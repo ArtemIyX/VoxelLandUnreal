@@ -6,7 +6,7 @@
 // Plan-scoped junction intent. The enclosing plan supplies the signed region.
 // CenterCm is a cave-geometry centerline position, not a feet position. Every
 // incident route must meet FeetAnchorCm or use a separately validated connector.
-struct VOXELLANDDATA_API FVoxelLandM5Junction
+struct FVoxelLandM5Junction
 {
 	bool bHasId = false;
 	uint64 Id = 0;

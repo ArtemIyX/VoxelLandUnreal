@@ -23,9 +23,9 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 	int64& OutMaxSurfaceZ, int32& OutSlopeDegrees, bool& bOutProtected, bool& bOutFlooded)
 {
 	using namespace VoxelLand::M5::CheckedMath;
-	constexpr int64 CoordinateLimit = 1048576;
+	constexpr int64 QueryCoordinateLimit = 1048576;
 	const auto InRange = [](int64 Value) {
-		return Value >= -CoordinateLimit && Value <= CoordinateLimit;
+		return Value >= -QueryCoordinateLimit && Value <= QueryCoordinateLimit;
 	};
 	if (SampleCounts.X < 6 || SampleCounts.Y < 6 || SampleCounts.Z < 2 || SpacingCm <= 0 || SpacingCm > 65536
 		|| SpacingCm % 2 != 0 || Origin.X % SpacingCm != 0 || Origin.Y % SpacingCm != 0 || Origin.Z % SpacingCm != 0

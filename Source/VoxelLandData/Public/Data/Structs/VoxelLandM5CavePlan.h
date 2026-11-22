@@ -15,7 +15,7 @@
 // Feature IDs are plan-scoped: in regional mode, callers must include the signed
 // Region coordinates with the local ID when deriving streams or comparing features
 // across plans. This is transient topology, not a persisted descriptor or plan format.
-struct VOXELLANDDATA_API FVoxelLandM5CavePlan
+struct FVoxelLandM5CavePlan
 {
 	FVoxelLandM5Bounds Bounds;
 	FVoxelLandM5RegionCoord Region;

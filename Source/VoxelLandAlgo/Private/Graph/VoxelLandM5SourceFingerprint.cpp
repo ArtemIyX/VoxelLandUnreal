@@ -157,8 +157,8 @@ FVoxelLandM5Diagnostic M5FingerprintValidateFunctions(const FVoxelLandGraphSnaps
 		return M5FingerprintError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function dependency memory exceeds limit"));
 	}
-	TArray<uint8> Edges;
-	Edges.Init(0, int32(MatrixCells));
+	TArray<uint8> FunctionEdges;
+	FunctionEdges.Init(0, int32(MatrixCells));
 	TArray<uint8> Roots;
 	Roots.Init(0, Count);
 	for (int32 I = 0; I < Count; ++I)
@@ -217,7 +217,7 @@ FVoxelLandM5Diagnostic M5FingerprintValidateFunctions(const FVoxelLandGraphSnaps
 			}
 			else
 			{
-				Edges[Parent * Count + Target] = 1;
+				FunctionEdges[Parent * Count + Target] = 1;
 			}
 		}
 		return {};
@@ -235,7 +235,7 @@ FVoxelLandM5Diagnostic M5FingerprintValidateFunctions(const FVoxelLandGraphSnaps
 			return D;
 		}
 	}
-	TArray<uint8> Direct = Edges;
+	TArray<uint8> Direct = FunctionEdges;
 	TArray<uint8> Depth = Roots;
 	for (int32 Pass = 0; Pass < Count; ++Pass)
 	{
@@ -275,20 +275,20 @@ FVoxelLandM5Diagnostic M5FingerprintValidateFunctions(const FVoxelLandGraphSnaps
 				{
 					return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 				}
-				Edges[I * Count + J] |= Edges[I * Count + K] & Edges[K * Count + J];
+				FunctionEdges[I * Count + J] |= FunctionEdges[I * Count + K] & FunctionEdges[K * Count + J];
 			}
 		}
 	}
 	for (int32 I = 0; I < Count; ++I)
 	{
-		if (Edges[I * Count + I])
+		if (FunctionEdges[I * Count + I])
 		{
 			return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function dependency cycle"));
 		}
 		bool bReachable = Roots[I] != 0;
 		for (int32 J = 0; J < Count && !bReachable; ++J)
 		{
-			bReachable = Roots[J] && Edges[J * Count + I];
+			bReachable = Roots[J] && FunctionEdges[J * Count + I];
 		}
 		if (!bReachable)
 		{

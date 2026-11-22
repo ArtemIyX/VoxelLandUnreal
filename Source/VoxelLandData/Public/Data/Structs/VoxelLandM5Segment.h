@@ -4,7 +4,7 @@
 #include "Data/Structs/VoxelLandM5PointCm.h"
 
 // Endpoints are logical global centimetres, never chunk-local coordinates.
-struct VOXELLANDDATA_API FVoxelLandM5Segment
+struct FVoxelLandM5Segment
 {
 	bool bHasId = false;
 	uint64 Id = 0;

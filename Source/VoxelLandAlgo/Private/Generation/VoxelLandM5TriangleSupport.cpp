@@ -8,7 +8,7 @@ namespace
 constexpr int64 M5TriangleSupportLimit = 1048576;
 constexpr int32 M5TriangleSupportCoefficientLimit = 32767;
 
-FVoxelLandM5Diagnostic Error(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+FVoxelLandM5Diagnostic M5SupportError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Result;
 	Result.Code = Code;
@@ -129,7 +129,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 	using namespace VoxelLand::M5::CheckedMath;
 	if (IsCancelled())
 	{
-		return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
+		return M5SupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 	}
 	if (!InRange(FeetStart) || !InRange(FeetEnd) || !InRange(Plane.Origin) || RadiusCm < 1
 		|| RadiusCm > M5TriangleSupportLimit || HeightCm < 2 * RadiusCm || HeightCm > M5TriangleSupportLimit
@@ -141,42 +141,43 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 		|| MaxSlopeNumerator > M5TriangleSupportCoefficientLimit || MaxSlopeDenominator < 1
 		|| MaxSlopeDenominator > M5TriangleSupportCoefficientLimit)
 	{
-		return Error(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid capsule, plane or slope"));
+		return M5SupportError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid capsule, plane or slope"));
 	}
 	if (Triangles.IsEmpty())
 	{
-		return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("No support triangles"));
+		return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("No support triangles"));
 	}
 	if (Triangles.Num() > 256)
 	{
-		return Error(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Too many support triangles"));
+		return M5SupportError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Too many support triangles"));
 	}
 	const int64 Count = Triangles.Num();
 	// No scratch allocation. The fixed charge bounds all triangle/edge pair
 	// comparisons and cancellation calls, including exact boundary scans.
 	if (!Budget->TryChargeWork(128 + 256 * Count * Count))
 	{
-		return Error(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Support work budget exhausted"));
+		return M5SupportError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Support work budget exhausted"));
 	}
 	const int64 GX = Plane.GradientX, GY = Plane.GradientY, Den = Plane.Denominator;
 	const int64 SN = MaxSlopeNumerator, SD = MaxSlopeDenominator;
 	if ((GX * GX + GY * GY) * SD * SD > Den * Den * SN * SN)
 	{
-		return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Support slope exceeds limit"));
+		return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Support slope exceeds limit"));
 	}
 	const int64 NormalSquared = GX * GX + GY * GY + Den * Den;
 	int64 MinSquared = 0, MaxSquared = 0;
 	if (!SquareProduct(RadiusCm, NormalSquared, MinSquared)
 		|| !SquareProduct(RadiusCm + ContactSkinCm, NormalSquared, MaxSquared))
 	{
-		return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Contact predicate exceeds exact arithmetic range"));
+		return M5SupportError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Contact predicate exceeds exact arithmetic range"));
 	}
 	for (const FVoxelLandM5PointCm* Feet : {&FeetStart, &FeetEnd})
 	{
 		int64 TopZ = 0;
 		if (!TryAdd(Feet->Z, HeightCm, TopZ) || !InRange(TopZ))
 		{
-			return Error(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Capsule exceeds domain"));
+			return M5SupportError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Capsule exceeds domain"));
 		}
 		const int64 CenterZ = Feet->Z + RadiusCm;
 		const int64 Dot =
@@ -184,11 +185,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 		int64 DotSquared = 0;
 		if (Dot < 0 || !TryMultiplyNonNegative(Dot, Dot, DotSquared))
 		{
-			return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Capsule contact cannot be proven"));
+			return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Capsule contact cannot be proven"));
 		}
 		if (DotSquared < MinSquared || DotSquared > MaxSquared)
 		{
-			return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Capsule penetrates or loses contact"));
+			return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Capsule penetrates or loses contact"));
 		}
 	}
 	const int64 Extent = RadiusCm + ContactSkinCm;
@@ -198,19 +199,19 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 	const int64 MaxY = FMath::Max(FeetStart.Y, FeetEnd.Y) + Extent;
 	if (!InRange(MinX) || !InRange(MaxX) || !InRange(MinY) || !InRange(MaxY))
 	{
-		return Error(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Contact footprint exceeds domain"));
+		return M5SupportError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Contact footprint exceeds domain"));
 	}
 	for (const FVoxelLandM5FloorTriangleCm& T : Triangles)
 	{
 		if (IsCancelled())
 		{
-			return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
+			return M5SupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 		}
 		if (!InRange(T.A) || !InRange(T.B) || !InRange(T.C) || !M5TriangleSupportOnPlane(T.A, Plane)
 			|| !M5TriangleSupportOnPlane(T.B, Plane) || !M5TriangleSupportOnPlane(T.C, Plane)
 			|| Orient(T.A, T.B, T.C) <= 0)
 		{
-			return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Invalid, noncoplanar or downward triangle"));
+			return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Invalid, noncoplanar or downward triangle"));
 		}
 	}
 	for (int32 I = 0; I < Triangles.Num(); ++I)
@@ -219,7 +220,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 		{
 			if (IsCancelled())
 			{
-				return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
+				return M5SupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 			}
 			const auto& A = Triangles[I];
 			const auto& B = Triangles[J];
@@ -227,13 +228,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 			{
 				if (StrictlyInside(A, Vertex(B, K)) || StrictlyInside(B, Vertex(A, K)))
 				{
-					return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Overlapping floor triangles"));
+					return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Overlapping floor triangles"));
 				}
 				for (int32 L = 0; L < 3; ++L)
 				{
 					if (!EdgePairCompatible(Vertex(A, K), Vertex(A, (K + 1) % 3), Vertex(B, L), Vertex(B, (L + 1) % 3)))
 					{
-						return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Intersecting or nonmanifold floor edges"));
+						return M5SupportError(
+							EVoxelLandM5ErrorCode::Unproven, TEXT("Intersecting or nonmanifold floor edges"));
 					}
 				}
 			}
@@ -257,7 +259,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 		}
 		if (!bCovered)
 		{
-			return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Contact footprint is not covered"));
+			return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Contact footprint is not covered"));
 		}
 	}
 	// Corners alone can touch four unrelated triangles outside the rectangle.
@@ -279,7 +281,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 	}
 	if (!bInteriorWitness)
 	{
-		return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("No strict interior support witness"));
+		return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("No strict interior support witness"));
 	}
 	for (int32 I = 0; I < Triangles.Num(); ++I)
 	{
@@ -287,7 +289,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 		{
 			if (IsCancelled())
 			{
-				return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
+				return M5SupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 			}
 			const auto& A = Vertex(Triangles[I], E);
 			const auto& B = Vertex(Triangles[I], (E + 1) % 3);
@@ -296,7 +298,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 			{
 				if (IsCancelled())
 				{
-					return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
+					return M5SupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 				}
 				if (I == J)
 				{
@@ -312,18 +314,19 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 			}
 			if (ReverseCount > 1)
 			{
-				return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Nonmanifold shared edge"));
+				return M5SupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Nonmanifold shared edge"));
 			}
 			if (ReverseCount == 0 && FMath::Min(A.X, B.X) < MaxX && FMath::Max(A.X, B.X) > MinX
 				&& FMath::Min(A.Y, B.Y) < MaxY && FMath::Max(A.Y, B.Y) > MinY)
 			{
-				return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Floor boundary may cross the contact footprint"));
+				return M5SupportError(
+					EVoxelLandM5ErrorCode::Unproven, TEXT("Floor boundary may cross the contact footprint"));
 			}
 		}
 	}
 	if (IsCancelled())
 	{
-		return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
+		return M5SupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 	}
 	return {};
 }

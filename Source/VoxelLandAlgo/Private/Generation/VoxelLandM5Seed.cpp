@@ -217,15 +217,15 @@ bool TryDigestWord(TConstArrayView<uint8> Digest, uint64& OutWord)
 	return true;
 }
 
-bool TryUniform(uint64 Range, uint32 FirstDraw, uint32 MaxDraws, TFunctionRef<bool(uint32, uint64&)> Source,
+bool TryUniform(uint64 Range, uint32 FirstDraw, uint32 DrawLimit, TFunctionRef<bool(uint32, uint64&)> Source,
 	TFunctionRef<bool()> IsCancelled, uint64& OutValue, uint32& OutDrawsUsed)
 {
-	if (Range == 0 || MaxDraws == 0)
+	if (Range == 0 || DrawLimit == 0)
 	{
 		return false;
 	}
 	const uint64 Threshold = (uint64(0) - Range) % Range;
-	for (uint32 Index = 0; Index < MaxDraws; ++Index)
+	for (uint32 Index = 0; Index < DrawLimit; ++Index)
 	{
 		if (IsCancelled() || Index > MAX_uint32 - FirstDraw)
 		{
@@ -251,10 +251,10 @@ bool TryUniform(uint64 Range, uint32 FirstDraw, uint32 MaxDraws, TFunctionRef<bo
 	return false;
 }
 
-bool TryUniformSigned(int64 Min, int64 Max, uint32 FirstDraw, uint32 MaxDraws,
+bool TryUniformSigned(int64 Min, int64 Max, uint32 FirstDraw, uint32 DrawLimit,
 	TFunctionRef<bool(uint32, uint64&)> Source, TFunctionRef<bool()> IsCancelled, int64& OutValue, uint32& OutDrawsUsed)
 {
-	if (Min > Max || MaxDraws == 0)
+	if (Min > Max || DrawLimit == 0)
 	{
 		return false;
 	}
@@ -272,7 +272,7 @@ bool TryUniformSigned(int64 Min, int64 Max, uint32 FirstDraw, uint32 MaxDraws,
 		}
 		DrawsUsed = 1;
 	}
-	else if (!TryUniform(Range, FirstDraw, MaxDraws, Source, IsCancelled, Offset, DrawsUsed))
+	else if (!TryUniform(Range, FirstDraw, DrawLimit, Source, IsCancelled, Offset, DrawsUsed))
 	{
 		return false;
 	}

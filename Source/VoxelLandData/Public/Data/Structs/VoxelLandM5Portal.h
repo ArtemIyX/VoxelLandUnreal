@@ -5,7 +5,7 @@
 #include "Data/Structs/VoxelLandM5PortalKey.h"
 
 // Transient, shared-boundary geometry; both regions derive and validate the same key.
-struct VOXELLANDDATA_API FVoxelLandM5Portal
+struct FVoxelLandM5Portal
 {
 	bool bHasId = false;
 	uint64 Id = 0;

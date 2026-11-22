@@ -9,7 +9,7 @@
 // compatible with Kind; connection topology alone may leave it None. Portal IDs
 // additionally require full-key equality to detect hash collisions, and Region
 // must match the region selected by its A/B feet-anchor role.
-struct VOXELLANDDATA_API FVoxelLandM5Endpoint
+struct FVoxelLandM5Endpoint
 {
 	bool bValid = false;
 	EVoxelLandM5EndpointKind Kind = EVoxelLandM5EndpointKind::Chamber;

@@ -165,8 +165,8 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 			}
 		}
 	}
-	TArray<uint8> Edges;
-	Edges.Init(0, FunctionCount * FunctionCount);
+	TArray<uint8> FunctionEdges;
+	FunctionEdges.Init(0, FunctionCount * FunctionCount);
 	TArray<uint8> Roots;
 	Roots.Init(0, FunctionCount);
 	FString Path;
@@ -231,7 +231,7 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 				}
 				else
 				{
-					Edges[Parent * FunctionCount + Target] = 1;
+					FunctionEdges[Parent * FunctionCount + Target] = 1;
 				}
 				continue;
 			}
@@ -303,7 +303,7 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 	}
 	// Validate every dependency is reachable and reject cycles. Since counts are
 	// bounded, transitive closure is deterministic and independent of task order.
-	TArray<uint8> Closure = Edges;
+	TArray<uint8> Closure = FunctionEdges;
 	for (int32 K = 0; K < FunctionCount; ++K)
 	{
 		for (int32 I = 0; I < FunctionCount; ++I)

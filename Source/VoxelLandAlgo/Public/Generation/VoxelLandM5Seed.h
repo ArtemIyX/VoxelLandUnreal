@@ -28,12 +28,12 @@ VOXELLANDALGO_API bool TryDigestWord(TConstArrayView<uint8> Digest, uint64& OutW
 // Uniform result in [0, Range); rejects Range == 0. Source gets an explicit
 // draw index; source failure, cancellation, exhausted budget or draw-index
 // overflow returns false without modifying OutValue or OutDrawsUsed.
-VOXELLANDALGO_API bool TryUniform(uint64 Range, uint32 FirstDraw, uint32 MaxDraws,
+VOXELLANDALGO_API bool TryUniform(uint64 Range, uint32 FirstDraw, uint32 DrawLimit,
 	TFunctionRef<bool(uint32, uint64&)> Source, TFunctionRef<bool()> IsCancelled, uint64& OutValue,
 	uint32& OutDrawsUsed);
 
 // Inclusive signed interval, including the entire int64 range.
-VOXELLANDALGO_API bool TryUniformSigned(int64 Min, int64 Max, uint32 FirstDraw, uint32 MaxDraws,
+VOXELLANDALGO_API bool TryUniformSigned(int64 Min, int64 Max, uint32 FirstDraw, uint32 DrawLimit,
 	TFunctionRef<bool(uint32, uint64&)> Source, TFunctionRef<bool()> IsCancelled, int64& OutValue,
 	uint32& OutDrawsUsed);
 }

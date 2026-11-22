@@ -5,7 +5,7 @@
 #include "Data/Structs/VoxelLandM5PointCm.h"
 
 // Only this explicitly bounded opening may cross the protected surface roof.
-struct VOXELLANDDATA_API FVoxelLandM5Entrance
+struct FVoxelLandM5Entrance
 {
 	bool bHasId = false;
 	uint64 Id = 0;

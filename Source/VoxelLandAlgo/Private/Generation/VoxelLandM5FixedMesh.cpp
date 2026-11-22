@@ -18,7 +18,7 @@ FVoxelLandM5Diagnostic M5FixedMeshFailure(EVoxelLandM5ErrorCode Code, const TCHA
 
 bool M5FixedMeshCoordinate(double Value, int64 GridQ18, int64& Out)
 {
-	constexpr double LimitCm = 1048576.0;
+	constexpr double MeshLimitCm = 1048576.0;
 	constexpr double Scale = 262144.0;
 	// Inspect the representation before comparisons or arithmetic: when the
 	// host enables DAZ, a nonzero subnormal can otherwise compare as zero and
@@ -26,7 +26,7 @@ bool M5FixedMeshCoordinate(double Value, int64 GridQ18, int64& Out)
 	uint64 Bits = 0;
 	FMemory::Memcpy(&Bits, &Value, sizeof(Bits));
 	const bool bSubnormal = (Bits & 0x7ff0000000000000ull) == 0 && (Bits & 0x000fffffffffffffull) != 0;
-	if (!std::isfinite(Value) || bSubnormal || Value < -LimitCm || Value > LimitCm)
+	if (!std::isfinite(Value) || bSubnormal || Value < -MeshLimitCm || Value > MeshLimitCm)
 	{
 		return false;
 	}
@@ -44,12 +44,12 @@ bool M5FixedMeshCoordinate(double Value, int64 GridQ18, int64& Out)
 
 bool M5FixedMeshErrorBound(double ErrorCm, int64& Out)
 {
-	constexpr double LimitCm = 1048576.0;
+	constexpr double MeshLimitCm = 1048576.0;
 	constexpr double Scale = 262144.0;
 	uint64 Bits = 0;
 	FMemory::Memcpy(&Bits, &ErrorCm, sizeof(Bits));
 	const bool bSubnormal = (Bits & 0x7ff0000000000000ull) == 0 && (Bits & 0x000fffffffffffffull) != 0;
-	if (!std::isfinite(ErrorCm) || bSubnormal || ErrorCm < 0.0 || ErrorCm > LimitCm)
+	if (!std::isfinite(ErrorCm) || bSubnormal || ErrorCm < 0.0 || ErrorCm > MeshLimitCm)
 	{
 		return false;
 	}
@@ -61,7 +61,7 @@ bool M5FixedMeshErrorBound(double ErrorCm, int64& Out)
 	// Multiplication by a power of two is exact except possible underflow;
 	// nextafter and ceil ensure even tiny positive errors consume one unit.
 	const double Upper = std::nextafter(ErrorCm * Scale, std::numeric_limits<double>::infinity());
-	if (!std::isfinite(Upper) || Upper > LimitCm * Scale + 1.0)
+	if (!std::isfinite(Upper) || Upper > MeshLimitCm * Scale + 1.0)
 	{
 		return false;
 	}

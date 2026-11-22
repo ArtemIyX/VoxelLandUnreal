@@ -6,6 +6,7 @@
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CandidatePlanner.h"
 #include "Generation/VoxelLandM5EntrancePlanner.h"
+#include "Generation/VoxelLandM5RouteBuilder.h"
 #include "Templates/SharedPointer.h"
 
 // Owns scratch-only candidate data and its shared admission. The plan is
@@ -22,6 +23,11 @@ public:
 	const FVoxelLandM5CavePlan& GetPlan() const { return Plan; }
 
 private:
+	friend FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5CaveSettings&, int64,
+		const FVoxelLandM5RegionCoord&, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>,
+		TConstArrayView<FVoxelLandM5RouteAnchorChoice>, TConstArrayView<FVoxelLandM5RouteConnectionChoice>,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>&);
 	friend FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5CaveSettings&, int64,
 		const FVoxelLandM5RegionCoord&, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
 		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>&);
@@ -32,6 +38,7 @@ private:
 			int64&, int64&, int64&, int32&, bool&, bool&)>,
 		TFunctionRef<bool()>, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>&);
 #if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5RouteBuilderFixtureFactory;
 	friend class FVoxelLandM5EntranceFixtureFactory;
 	friend class FVoxelLandM5TopologyFixtureFactory;
 	friend class FVoxelLandM5HandshakeFixtureFactory;

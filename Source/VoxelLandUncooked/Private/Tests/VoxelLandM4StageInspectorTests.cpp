@@ -54,6 +54,14 @@ bool FVoxelLandM4StageInspectorTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("peaks maximum"), int32(Stats.PeaksMax), 1200);
 	TestEqual(TEXT("base minimum"), Stats.BaseHeightMinQ8, 136);
 	TestEqual(TEXT("base maximum"), Stats.BaseHeightMaxQ8, 136);
+	constexpr int32 R = FVoxelLandM4StageStats::ControlMapResolution;
+	TestTrue(TEXT("control maps available"), Stats.bHasControlMaps);
+	TestEqual(TEXT("continental top left samples max Y"), Stats.ControlMaps[0][0], uint8(1));
+	TestEqual(TEXT("continental top right preserves upper endpoint"), Stats.ControlMaps[0][R - 1], uint8(255));
+	TestEqual(TEXT("continental bottom left preserves zero endpoint"), Stats.ControlMaps[0][(R - 1) * R], uint8(0));
+	TestEqual(TEXT("continental bottom right samples max X"), Stats.ControlMaps[0][R * R - 1], uint8(1));
+	TestEqual(TEXT("mountain map uses independent channel"), Stats.ControlMaps[1][0], uint8(3));
+	TestEqual(TEXT("peaks map uses independent channel"), Stats.ControlMaps[2][0], uint8(4));
 	TestEqual(TEXT("continental sum"), Stats.ContinentalSum, uint64(66035));
 	TestEqual(TEXT("continental zero count"), Stats.ContinentalZeroCount, 1);
 	TestEqual(TEXT("continental upper endpoint count"), Stats.ContinentalMaxCount, 1);
@@ -72,6 +80,14 @@ bool FVoxelLandM4StageInspectorTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("cancelled prepass reports cancellation"), Cancelled.Code == EVoxelLandErrorCode::Cancelled);
 	TestTrue(TEXT("cancelled prepass preserves grid and statistics"), Grid == SharedGrid);
 	TestEqual(TEXT("cancelled prepass preserves hash"), Hash, OriginalHash);
+	int32 ThumbnailChecks = 0;
+	const FVoxelLandError ThumbnailCancelled =
+		VoxelLandM4HeightPrepass::Generate(Domain, Continental, *Curve, Mountain, *Curve, Peaks, *Curve, 10, 42,
+			FGuid(), 0, 0, Erosion, Grid, Hash, [&ThumbnailChecks] { return ++ThumbnailChecks == 7; });
+	TestTrue(TEXT("thumbnail generation can be cancelled"), ThumbnailCancelled.Code == EVoxelLandErrorCode::Cancelled);
+	TestTrue(TEXT("cancelled thumbnail preserves old grid"), Grid == SharedGrid);
+	TestEqual(TEXT("cancelled thumbnail preserves old hash"), Hash, OriginalHash);
+
 	// Disabled erosion checks cancellation before copying and once per copied
 	// row. The fourth check occurs in the first comparison row.
 	const TArray<int32> ComparisonHeights = {136, 136, 136, 136};

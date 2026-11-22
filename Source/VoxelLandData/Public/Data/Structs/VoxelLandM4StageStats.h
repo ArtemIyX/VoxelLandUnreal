@@ -7,6 +7,11 @@
 // heights are signed Q8 centimeters. Not a persistent world format.
 struct FVoxelLandM4StageStats
 {
+	static constexpr int32 ControlMapResolution = 32;
+	// Fixed, absolute 0..255 samples of the pre-erosion
+	// uint16 controls; no full control grids are retained for inspection.
+	bool bHasControlMaps = false;
+	uint8 ControlMaps[3][ControlMapResolution * ControlMapResolution] = {};
 	int32 SampleCount = 0;
 	uint16 ContinentalMin = 0;
 	uint16 ContinentalMax = 0;

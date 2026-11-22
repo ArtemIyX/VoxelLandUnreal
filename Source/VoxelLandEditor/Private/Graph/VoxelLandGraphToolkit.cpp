@@ -65,6 +65,7 @@
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SExpandableArea.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Containers/Ticker.h"
 #include "Widgets/Text/STextBlock.h"
@@ -618,6 +619,8 @@ void FVoxelLandGraphToolkit::Stop()
 	PreviewWork.Reset();
 	M4StageBrush.SetResourceObject(nullptr);
 	M4StageTexture = nullptr;
+	M4ControlsBrush.SetResourceObject(nullptr);
+	M4ControlsTexture = nullptr;
 	NoiseBrush.SetResourceObject(nullptr);
 	NoiseTexture = nullptr;
 	ClearPreview();
@@ -631,6 +634,7 @@ void FVoxelLandGraphToolkit::AddReferencedObjects(FReferenceCollector& Collector
 	Collector.AddReferencedObject(PreviewMaterial);
 	Collector.AddReferencedObject(NoiseTexture);
 	Collector.AddReferencedObject(M4StageTexture);
+	Collector.AddReferencedObject(M4ControlsTexture);
 	Collector.AddReferencedObject(PreviewSettings);
 	Collector.AddReferencedObject(M4PreviewConfig);
 }
@@ -969,16 +973,23 @@ FReply FVoxelLandGraphToolkit::AddParameter(EVoxelLandGraphValueType Type)
 
 TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArgs&)
 {
-	return SNew(SDockTab)
-		[SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(
-				4)[SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText)]
-			+ SVerticalBox::Slot().AutoHeight().Padding(
-				4)[SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::M4StageInspectorText)]
-			+ SVerticalBox::Slot().AutoHeight().Padding(
-				4)[SNew(SBox).WidthOverride(256).HeightOverride(256).Visibility_Lambda([this] {
-				  return M4StageTexture ? EVisibility::Visible : EVisibility::Collapsed;
-			  })[SNew(SImage).Image_Raw(this, &FVoxelLandGraphToolkit::GetM4StageBrush)]]];
+	return SNew(
+		SDockTab)[SNew(SScrollBox)
+				  + SScrollBox::Slot()
+					  [SNew(SVerticalBox)
+						  + SVerticalBox::Slot().AutoHeight().Padding(4)
+							  [SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText)]
+						  + SVerticalBox::Slot().AutoHeight().Padding(4)[SNew(STextBlock)
+								  .AutoWrapText(true)
+								  .Text_Raw(this, &FVoxelLandGraphToolkit::M4StageInspectorText)]
+						  + SVerticalBox::Slot().AutoHeight().Padding(
+							  4)[SNew(SBox).WidthOverride(256).HeightOverride(256).Visibility_Lambda([this] {
+								return M4StageTexture ? EVisibility::Visible : EVisibility::Collapsed;
+							})[SNew(SImage).Image_Raw(this, &FVoxelLandGraphToolkit::GetM4StageBrush)]]
+						  + SVerticalBox::Slot().AutoHeight().Padding(
+							  4)[SNew(SBox).WidthOverride(384).HeightOverride(128).Visibility_Lambda([this] {
+								return M4ControlsTexture ? EVisibility::Visible : EVisibility::Collapsed;
+							})[SNew(SImage).Image_Raw(this, &FVoxelLandGraphToolkit::GetM4ControlsBrush)]]]];
 }
 
 FText FVoxelLandGraphToolkit::StatusText() const
@@ -2207,6 +2218,8 @@ void FVoxelLandGraphToolkit::ClearM4StageMap()
 {
 	M4StageBrush.SetResourceObject(nullptr);
 	M4StageTexture = nullptr;
+	M4ControlsBrush.SetResourceObject(nullptr);
+	M4ControlsTexture = nullptr;
 	M4StageDiagnostics.Reset();
 }
 
@@ -3140,6 +3153,58 @@ const FSlateBrush* FVoxelLandGraphToolkit::GetM4StageBrush() const
 	return &M4StageBrush;
 }
 
+const FSlateBrush* FVoxelLandGraphToolkit::GetM4ControlsBrush() const
+{
+	return &M4ControlsBrush;
+}
+
+bool FVoxelLandGraphToolkit::PublishM4ControlMaps(const FVoxelLandM4StageStats& Stats)
+{
+	if (!Stats.bHasControlMaps)
+	{
+		return false;
+	}
+	constexpr int32 R = FVoxelLandM4StageStats::ControlMapResolution;
+	constexpr int32 Width = 3 * R;
+	UTexture2D* Texture = M4ControlsTexture.Get();
+	if (!Texture)
+	{
+		Texture = UTexture2D::CreateTransient(Width, R, PF_B8G8R8A8);
+	}
+	if (!Texture || !Texture->GetPlatformData() || Texture->GetPlatformData()->Mips.IsEmpty())
+	{
+		return false;
+	}
+	uint8* Destination = static_cast<uint8*>(Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE));
+	if (!Destination)
+	{
+		Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+		return false;
+	}
+	for (int32 Y = 0; Y < R; ++Y)
+	{
+		for (int32 Channel = 0; Channel < 3; ++Channel)
+		{
+			for (int32 X = 0; X < R; ++X)
+			{
+				const uint8 Gray = Stats.ControlMaps[Channel][Y * R + X];
+				const int32 Offset = (Y * Width + Channel * R + X) * 4;
+				Destination[Offset] = Destination[Offset + 1] = Destination[Offset + 2] = Gray;
+				Destination[Offset + 3] = 255;
+			}
+		}
+	}
+	Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+	Texture->SRGB = true;
+	Texture->NeverStream = true;
+	Texture->Filter = TF_Nearest;
+	Texture->UpdateResource();
+	M4ControlsTexture = Texture;
+	M4ControlsBrush.SetResourceObject(Texture);
+	M4ControlsBrush.SetImageSize(FVector2D(Width, R));
+	return true;
+}
+
 bool FVoxelLandGraphToolkit::PublishM4StageMap(const TArray<uint8>& Pixels)
 {
 	constexpr int32 Resolution = VoxelLandM4StageMap::Resolution;
@@ -3236,6 +3301,15 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 			if (Finished.bHasM4StageStats)
 			{
 				const FVoxelLandM4StageStats& S = Finished.M4StageStats;
+				if (PublishM4ControlMaps(S))
+				{
+					M4StageDiagnostics += TEXT(
+						"\nPre-erosion control maps below, left to right: continental, mountain, peaks. Black is 0, white is 65535; +X right, +Y up. Each is a 32×32 grid-sample thumbnail using floor indices; small features may be missed.");
+				}
+				else
+				{
+					M4StageDiagnostics += TEXT("\nPre-erosion control map image unavailable.");
+				}
 				M4StageDiagnostics += FString::Printf(
 					TEXT(
 						"\nObserved %d samples: continental [%u,%u], mountain [%u,%u], peaks [%u,%u] (normalized uint16); base height [%.2f,%.2f] cm before erosion."),

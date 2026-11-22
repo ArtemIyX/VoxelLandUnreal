@@ -22,6 +22,7 @@ class SGraphActionMenu;
 class UVoxelLandChunkComponent;
 class UMaterialInterface;
 class UTexture2D;
+struct FVoxelLandM4StageStats;
 class UVoxelLandWorldSettings;
 class UVoxelLandM4WorldConfig;
 struct FAssetData;
@@ -179,6 +180,8 @@ private:
 	void SetNoiseSlice(float Value, ETextCommit::Type CommitType);
 	const FSlateBrush* GetNoiseBrush() const;
 	const FSlateBrush* GetM4StageBrush() const;
+	const FSlateBrush* GetM4ControlsBrush() const;
+	bool PublishM4ControlMaps(const FVoxelLandM4StageStats& Stats);
 	bool PublishM4StageMap(const TArray<uint8>& Pixels);
 	bool PublishNoisePreview(const FVoxelLandPreviewWork& Finished);
 	FReply ReturnToRootPreview();
@@ -231,6 +234,8 @@ private:
 	FSlateBrush NoiseBrush;
 	TObjectPtr<UTexture2D> M4StageTexture = nullptr;
 	FSlateBrush M4StageBrush;
+	TObjectPtr<UTexture2D> M4ControlsTexture = nullptr;
+	FSlateBrush M4ControlsBrush;
 	TSoftObjectPtr<UMaterialInterface> SelectedPreviewMaterial;
 	TSoftObjectPtr<UVoxelLandWorldSettings> SelectedPreviewSettings;
 	TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;

@@ -133,6 +133,29 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 			Stats.BaseHeightMaxQ8 = FMath::Max(Stats.BaseHeightMaxQ8, BaseHeights[Index]);
 		}
 	}
+	// The immutable grid reservation already covers a fixed 128 MiB per
+	// producer/grid. These three bounded thumbnails retain exactly 3072 bytes;
+	// they do not retain any of the larger source control buffers.
+	constexpr int32 R = FVoxelLandM4StageStats::ControlMapResolution;
+	const TConstArrayView<uint16> Controls[] = {Continental, Mountain, Peaks};
+	for (int32 Y = 0; Y < R; ++Y)
+	{
+		if (IsCancelled())
+		{
+			return M4HeightPrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 control map inspection cancelled"));
+		}
+		const int32 SourceY = Domain.CellsY - (Domain.CellsY * Y / (R - 1));
+		for (int32 X = 0; X < R; ++X)
+		{
+			const int32 SourceX = Domain.CellsX * X / (R - 1);
+			const int32 SourceIndex = SourceY * Width + SourceX;
+			for (int32 Channel = 0; Channel < 3; ++Channel)
+			{
+				Stats.ControlMaps[Channel][Y * R + X] = uint8((uint32(Controls[Channel][SourceIndex]) + 128) / 257);
+			}
+		}
+	}
+	Stats.bHasControlMaps = true;
 	return VoxelLandM4Prepass::Generate(Domain, BaseHeights, WorldSeed, StageId, Salt, DropletCount, Erosion, OutGrid,
 		OutHash, IsCancelled, Lease, &Stats);
 }

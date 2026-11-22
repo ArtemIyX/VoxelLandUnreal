@@ -5,6 +5,7 @@
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM4FixedLattice.h"
 #include "Generation/VoxelLandM4Domain.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Hash/xxhash.h"
@@ -40,7 +41,14 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 	const FVoxelLandM4WorldSnapshot& S, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if ((Version != 1 && Version != 2 && Version != 3 && Version != 4) || (Version < 4 && S.HeightStage.Version != 0)
+	if ((Version != 1 && Version != 2 && Version != 3 && Version != 4 && Version != 5)
+		|| (Version < 4 && S.HeightStage.Version != 0)
+		|| (Version < 5 && S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat)
+		|| (S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
+			&& S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
+		|| (S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
+			&& (S.Domain.Mode != EVoxelLandM4DomainMode::Unlimited || S.Domain.bGlobalErosion || S.bOverhangEnabled
+				|| S.HeightDetail.bEnabled))
 		|| IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1 || S.VoxelSizeCm > 2000000
 		|| (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && S.VoxelSizeCm > 134217)
 		|| VoxelLandM4Domain::Validate(S.Domain) || S.Smooth.Version != 1 || !FMath::IsFinite(S.Smooth.Strength)
@@ -75,6 +83,23 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		if (!FVoxelLandProgramCodec::Load(Channels[I]->Source, Channels[I]->Payload, Programs[I], Error))
 		{
 			return false;
+		}
+		if (S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice)
+		{
+			FVoxelLandGeneratorSettings Settings;
+			Settings.Program = Programs[I];
+			VoxelLandM4OverrideValidation::BuildProfile(*Channels[I], S.VoxelSizeCm, Settings.Profile);
+			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+			if (const FVoxelLandError Failure = FVoxelLandGenerator::Create(Settings, Generator))
+			{
+				Error = Failure.Message;
+				return false;
+			}
+			if (const FVoxelLandError Failure = VoxelLandM4FixedLattice::Validate(*Generator))
+			{
+				Error = Failure.Message;
+				return false;
+			}
 		}
 	}
 	// Unlimited uses the same control program/curve encoding but no global grid.
@@ -158,6 +183,11 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		M4WorldIdentityGuid(W, S.HeightStage.MountainInputId);
 		M4WorldIdentityGuid(W, S.HeightStage.PeaksInputId);
 	}
+	if (Version >= 5)
+	{
+		W.U8(uint8(S.UnlimitedBackend));
+		W.U32(1); // fixed-lattice numeric/noise contract
+	}
 	if (W.Bytes.Num() > 8 * 1024 * 1024)
 	{
 		Error = TEXT("M4 world identity exceeds its supported size");
@@ -174,14 +204,16 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 bool VoxelLandM4WorldIdentity::Capture(
 	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
-	return CaptureVersion(S, S.HeightStage.Version == 1 ? 4 : 3, Out, Error);
+	return CaptureVersion(S,
+		S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice ? 5 : (S.HeightStage.Version == 1 ? 4 : 3),
+		Out, Error);
 }
 
 bool VoxelLandM4WorldIdentity::Matches(
 	const FVoxelLandM4IdentityRecord& Record, const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error)
 {
 	if ((Record.FormatVersion != 1 && Record.FormatVersion != 2 && Record.FormatVersion != 3
-			&& Record.FormatVersion != 4)
+			&& Record.FormatVersion != 4 && Record.FormatVersion != 5)
 		|| Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > 8 * 1024 * 1024
 		|| Record.FingerprintBits != M4WorldIdentityHash(Record.CanonicalBytes))
 	{

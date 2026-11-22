@@ -1,6 +1,7 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4Control.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
+#include "Generation/VoxelLandM4FixedLattice.h"
 #include "Generation/VoxelLandM4Slope.h"
 #include "Generation/VoxelLandM4Overhang.h"
 #include "Generation/VoxelLandM4ControlGrid.h"
@@ -184,6 +185,14 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGeneratorSettings& Settings,
 	const FVoxelLandM4UnlimitedConfig& Config, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
+	if ((Config.Backend != EVoxelLandM4UnlimitedBackend::LegacyFloat
+			&& Config.Backend != EVoxelLandM4UnlimitedBackend::FixedLattice)
+		|| (Config.Backend == EVoxelLandM4UnlimitedBackend::FixedLattice
+			&& (Config.Overhang.Displacement.bEnabled || Config.HeightDetail.bEnabled)))
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter,
+			TEXT("Fixed lattice requires overhang and height detail to be disabled"));
+	}
 	const auto& Detail = Config.HeightDetail;
 	if (Detail.AlgorithmVersion != 1 || Detail.AmplitudeQ8 < 0 || Detail.AmplitudeQ8 > 1280000
 		|| !FMath::IsFinite(Detail.FrequencyPerCm) || Detail.FrequencyPerCm <= 0.f || Detail.FrequencyPerCm > 1.f
@@ -229,7 +238,10 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 			return Fail(
 				EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local controls must be ordinary VM generators"));
 		}
-		if (FVoxelLandError Error = VoxelLandM4ControlGrid::ValidateProgram(Control->GetProgram()))
+		const FVoxelLandError Error = Config.Backend == EVoxelLandM4UnlimitedBackend::FixedLattice
+										? VoxelLandM4FixedLattice::Validate(*Control)
+										: VoxelLandM4ControlGrid::ValidateProgram(Control->GetProgram());
+		if (Error)
 		{
 			return Error;
 		}
@@ -547,6 +559,11 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	W.VM = SelectedVM;
 	if (M4Unlimited)
 	{
+		if (M4Unlimited->Backend == EVoxelLandM4UnlimitedBackend::FixedLattice)
+		{
+			OutWorker = MoveTemp(Worker);
+			return {};
+		}
 		const FVoxelLandGenerator* Controls[] = {M4Unlimited->ContinentalGenerator.Get(),
 			M4Unlimited->MountainGenerator.Get(), M4Unlimited->PeaksGenerator.Get()};
 		for (int32 Index = 0; Index < 3; ++Index)
@@ -1091,8 +1108,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 				EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("M4 local generation requires a worker thread"));
 		}
 		if (!Worker.Impl || Worker.Impl->Owner.Get() != this
-			|| Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId() || !Worker.Impl->M4UnlimitedWorkers[0]
-			|| !Worker.Impl->M4UnlimitedWorkers[1] || !Worker.Impl->M4UnlimitedWorkers[2])
+			|| Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId()
+			|| (M4Unlimited->Backend == EVoxelLandM4UnlimitedBackend::LegacyFloat
+				&& (!Worker.Impl->M4UnlimitedWorkers[0] || !Worker.Impl->M4UnlimitedWorkers[1]
+					|| !Worker.Impl->M4UnlimitedWorkers[2])))
 		{
 			return Fail(EVoxelLandErrorCode::InvalidContext,
 				TEXT("M4 local worker belongs to a different generator or thread"));
@@ -1100,6 +1119,14 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 		if (FVoxelLandError Error = ValidateM4ChunkDemand(Key))
 		{
 			return Error;
+		}
+		if (M4Unlimited->Backend == EVoxelLandM4UnlimitedBackend::FixedLattice)
+		{
+			return VoxelLandM4Unlimited::GenerateFixedChunk(*M4UnlimitedSettings, M4Unlimited->Overhang,
+				M4Unlimited->bNormalizeSlope, M4Unlimited->BaseQ8, *M4Unlimited->ContinentalGenerator,
+				*M4Unlimited->ContinentalCurve, *M4Unlimited->MountainGenerator, *M4Unlimited->MountainCurve,
+				*M4Unlimited->PeaksGenerator, *M4Unlimited->PeaksCurve, Key, OutChunk, IsCancelled,
+				M4Unlimited->SmoothOverride, M4Unlimited->HeightDetail);
 		}
 		return VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, M4Unlimited->Overhang,
 			M4Unlimited->bNormalizeSlope, M4Unlimited->BaseQ8, *M4Unlimited->ContinentalGenerator,
@@ -1136,8 +1163,10 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunk
 			|| !VoxelLandM4Control::LatticePositionCm(Y - 3, Size, MinY)
 			|| !VoxelLandM4Control::LatticePositionCm(Y + 35, Size, MaxY)
 			|| !VoxelLandM4Control::LatticePositionCm(Z - 2, Size, MinZ)
-			|| !VoxelLandM4Control::LatticePositionCm(Z + 34, Size, MaxZ) || MinX < -16777216 || MaxX > 16777216
-			|| MinY < -16777216 || MaxY > 16777216 || MinZ < -2000000 || MaxZ > 2000000)
+			|| !VoxelLandM4Control::LatticePositionCm(Z + 34, Size, MaxZ)
+			|| (M4Unlimited->Backend == EVoxelLandM4UnlimitedBackend::LegacyFloat
+				&& (MinX < -16777216 || MaxX > 16777216 || MinY < -16777216 || MaxY > 16777216))
+			|| MinZ < -2000000 || MaxZ > 2000000)
 		{
 			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate,
 				TEXT("M4 local terrain demand exceeds supported exact coordinates"));

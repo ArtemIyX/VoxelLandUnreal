@@ -27,6 +27,14 @@ class FVoxelLandM4CurveLut;
 // OutChunk remains unchanged. No world streaming integration is provided here.
 namespace VoxelLandM4Unlimited
 {
+// Fixed-lattice version evaluates the same curves using integer-coordinate controls.
+VOXELLANDALGO_API FVoxelLandError GenerateFixedChunk(const FVoxelLandGeneratorSettings& FinalSettings,
+	const FVoxelLandM4OverhangConfig& Overhang, bool bNormalizeSlope, int32 BaseQ8,
+	const FVoxelLandGenerator& ContinentalGenerator, const FVoxelLandM4CurveLut& ContinentalCurve,
+	const FVoxelLandGenerator& MountainGenerator, const FVoxelLandM4CurveLut& MountainCurve,
+	const FVoxelLandGenerator& PeaksGenerator, const FVoxelLandM4CurveLut& PeaksCurve, const FVoxelLandChunkKey& Key,
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
+	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail);
 VOXELLANDALGO_API FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	const FVoxelLandM4OverhangConfig& Overhang, bool bNormalizeSlope, int32 BaseQ8,
 	const FVoxelLandGenerator& ContinentalGenerator, FVoxelLandWorkerContext& ContinentalWorker,

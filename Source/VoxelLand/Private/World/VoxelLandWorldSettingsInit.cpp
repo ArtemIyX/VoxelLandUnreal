@@ -311,34 +311,6 @@ TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ReserveM4Budget()
 	return MakeShared<FM4GridReservation, ESPMode::ThreadSafe>();
 }
 
-void CopyM4Overrides(const FVoxelLandM4ControlSnapshot& Channel, int32 VoxelSizeCm, FVoxelLandZoneProfile& Profile)
-{
-	Profile.VoxelSizeCm = float(VoxelSizeCm);
-	for (const FVoxelLandParameterOverride& Override : Channel.Overrides)
-	{
-		const FVoxelLandSerializedParameter* Parameter =
-			Channel.Payload.Parameters.FindByPredicate([&Override](const FVoxelLandSerializedParameter& Candidate) {
-				return Candidate.Id == Override.ParameterId;
-			});
-		if (!Parameter)
-		{
-			continue;
-		}
-		switch (Override.Type)
-		{
-			case EVoxelLandGraphValueType::Float:
-				Profile.FloatOverrides.Add(Parameter->Name, Override.FloatValue);
-				break;
-			case EVoxelLandGraphValueType::Int32:
-				Profile.IntOverrides.Add(Parameter->Name, Override.IntValue);
-				break;
-			case EVoxelLandGraphValueType::Bool:
-				Profile.BoolOverrides.Add(Parameter->Name, Override.BoolValue);
-				break;
-		}
-	}
-}
-
 template <typename T> bool M4StructArraysEqual(const TArray<T>& Left, const TArray<T>& Right)
 {
 	if (Left.Num() != Right.Num())
@@ -743,6 +715,15 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		OutError = TEXT("Unsupported M4 domain mode");
 		return false;
 	}
+	if ((Snapshot.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
+			&& Snapshot.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
+		|| (Snapshot.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
+			&& (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Unlimited || Snapshot.Domain.bGlobalErosion
+				|| Snapshot.bOverhangEnabled || Snapshot.HeightDetail.bEnabled)))
+	{
+		OutError = TEXT("M4 fixed lattice requires unlimited mode and disables erosion, overhang, and height detail");
+		return false;
+	}
 	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && Snapshot.Domain.bGlobalErosion)
 	{
 		OutError = TEXT("Unlimited M4 worlds cannot run global erosion");
@@ -790,7 +771,7 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 			OutError = Failure.Message;
 			return false;
 		}
-		CopyM4Overrides(*Channels[Index], Snapshot.VoxelSizeCm, Profiles[Index]);
+		VoxelLandM4OverrideValidation::BuildProfile(*Channels[Index], Snapshot.VoxelSizeCm, Profiles[Index]);
 		FVoxelLandGeneratorSettings Settings;
 		Settings.Program = Programs[Index];
 		Settings.WorldSeed = VoxelLandDeterminism::DeriveNodeSeed(uint64(Snapshot.Seed), ChannelIds[Index], 0);
@@ -821,6 +802,7 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
 	{
 		FVoxelLandM4UnlimitedConfig Unlimited;
+		Unlimited.Backend = Snapshot.UnlimitedBackend;
 		Unlimited.ContinentalGenerator = Generators[0];
 		Unlimited.MountainGenerator = Generators[1];
 		Unlimited.PeaksGenerator = Generators[2];

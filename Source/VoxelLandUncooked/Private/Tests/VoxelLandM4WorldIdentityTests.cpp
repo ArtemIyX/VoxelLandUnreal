@@ -27,7 +27,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	bool bBuilt = false, bStable = false, bSeed = false, bShape = false, bDetail = false;
 	bool bMaterial = false, bUnlimited = false, bVersion = false, bCorrupt = false, bRoundTrip = false;
 	bool bInvalidOverride = false, bLegacyExact = false, bLegacyMatch = false;
-	bool bInvalidBake = false;
+	bool bInvalidBake = false, bFixedIdentity = false;
 	bool bCanonicalReordered = false, bLegacyOrderSensitive = false;
 	bool bSourceBound = false, bV2Compatible = false, bPrepassReused = false;
 	FString Error;
@@ -201,6 +201,13 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 		bUnlimited = VoxelLandM4WorldIdentity::Capture(S, Unlimited, Error)
 				  && VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error)
 				  && !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+		S.UnlimitedBackend = EVoxelLandM4UnlimitedBackend::FixedLattice;
+		FVoxelLandM4IdentityRecord Fixed, WrongVersion;
+		bFixedIdentity = VoxelLandM4WorldIdentity::Capture(S, Fixed, Error) && Fixed.FormatVersion == 5
+					  && VoxelLandM4WorldIdentity::Matches(Fixed, S, Error)
+					  && !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error)
+					  && !VoxelLandM4WorldIdentity::CaptureVersion(S, 4, WrongVersion, Error);
+		S.UnlimitedBackend = EVoxelLandM4UnlimitedBackend::LegacyFloat;
 		const int32 SupportedVersion = Unlimited.FormatVersion;
 		Unlimited.FormatVersion = 999;
 		bVersion = !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error);
@@ -224,6 +231,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("slope changes reject reuse"), bShape);
 	TestTrue(TEXT("height detail changes reject reuse"), bDetail);
 	TestTrue(TEXT("material does not affect identity"), bMaterial);
+	TestTrue(TEXT("fixed lattice has distinct versioned identity"), bFixedIdentity);
 	TestTrue(TEXT("unlimited identity is distinct and matches itself"), bUnlimited);
 	TestTrue(TEXT("unknown record versions fail"), bVersion);
 	TestTrue(TEXT("corrupt bytes fail"), bCorrupt);

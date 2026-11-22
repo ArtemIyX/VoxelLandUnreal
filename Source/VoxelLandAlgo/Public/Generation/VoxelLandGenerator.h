@@ -99,6 +99,10 @@ public:
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
+	// Immutable resolved values used by the versioned fixed-lattice control backend.
+	TConstArrayView<float> GetResolvedFloatParameters() const { return FloatParameters; }
+	TConstArrayView<int32> GetResolvedIntParameters() const { return IntParameters; }
+	TConstArrayView<uint64> GetResolvedSeeds() const { return FullSeeds; }
 	// Finite M4 height grids remain immutable and retain their resource lease.
 	// Returns null for M3 and chunk-local M4 generators.
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> GetM4HeightGrid() const { return M4HeightGrid; }

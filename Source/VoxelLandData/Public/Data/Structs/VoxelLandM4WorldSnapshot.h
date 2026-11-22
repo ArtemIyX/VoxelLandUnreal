@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM4ControlSnapshot.h"
+#include "Data/Enums/VoxelLandM4UnlimitedBackend.h"
 #include "Data/Structs/VoxelLandM4DomainSettings.h"
 #include "Data/Structs/VoxelLandM4ErosionSettings.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
@@ -27,6 +28,8 @@ struct VOXELLANDDATA_API FVoxelLandM4WorldSnapshot
 	FVoxelLandM4ControlSnapshot Peaks;
 	UPROPERTY()
 	FVoxelLandM4DomainSettings Domain;
+	UPROPERTY()
+	EVoxelLandM4UnlimitedBackend UnlimitedBackend = EVoxelLandM4UnlimitedBackend::LegacyFloat;
 	UPROPERTY()
 	FVoxelLandM4ErosionSettings Erosion;
 	UPROPERTY()

@@ -544,6 +544,15 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 		OutError = TEXT("M4 erosion configuration is invalid.");
 		return false;
 	}
+	if ((UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
+			&& UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
+		|| (UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
+			&& (!bUnlimited || bGlobalErosion || bOverhangEnabled || HeightDetail.bEnabled)))
+	{
+		OutError =
+			TEXT("M4 fixed lattice requires unlimited mode, global erosion off, overhang off and height detail off.");
+		return false;
+	}
 	if (bUnlimited && bGlobalErosion)
 	{
 		OutError = TEXT("Unlimited M4 worlds require global erosion to be disabled.");
@@ -603,6 +612,7 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 	S.Seed = Seed;
 	S.VoxelSizeCm = VoxelSizeCm;
 	S.BaseHeightQ8 = BaseHeightQ8;
+	S.UnlimitedBackend = UnlimitedBackend;
 	S.Domain.Mode = bUnlimited ? EVoxelLandM4DomainMode::Unlimited : EVoxelLandM4DomainMode::Finite;
 	S.Domain.bGlobalErosion = bGlobalErosion;
 	S.Domain.OriginXCm = OriginXCm;
@@ -650,8 +660,9 @@ bool UVoxelLandM4WorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S
 	const bool bStageMatches = bAnyHeight ? C && C == M && C == P && S.HeightStage.Version == 1
 												&& C->HeightOutputId == S.HeightStage.OutputNodeId
 										  : S.HeightStage.Version == 0 && !S.HeightStage.OutputNodeId.IsValid();
-	return bStageMatches && IsInGameThread() && FormatVersion == S.FormatVersion && Seed == S.Seed
-		&& VoxelSizeCm == S.VoxelSizeCm && BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
+	return bStageMatches && IsInGameThread() && UnlimitedBackend == S.UnlimitedBackend
+		&& FormatVersion == S.FormatVersion && Seed == S.Seed && VoxelSizeCm == S.VoxelSizeCm
+		&& BaseHeightQ8 == S.BaseHeightQ8 && bNormalizeSlope == S.bNormalizeSlope
 		&& HeightDetail.bEnabled == S.HeightDetail.bEnabled
 		&& HeightDetail.AlgorithmVersion == S.HeightDetail.AlgorithmVersion
 		&& HeightDetail.AmplitudeQ8 == S.HeightDetail.AmplitudeQ8

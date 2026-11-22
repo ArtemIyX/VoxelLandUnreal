@@ -18,6 +18,8 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4ControlGrid.h"
+#include "Generation/VoxelLandM4FixedLattice.h"
+#include "World/VoxelLandM4OverrideValidation.h"
 #include "Generation/VoxelLandM4CurveBake.h"
 #include "Async/Async.h"
 #include "UObject/ObjectSaveContext.h"
@@ -149,6 +151,27 @@ bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 			{
 				Error = Validation.Message;
 				return false;
+			}
+			if (Snapshot.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice)
+			{
+				if (!VoxelLandM4OverrideValidation::Validate(Channel, Error))
+				{
+					return false;
+				}
+				FVoxelLandGeneratorSettings Settings;
+				Settings.Program = Program;
+				VoxelLandM4OverrideValidation::BuildProfile(Channel, Snapshot.VoxelSizeCm, Settings.Profile);
+				TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+				if (const FVoxelLandError Failure = FVoxelLandGenerator::Create(Settings, Generator))
+				{
+					Error = Failure.Message;
+					return false;
+				}
+				if (const FVoxelLandError Failure = VoxelLandM4FixedLattice::Validate(*Generator))
+				{
+					Error = Failure.Message;
+					return false;
+				}
 			}
 			TArray<FVoxelLandM4CurveKey> Keys;
 			Keys.Reserve(Channel.CurveKeys.Num());

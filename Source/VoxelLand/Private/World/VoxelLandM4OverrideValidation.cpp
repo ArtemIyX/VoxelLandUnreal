@@ -1,5 +1,6 @@
 #include "World/VoxelLandM4OverrideValidation.h"
 #include "Data/Structs/VoxelLandM4ControlSnapshot.h"
+#include "Data/Structs/VoxelLandZoneProfile.h"
 
 bool VoxelLandM4OverrideValidation::Validate(const FVoxelLandM4ControlSnapshot& Channel, FString& Error)
 {
@@ -62,4 +63,36 @@ bool VoxelLandM4OverrideValidation::Validate(const FVoxelLandM4ControlSnapshot& 
 	}
 	Error.Reset();
 	return true;
+}
+
+void VoxelLandM4OverrideValidation::BuildProfile(
+	const FVoxelLandM4ControlSnapshot& Channel, int32 VoxelSizeCm, FVoxelLandZoneProfile& Profile)
+{
+	Profile = FVoxelLandZoneProfile();
+	Profile.VoxelSizeCm = float(VoxelSizeCm);
+	for (const FVoxelLandParameterOverride& Override : Channel.Overrides)
+	{
+		const FVoxelLandSerializedParameter* Parameter =
+			Channel.Payload.Parameters.FindByPredicate([&Override](const FVoxelLandSerializedParameter& Candidate) {
+				return Candidate.Id == Override.ParameterId;
+			});
+		if (!Parameter)
+		{
+			continue;
+		}
+		switch (Override.Type)
+		{
+			case EVoxelLandGraphValueType::Float:
+				Profile.FloatOverrides.Add(Parameter->Name, Override.FloatValue);
+				break;
+			case EVoxelLandGraphValueType::Int32:
+				Profile.IntOverrides.Add(Parameter->Name, Override.IntValue);
+				break;
+			case EVoxelLandGraphValueType::Bool:
+				Profile.BoolOverrides.Add(Parameter->Name, Override.BoolValue);
+				break;
+			default:
+				break;
+		}
+	}
 }

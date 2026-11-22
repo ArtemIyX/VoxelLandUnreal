@@ -25,7 +25,7 @@ void UVoxelLandM4WorldConfig::EnforceCookPreparation(FArchive& Ar) const
 {
 	// Only reject the actual export write. Harvest and other archive traversals
 	// may serialize the object but are not the package writer's error channel.
-	const FObjectSavePackageSerializeContext* Context = Ar.GetSavePackageSerializeContext();
+	const FObjectSavePackageSerializeContext* Context = Ar.GetArchiveState().GetSavePackageSerializeContext();
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
 	    && Context->GetPhase() == EObjectSaveContextPhase::Write && !bCookPreparationSucceeded)
 	{

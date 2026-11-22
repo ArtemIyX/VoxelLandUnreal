@@ -386,7 +386,7 @@ bool FVoxelLandM4VerifyExampleAssets::RunTest(const FString& Parameters)
 		{
 			return false;
 		}
-		if (!TestNotNull(TEXT("saved graph retains editor layout"), Graphs[I]->EditorGraph))
+		if (!TestNotNull(TEXT("saved graph retains editor layout"), Graphs[I]->EditorGraph.Get()))
 		{
 			return false;
 		}

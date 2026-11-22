@@ -117,7 +117,7 @@ void UVoxelLandM4ControlGraph::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
 #if WITH_EDITOR
-	const FObjectSavePackageSerializeContext* Context = Ar.GetSavePackageSerializeContext();
+	const FObjectSavePackageSerializeContext* Context = Ar.GetArchiveState().GetSavePackageSerializeContext();
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
 	    && Context->GetPhase() == EObjectSaveContextPhase::Write && !bCookPreparationSucceeded)
 	{

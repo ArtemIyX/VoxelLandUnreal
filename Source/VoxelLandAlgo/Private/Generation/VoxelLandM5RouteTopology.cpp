@@ -47,8 +47,9 @@ bool FeatureIsNode(const FVoxelLandM5RouteFeatureRef& Ref, const FVoxelLandM5End
 }
 }
 
-FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::Validate(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
-	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5RegionCoord& Region,
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
 {
 	if (IsCancelled())
@@ -856,6 +857,23 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::Validate(const FVoxelLandM5
 	if (Queue.Num() != Plan.Routes.Num())
 	{
 		return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Route graph is disconnected"));
+	}
+	if (IsCancelled())
+	{
+		return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
+	}
+	return FVoxelLandM5Diagnostic();
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::Validate(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
+	const FVoxelLandM5Diagnostic Result =
+		ValidateStructure(Settings, WorldSeed, Region, Candidate, Budget, IsCancelled);
+	if (Result.Code != EVoxelLandM5ErrorCode::None)
+	{
+		return Result;
 	}
 	if (IsCancelled())
 	{

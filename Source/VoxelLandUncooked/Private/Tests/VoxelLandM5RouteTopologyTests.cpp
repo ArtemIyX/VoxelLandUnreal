@@ -196,7 +196,7 @@ FVoxelLandM5CavePlan FullRouteFixture()
 	return P;
 }
 FVoxelLandM5Diagnostic ValidateFixture(
-	const FVoxelLandM5CavePlan& Plan, TFunctionRef<bool()> Cancel, int64 Work = 10000000)
+	const FVoxelLandM5CavePlan& Plan, TFunctionRef<bool()> Cancel, int64 Work = 10000000, bool bStructureOnly = false)
 {
 	FVoxelLandM5CaveSettings S;
 	S.StageId = FGuid(1, 2, 3, 4);
@@ -214,6 +214,11 @@ FVoxelLandM5Diagnostic ValidateFixture(
 		FVoxelLandM5Diagnostic D;
 		D.Code = EVoxelLandM5ErrorCode::BudgetExceeded;
 		return D;
+	}
+	if (bStructureOnly)
+	{
+		return VoxelLand::M5::RouteTopology::ValidateStructure(
+			S, 42, Plan.Region, Candidate.ToSharedRef(), Budget.ToSharedRef(), Cancel);
 	}
 	return VoxelLand::M5::RouteTopology::Validate(
 		S, 42, Plan.Region, Candidate.ToSharedRef(), Budget.ToSharedRef(), Cancel);
@@ -240,9 +245,13 @@ bool FVoxelLandM5RouteTopologyTest::RunTest(const FString& Parameters)
 		EVoxelLandM5ErrorCode::Unproven);
 	const auto Full = FullRouteFixture();
 	Expected(TEXT("all structural features covered; geometry unproven"), Full, EVoxelLandM5ErrorCode::Unproven);
+	TestTrue(TEXT("structural-only API accepts the complete fixture"),
+		ValidateFixture(Full, Never, 10000000, true).Code == EVoxelLandM5ErrorCode::None);
 	auto Missing = Full;
 	Missing.Junctions[0].bHasCenter = false;
 	Expected(TEXT("junction needs a center for segment chains"), Missing, EVoxelLandM5ErrorCode::InconsistentTopology);
+	TestTrue(TEXT("structural-only API rejects the missing center"),
+		ValidateFixture(Missing, Never, 10000000, true).Code == EVoxelLandM5ErrorCode::InconsistentTopology);
 	Missing = Full;
 	Missing.Junctions[0].CenterCm.Z = 0;
 	Expected(
@@ -307,10 +316,14 @@ bool FVoxelLandM5RouteTopologyTest::RunTest(const FString& Parameters)
 	Expected(TEXT("zero length leg"), P, EVoxelLandM5ErrorCode::InconsistentTopology);
 	TestTrue(TEXT("insufficient work fails before validation"),
 		ValidateFixture(Good, Never, 1).Code == EVoxelLandM5ErrorCode::BudgetExceeded);
+	TestTrue(TEXT("structural validation shares the work limit"),
+		ValidateFixture(Good, Never, 1, true).Code == EVoxelLandM5ErrorCode::BudgetExceeded);
 	const auto Cancel = [] {
 		return true;
 	};
 	TestTrue(TEXT("cancellation is explicit"), ValidateFixture(Good, Cancel).Code == EVoxelLandM5ErrorCode::Cancelled);
+	TestTrue(TEXT("structural cancellation is explicit"),
+		ValidateFixture(Good, Cancel, 10000000, true).Code == EVoxelLandM5ErrorCode::Cancelled);
 	return true;
 }
 #endif

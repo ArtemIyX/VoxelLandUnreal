@@ -8,6 +8,12 @@ After building an editor target, launch Unreal Editor with `-VoxelLandCreateM4Ex
 
 In a fresh editor process, pass `-VoxelLandVerifyM4Examples` and run `VoxelLand.M4.Example.VerifyAssets` to check that the saved assets, graph layouts, references, configuration, and baked curves reopen. `VoxelLand.M4.Example.Authoring` exercises transient creation and curve staleness without writing packages. These tests have not been run for this revision.
 
+## Generate a shared height-output example
+
+To generate an editable shared height graph and config at `/Game/VoxelLandExamples/M4/DA_M4_HeightGraph` and `/Game/VoxelLandExamples/M4/DA_M4_HeightWorld`, launch the editor with `-VoxelLandCreateM4HeightExamples` and run `VoxelLand.M4.Example.CreateHeightAssets`. The graph has three independently seeded fBm branches connected to one M4 Height Output; the config adds curves, finite erosion, height detail and overhang. The generator checks both paths and refuses to overwrite existing packages. A write failure can leave a partial pair, so inspect any created files before retrying. The assets are generated only on explicit opt-in; they are not supplied as prebuilt files. A successful save or validation does not itself prove an actual cook.
+
+Run `VoxelLand.M4.Example.HeightAuthoring` to validate the transient example. To check saved assets, launch a fresh editor with `-VoxelLandVerifyM4HeightExamples` and run `VoxelLand.M4.Example.VerifyHeightAssets`. These tests have not been run for this revision.
+
 ## Use one graph-authored height output
 
 Create a **VoxelLand M4 Control Graph** asset. A new graph starts with an **M4 Height Output** node containing named Continental, Mountain and Peaks inputs. Connect each input to a 2D control expression; expressions may share upstream nodes. Assign this same graph to all three controls in the M4 world config and edit the three curves on the config. Each input is compiled as its own program with an independent channel seed namespace. The fixed version 1 height stage adds the configured base height and the three curve outputs in continental, mountain, peaks order before erosion; it does not support arbitrary height arithmetic.

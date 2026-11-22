@@ -9,6 +9,7 @@
 #include "Hash/xxhash.h"
 #include "World/VoxelLandM4PrepassIdentity.h"
 #include "World/VoxelLandM4OverrideValidation.h"
+#include "World/VoxelLandM4CurveValidation.h"
 #include "World/VoxelLandM4Preparation.h"
 
 namespace
@@ -31,29 +32,6 @@ int64 M4WorldIdentityHash(const TArray<uint8>& Bytes)
 	int64 Bits = 0;
 	FMemory::Memcpy(&Bits, &Hash, sizeof(Bits));
 	return Bits;
-}
-bool M4WorldIdentityCurveValid(const FVoxelLandM4ControlSnapshot& C)
-{
-	const auto& Curve = C.CookedCurve;
-	if (Curve.BakeVersion != 1 || Curve.SamplesQ8.Num() != 4097 || Curve.SourceKeys.Num() < 2
-		|| Curve.SourceKeys.Num() != C.CurveKeys.Num())
-	{
-		return false;
-	}
-	for (int32 I = 0; I < Curve.SourceKeys.Num(); ++I)
-	{
-		if (Curve.SourceKeys[I].InputQ16 != C.CurveKeys[I].InputQ16
-			|| Curve.SourceKeys[I].OutputQ8 != C.CurveKeys[I].OutputQ8)
-		{
-			return false;
-		}
-	}
-	FCanonicalWriter W;
-	for (int32 V : Curve.SamplesQ8)
-	{
-		W.U32(uint32(V));
-	}
-	return M4WorldIdentityHash(W.Bytes) == Curve.SamplesHash;
 }
 }
 
@@ -84,9 +62,8 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		{
 			return false;
 		}
-		if (!M4WorldIdentityCurveValid(*Channels[I]))
+		if (!VoxelLandM4CurveValidation::Validate(*Channels[I], Error))
 		{
-			Error = TEXT("M4 identity requires current, intact baked curves");
 			return false;
 		}
 		if (!FVoxelLandProgramCodec::Load(Channels[I]->Source, Channels[I]->Payload, Programs[I], Error))

@@ -26,6 +26,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	bool bBuilt = false, bStable = false, bSeed = false, bShape = false, bDetail = false;
 	bool bMaterial = false, bUnlimited = false, bVersion = false, bCorrupt = false, bRoundTrip = false;
 	bool bInvalidOverride = false, bLegacyExact = false, bLegacyMatch = false;
+	bool bInvalidBake = false;
 	bool bCanonicalReordered = false, bLegacyOrderSensitive = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
@@ -126,6 +127,24 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 		bInvalidOverride = !VoxelLandM4WorldIdentity::Capture(S, Invalid, Error)
 						&& !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
 		S.Continental.Overrides.Pop();
+		++S.Peaks.CookedCurve.SamplesQ8[100];
+		FCanonicalWriter TamperedCurve;
+		for (int32 Value : S.Peaks.CookedCurve.SamplesQ8)
+		{
+			TamperedCurve.U32(uint32(Value));
+		}
+		uint64 TamperedHash = FXxHash64::HashBuffer(TamperedCurve.Bytes.GetData(), TamperedCurve.Bytes.Num()).Hash;
+		FMemory::Memcpy(&S.Peaks.CookedCurve.SamplesHash, &TamperedHash, sizeof(TamperedHash));
+		bInvalidBake = !VoxelLandM4WorldIdentity::Capture(S, Invalid, Error)
+					&& !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+		--S.Peaks.CookedCurve.SamplesQ8[100];
+		FCanonicalWriter OriginalCurve;
+		for (int32 Value : S.Peaks.CookedCurve.SamplesQ8)
+		{
+			OriginalCurve.U32(uint32(Value));
+		}
+		TamperedHash = FXxHash64::HashBuffer(OriginalCurve.Bytes.GetData(), OriginalCurve.Bytes.Num()).Hash;
+		FMemory::Memcpy(&S.Peaks.CookedCurve.SamplesHash, &TamperedHash, sizeof(TamperedHash));
 		TArray<uint8> Stored;
 		FMemoryWriter Writer(Stored);
 		FVoxelLandM4IdentityRecord::StaticStruct()->SerializeItem(Writer, &Record, nullptr);
@@ -163,6 +182,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("v2 identity ignores override order"), bCanonicalReordered);
 	TestTrue(TEXT("v1 identity retains original override order"), bLegacyOrderSensitive);
 	TestTrue(TEXT("capture and matching reject unknown overrides"), bInvalidOverride);
+	TestTrue(TEXT("capture and matching reject a mismatched curve despite its updated hash"), bInvalidBake);
 	TestTrue(TEXT("serialized identity matches after round trip"), bRoundTrip);
 	TestTrue(TEXT("seed changes reject reuse"), bSeed);
 	TestTrue(TEXT("slope changes reject reuse"), bShape);

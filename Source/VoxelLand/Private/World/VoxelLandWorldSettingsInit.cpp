@@ -3,6 +3,7 @@
 #include "World/VoxelLandM4PrepassCoordinator.h"
 #include "World/VoxelLandM4PrepassIdentity.h"
 #include "World/VoxelLandM4OverrideValidation.h"
+#include "World/VoxelLandM4CurveValidation.h"
 #include "World/VoxelLandM4SavedWorldPreflight.h"
 #include "World/VoxelLandM4WorldIdentity.h"
 
@@ -16,8 +17,6 @@
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Data/Structs/VoxelLandM4SavedWorld.h"
-#include "Data/Structs/VoxelLandCanonicalWriter.h"
-#include "Hash/xxhash.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
 #include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandWorldState.h"
@@ -722,33 +721,13 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		{
 			return false;
 		}
-		const FVoxelLandM4CookedCurve& Curve = Channel->CookedCurve;
-		if (Curve.BakeVersion != 1 || Curve.SamplesQ8.Num() != 4097 || Curve.SourceKeys.Num() < 2
-			|| Curve.SourceKeys.Num() != Channel->CurveKeys.Num())
+		if (IsCancelled())
 		{
-			OutError = TEXT("M4 baked curve is missing or unsupported");
+			OutError = TEXT("M4 curve validation cancelled");
 			return false;
 		}
-		for (int32 I = 0; I < Curve.SourceKeys.Num(); ++I)
+		if (!VoxelLandM4CurveValidation::Validate(*Channel, OutError))
 		{
-			if (Curve.SourceKeys[I].InputQ16 != Channel->CurveKeys[I].InputQ16
-				|| Curve.SourceKeys[I].OutputQ8 != Channel->CurveKeys[I].OutputQ8)
-			{
-				OutError = TEXT("M4 baked curve is stale");
-				return false;
-			}
-		}
-		FCanonicalWriter Writer;
-		for (int32 Value : Curve.SamplesQ8)
-		{
-			Writer.U32(uint32(Value));
-		}
-		const uint64 Hash = FXxHash64::HashBuffer(Writer.Bytes.GetData(), Writer.Bytes.Num()).Hash;
-		int64 Bits = 0;
-		FMemory::Memcpy(&Bits, &Hash, sizeof(Bits));
-		if (Bits != Curve.SamplesHash)
-		{
-			OutError = TEXT("M4 baked curve hash mismatch");
 			return false;
 		}
 	}

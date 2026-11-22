@@ -299,8 +299,17 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 		{
 			return;
 		}
+		if (Context.IsCooking())
+		{
+			Config->SetCookPreparationResult(false);
+		}
 		FString Error;
-		if (!VoxelLandM4Editor::BakeWorldConfig(*Config, Error))
+		const bool bBaked = VoxelLandM4Editor::BakeWorldConfig(*Config, Error);
+		if (Context.IsCooking())
+		{
+			Config->SetCookPreparationResult(bBaked);
+		}
+		if (!bBaked)
 		{
 			if (Context.IsCooking())
 			{

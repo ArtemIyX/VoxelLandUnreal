@@ -10,6 +10,10 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/DataValidation.h"
+#include "Serialization/ArchiveSavePackageData.h"
+#include "Serialization/MemoryWriter.h"
+#include "UObject/ArchiveCookContext.h"
+#include "UObject/ObjectSaveContext.h"
 #include <limits>
 
 namespace
@@ -113,6 +117,46 @@ bool FVoxelLandM4CookGuardTest::RunTest(const FString& Parameters)
 	Graph->Nodes[0].Pins[0].FloatDefault = std::numeric_limits<float>::quiet_NaN();
 	TestFalse(TEXT("invalid graph cannot be recaptured"), VoxelLandM4Editor::BakeWorldConfig(*Config, Error));
 	TestFalse(TEXT("capture failure also clears old LUTs"), Config->ValidateBakedCurves(Error));
+	return true;
+}
+
+// Exercises the same archive guard invoked by Serialize without writing a package.
+// End-to-end cooker behavior still needs a real cook integration run.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4CookArchiveGuardTest, "VoxelLand.M4.Editor.CookArchiveGuard", M4CookGuardFlags)
+bool FVoxelLandM4CookArchiveGuardTest::RunTest(const FString& Parameters)
+{
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	FObjectSaveContextData SaveData;
+	FObjectSavePackageSerializeContext SerializeContext(SaveData);
+	FArchiveCookContext CookContext(
+		nullptr, UE::Cook::ECookType::Unknown, UE::Cook::ECookingDLC::Unknown, nullptr, nullptr);
+	FArchiveSavePackageData CookData(SerializeContext, nullptr, &CookContext);
+	TArray<uint8> Bytes;
+	FMemoryWriter Writer(Bytes);
+	Writer.SetSavePackageData(&CookData);
+
+	SaveData.ObjectSaveContextPhase = EObjectSaveContextPhase::Harvest;
+	Config->EnforceCookPreparation(Writer);
+	TestFalse(TEXT("harvest does not poison its archive"), Writer.IsError());
+	SaveData.ObjectSaveContextPhase = EObjectSaveContextPhase::Write;
+	Config->EnforceCookPreparation(Writer);
+	TestTrue(TEXT("missing preparation fails cooked export"), Writer.IsError());
+
+	TArray<uint8> ValidBytes;
+	FMemoryWriter ValidWriter(ValidBytes);
+	ValidWriter.SetSavePackageData(&CookData);
+	Config->SetCookPreparationResult(true);
+	Config->EnforceCookPreparation(ValidWriter);
+	TestFalse(TEXT("successful preparation permits cooked export"), ValidWriter.IsError());
+	Config->SetCookPreparationResult(false);
+	Config->EnforceCookPreparation(ValidWriter);
+	TestTrue(TEXT("later failed preparation rejects cooked export"), ValidWriter.IsError());
+
+	TArray<uint8> EditorBytes;
+	FMemoryWriter EditorWriter(EditorBytes);
+	Config->EnforceCookPreparation(EditorWriter);
+	TestFalse(TEXT("ordinary editor serialization is unaffected"), EditorWriter.IsError());
 	return true;
 }
 

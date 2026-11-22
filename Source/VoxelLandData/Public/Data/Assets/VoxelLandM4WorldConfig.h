@@ -17,6 +17,11 @@ class VOXELLANDDATA_API UVoxelLandM4WorldConfig : public UDataAsset
 	GENERATED_BODY()
 public:
 #if WITH_EDITOR
+	virtual void Serialize(FArchive& Ar) override;
+	virtual void PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext) override;
+	// Set by the editor's first concurrent cook PreSave after full source and LUT validation.
+	void SetCookPreparationResult(bool bSucceeded) { bCookPreparationSucceeded = bSucceeded; }
+	void EnforceCookPreparation(FArchive& Ar) const;
 	// Data validation checks the persisted authoring settings and baked LUTs.
 	// Full compiled-program/2D validation still runs in the editor bake hook.
 	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
@@ -109,4 +114,9 @@ public:
 	int32 HorizontalRadius = 1;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Bounds", meta = (ClampMin = "1", ClampMax = "4"))
 	int32 VerticalRadius = 1;
+#if WITH_EDITOR
+private:
+	// Transient and deliberately false until this cook's PreSave succeeds.
+	bool bCookPreparationSucceeded = false;
+#endif
 };

@@ -7,6 +7,38 @@
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Hash/xxhash.h"
 #include <limits>
+#if WITH_EDITOR
+#include "UObject/ObjectSaveContext.h"
+#endif
+
+#if WITH_EDITOR
+void UVoxelLandM4WorldConfig::Serialize(FArchive& Ar)
+{
+	Super::Serialize(Ar);
+	EnforceCookPreparation(Ar);
+}
+
+void UVoxelLandM4WorldConfig::EnforceCookPreparation(FArchive& Ar) const
+{
+	// Only reject the actual export write. Harvest and other archive traversals
+	// may serialize the object but are not the package writer's error channel.
+	const FObjectSavePackageSerializeContext* Context = Ar.GetSavePackageSerializeContext();
+	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
+		&& Context->GetPhase() == EObjectSaveContextPhase::Write && !bCookPreparationSucceeded)
+	{
+		Ar.SetError();
+	}
+}
+
+void UVoxelLandM4WorldConfig::PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext)
+{
+	Super::PostSaveRoot(ObjectSaveContext);
+	if (ObjectSaveContext.IsLastConcurrentSave())
+	{
+		bCookPreparationSucceeded = false;
+	}
+}
+#endif
 
 namespace
 {

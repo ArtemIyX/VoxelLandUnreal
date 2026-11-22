@@ -32,6 +32,7 @@ class FPackageReloadedEvent;
 enum class EPackageReloadPhase : uint8;
 struct FEdGraphEditAction;
 struct FPropertyChangedEvent;
+class FTransactionObjectEvent;
 struct FVoxelLandReloadTestBarrier;
 struct FVoxelLandZoneProfile;
 struct FVoxelLandSerializedProgram;
@@ -192,6 +193,7 @@ private:
 	void ObjectsReinstanced(const TMap<UObject*, UObject*>& Replacements);
 	void PauseForReload(bool bGraphAffected);
 	void ResumeAfterReload();
+	void M4ObjectTransacted(UObject* Object, const FTransactionObjectEvent& Event);
 	void MaterialChanged(const FAssetData& Material);
 	FString MaterialPickerPath() const;
 	FString SettingsPickerPath() const;
@@ -237,6 +239,8 @@ private:
 	uint64 M4FunctionPresentationRevision = 0;
 	bool bM4Preview = false;
 	bool bM4Inspection = false;
+	bool bM4UndoSemanticChange = false;
+	bool bM4UndoMaterialChange = false;
 	FString M4StageDiagnostics;
 	FString M4InspectionDetails;
 	TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> PreviewCancel;
@@ -261,6 +265,7 @@ private:
 	FDelegateHandle BeginPIEHandle;
 	FDelegateHandle EndPIEHandle;
 	FDelegateHandle MaterialSetupChangedHandle;
+	FDelegateHandle M4ObjectTransactedHandle;
 	FDelegateHandle PackageReloadHandle;
 	FDelegateHandle ObjectsReplacedHandle;
 	FDelegateHandle ObjectsReinstancedHandle;

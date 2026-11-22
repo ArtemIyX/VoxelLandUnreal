@@ -57,6 +57,7 @@
 #include "IDetailsView.h"
 #include "PropertyEditorModule.h"
 #include "ScopedTransaction.h"
+#include "Misc/TransactionObjectEvent.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboButton.h"
@@ -586,7 +587,9 @@ void FVoxelLandGraphToolkit::Stop()
 	FCoreUObjectDelegates::OnObjectsReplaced.Remove(ObjectsReplacedHandle);
 	FCoreUObjectDelegates::OnObjectsReinstanced.Remove(ObjectsReinstancedHandle);
 	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(MaterialSetupChangedHandle);
+	FCoreUObjectDelegates::OnObjectTransacted.Remove(M4ObjectTransactedHandle);
 	MaterialSetupChangedHandle.Reset();
+	M4ObjectTransactedHandle.Reset();
 	FEditorDelegates::PreBeginPIE.Remove(BeginPIEHandle);
 	FEditorDelegates::EndPIE.Remove(EndPIEHandle);
 	BeginPIEHandle.Reset();
@@ -655,6 +658,8 @@ void FVoxelLandGraphToolkit::Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode:
 	Asset = InAsset;
 	MaterialSetupChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this,
 		&FVoxelLandGraphToolkit::MaterialSetupPropertyChanged);
+	M4ObjectTransactedHandle =
+		FCoreUObjectDelegates::OnObjectTransacted.AddRaw(this, &FVoxelLandGraphToolkit::M4ObjectTransacted);
 	PackageReloadHandle = FCoreUObjectDelegates::OnPackageReloaded.AddRaw(this,
 		&FVoxelLandGraphToolkit::PackageReloaded);
 	ObjectsReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddRaw(this,
@@ -786,6 +791,8 @@ void FVoxelLandGraphToolkit::InitializeForTests(UVoxelLandTerrainGraph* InAsset)
 	Asset = InAsset;
 	MaterialSetupChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this,
 		&FVoxelLandGraphToolkit::MaterialSetupPropertyChanged);
+	M4ObjectTransactedHandle =
+		FCoreUObjectDelegates::OnObjectTransacted.AddRaw(this, &FVoxelLandGraphToolkit::M4ObjectTransacted);
 	PackageReloadHandle = FCoreUObjectDelegates::OnPackageReloaded.AddRaw(this,
 		&FVoxelLandGraphToolkit::PackageReloaded);
 	ObjectsReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddRaw(this,
@@ -1739,8 +1746,28 @@ void FVoxelLandGraphToolkit::PostUndo(bool bSuccess)
 		{
 			FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
 		}
+		const uint64 PreviousRevision = Revision;
 		SynchronizeGraph();
 		SynchronizePreviewSettings(true);
+		if (bM4Preview && M4PreviewConfig)
+		{
+			const bool bEditedAssetIsControl =
+				Asset == M4PreviewConfig->Continental.Graph || Asset == M4PreviewConfig->Mountain.Graph
+				|| Asset == M4PreviewConfig->Peaks.Graph
+				|| M4FunctionDependencies.ContainsByPredicate(
+					[this](const TWeakObjectPtr<UObject>& Item) { return Item.Get() == Asset; });
+			if (bM4UndoMaterialChange)
+			{
+				const UVoxelLandMaterialSetup* Setup = M4PreviewConfig->MaterialSetup.LoadSynchronous();
+				ApplyPreviewMaterial(Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr);
+			}
+			if (bM4UndoSemanticChange || (bEditedAssetIsControl && PreviousRevision != Revision))
+			{
+				StartM4Preview();
+			}
+		}
+		bM4UndoSemanticChange = false;
+		bM4UndoMaterialChange = false;
 		if (PreviewDetails)
 		{
 			PreviewDetails->ForceRefresh();
@@ -1762,6 +1789,11 @@ void FVoxelLandGraphToolkit::PostUndo(bool bSuccess)
 			++PanelRefreshCountForTests;
 #endif
 		}
+	}
+	else
+	{
+		bM4UndoSemanticChange = false;
+		bM4UndoMaterialChange = false;
 	}
 }
 
@@ -2366,6 +2398,55 @@ void FVoxelLandGraphToolkit::ObjectsReinstanced(const TMap<UObject*, UObject*>&)
 	if (!bPackageReloadInProgress)
 	{
 		ResumeAfterReload();
+	}
+}
+
+void FVoxelLandGraphToolkit::M4ObjectTransacted(UObject* Object, const FTransactionObjectEvent& Event)
+{
+	if (bStopped || !bM4Preview || !M4PreviewConfig || !Object
+		|| Event.GetEventType() != ETransactionObjectEventType::UndoRedo)
+	{
+		return;
+	}
+	if (Object == M4PreviewConfig)
+	{
+		if (Event.HasNonPropertyChanges() || !Event.HasPropertyChanges())
+		{
+			bM4UndoSemanticChange = true;
+			return;
+		}
+		for (const FName Property : Event.GetChangedProperties())
+		{
+			if (Property == GET_MEMBER_NAME_CHECKED(UVoxelLandM4WorldConfig, MaterialSetup))
+			{
+				bM4UndoMaterialChange = true;
+			}
+			else
+			{
+				bM4UndoSemanticChange = true;
+			}
+		}
+		return;
+	}
+	if (Object == M4PreviewConfig->MaterialSetup.Get())
+	{
+		bM4UndoMaterialChange = true;
+		return;
+	}
+	if (Object == M4PreviewConfig->Continental.Graph || Object == M4PreviewConfig->Mountain.Graph
+		|| Object == M4PreviewConfig->Peaks.Graph
+		|| M4FunctionDependencies.ContainsByPredicate(
+			[Object](const TWeakObjectPtr<UObject>& Item) { return Item.Get() == Object; }))
+	{
+		// EditorGraph is layout-only; other changes or unknown transaction
+		// metadata conservatively invalidate the control program.
+		const TArray<FName>& Properties = Event.GetChangedProperties();
+		const bool bOnlyLayout = !Event.HasNonPropertyChanges() && !Properties.IsEmpty()
+							  && Properties.ContainsByPredicate([](FName Name) {
+									 return Name == GET_MEMBER_NAME_CHECKED(UVoxelLandTerrainGraph, EditorGraph);
+								 })
+							  && Properties.Num() == 1;
+		bM4UndoSemanticChange |= !bOnlyLayout;
 	}
 }
 

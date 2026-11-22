@@ -4,6 +4,9 @@
 #include "../VoxelLandM4EditorBake.h"
 #include "Async/Async.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/Assets/VoxelLandMaterialSetup.h"
+#include "Editor.h"
+#include "ScopedTransaction.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Generation/VoxelLandGenerator.h"
@@ -208,6 +211,72 @@ bool FVoxelLandM4EditorPreviewSafetyTest::RunTest(const FString& Parameters)
 	Toolkit->InitializePreviewForTests();
 	Toolkit->StartM4PreviewForTests(Config);
 	ADD_LATENT_AUTOMATION_COMMAND(FM4EditorPreviewSafetyCommand(this, Config, Toolkit));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4EditorUndoTest, "VoxelLand.M4.Editor.PreviewUndo", M4EditorBakeFlags)
+bool FVoxelLandM4EditorUndoTest::RunTest(const FString& Parameters)
+{
+	if (!TestNotNull(TEXT("editor is available"), GEditor))
+	{
+		return false;
+	}
+	UVoxelLandM4WorldConfig* Config =
+		NewObject<UVoxelLandM4WorldConfig>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config, NAME_None, RF_Transactional);
+	FString Error;
+	if (!M4EditorBakeMakeGraph(*Graph, Error))
+	{
+		AddError(Error);
+		return false;
+	}
+	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
+	FVoxelLandM4CurveAuthoringKey First, Last;
+	Last.InputQ16 = 65535;
+	Config->Continental.CurveKeys = Config->Mountain.CurveKeys = Config->Peaks.CurveKeys = {First, Last};
+	Config->CellsX = Config->CellsY = 4;
+	Config->OriginXCm = Config->OriginYCm = -12800;
+	Config->GridSpacingCm = 6400;
+	Config->bGlobalErosion = false;
+	if (!VoxelLandM4Editor::BakeWorldConfig(*Config, Error))
+	{
+		AddError(Error);
+		return false;
+	}
+	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+	Toolkit->InitializeForTests(Graph);
+	Toolkit->InitializePreviewForTests();
+	Toolkit->StartM4PreviewForTests(Config);
+	const uint64 BeforeMaterial = Toolkit->GetPreviewRevisionForTests();
+	const int32 BeforeApply = Toolkit->GetMaterialApplyCountForTests();
+	UVoxelLandMaterialSetup* Setup =
+		NewObject<UVoxelLandMaterialSetup>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+	{
+		const FScopedTransaction Transaction(
+			NSLOCTEXT("VoxelLandTests", "M4PreviewMaterialUndo", "M4 preview material"));
+		Config->Modify();
+		Config->MaterialSetup = Setup;
+	}
+	TestTrue(TEXT("M4 material undo succeeds"), GEditor->UndoTransaction());
+	TestEqual(TEXT("M4 material undo does not regenerate"), Toolkit->GetPreviewRevisionForTests(), BeforeMaterial);
+	TestTrue(TEXT("M4 material undo reapplies presentation"), Toolkit->GetMaterialApplyCountForTests() > BeforeApply);
+	const int32 BeforeRedoApply = Toolkit->GetMaterialApplyCountForTests();
+	TestTrue(TEXT("M4 material redo succeeds"), GEditor->RedoTransaction());
+	TestEqual(TEXT("M4 material redo does not regenerate"), Toolkit->GetPreviewRevisionForTests(), BeforeMaterial);
+	TestTrue(
+		TEXT("M4 material redo reapplies presentation"), Toolkit->GetMaterialApplyCountForTests() > BeforeRedoApply);
+	{
+		const FScopedTransaction Transaction(NSLOCTEXT("VoxelLandTests", "M4PreviewSeedUndo", "M4 preview seed"));
+		Config->Modify();
+		++Config->Seed;
+	}
+	const uint64 BeforeSeed = Toolkit->GetPreviewRevisionForTests();
+	TestTrue(TEXT("M4 seed undo succeeds"), GEditor->UndoTransaction());
+	TestTrue(TEXT("M4 seed undo invalidates old preview"), Toolkit->GetPreviewRevisionForTests() > BeforeSeed);
+	const uint64 BeforeSeedRedo = Toolkit->GetPreviewRevisionForTests();
+	TestTrue(TEXT("M4 seed redo succeeds"), GEditor->RedoTransaction());
+	TestTrue(TEXT("M4 seed redo invalidates old preview"), Toolkit->GetPreviewRevisionForTests() > BeforeSeedRedo);
+	Toolkit->Stop();
 	return true;
 }
 

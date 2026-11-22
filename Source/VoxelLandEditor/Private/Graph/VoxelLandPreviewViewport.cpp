@@ -99,25 +99,25 @@ bool SVoxelLandPreviewViewport::SetInspectionCamera(const FVector& Target)
 	{
 		return false;
 	}
-	if (TSharedPtr<FEditorViewportClient> Client = GetViewportClient())
+	if (TSharedPtr<FEditorViewportClient> ViewportClient = GetViewportClient())
 	{
-		if (!Client->Viewport)
+		if (!ViewportClient->Viewport)
 		{
 			return false;
 		}
 		if (!PreviousViewFov.IsSet())
 		{
-			PreviousViewFov = Client->ViewFOV;
+			PreviousViewFov = ViewportClient->ViewFOV;
 		}
 		if (!PreviousStoredFov.IsSet())
 		{
-			PreviousStoredFov = Client->FOVAngle;
+			PreviousStoredFov = ViewportClient->FOVAngle;
 		}
 		const FVector Location = VoxelLandM4Inspection::CameraLocation(Target);
-		Client->SetViewLocation(Location);
-		Client->SetViewRotation((Target - Location).Rotation());
-		Client->ViewFOV = VoxelLandM4Inspection::HorizontalFovDegrees;
-		Client->FOVAngle = VoxelLandM4Inspection::HorizontalFovDegrees;
+		ViewportClient->SetViewLocation(Location);
+		ViewportClient->SetViewRotation((Target - Location).Rotation());
+		ViewportClient->ViewFOV = VoxelLandM4Inspection::HorizontalFovDegrees;
+		ViewportClient->FOVAngle = VoxelLandM4Inspection::HorizontalFovDegrees;
 		Invalidate();
 		return true;
 	}
@@ -127,16 +127,16 @@ bool SVoxelLandPreviewViewport::SetInspectionCamera(const FVector& Target)
 bool SVoxelLandPreviewViewport::GetCameraDetails(
 	FVector& OutLocation, FRotator& OutRotation, float& OutHorizontalFov, FIntPoint& OutResolution) const
 {
-	if (TSharedPtr<FEditorViewportClient> Client = GetViewportClient())
+	if (TSharedPtr<FEditorViewportClient> ViewportClient = GetViewportClient())
 	{
-		if (!Client->Viewport)
+		if (!ViewportClient->Viewport)
 		{
 			return false;
 		}
-		OutLocation = Client->GetViewLocation();
-		OutRotation = Client->GetViewRotation();
-		OutHorizontalFov = Client->ViewFOV;
-		OutResolution = Client->Viewport->GetSizeXY();
+		OutLocation = ViewportClient->GetViewLocation();
+		OutRotation = ViewportClient->GetViewRotation();
+		OutHorizontalFov = ViewportClient->ViewFOV;
+		OutResolution = ViewportClient->Viewport->GetSizeXY();
 		return OutResolution.X > 0 && OutResolution.Y > 0;
 	}
 	return false;

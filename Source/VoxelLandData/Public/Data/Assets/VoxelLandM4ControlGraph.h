@@ -11,6 +11,7 @@ UCLASS(BlueprintType)
 class VOXELLANDDATA_API UVoxelLandM4ControlGraph : public UVoxelLandTerrainGraph
 {
 	GENERATED_BODY()
+
 public:
 	virtual void Serialize(FArchive& Ar) override;
 #if WITH_EDITOR
@@ -40,6 +41,7 @@ public:
 	bool ProjectSnapshot(const FVoxelLandGraphSnapshot& Source, EVoxelLandM4ControlChannel Channel,
 		FVoxelLandGraphSnapshot& OutProjection, FString& OutError) const;
 #if WITH_EDITOR
+
 private:
 	bool bCookPreparationSucceeded = false;
 #endif

@@ -16,6 +16,7 @@ UCLASS(BlueprintType)
 class VOXELLANDDATA_API UVoxelLandM4WorldConfig : public UDataAsset
 {
 	GENERATED_BODY()
+
 public:
 	virtual void Serialize(FArchive& Ar) override;
 #if WITH_EDITOR
@@ -40,6 +41,7 @@ public:
 	// ignores only persisted LUT cache bytes and never validates graph programs.
 	bool MatchesPreviewSnapshot(const FVoxelLandM4WorldSnapshot& Snapshot) const;
 #endif
+
 private:
 	bool MatchesSnapshotInternal(const FVoxelLandM4WorldSnapshot& Snapshot, bool bCompareBakedCurves) const;
 
@@ -128,6 +130,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|M4|Bounds", meta = (ClampMin = "1", ClampMax = "4"))
 	int32 VerticalRadius = 1;
 #if WITH_EDITOR
+
 private:
 	// Transient and deliberately false until this cook's PreSave succeeds.
 	bool bCookPreparationSucceeded = false;

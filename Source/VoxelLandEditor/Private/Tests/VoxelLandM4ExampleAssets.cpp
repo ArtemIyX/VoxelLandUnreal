@@ -46,9 +46,11 @@ void M4ExampleCaptureNodes(UVoxelLandTerrainGraph& Asset, TConstArrayView<UVoxel
 			Data.Id = Pin->PinId;
 			Data.Name = Pin->PinName.ToString();
 			Data.bOutput = Pin->Direction == EGPD_Output;
-			Data.Type = Pin->PinType.PinCategory == TEXT("int")  ? EVoxelLandGraphValueType::Int32
-					  : Pin->PinType.PinCategory == TEXT("bool") ? EVoxelLandGraphValueType::Bool
-																 : EVoxelLandGraphValueType::Float;
+			Data.Type = Pin->PinType.PinCategory == TEXT("int")
+				            ? EVoxelLandGraphValueType::Int32
+				            : Pin->PinType.PinCategory == TEXT("bool")
+				            ? EVoxelLandGraphValueType::Bool
+				            : EVoxelLandGraphValueType::Float;
 			if (!Data.bOutput)
 			{
 				if (Data.Type == EVoxelLandGraphValueType::Float)
@@ -85,7 +87,7 @@ bool M4ExampleBuildGraph(UVoxelLandTerrainGraph& Asset, int32 Channel, FString& 
 	Graph->Schema = UVoxelLandEditorSchema::StaticClass();
 	Asset.EditorGraph = Graph;
 	const EVoxelLandBuiltinNode Kinds[] = {EVoxelLandBuiltinNode::PositionX, EVoxelLandBuiltinNode::PositionY,
-		EVoxelLandBuiltinNode::Fbm2, EVoxelLandBuiltinNode::DensityOutput};
+	                                       EVoxelLandBuiltinNode::Fbm2, EVoxelLandBuiltinNode::DensityOutput};
 	const TCHAR* Frequencies[] = {TEXT("0.00002"), TEXT("0.00006"), TEXT("0.00012")};
 	UVoxelLandEditorNode* Nodes[4] = {};
 	for (int32 I = 0; I < 4; ++I)
@@ -135,7 +137,7 @@ bool M4ExampleBuildGraph(UVoxelLandTerrainGraph& Asset, int32 Channel, FString& 
 		FVoxelLandProgramDraft Draft;
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 		return FVoxelLandGraphCompiler::Compile(Snapshot, Draft, Error) && !FVoxelLandProgram::Validate(Draft, Program)
-			&& FVoxelLandProgramCodec::Pack(Snapshot, *Program, Payload, Error);
+		       && FVoxelLandProgramCodec::Pack(Snapshot, *Program, Payload, Error);
 	}).Get();
 	if (bCompiled)
 	{
@@ -150,8 +152,9 @@ bool M4ExampleBuildHeightGraph(UVoxelLandM4ControlGraph& Asset, FString& Error)
 	Graph->Schema = UVoxelLandEditorSchema::StaticClass();
 	Asset.EditorGraph = Graph;
 	const EVoxelLandBuiltinNode Kinds[] = {EVoxelLandBuiltinNode::PositionX, EVoxelLandBuiltinNode::PositionY,
-		EVoxelLandBuiltinNode::Fbm2, EVoxelLandBuiltinNode::Fbm2, EVoxelLandBuiltinNode::Fbm2,
-		EVoxelLandBuiltinNode::M4HeightOutput};
+	                                       EVoxelLandBuiltinNode::Fbm2, EVoxelLandBuiltinNode::Fbm2,
+	                                       EVoxelLandBuiltinNode::Fbm2,
+	                                       EVoxelLandBuiltinNode::M4HeightOutput};
 	const TCHAR* Frequencies[] = {TEXT("0.00002"), TEXT("0.00006"), TEXT("0.00012")};
 	const TCHAR* Inputs[] = {TEXT("Continental"), TEXT("Mountain"), TEXT("Peaks")};
 	TArray<UVoxelLandEditorNode*> Nodes;
@@ -207,6 +210,7 @@ void M4ExampleSetCurve(FVoxelLandM4ControlConfig& Channel, int32 First, int32 Mi
 	C.OutputQ8 = Last;
 	Channel.CurveKeys = {A, B, C};
 }
+
 bool M4ExampleConfigure(UVoxelLandM4WorldConfig& Config, UVoxelLandTerrainGraph* const (&Graphs)[3], FString& Error)
 {
 	Config.Continental.Graph = Graphs[0];
@@ -226,11 +230,12 @@ bool M4ExampleConfigure(UVoxelLandM4WorldConfig& Config, UVoxelLandTerrainGraph*
 	Config.OverhangAmplitudeQ8 = 16384;
 	return Config.ValidateSettings(Error) && VoxelLandM4Editor::BakeWorldConfig(Config, Error);
 }
+
 bool M4ExampleCheckHeight(UVoxelLandM4WorldConfig& Config, UVoxelLandM4ControlGraph& Graph, FString& Error)
 {
 	if (Config.Continental.Graph != &Graph || Config.Mountain.Graph != &Graph || Config.Peaks.Graph != &Graph
-		|| !Graph.HeightOutputId.IsValid() || !Graph.EditorGraph || !Config.bGlobalErosion
-		|| !Config.HeightDetail.bEnabled || !Config.ValidateBakedCurves(Error))
+	    || !Graph.HeightOutputId.IsValid() || !Graph.EditorGraph || !Config.bGlobalErosion
+	    || !Config.HeightDetail.bEnabled || !Config.ValidateBakedCurves(Error))
 	{
 		if (Error.IsEmpty())
 		{
@@ -240,7 +245,7 @@ bool M4ExampleCheckHeight(UVoxelLandM4WorldConfig& Config, UVoxelLandM4ControlGr
 	}
 	FVoxelLandM4WorldSnapshot Snapshot;
 	if (!Config.CaptureSnapshot(Snapshot, Error) || Snapshot.HeightStage.Version != 1
-		|| !VoxelLandM4HeightStageValidation::Validate(Snapshot, Error))
+	    || !VoxelLandM4HeightStageValidation::Validate(Snapshot, Error))
 	{
 		return false;
 	}
@@ -287,11 +292,13 @@ bool M4ExampleSave(UObject* Asset, FString& Error)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ExampleAuthoring, "VoxelLand.M4.Example.Authoring", M4AssetFlags)
+
 bool FVoxelLandM4ExampleAuthoring::RunTest(const FString& Parameters)
 {
 	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
 	UVoxelLandTerrainGraph* Graphs[3] = {NewObject<UVoxelLandTerrainGraph>(Config),
-		NewObject<UVoxelLandTerrainGraph>(Config), NewObject<UVoxelLandTerrainGraph>(Config)};
+	                                     NewObject<UVoxelLandTerrainGraph>(Config),
+	                                     NewObject<UVoxelLandTerrainGraph>(Config)};
 	FString Error;
 	for (int32 I = 0; I < 3; ++I)
 	{
@@ -317,6 +324,7 @@ bool FVoxelLandM4ExampleAuthoring::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4CreateExampleAssets, "VoxelLand.M4.Example.CreateAssets", M4AssetFlags)
+
 bool FVoxelLandM4CreateExampleAssets::RunTest(const FString& Parameters)
 {
 	if (!FParse::Param(FCommandLine::Get(), TEXT("VoxelLandCreateM4Examples")))
@@ -369,7 +377,9 @@ bool FVoxelLandM4CreateExampleAssets::RunTest(const FString& Parameters)
 	AddInfo(TEXT("Created four M4 example packages under /Game/VoxelLandExamples/M4."));
 	return true;
 }
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4VerifyExampleAssets, "VoxelLand.M4.Example.VerifyAssets", M4AssetFlags)
+
 bool FVoxelLandM4VerifyExampleAssets::RunTest(const FString& Parameters)
 {
 	if (!FParse::Param(FCommandLine::Get(), TEXT("VoxelLandVerifyM4Examples")))
@@ -399,9 +409,9 @@ bool FVoxelLandM4VerifyExampleAssets::RunTest(const FString& Parameters)
 	}
 	FString Error;
 	if (!TestTrue(TEXT("saved references and features match"),
-			Config->Continental.Graph == Graphs[0] && Config->Mountain.Graph == Graphs[1]
-				&& Config->Peaks.Graph == Graphs[2] && Config->bGlobalErosion && Config->HeightDetail.bEnabled
-				&& Config->HeightDetail.AmplitudeQ8 == 25600))
+		Config->Continental.Graph == Graphs[0] && Config->Mountain.Graph == Graphs[1]
+		&& Config->Peaks.Graph == Graphs[2] && Config->bGlobalErosion && Config->HeightDetail.bEnabled
+		&& Config->HeightDetail.AmplitudeQ8 == 25600))
 	{
 		return false;
 	}
@@ -417,8 +427,10 @@ bool FVoxelLandM4VerifyExampleAssets::RunTest(const FString& Parameters)
 	}
 	return true;
 }
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4HeightExampleAuthoring, "VoxelLand.M4.Example.HeightAuthoring", M4AssetFlags)
+
 bool FVoxelLandM4HeightExampleAuthoring::RunTest(const FString& Parameters)
 {
 	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
@@ -449,6 +461,7 @@ bool FVoxelLandM4HeightExampleAuthoring::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4CreateHeightExampleAssets, "VoxelLand.M4.Example.CreateHeightAssets", M4AssetFlags)
+
 bool FVoxelLandM4CreateHeightExampleAssets::RunTest(const FString& Parameters)
 {
 	if (!FParse::Param(FCommandLine::Get(), TEXT("VoxelLandCreateM4HeightExamples")))
@@ -475,8 +488,8 @@ bool FVoxelLandM4CreateHeightExampleAssets::RunTest(const FString& Parameters)
 	UVoxelLandTerrainGraph* Graphs[3] = {Graph, Graph, Graph};
 	FString Error;
 	if (!M4ExampleBuildHeightGraph(*Graph, Error) || !M4ExampleConfigure(*Config, Graphs, Error)
-		|| !M4ExampleCheckHeight(*Config, *Graph, Error) || !M4ExampleSave(Graph, Error)
-		|| !M4ExampleSave(Config, Error))
+	    || !M4ExampleCheckHeight(*Config, *Graph, Error) || !M4ExampleSave(Graph, Error)
+	    || !M4ExampleSave(Config, Error))
 	{
 		AddError(Error);
 		return false;
@@ -487,6 +500,7 @@ bool FVoxelLandM4CreateHeightExampleAssets::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4VerifyHeightExampleAssets, "VoxelLand.M4.Example.VerifyHeightAssets", M4AssetFlags)
+
 bool FVoxelLandM4VerifyHeightExampleAssets::RunTest(const FString& Parameters)
 {
 	if (!FParse::Param(FCommandLine::Get(), TEXT("VoxelLandVerifyM4HeightExamples")))
@@ -499,13 +513,13 @@ bool FVoxelLandM4VerifyHeightExampleAssets::RunTest(const FString& Parameters)
 	UVoxelLandM4WorldConfig* Config = LoadObject<UVoxelLandM4WorldConfig>(
 		nullptr, TEXT("/Game/VoxelLandExamples/M4/DA_M4_HeightWorld.DA_M4_HeightWorld"));
 	if (!TestNotNull(TEXT("saved shared graph loads"), Graph)
-		|| !TestNotNull(TEXT("saved height config loads"), Config))
+	    || !TestNotNull(TEXT("saved height config loads"), Config))
 	{
 		return false;
 	}
 	FString Error;
 	if (!TestTrue(
-			TEXT("saved height graph and projections remain valid"), M4ExampleCheckHeight(*Config, *Graph, Error)))
+		TEXT("saved height graph and projections remain valid"), M4ExampleCheckHeight(*Config, *Graph, Error)))
 	{
 		AddError(Error);
 		return false;

@@ -1,5 +1,6 @@
 #include "Generation/VoxelLandM5SurfaceQuery.h"
 
+#include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 
 namespace
@@ -14,7 +15,8 @@ FVoxelLandM5Diagnostic SurfaceQueryError(EVoxelLandM5ErrorCode Code, const TCHAR
 }
 }
 
-FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(FIntVector SampleCounts,
+FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, FIntVector SampleCounts,
 	const FVoxelLandM5PointCm& Origin, int64 SpacingCm, TConstArrayView<int16> Samples,
 	TConstArrayView<uint8> ProtectionColumns, int64 X, int64 Y, int32 RadiusCm, bool bHasWaterLevel, int64 WaterLevelCm,
 	int64 MaxSamplesToInspect, TFunctionRef<bool()> IsCancelled, int64& OutSurfaceZ, int64& OutMinSurfaceZ,
@@ -77,6 +79,20 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(FIntVector 
 	if (Work > MaxSamplesToInspect)
 	{
 		return SurfaceQueryError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Surface query work budget exceeded"));
+	}
+	int64 ColumnWork = 0, ChargedWork = 0;
+	if (!TryMultiplyNonNegative(Columns, 3, ColumnWork) || !TryAdd(Work, ColumnWork, ChargedWork)
+		|| !TryAdd(ChargedWork, 1, ChargedWork))
+	{
+		return SurfaceQueryError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface query work charge overflow"));
+	}
+	if (IsCancelled())
+	{
+		return SurfaceQueryError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Surface query cancelled"));
+	}
+	if (!Budget->TryChargeWork(ChargedWork))
+	{
+		return SurfaceQueryError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared surface work budget exceeded"));
 	}
 	int64 CommonCrossing = -1;
 	int16 CommonBelow = 0, CommonAbove = 0;

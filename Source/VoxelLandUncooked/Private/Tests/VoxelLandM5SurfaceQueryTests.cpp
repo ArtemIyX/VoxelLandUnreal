@@ -1,4 +1,5 @@
 #if WITH_DEV_AUTOMATION_TESTS
+#include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5SurfaceQuery.h"
 #include "Misc/AutomationTest.h"
 
@@ -29,12 +30,17 @@ bool FVoxelLandM5FlatSurfaceQueryTest::RunTest(const FString& Parameters)
 	int64 Height = 123, MinHeight = 124, MaxHeight = 125;
 	int32 Slope = 126;
 	bool bProtected = true, bFlooded = false;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("create work budget"), FVoxelLandM5Budget::TryCreate(0, 100000, Budget)))
+	{
+		return false;
+	}
 	const auto NeverCancel = []() {
 		return false;
 	};
-	const auto Query = [&](int64 X, int64 Y, int32 Radius, int64 Budget, TFunctionRef<bool()> IsCancelled) {
-		return QueryFlatSurface(Dims, Origin, 100, Samples, Protection, X, Y, Radius, true, -50, Budget, IsCancelled,
-			Height, MinHeight, MaxHeight, Slope, bProtected, bFlooded);
+	const auto Query = [&](int64 X, int64 Y, int32 Radius, int64 MaxSamples, TFunctionRef<bool()> IsCancelled) {
+		return QueryFlatSurface(Budget.ToSharedRef(), Dims, Origin, 100, Samples, Protection, X, Y, Radius, true, -50,
+			MaxSamples, IsCancelled, Height, MinHeight, MaxHeight, Slope, bProtected, bFlooded);
 	};
 	auto Result = Query(-100, -100, 0, 144, NeverCancel);
 	TestEqual(TEXT("flat midpoint accepted"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::None));
@@ -69,11 +75,25 @@ bool FVoxelLandM5FlatSurfaceQueryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("work cap rejected"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::BudgetExceeded));
 	int32 Calls = 0;
 	const auto CancelLater = [&Calls]() {
-		return ++Calls == 2;
+		return ++Calls == 3;
 	};
 	Result = Query(-100, -100, 0, 144, CancelLater);
 	TestEqual(TEXT("mid scan cancellation"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::Cancelled));
 	TestEqual(TEXT("cancel leaves height"), Height, int64(123));
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> TightBudget;
+	if (!TestTrue(TEXT("create exact budget"), FVoxelLandM5Budget::TryCreate(0, 253, TightBudget)))
+	{
+		return false;
+	}
+	Result = QueryFlatSurface(TightBudget.ToSharedRef(), Dims, Origin, 100, Samples, Protection, -100, -100, 0, true,
+		-50, 144, NeverCancel, Height, MinHeight, MaxHeight, Slope, bProtected, bFlooded);
+	TestEqual(TEXT("exact shared charge succeeds"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::None));
+	Height = 123;
+	Result = QueryFlatSurface(TightBudget.ToSharedRef(), Dims, Origin, 100, Samples, Protection, -100, -100, 0, true,
+		-50, 144, NeverCancel, Height, MinHeight, MaxHeight, Slope, bProtected, bFlooded);
+	TestEqual(
+		TEXT("cumulative shared budget enforced"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::BudgetExceeded));
+	TestEqual(TEXT("shared budget failure leaves height"), Height, int64(123));
 	return true;
 }
 #endif

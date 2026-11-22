@@ -82,18 +82,25 @@ bool M4SavedChannelBounded(const FVoxelLandM4ControlSnapshot& Channel)
 	return true;
 }
 }
-bool VoxelLandM4SavedWorldPreflight::Validate(const FVoxelLandM4SavedWorld& Saved, FString& Error)
+bool VoxelLandM4SavedWorldPreflight::ValidateSnapshot(const FVoxelLandM4WorldSnapshot& S, FString& Error)
 {
-	const auto& S = Saved.Snapshot;
-	if (Saved.FormatVersion != 1 || Saved.Identity.CanonicalBytes.Num() < 8
-		|| Saved.Identity.CanonicalBytes.Num() > 8 * 1024 * 1024 || S.HorizontalRadius < 1 || S.HorizontalRadius > 8
-		|| S.VerticalRadius < 1 || S.VerticalRadius > 4 || S.MaterialSetupPath.ToString().Len() > 2048
-		|| !M4SavedChannelBounded(S.Continental) || !M4SavedChannelBounded(S.Mountain)
-		|| !M4SavedChannelBounded(S.Peaks))
+	if (S.HorizontalRadius < 1 || S.HorizontalRadius > 8 || S.VerticalRadius < 1 || S.VerticalRadius > 4
+		|| S.MaterialSetupPath.ToString().Len() > 2048 || !M4SavedChannelBounded(S.Continental)
+		|| !M4SavedChannelBounded(S.Mountain) || !M4SavedChannelBounded(S.Peaks))
 	{
-		Error = TEXT("M4 saved world exceeds admission limits or has an unsupported version");
+		Error = TEXT("M4 saved world snapshot exceeds admission limits");
 		return false;
 	}
 	Error.Reset();
 	return true;
+}
+bool VoxelLandM4SavedWorldPreflight::Validate(const FVoxelLandM4SavedWorld& Saved, FString& Error)
+{
+	if (Saved.FormatVersion != 1 || Saved.Identity.CanonicalBytes.Num() < 8
+		|| Saved.Identity.CanonicalBytes.Num() > 8 * 1024 * 1024)
+	{
+		Error = TEXT("M4 saved world identity exceeds admission limits or has an unsupported version");
+		return false;
+	}
+	return ValidateSnapshot(Saved.Snapshot, Error);
 }

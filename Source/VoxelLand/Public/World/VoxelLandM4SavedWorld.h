@@ -7,7 +7,7 @@ struct FVoxelLandM4WorldSnapshot;
 
 namespace VoxelLandM4SavedWorld
 {
-// Worker thread only. Saves a value copy, after checking its current control
+// Worker thread only. Bounds the input first, then saves a value copy after checking its current control
 // programs, provider dependencies, curves and density identity. No filesystem
 // writes occur. Outputs are unchanged on failure.
 VOXELLAND_API bool Capture(const FVoxelLandM4WorldSnapshot& Snapshot, FVoxelLandM4SavedWorld& Out, FString& Error);

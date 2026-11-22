@@ -26,6 +26,7 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 {
 	bool bCaptured = false, bRestored = false, bFields = false, bIdentity = false;
 	bool bTampered = false, bUnknown = false, bAtomic = false, bBadProgram = false;
+	bool bCaptureRadius = false, bCaptureOversized = false, bCaptureAtomic = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4WorldSnapshot Original;
@@ -86,6 +87,18 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 		{
 			return;
 		}
+		FVoxelLandM4SavedWorld Protected = Saved;
+		FVoxelLandM4WorldSnapshot InvalidSnapshot = Original;
+		InvalidSnapshot.HorizontalRadius = 0;
+		bCaptureRadius =
+			!VoxelLandM4SavedWorld::Capture(InvalidSnapshot, Protected, Error) && Error.Contains(TEXT("admission"));
+		bCaptureAtomic = Protected.Snapshot.Seed == Saved.Snapshot.Seed
+					  && Protected.Identity.CanonicalBytes == Saved.Identity.CanonicalBytes;
+		InvalidSnapshot = Original;
+		InvalidSnapshot.Continental.Source.Functions.SetNum(17);
+		bCaptureOversized = !VoxelLandM4SavedWorld::Capture(InvalidSnapshot, Protected, Error)
+						 && Error.Contains(TEXT("admission"))
+						 && Protected.Identity.CanonicalBytes == Saved.Identity.CanonicalBytes;
 		TArray<uint8> Bytes;
 		FMemoryWriter MemoryWriter(Bytes);
 		FObjectAndNameAsStringProxyArchive Writer(MemoryWriter, false);
@@ -120,6 +133,9 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 	}).Get();
 	TestTrue(FString::Printf(TEXT("world captured: %s"), *Error), bCaptured);
 	TestTrue(TEXT("world restored after property serialization"), bRestored);
+	TestTrue(TEXT("capture rejects invalid startup radius"), bCaptureRadius);
+	TestTrue(TEXT("capture rejects excessive nested metadata"), bCaptureOversized);
+	TestTrue(TEXT("failed capture leaves its prior output unchanged"), bCaptureAtomic);
 	TestTrue(TEXT("settings, source, program and LUT survive"), bFields);
 	TestTrue(TEXT("restored density identity matches"), bIdentity);
 	TestTrue(TEXT("tampered density setting rejected"), bTampered);

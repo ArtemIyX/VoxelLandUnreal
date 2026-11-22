@@ -17,6 +17,8 @@ bool FVoxelLandM4SavedWorldPreflightTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("bounded metadata admitted for worker validation"),
 		VoxelLandM4SavedWorldPreflight::Validate(Saved, Error));
 	Saved.Snapshot.HorizontalRadius = 9;
+	TestFalse(TEXT("snapshot-only check rejects excessive demand"),
+		VoxelLandM4SavedWorldPreflight::ValidateSnapshot(Saved.Snapshot, Error));
 	TestFalse(TEXT("excessive horizontal demand rejected"), VoxelLandM4SavedWorldPreflight::Validate(Saved, Error));
 	Saved.Snapshot.HorizontalRadius = 1;
 	Saved.Snapshot.Continental.Source.Functions.SetNum(17);

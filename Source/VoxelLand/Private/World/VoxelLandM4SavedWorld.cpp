@@ -7,6 +7,11 @@
 bool VoxelLandM4SavedWorld::Capture(
 	const FVoxelLandM4WorldSnapshot& Snapshot, FVoxelLandM4SavedWorld& Out, FString& Error)
 {
+	// Validate metadata before the identity encoder or the saved copy allocate.
+	if (!VoxelLandM4SavedWorldPreflight::ValidateSnapshot(Snapshot, Error))
+	{
+		return false;
+	}
 	FVoxelLandM4SavedWorld Saved;
 	if (!VoxelLandM4WorldIdentity::Capture(Snapshot, Saved.Identity, Error))
 	{

@@ -78,6 +78,8 @@
 
 namespace
 {
+DECLARE_MULTICAST_DELEGATE_OneParam(FM4ControlGraphChanged, UVoxelLandTerrainGraph*);
+FM4ControlGraphChanged M4ControlGraphChanged;
 TAutoConsoleVariable<int32> CVarVoxelLandPreviewGPUUploadTiming(
 	TEXT("VoxelLand.Preview.GPUUploadTiming"), 0,
 	TEXT("Observe preview buffer upload GPU fences on supported D3D12 editor previews."), ECVF_Default);
@@ -585,6 +587,7 @@ void FVoxelLandGraphToolkit::Stop()
 		GEditor->UnregisterForUndo(this);
 		bRegisteredForUndo = false;
 	}
+	M4ControlGraphChanged.Remove(M4ControlGraphChangedHandle);
 	FCoreUObjectDelegates::OnPackageReloaded.Remove(PackageReloadHandle);
 	FCoreUObjectDelegates::OnObjectsReplaced.Remove(ObjectsReplacedHandle);
 	FCoreUObjectDelegates::OnObjectsReinstanced.Remove(ObjectsReinstancedHandle);
@@ -654,6 +657,7 @@ bool FVoxelLandGraphToolkit::StoreCompiledProgram(UVoxelLandTerrainGraph& Graph,
 	Graph.Modify();
 	Graph.CompiledProgram = MoveTemp(Payload);
 	Graph.MarkPackageDirty();
+	M4ControlGraphChanged.Broadcast(&Graph);
 	return true;
 }
 
@@ -661,6 +665,8 @@ void FVoxelLandGraphToolkit::Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode:
 	const TSharedPtr<IToolkitHost>& Host)
 {
 	Asset = InAsset;
+	M4ControlGraphChangedHandle =
+		M4ControlGraphChanged.AddRaw(this, &FVoxelLandGraphToolkit::M4ControlGraphSourceChanged);
 	MaterialSetupChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this,
 		&FVoxelLandGraphToolkit::MaterialSetupPropertyChanged);
 	M4ObjectTransactedHandle =
@@ -794,6 +800,8 @@ void FVoxelLandGraphToolkit::CopyPasteNodesForTests(const TArray<UEdGraphNode*>&
 void FVoxelLandGraphToolkit::InitializeForTests(UVoxelLandTerrainGraph* InAsset)
 {
 	Asset = InAsset;
+	M4ControlGraphChangedHandle =
+		M4ControlGraphChanged.AddRaw(this, &FVoxelLandGraphToolkit::M4ControlGraphSourceChanged);
 	MaterialSetupChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this,
 		&FVoxelLandGraphToolkit::MaterialSetupPropertyChanged);
 	M4ObjectTransactedHandle =
@@ -1719,7 +1727,8 @@ bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagno
 	Stored.Parameters = Asset->Parameters;
 	Stored.Nodes = Asset->Nodes;
 	Stored.Links = Asset->Links;
-	if (FVoxelLandProgramCodec::SourceFingerprint(Stored) != MirrorHash || !SamePinNames(Stored.Nodes, Snapshot.Nodes))
+	const bool bSemanticSourceChanged = FVoxelLandProgramCodec::SourceFingerprint(Stored) != MirrorHash;
+	if (bSemanticSourceChanged || !SamePinNames(Stored.Nodes, Snapshot.Nodes))
 	{
 		if (!GIsTransacting)
 		{
@@ -1728,6 +1737,12 @@ bool FVoxelLandGraphToolkit::CaptureMirror(FString& Error, FVoxelLandGraphDiagno
 		Asset->Nodes = Snapshot.Nodes;
 		Asset->Links = Snapshot.Links;
 		Asset->MarkPackageDirty();
+		// Function dependencies already propagate through the registry revision;
+		// this signal handles direct control graphs in other open toolkits.
+		if (bSemanticSourceChanged && !Asset->IsA<UVoxelLandGraphFunction>())
+		{
+			M4ControlGraphChanged.Broadcast(Asset);
+		}
 		if (Asset->IsA<UVoxelLandGraphFunction>())
 		{
 			FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged();
@@ -2465,6 +2480,21 @@ void FVoxelLandGraphToolkit::M4ObjectTransacted(UObject* Object, const FTransact
 								 })
 							  && Properties.Num() == 1;
 		bM4UndoSemanticChange |= !bOnlyLayout;
+	}
+}
+
+void FVoxelLandGraphToolkit::M4ControlGraphSourceChanged(UVoxelLandTerrainGraph* Changed)
+{
+	// The originating toolkit already schedules compilation/preview through
+	// its own mirror. Do not create a reentrant notification cycle.
+	if (bStopped || bPIE || bReloadPaused || !bM4Preview || !M4PreviewConfig || !Changed || Changed == Asset)
+	{
+		return;
+	}
+	if (Changed == M4PreviewConfig->Continental.Graph || Changed == M4PreviewConfig->Mountain.Graph
+		|| Changed == M4PreviewConfig->Peaks.Graph)
+	{
+		StartM4Preview();
 	}
 }
 

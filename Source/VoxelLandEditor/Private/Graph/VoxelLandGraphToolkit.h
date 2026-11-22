@@ -193,6 +193,7 @@ private:
 	void SeedCommitted(const FText& Text, ETextCommit::Type CommitType);
 	void CommitPreviewRadius(int32 Value, bool bHorizontal);
 	void MaterialSetupPropertyChanged(UObject* Object, FPropertyChangedEvent& Event);
+	void M4ControlGraphSourceChanged(UVoxelLandTerrainGraph* Changed);
 	void PackageReloaded(EPackageReloadPhase Phase, FPackageReloadedEvent* Event);
 	void ObjectsReplaced(const TMap<UObject*, UObject*>& Replacements);
 	void ObjectsReinstanced(const TMap<UObject*, UObject*>& Replacements);
@@ -272,6 +273,7 @@ private:
 	FDelegateHandle BeginPIEHandle;
 	FDelegateHandle EndPIEHandle;
 	FDelegateHandle MaterialSetupChangedHandle;
+	FDelegateHandle M4ControlGraphChangedHandle;
 	FDelegateHandle M4ObjectTransactedHandle;
 	FDelegateHandle PackageReloadHandle;
 	FDelegateHandle ObjectsReplacedHandle;

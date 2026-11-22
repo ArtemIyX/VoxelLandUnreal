@@ -13,6 +13,8 @@
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Graph/VoxelLandGraphToolkit.h"
+#include "Graph/VoxelLandEditorNode.h"
+#include "EdGraph/EdGraph.h"
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandM4Preparation.h"
 
@@ -326,6 +328,62 @@ bool FVoxelLandM4InspectionReportLifecycleTest::RunTest(const FString& Parameter
 	Toolkit->SetM4InspectionDetailsForTests(TEXT("old report"));
 	Toolkit->Stop();
 	TestTrue(TEXT("closing invalidates the report"), Toolkit->GetM4InspectionDetailsForTests().IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4CrossEditorControlChangeTest, "VoxelLand.M4.Editor.CrossEditorControlChange", M4EditorBakeFlags)
+bool FVoxelLandM4CrossEditorControlChangeTest::RunTest(const FString& Parameters)
+{
+	UVoxelLandTerrainGraph* Control = NewObject<UVoxelLandTerrainGraph>();
+	UVoxelLandTerrainGraph* Host = NewObject<UVoxelLandTerrainGraph>();
+	UVoxelLandTerrainGraph* Unrelated = NewObject<UVoxelLandTerrainGraph>();
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Control;
+	TSharedRef<FVoxelLandGraphToolkit> ControlEditor = MakeShared<FVoxelLandGraphToolkit>();
+	TSharedRef<FVoxelLandGraphToolkit> PreviewEditor = MakeShared<FVoxelLandGraphToolkit>();
+	ControlEditor->InitializeForTests(Control);
+	PreviewEditor->InitializeForTests(Host);
+	PreviewEditor->StartM4PreviewForTests(Config);
+	if (!TestNotNull(TEXT("control graph editor exists"), Control->EditorGraph.Get()))
+	{
+		return false;
+	}
+	UVoxelLandEditorNode* Node = nullptr;
+	for (UEdGraphNode* Candidate : Control->EditorGraph->Nodes)
+	{
+		if ((Node = Cast<UVoxelLandEditorNode>(Candidate)))
+		{
+			break;
+		}
+	}
+	if (!TestNotNull(TEXT("control graph node exists"), Node))
+	{
+		return false;
+	}
+	uint64 Revision = PreviewEditor->GetPreviewRevisionForTests();
+	Node->NodePosX += 10;
+	Control->EditorGraph->NotifyGraphChanged();
+	TestEqual(TEXT("layout-only edit does not invalidate M4"), PreviewEditor->GetPreviewRevisionForTests(), Revision);
+	++Node->SeedSalt;
+	Control->EditorGraph->NotifyGraphChanged();
+	TestTrue(TEXT("semantic source edit invalidates another toolkit"),
+		PreviewEditor->GetPreviewRevisionForTests() > Revision);
+	Revision = PreviewEditor->GetPreviewRevisionForTests();
+	FVoxelLandSerializedProgram Payload = Unrelated->CompiledProgram;
+	++Payload.SourceFingerprint;
+	FVoxelLandGraphToolkit::StoreCompiledProgram(*Unrelated, MoveTemp(Payload));
+	TestEqual(TEXT("unrelated compile leaves M4 alone"), PreviewEditor->GetPreviewRevisionForTests(), Revision);
+	Payload = Control->CompiledProgram;
+	++Payload.SourceFingerprint;
+	FVoxelLandGraphToolkit::StoreCompiledProgram(*Control, MoveTemp(Payload));
+	TestTrue(TEXT("compiled control replacement retries M4"), PreviewEditor->GetPreviewRevisionForTests() > Revision);
+	Revision = PreviewEditor->GetPreviewRevisionForTests();
+	Payload = Control->CompiledProgram;
+	FVoxelLandGraphToolkit::StoreCompiledProgram(*Control, MoveTemp(Payload));
+	TestEqual(TEXT("unchanged payload does not notify"), PreviewEditor->GetPreviewRevisionForTests(), Revision);
+	PreviewEditor->Stop();
+	ControlEditor->Stop();
 	return true;
 }
 

@@ -387,4 +387,117 @@ bool FVoxelLandM4CrossEditorControlChangeTest::RunTest(const FString& Parameters
 	return true;
 }
 
+namespace
+{
+class FM4LiveCurvePreviewCommand final : public IAutomationLatentCommand
+{
+public:
+	FM4LiveCurvePreviewCommand(FAutomationTestBase* InTest, UVoxelLandM4WorldConfig* InConfig,
+		TSharedRef<FVoxelLandGraphToolkit> InToolkit, int64 InSavedHash)
+		: Test(InTest)
+		, Config(InConfig)
+		, Toolkit(InToolkit)
+		, SavedHash(InSavedHash)
+		, Started(FPlatformTime::Seconds())
+	{
+	}
+	virtual bool Update() override
+	{
+		if (!IsValid(Config) || FPlatformTime::Seconds() - Started > 30.0)
+		{
+			Test->AddError(TEXT("live M4 curve preview timed out"));
+			Cleanup();
+			return true;
+		}
+		Toolkit->PollJobsForTests();
+		if (Toolkit->HasM4PreviewWorkForTests())
+		{
+			return false;
+		}
+		if (Phase == 0)
+		{
+			if (!Test->TestEqual(TEXT("unsaved curve preview publishes"), Toolkit->GetPreviewPublishCountForTests(), 1))
+			{
+				Test->AddError(Toolkit->GetStatusForTests());
+				Cleanup();
+				return true;
+			}
+			FString Error;
+			Test->TestFalse(TEXT("saved LUT stays stale until save"), Config->ValidateBakedCurves(Error));
+			Test->TestEqual(
+				TEXT("preview does not write asset LUT"), Config->Continental.CookedCurve.SamplesHash, SavedHash);
+			Toolkit->StartM4PreviewForTests(Config);
+			++Config->Continental.CurveKeys.Last().OutputQ8;
+			Phase = 1;
+			return false;
+		}
+		Test->TestEqual(TEXT("superseded curve preview never publishes"), Toolkit->GetPreviewPublishCountForTests(), 1);
+		Test->TestTrue(TEXT("superseded curve preview reports stale"),
+			Toolkit->GetStatusForTests().Contains(TEXT("stale"), ESearchCase::IgnoreCase));
+		Cleanup();
+		return true;
+	}
+
+private:
+	void Cleanup()
+	{
+		Toolkit->Stop();
+		if (IsValid(Config))
+		{
+			Config->RemoveFromRoot();
+		}
+	}
+	FAutomationTestBase* Test;
+	UVoxelLandM4WorldConfig* Config;
+	TSharedRef<FVoxelLandGraphToolkit> Toolkit;
+	int64 SavedHash;
+	double Started;
+	int32 Phase = 0;
+};
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4LiveCurvePreviewTest, "VoxelLand.M4.Editor.LiveCurvePreview", M4EditorBakeFlags)
+bool FVoxelLandM4LiveCurvePreviewTest::RunTest(const FString& Parameters)
+{
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	Config->AddToRoot();
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
+	FString Error;
+	if (!M4EditorBakeMakeGraph(*Graph, Error))
+	{
+		AddError(Error);
+		Config->RemoveFromRoot();
+		return false;
+	}
+	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
+	FVoxelLandM4CurveAuthoringKey First, Last;
+	Last.InputQ16 = 65535;
+	Config->Continental.CurveKeys = Config->Mountain.CurveKeys = Config->Peaks.CurveKeys = {First, Last};
+	Config->CellsX = Config->CellsY = 4;
+	Config->OriginXCm = Config->OriginYCm = -12800;
+	Config->GridSpacingCm = 6400;
+	Config->bGlobalErosion = false;
+	if (!VoxelLandM4Editor::BakeWorldConfig(*Config, Error))
+	{
+		AddError(Error);
+		Config->RemoveFromRoot();
+		return false;
+	}
+	const int64 SavedHash = Config->Continental.CookedCurve.SamplesHash;
+	Config->Continental.CurveKeys.Last().OutputQ8 = 256;
+	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+	Toolkit->InitializeForTests(Graph);
+	Toolkit->InitializePreviewForTests();
+	Toolkit->StartM4PreviewForTests(Config);
+	if (!TestTrue(TEXT("unsaved valid curve starts worker"), Toolkit->HasM4PreviewWorkForTests()))
+	{
+		AddError(Toolkit->GetStatusForTests());
+		Toolkit->Stop();
+		Config->RemoveFromRoot();
+		return false;
+	}
+	ADD_LATENT_AUTOMATION_COMMAND(FM4LiveCurvePreviewCommand(this, Config, Toolkit, SavedHash));
+	return true;
+}
+
 #endif

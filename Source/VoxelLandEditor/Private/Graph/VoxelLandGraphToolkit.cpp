@@ -18,6 +18,7 @@
 #include "Graph/VoxelLandPreviewViewport.h"
 #include "Graph/VoxelLandM4Inspection.h"
 #include "Graph/VoxelLandM4InspectionReport.h"
+#include "Graph/VoxelLandM4PreviewCurves.h"
 #include "Graph/VoxelLandM4StageMap.h"
 #include "Graph/VoxelLandPreviewScene.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
@@ -2942,7 +2943,7 @@ bool FVoxelLandGraphToolkit::IsM4PreviewCurrent(const FVoxelLandPreviewWork& Wor
 	}
 	FString Error;
 	FVoxelLandM4WorldSnapshot Current;
-	if (!Config->ValidateBakedCurves(Error) || !Config->CaptureSnapshot(Current, Error))
+	if (!Config->CaptureSnapshot(Current, Error))
 	{
 		return false;
 	}
@@ -3008,7 +3009,7 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 	}
 	FString Error;
 	auto Snapshot = MakeShared<FVoxelLandM4WorldSnapshot, ESPMode::ThreadSafe>();
-	if (!M4PreviewConfig->ValidateBakedCurves(Error) || !M4PreviewConfig->CaptureSnapshot(*Snapshot, Error))
+	if (!M4PreviewConfig->CaptureSnapshot(*Snapshot, Error))
 	{
 		Status = FString::Printf(TEXT("Error; previous preview is stale: %s"), *Error);
 		return;
@@ -3074,7 +3075,8 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 		auto IsCancelled = [&Cancel] {
 			return Cancel->Load();
 		};
-		if (VoxelLandM4Preparation::Prepare(
+		if (VoxelLandM4PreviewCurves::Bake(*Work->M4ExecutionSnapshot, IsCancelled, Work->Error)
+			&& VoxelLandM4Preparation::Prepare(
 				*Work->M4ExecutionSnapshot, Lease, Work->M4ValidationLease, IsCancelled, Generator, Work->Error))
 		{
 			const TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid = Generator->GetM4HeightGrid();
@@ -3507,9 +3509,14 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 				Snapshot.HeightDetail.bEnabled ? Snapshot.HeightDetail.AmplitudeQ8 : 0, *FApp::GetGraphicsRHI(),
 				Resolution.X, Resolution.Y, *CameraLocation.ToString(), *CameraRotation.ToString(), CameraFov,
 				bCameraReady ? TEXT("yes") : TEXT("no"));
-			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Continental"), Snapshot.Continental);
-			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Mountain"), Snapshot.Mountain);
-			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Peaks"), Snapshot.Peaks);
+			// Curves in the execution snapshot are freshly baked from the
+			// captured keys; saved asset LUTs may legitimately be stale.
+			const FVoxelLandM4WorldSnapshot& Executed = *Finished.M4ExecutionSnapshot;
+			M4InspectionDetails += TEXT(
+				"Curve hashes below describe the in-memory preview bake; save the config before using it at runtime or cooking.\n");
+			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Continental"), Executed.Continental);
+			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Mountain"), Executed.Mountain);
+			M4InspectionAppendOverrides(M4InspectionDetails, TEXT("Peaks"), Executed.Peaks);
 			M4InspectionDetails += VoxelLandM4Inspection::DescribeSnapshot(Snapshot);
 			M4InspectionDetails +=
 				FString::Printf(TEXT("Control graph assets: continental=%s; mountain=%s; peaks=%s\n"),

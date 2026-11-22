@@ -31,6 +31,7 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeLock.h"
 #include "Modules/ModuleManager.h"
+#include "UObject/StrongObjectPtr.h"
 #if PLATFORM_WINDOWS
 #include "Windows/WindowsHWrapper.h"
 #endif
@@ -99,7 +100,7 @@ class FInitializationRequest
 public:
 	virtual ~FInitializationRequest() = default;
 	virtual bool IsCurrent() const = 0;
-	virtual void PreparePresentation(AVoxelLandWorld&) const {}
+	virtual TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld&) const { return {}; }
 	virtual bool PublishStartup(AVoxelLandWorld&) const { return true; }
 #if WITH_EDITOR
 	virtual bool References(const UObject* Object) const = 0;
@@ -424,7 +425,8 @@ public:
 		{
 			return true; // Owned snapshot cannot be edited or reinstanced.
 		}
-		UVoxelLandM4WorldConfig* Config = WeakConfig.Get();
+		TStrongObjectPtr<UVoxelLandM4WorldConfig> ConfigGuard(WeakConfig.Get());
+		UVoxelLandM4WorldConfig* Config = ConfigGuard.Get();
 		if (!Config || Config->Continental.Graph != Continental.Get() || Config->Mountain.Graph != Mountain.Get()
 			|| Config->Peaks.Graph != Peaks.Get() || !Config->MatchesSnapshot(Snapshot))
 		{
@@ -457,17 +459,19 @@ public:
 		return World.RequestChunk(Key);
 	}
 
-	void PreparePresentation(AVoxelLandWorld& World) const override
+	TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld& World) const override
 	{
 #if !UE_SERVER
 		if (!World.bDataOnly && World.GetNetMode() != NM_DedicatedServer)
 		{
-			if (const UVoxelLandM4WorldConfig* Config = WeakConfig.Get())
+			TStrongObjectPtr<UVoxelLandM4WorldConfig> Config(WeakConfig.Get());
+			if (Config.IsValid())
 			{
-				World.SetTerrainMaterial(ResolveM4TerrainMaterial(*Config));
+				return TWeakObjectPtr<UMaterialInterface>(ResolveM4TerrainMaterial(*Config));
 			}
 		}
 #endif
+		return {};
 	}
 
 #if WITH_EDITOR
@@ -601,7 +605,10 @@ UMaterialInterface* ResolveTerrainMaterial(const UVoxelLandWorldSettings& Settin
 UMaterialInterface* ResolveM4TerrainMaterial(const UVoxelLandM4WorldConfig& Settings)
 {
 	const UVoxelLandMaterialSetup* Setup = Settings.MaterialSetup.LoadSynchronous();
-	UMaterialInterface* Material = Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr;
+	// Copy the path before a second synchronous load can dispatch callbacks or GC.
+	const TSoftObjectPtr<UMaterialInterface> MaterialPath =
+		Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
+	UMaterialInterface* Material = MaterialPath.LoadSynchronous();
 	if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
 	{
 		UE_LOG(LogTemp, Warning,
@@ -1064,10 +1071,21 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		LastInitializationError = TEXT("M4 snapshot validation capacity is exhausted");
 		return false;
 	}
+	TStrongObjectPtr<UVoxelLandM4WorldConfig> SettingsGuard(Settings);
+	const uint64 CaptureEpoch = ConfigurationEpoch;
 	FVoxelLandM4WorldSnapshot Snapshot;
-	if (!Settings->ValidateBakedCurves(LastInitializationError)
-		|| !Settings->CaptureSnapshot(Snapshot, LastInitializationError))
+	FString CaptureError;
+	const bool bCaptured =
+		Settings->ValidateBakedCurves(CaptureError) && Settings->CaptureSnapshot(Snapshot, CaptureError);
+	// Capturing function dependencies can synchronously load assets and reenter.
+	if (ConfigurationEpoch != CaptureEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+		|| GetWorld()->bIsTearingDown)
 	{
+		return false;
+	}
+	if (!bCaptured)
+	{
+		LastInitializationError = MoveTemp(CaptureError);
 		return false;
 	}
 	HorizontalRadius = Snapshot.HorizontalRadius;
@@ -1207,9 +1225,18 @@ void AVoxelLandWorld::PollInitialization()
 #if WITH_EDITOR
     UnbindInitReloadHandlers();
 #endif
-    TSharedPtr<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job = MoveTemp(PendingInitialization);
-    bInitializing = false;
-    if (!Job->Request->IsCurrent())
+	TSharedPtr<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job = MoveTemp(PendingInitialization);
+	bInitializing = false;
+	// Source recapture can synchronously load function assets and dispatch callbacks.
+	// A callback may replace or tear down this actor's initialization.
+	const uint64 SourceEpoch = ConfigurationEpoch;
+	const bool bSourceCurrent = Job->Request->IsCurrent();
+	if (ConfigurationEpoch != SourceEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+		|| GetWorld()->bIsTearingDown)
+	{
+		return;
+	}
+	if (!bSourceCurrent)
     {
         LastInitializationError = TEXT("Initialization result was superseded by changed settings or graph");
         SetActorTickEnabled(false);
@@ -1221,19 +1248,40 @@ void AVoxelLandWorld::PollInitialization()
         LastInitializationError = Job->Error.IsEmpty() ? TEXT("Generator initialization failed") : Job->Error;
         SetActorTickEnabled(false);
         OnInitializationFinished.Broadcast(false);
-        return;
-    }
+		return;
+	}
 	const uint64 PresentationEpoch = ConfigurationEpoch;
-	Job->Request->PreparePresentation(*this);
-	// Material resolution can synchronously load an asset and dispatch engine
-	// callbacks. Recheck the source and actor after that potential reentry.
+	const TOptional<TWeakObjectPtr<UMaterialInterface>> Presentation = Job->Request->ResolvePresentation(*this);
+#if WITH_DEV_AUTOMATION_TESTS
+	if (PresentationHookForTests)
+	{
+		TFunction<void()> Hook = MoveTemp(PresentationHookForTests);
+		Hook();
+	}
+#endif
+	// A reentrant request owns the actor now. Do not overwrite its error,
+	// disable its tick, or broadcast a completion for the superseded request.
 	if (ConfigurationEpoch != PresentationEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
-		|| GetWorld()->bIsTearingDown || !Job->Request->IsCurrent())
+		|| GetWorld()->bIsTearingDown)
+	{
+		return;
+	}
+	const bool bStillCurrent = Job->Request->IsCurrent();
+	if (ConfigurationEpoch != PresentationEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+		|| GetWorld()->bIsTearingDown)
+	{
+		return;
+	}
+	if (!bStillCurrent)
 	{
 		LastInitializationError = TEXT("Initialization result was superseded during presentation setup");
 		SetActorTickEnabled(false);
 		OnInitializationFinished.Broadcast(false);
 		return;
+	}
+	if (Presentation.IsSet())
+	{
+		SetTerrainMaterial(Presentation->Get());
 	}
 	Initialize(Job->Generator);
 	if (!State || State->Threads.IsEmpty() || !Job->Request->PublishStartup(*this))

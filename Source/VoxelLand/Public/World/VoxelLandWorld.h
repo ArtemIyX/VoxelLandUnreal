@@ -111,6 +111,7 @@ public:
 	int32 GetDemandedChunkCount() const;
 	bool IsChunkDemanded(FIntVector Coordinate) const;
 	bool HasWorldStateForTests() const { return State.IsValid(); }
+	void SetPresentationHookForTests(TFunction<void()>&& Hook) { PresentationHookForTests = MoveTemp(Hook); }
 #if WITH_EDITOR
     void SetInitReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { InitReloadBarrierForTests = MoveTemp(Barrier); }
     void OnInitObjectsReplacedForTests(const TMap<UObject*, UObject*>& Map) { HandleInitObjectsReplaced(Map); }
@@ -167,6 +168,9 @@ private:
 	uint64 ConfigurationEpoch = 0;
 	bool bLifecycleEnded = false;
 	FDelegateHandle WorldTearDownHandle;
+#if WITH_DEV_AUTOMATION_TESTS
+	TFunction<void()> PresentationHookForTests;
+#endif
 	TUniquePtr<FVoxelLandWorldState> State;
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<AVoxelLandRegion>> Regions;

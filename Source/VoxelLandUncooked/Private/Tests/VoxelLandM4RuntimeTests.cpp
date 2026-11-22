@@ -95,6 +95,15 @@ public:
 			return true;
 		}
 		Actor->Tick(0.016f);
+		if (bReentered && !bCheckedReentry)
+		{
+			bCheckedReentry = true;
+			Test->TestTrue(TEXT("presentation callback starts replacement request"), bReentryStarted);
+			Test->TestTrue(TEXT("replacement remains initializing"), Actor->bInitializing);
+			Test->TestTrue(TEXT("replacement retains its actor tick"), Actor->IsActorTickEnabled());
+			Test->TestTrue(
+				TEXT("old completion does not overwrite replacement error"), Actor->LastInitializationError.IsEmpty());
+		}
 		if (Actor->bInitializing)
 		{
 			return false;
@@ -105,6 +114,10 @@ public:
 			Test->TestTrue(TEXT("asynchronous budget rejection is explained"),
 				Actor->LastInitializationError.Contains(TEXT("budget")));
 			RestoreBudget();
+			Actor->SetPresentationHookForTests([this] {
+				bReentered = true;
+				bReentryStarted = Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue);
+			});
 			if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
 			{
 				Test->AddError(TEXT("M4 initialization did not start after budget restoration"));
@@ -123,6 +136,7 @@ public:
 			{
 				return false;
 			}
+			Test->TestTrue(TEXT("presentation reentry was exercised"), bCheckedReentry);
 			Test->TestTrue(TEXT("finite data-only world initialized"), Actor->HasWorldStateForTests());
 			Test->TestTrue(TEXT("startup chunk reaches data-ready"), Actor->HasDataChunk(FIntVector::ZeroValue));
 			Test->TestTrue(TEXT("success reports no error"), Actor->LastInitializationError.IsEmpty());
@@ -266,6 +280,9 @@ private:
 	int32 PreviousBudget;
 	double Start;
 	int32 Phase = -1;
+	bool bReentered = false;
+	bool bReentryStarted = false;
+	bool bCheckedReentry = false;
 };
 }
 

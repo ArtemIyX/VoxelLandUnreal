@@ -31,8 +31,16 @@ void* AcquireModuleReference(const FString& Filename)
 class FProviderLease final : public IVoxelLandOperator
 {
 public:
-	FProviderLease(TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> InProvider, void* InHandle)
-		: Provider(InProvider), Handle(InHandle) {}
+	FProviderLease(TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> InProvider, void* InHandle,
+		const FGuid& InId, int32 InVersion, EVoxelLandOperatorStage InStage, EVoxelLandWorldRequirement InRequirement)
+		: Provider(InProvider)
+		, Handle(InHandle)
+		, FrozenId(InId)
+		, FrozenVersion(InVersion)
+		, FrozenStage(InStage)
+		, FrozenRequirement(InRequirement)
+	{
+	}
 
 	virtual ~FProviderLease() override
 	{
@@ -43,9 +51,10 @@ public:
 		}
 	}
 
-	EVoxelLandOperatorStage Stage() const override { return Provider->Stage(); }
-	FGuid Id() const override { return Provider->Id(); }
-	int32 Version() const override { return Provider->Version(); }
+	EVoxelLandOperatorStage Stage() const override { return FrozenStage; }
+	EVoxelLandWorldRequirement WorldRequirement() const override { return FrozenRequirement; }
+	FGuid Id() const override { return FrozenId; }
+	int32 Version() const override { return FrozenVersion; }
 	TArray<EVoxelLandGraphValueType> InputTypes() const override { return Provider->InputTypes(); }
 	EVoxelLandGraphValueType OutputType() const override { return Provider->OutputType(); }
 	uint32 MaximumWorkerBytes() const override { return Provider->MaximumWorkerBytes(); }
@@ -56,8 +65,8 @@ public:
 		return Provider->ValidateConfiguration(Config, Error);
 	}
 
-	TUniquePtr<IVoxelLandOperatorWorker>
-	CreateWorker(TConstArrayView<uint8> Config, uint64 Seed, FString& Error) const override
+	TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(
+		TConstArrayView<uint8> Config, uint64 Seed, FString& Error) const override
 	{
 		return Provider->CreateWorker(Config, Seed, Error);
 	}
@@ -65,6 +74,10 @@ public:
 private:
 	TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider;
 	void* Handle = nullptr;
+	const FGuid FrozenId;
+	const int32 FrozenVersion;
+	const EVoxelLandOperatorStage FrozenStage;
+	const EVoxelLandWorldRequirement FrozenRequirement;
 };
 
 // Registry state is process-lifetime. A live program may release its final provider on
@@ -85,7 +98,7 @@ FRegistryState& Registry()
 }
 }
 
-bool FVoxelLandOperatorRegistry::RegisterV2(FName ModuleName,
+bool FVoxelLandOperatorRegistry::RegisterV3(FName ModuleName,
 	TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider, uint32 CallerAbiVersion, FString& Error)
 {
 	Error.Reset();
@@ -101,22 +114,32 @@ bool FVoxelLandOperatorRegistry::RegisterV2(FName ModuleName,
 		Error = TEXT("Operator ID uses the reserved VoxelLand builtin and function namespace");
 		return false;
 	}
+	const int32 OperatorVersion = Provider->Version();
+	const EVoxelLandOperatorStage OperatorStage = Provider->Stage();
+	const EVoxelLandWorldRequirement Requirement = Provider->WorldRequirement();
 	const TArray<EVoxelLandGraphValueType> Inputs = Provider->InputTypes();
 	const EVoxelLandOperatorSimdRequirement Simd = Provider->SimdRequirement();
-	if (!OperatorId.IsValid() || Provider->Version() < 1 || Inputs.Num() < 1 || Inputs.Num() > 3 ||
-	    (Provider->Stage() != EVoxelLandOperatorStage::Sample && Provider->Stage() !=
-	     EVoxelLandOperatorStage::OneCellFilter) ||
-	    (Provider->Stage() == EVoxelLandOperatorStage::OneCellFilter && (
-		     Inputs.Num() != 1 || Inputs[0] != EVoxelLandGraphValueType::Float || Provider->OutputType() !=
-		     EVoxelLandGraphValueType::Float || Simd != EVoxelLandOperatorSimdRequirement::None)) ||
-	    (Simd != EVoxelLandOperatorSimdRequirement::None && Simd != EVoxelLandOperatorSimdRequirement::SSE2))
+	if (!OperatorId.IsValid() || OperatorVersion < 1 || Inputs.Num() < 1 || Inputs.Num() > 3
+		|| (OperatorStage != EVoxelLandOperatorStage::Sample && OperatorStage != EVoxelLandOperatorStage::OneCellFilter)
+		|| (OperatorStage == EVoxelLandOperatorStage::OneCellFilter
+			&& (Inputs.Num() != 1 || Inputs[0] != EVoxelLandGraphValueType::Float
+				|| Provider->OutputType() != EVoxelLandGraphValueType::Float
+				|| Simd != EVoxelLandOperatorSimdRequirement::None))
+		|| (Simd != EVoxelLandOperatorSimdRequirement::None && Simd != EVoxelLandOperatorSimdRequirement::SSE2)
+		|| (Requirement != EVoxelLandWorldRequirement::Unspecified
+			&& Requirement != EVoxelLandWorldRequirement::SampleLocal
+			&& Requirement != EVoxelLandWorldRequirement::BoundedNeighborhood
+			&& Requirement != EVoxelLandWorldRequirement::BoundedRegion
+			&& Requirement != EVoxelLandWorldRequirement::FiniteGlobal)
+		|| (OperatorStage == EVoxelLandOperatorStage::OneCellFilter
+			&& Requirement == EVoxelLandWorldRequirement::SampleLocal))
 	{
 		Error = TEXT("Invalid operator ID, version or signature");
 		return false;
 	}
 	const auto IsType = [](EVoxelLandGraphValueType Type) {
-		return Type == EVoxelLandGraphValueType::Float || Type == EVoxelLandGraphValueType::Int32 ||
-		       Type == EVoxelLandGraphValueType::Bool;
+		return Type == EVoxelLandGraphValueType::Float || Type == EVoxelLandGraphValueType::Int32
+			|| Type == EVoxelLandGraphValueType::Bool;
 	};
 	if (!IsType(Provider->OutputType()))
 	{
@@ -145,8 +168,8 @@ bool FVoxelLandOperatorRegistry::RegisterV2(FName ModuleName,
 		return false;
 	}
 #endif
-	TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Lease =
-		MakeShared<FProviderLease, ESPMode::ThreadSafe>(Provider, Handle);
+	TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Lease = MakeShared<FProviderLease, ESPMode::ThreadSafe>(
+		Provider, Handle, OperatorId, OperatorVersion, OperatorStage, Requirement);
 	FRegistryState& State = Registry();
 	FScopeLock Lock(&State.Lock);
 #if !IS_MONOLITHIC
@@ -169,7 +192,7 @@ bool FVoxelLandOperatorRegistry::RegisterV2(FName ModuleName,
 #endif
 	for (const auto& Existing : State.Providers)
 	{
-		if (Existing->Id() == Provider->Id() && Existing->Version() == Provider->Version())
+		if (Existing->Id() == OperatorId && Existing->Version() == OperatorVersion)
 		{
 			Error = TEXT("Duplicate operator ID and version");
 			return false;
@@ -201,8 +224,8 @@ bool FVoxelLandOperatorRegistry::Unregister(const FGuid& Id, int32 Version, FStr
 	return false;
 }
 
-TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegistry::Resolve(const FGuid& Id,
-	int32 Version)
+TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegistry::Resolve(
+	const FGuid& Id, int32 Version)
 {
 	FRegistryState& State = Registry();
 	FScopeLock Lock(&State.Lock);
@@ -225,12 +248,15 @@ FVoxelLandOperatorRegistrySnapshot FVoxelLandOperatorRegistry::Snapshot()
 	return Result;
 }
 
-TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegistrySnapshot::Resolve(const FGuid& Id,
-	int32 Version) const
+TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegistrySnapshot::Resolve(
+	const FGuid& Id, int32 Version) const
 {
 	for (const auto& Provider : Providers)
 	{
-		if (Provider->Id() == Id && Provider->Version() == Version) { return Provider; }
+		if (Provider->Id() == Id && Provider->Version() == Version)
+		{
+			return Provider;
+		}
 	}
 	return nullptr;
 }

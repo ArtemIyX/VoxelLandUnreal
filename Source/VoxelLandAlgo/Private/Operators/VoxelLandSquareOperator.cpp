@@ -17,8 +17,8 @@ namespace
 class FSquareWorker final : public IVoxelLandOperatorWorker
 {
 public:
-	bool Evaluate(TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count,
-		FString& Error) override
+	bool Evaluate(
+		TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
 	{
 		if (Inputs.Num() != 1 || !Inputs[0] || Output.Num() != Count || Count < 1 || Count > 256)
 		{
@@ -38,8 +38,8 @@ public:
 		return true;
 	}
 #if VOXELLAND_SQUARE_HAS_SSE2
-	bool EvaluateSimd(TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count,
-		FString& Error) override
+	bool EvaluateSimd(
+		TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
 	{
 		if (Inputs.Num() != 1 || !Inputs[0] || Output.Num() != Count || Count < 4 || Count > 256 || Count % 4 != 0)
 		{
@@ -66,6 +66,7 @@ public:
 class FSquareOperator final : public IVoxelLandOperator
 {
 public:
+	EVoxelLandWorldRequirement WorldRequirement() const override { return EVoxelLandWorldRequirement::SampleLocal; }
 	FGuid Id() const override { return VoxelLandSquareOperatorId(); }
 	int32 Version() const override { return 1; }
 	TArray<EVoxelLandGraphValueType> InputTypes() const override { return {EVoxelLandGraphValueType::Float}; }
@@ -91,8 +92,8 @@ public:
 		return true;
 	}
 
-	TUniquePtr<IVoxelLandOperatorWorker>
-	CreateWorker(TConstArrayView<uint8> Config, uint64 Seed, FString& Error) const override
+	TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(
+		TConstArrayView<uint8> Config, uint64 Seed, FString& Error) const override
 	{
 		if (!ValidateConfiguration(Config, Error))
 		{
@@ -105,7 +106,7 @@ public:
 
 bool RegisterVoxelLandSquareOperator(FString& Error)
 {
-	return FVoxelLandOperatorRegistry::RegisterV2(FName(TEXT("VoxelLandAlgo")),
+	return FVoxelLandOperatorRegistry::RegisterV3(FName(TEXT("VoxelLandAlgo")),
 		MakeShared<FSquareOperator, ESPMode::ThreadSafe>(), FVoxelLandOperatorRegistry::ProviderAbiVersion, Error);
 }
 

@@ -18,8 +18,8 @@ public:
 	{
 		constexpr int32 HaloAxis = 37;
 		constexpr int32 OutputAxis = 35;
-		if (Halo.Num() != HaloAxis * HaloAxis * HaloAxis || Start < 0 || Output.Num() < 1 || Output.Num() > 256 ||
-		    Start + Output.Num() > OutputAxis * OutputAxis * OutputAxis)
+		if (Halo.Num() != HaloAxis * HaloAxis * HaloAxis || Start < 0 || Output.Num() < 1 || Output.Num() > 256
+			|| Start + Output.Num() > OutputAxis * OutputAxis * OutputAxis)
 		{
 			Error = TEXT("Invalid filter halo or output range");
 			return false;
@@ -32,8 +32,8 @@ public:
 				return false;
 			}
 			const int32 Index = Start + I;
-			const int32 X = Index % OutputAxis, Y = (Index / OutputAxis) % OutputAxis, Z =
-				            Index / (OutputAxis * OutputAxis);
+			const int32 X = Index % OutputAxis, Y = (Index / OutputAxis) % OutputAxis,
+						Z = Index / (OutputAxis * OutputAxis);
 			const int32 Center = (X + 1) + HaloAxis * ((Y + 1) + HaloAxis * (Z + 1));
 			const int32 Sum = int32(Halo[Center - 1]) + int32(Halo[Center]) + int32(Halo[Center + 1]);
 			if (!Output.WriteDensity(I, int16(Sum < 0 ? -((-Sum + 1) / 3) : (Sum + 1) / 3)))
@@ -50,6 +50,10 @@ class FExampleFilter final : public IVoxelLandOperator
 {
 public:
 	EVoxelLandOperatorStage Stage() const override { return EVoxelLandOperatorStage::OneCellFilter; }
+	EVoxelLandWorldRequirement WorldRequirement() const override
+	{
+		return EVoxelLandWorldRequirement::BoundedNeighborhood;
+	}
 	FGuid Id() const override { return VoxelLandExampleFilterOperatorId(); }
 	int32 Version() const override { return 1; }
 	TArray<EVoxelLandGraphValueType> InputTypes() const override { return {EVoxelLandGraphValueType::Float}; }
@@ -66,10 +70,13 @@ public:
 		return true;
 	}
 
-	TUniquePtr<IVoxelLandOperatorWorker>
-	CreateWorker(TConstArrayView<uint8> Config, uint64, FString& Error) const override
+	TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(
+		TConstArrayView<uint8> Config, uint64, FString& Error) const override
 	{
-		if (!ValidateConfiguration(Config, Error)) { return nullptr; }
+		if (!ValidateConfiguration(Config, Error))
+		{
+			return nullptr;
+		}
 		return MakeUnique<FExampleFilterWorker>();
 	}
 };
@@ -77,7 +84,7 @@ public:
 
 bool RegisterVoxelLandExampleFilter(FString& Error)
 {
-	return FVoxelLandOperatorRegistry::RegisterV2(TEXT("VoxelLandAlgo"),
+	return FVoxelLandOperatorRegistry::RegisterV3(TEXT("VoxelLandAlgo"),
 		MakeShared<FExampleFilter, ESPMode::ThreadSafe>(), FVoxelLandOperatorRegistry::ProviderAbiVersion, Error);
 }
 

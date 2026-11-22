@@ -330,11 +330,19 @@ bool FVoxelLandM3CheckedOperatorOutput::RunTest(const FString& Parameters)
     {
         TSharedRef<FShortWriteProvider, ESPMode::ThreadSafe> Provider = MakeShared<FShortWriteProvider, ESPMode::ThreadSafe>(Type, EVoxelLandOperatorStage::Sample);
         const int32 CallsBeforeAbiCheck = ShortProviderVirtualCalls.Load();
-        TestFalse(TEXT("Mismatched provider ABI is rejected"), FVoxelLandOperatorRegistry::RegisterV2(TEXT("VoxelLandUncooked"), Provider, 1, Error));
-        TestEqual(TEXT("ABI mismatch does not invoke provider methods"), ShortProviderVirtualCalls.Load(), CallsBeforeAbiCheck);
-        TestTrue(TEXT("ABI error gives rebuild guidance"), Error.Contains(TEXT("ABI")) && Error.Contains(TEXT("rebuild")));
-        if (!FVoxelLandOperatorRegistry::RegisterV2(TEXT("VoxelLandUncooked"), Provider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error)) { AddError(Error); return false; }
-        FVoxelLandProgramDraft Draft; Draft.FormatVersion = 2; Draft.RegisterCount = 4; Draft.Constants = {1.f};
+		TestFalse(TEXT("Mismatched provider ABI is rejected"),
+			FVoxelLandOperatorRegistry::RegisterV3(TEXT("VoxelLandUncooked"), Provider, 1, Error));
+		TestEqual(TEXT("ABI mismatch does not invoke provider methods"), ShortProviderVirtualCalls.Load(),
+			CallsBeforeAbiCheck);
+		TestTrue(
+			TEXT("ABI error gives rebuild guidance"), Error.Contains(TEXT("ABI")) && Error.Contains(TEXT("rebuild")));
+		if (!FVoxelLandOperatorRegistry::RegisterV3(
+				TEXT("VoxelLandUncooked"), Provider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error))
+		{
+			AddError(Error);
+			return false;
+		}
+		FVoxelLandProgramDraft Draft; Draft.FormatVersion = 2; Draft.RegisterCount = 4; Draft.Constants = {1.f};
         FVoxelLandSeedSlot Seed; Seed.NodeId = FGuid(11, 22, 33, 44); Draft.Seeds.Add(Seed);
         FVoxelLandExternalOperator Operator; Operator.Id = Provider->Id(); Operator.Version = 1; Operator.Inputs = {EVoxelLandGraphValueType::Float}; Operator.Output = Type; Operator.SeedSlot = 0;
         Draft.ExternalOperators.Add(Operator);
@@ -362,8 +370,13 @@ bool FVoxelLandM3CheckedOperatorOutput::RunTest(const FString& Parameters)
         TestTrue(TEXT("Short-write provider unregisters"), FVoxelLandOperatorRegistry::Unregister(Provider->Id(), 1, Error));
     }
     TSharedRef<FShortWriteProvider, ESPMode::ThreadSafe> FilterProvider = MakeShared<FShortWriteProvider, ESPMode::ThreadSafe>(EVoxelLandGraphValueType::Float, EVoxelLandOperatorStage::OneCellFilter);
-    if (!FVoxelLandOperatorRegistry::RegisterV2(TEXT("VoxelLandUncooked"), FilterProvider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error)) { AddError(Error); return false; }
-    FVoxelLandProgramDraft FilterDraft; FilterDraft.FormatVersion = 2; FilterDraft.RegisterCount = 1;
+	if (!FVoxelLandOperatorRegistry::RegisterV3(
+			TEXT("VoxelLandUncooked"), FilterProvider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error))
+	{
+		AddError(Error);
+		return false;
+	}
+	FVoxelLandProgramDraft FilterDraft; FilterDraft.FormatVersion = 2; FilterDraft.RegisterCount = 1;
     FVoxelLandSeedSlot FilterSeed; FilterSeed.NodeId = FGuid(11, 22, 33, 45); FilterDraft.Seeds.Add(FilterSeed);
     FVoxelLandExternalOperator FilterOperator; FilterOperator.Id = FilterProvider->Id(); FilterOperator.Version = 1;
     FilterOperator.Stage = EVoxelLandOperatorStage::OneCellFilter; FilterOperator.Inputs = {EVoxelLandGraphValueType::Float};
@@ -1455,8 +1468,9 @@ bool FVoxelLandM3MismatchedSimd::RunTest(const FString& Parameters)
 {
     FString Error;
     TSharedRef<FMismatchedSimdProvider, ESPMode::ThreadSafe> Provider = MakeShared<FMismatchedSimdProvider, ESPMode::ThreadSafe>();
-    if (!FVoxelLandOperatorRegistry::RegisterV2(FName(TEXT("VoxelLandUncooked")), Provider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error))
-    {
+	if (!FVoxelLandOperatorRegistry::RegisterV3(
+			FName(TEXT("VoxelLandUncooked")), Provider, FVoxelLandOperatorRegistry::ProviderAbiVersion, Error))
+	{
         AddError(FString::Printf(TEXT("Mismatch provider registration failed: %s"), *Error));
         return false;
     }

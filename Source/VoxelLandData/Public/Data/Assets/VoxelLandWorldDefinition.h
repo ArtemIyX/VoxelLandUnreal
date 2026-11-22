@@ -8,6 +8,7 @@
 #include "VoxelLandWorldDefinition.generated.h"
 
 struct FVoxelLandWorldCommonSnapshot;
+struct FVoxelLandWorldSourceSnapshot;
 
 #if WITH_DEV_AUTOMATION_TESTS
 // Test-only hook to model reentrancy immediately before each function load; clear after use.
@@ -23,6 +24,8 @@ class VOXELLANDDATA_API UVoxelLandWorldDefinition : public UDataAsset
 
 public:
 	virtual void Serialize(FArchive& Ar) override;
+	// Captures the concrete asset's mode and inputs together on the game thread.
+	TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> CaptureSource(FString& OutError) const;
 #if WITH_EDITOR
 	// A world definition is not cookable until its complete cooked generation
 	// and reconstruction path is implemented. Editor saves remain available.

@@ -1,5 +1,7 @@
 #include "Data/Assets/VoxelLandWorldDefinition.h"
 
+#include "Data/Assets/VoxelLandFiniteWorld.h"
+#include "Data/Assets/VoxelLandInfiniteWorld.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandM4ControlGraph.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
@@ -8,10 +10,41 @@
 #include "Data/Enums/VoxelLandM5PlanningMode.h"
 #include "Data/Structs/VoxelLandGraphFunctionSnapshot.h"
 #include "Data/Structs/VoxelLandWorldCommonSnapshot.h"
+#include "Data/Structs/VoxelLandWorldSourceSnapshot.h"
 #include "UObject/StrongObjectPtr.h"
 #if WITH_EDITOR
 #include "UObject/ObjectSaveContext.h"
 #endif
+
+TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandWorldDefinition::CaptureSource(
+	FString& OutError) const
+{
+	if (!IsInGameThread())
+	{
+		OutError = TEXT("World settings must be captured on the game thread.");
+		return nullptr;
+	}
+	if (const auto* Finite = Cast<UVoxelLandFiniteWorld>(this))
+	{
+		FVoxelLandFiniteWorldSnapshot Snapshot;
+		if (Finite->CaptureSnapshot(Snapshot, OutError))
+		{
+			return MakeShared<FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe>(MoveTemp(Snapshot));
+		}
+		return nullptr;
+	}
+	if (const auto* Infinite = Cast<UVoxelLandInfiniteWorld>(this))
+	{
+		FVoxelLandInfiniteWorldSnapshot Snapshot;
+		if (Infinite->CaptureSnapshot(Snapshot, OutError))
+		{
+			return MakeShared<FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe>(MoveTemp(Snapshot));
+		}
+		return nullptr;
+	}
+	OutError = TEXT("Unsupported world definition type.");
+	return nullptr;
+}
 
 void UVoxelLandWorldDefinition::Serialize(FArchive& Ar)
 {
@@ -107,14 +140,25 @@ public:
 			}
 		}
 		Source.SourceVersion = Graph.SourceVersion;
-		Source.Parameters = Graph.Parameters;
+		Source.Parameters.Reserve(Graph.Parameters.Num());
+		for (const FVoxelLandGraphParameter& Parameter : Graph.Parameters)
+		{
+			// Do not retain or evaluate editor text histories in the native snapshot.
+			auto& Copy = Source.Parameters.AddDefaulted_GetRef();
+			Copy.Id = Parameter.Id;
+			Copy.Name = Parameter.Name;
+			Copy.Type = Parameter.Type;
+			Copy.FloatDefault = Parameter.FloatDefault;
+			Copy.IntDefault = Parameter.IntDefault;
+			Copy.BoolDefault = Parameter.BoolDefault;
+			Copy.bHasRange = Parameter.bHasRange;
+			Copy.FloatMin = Parameter.FloatMin;
+			Copy.FloatMax = Parameter.FloatMax;
+			Copy.IntMin = Parameter.IntMin;
+			Copy.IntMax = Parameter.IntMax;
+		}
 		Source.Nodes = Graph.Nodes;
 		Source.Links = Graph.Links;
-		for (auto& Parameter : Source.Parameters)
-		{
-			// Tooltip is editor presentation. Do not evaluate opaque FText history.
-			Parameter.Tooltip = FText::GetEmpty();
-		}
 		if (const auto* Function = Cast<UVoxelLandGraphFunction>(&Graph))
 		{
 			bFunction = true;
@@ -219,7 +263,7 @@ public:
 	{
 		Captured = Stamps[0]->Source;
 		int32 Height = 0;
-		return Visit(*Stamps[0], Captured.Nodes, 0, Height, IsCaptureCurrent);
+		return Visit(Captured.Nodes, 0, Height, IsCaptureCurrent);
 	}
 
 	const FVoxelLandGraphSnapshot& GetCaptured() const { return Captured; }
@@ -245,50 +289,40 @@ private:
 
 	bool AddGraph(UVoxelLandTerrainGraph& Graph)
 	{
-		TUniquePtr<FWorldDefinitionGraphStamp> Stamp = MakeUnique<FWorldDefinitionGraphStamp>(Graph);
-		if (!Stamp->Capture(*Error))
-		{
-			return false;
-		}
-		Stamps.Add(MoveTemp(Stamp));
-		return true;
-	}
-
-	bool Visit(const FWorldDefinitionGraphStamp& Stamp, TArray<FVoxelLandGraphNodeRecord>& CapturedNodes, int32 Depth,
-		int32& OutHeight, TFunctionRef<bool()> IsCaptureCurrent)
-	{
-		OutHeight = 0;
-		const FVoxelLandGraphSnapshot& Graph = Stamp.Source;
-		if (Depth > 16 || Graph.SourceVersion != 1 || Graph.Parameters.Num() > WorldDefinitionMaxRecords
-			|| Graph.Nodes.Num() > 128 - TotalNodes || Graph.Links.Num() > 2048 - TotalLinks)
+		if (Graph.SourceVersion != 1 || Graph.Nodes.Num() > 128 - TotalNodes || Graph.Links.Num() > 2048 - TotalLinks)
 		{
 			return Fail(TEXT("Control graph dependencies exceed capture limits."));
 		}
-		TotalNodes += Graph.Nodes.Num();
-		TotalLinks += Graph.Links.Num();
-		for (const auto& Parameter : Graph.Parameters)
+		for (const auto& Node : Graph.Nodes)
 		{
-			if (Parameter.Name.Len() > 128)
-			{
-				return Fail(TEXT("Control parameter name exceeds capture limits."));
-			}
-		}
-		for (auto& Node : CapturedNodes)
-		{
-			if (Node.Configuration.Num() > 65536 || TotalConfig > 1048576 - Node.Configuration.Num()
-				|| Node.Pins.Num() > 64 || Node.Pins.Num() > 1024 - TotalPins)
+			if (TotalConfig > 1048576 - Node.Configuration.Num() || Node.Pins.Num() > 1024 - TotalPins)
 			{
 				return Fail(TEXT("Control graph pins or operator configuration exceed capture limits."));
 			}
 			TotalConfig += Node.Configuration.Num();
 			TotalPins += Node.Pins.Num();
-			for (const auto& Pin : Node.Pins)
-			{
-				if (Pin.Name.Len() > 128)
-				{
-					return Fail(TEXT("Control pin name exceeds capture limits."));
-				}
-			}
+		}
+		TUniquePtr<FWorldDefinitionGraphStamp> Stamp = MakeUnique<FWorldDefinitionGraphStamp>(Graph);
+		if (!Stamp->Capture(*Error))
+		{
+			return false;
+		}
+		TotalNodes += Graph.Nodes.Num();
+		TotalLinks += Graph.Links.Num();
+		Stamps.Add(MoveTemp(Stamp));
+		return true;
+	}
+
+	bool Visit(TArray<FVoxelLandGraphNodeRecord>& CapturedNodes, int32 Depth, int32& OutHeight,
+		TFunctionRef<bool()> IsCaptureCurrent)
+	{
+		OutHeight = 0;
+		if (Depth > 16)
+		{
+			return Fail(TEXT("Control graph dependencies exceed capture limits."));
+		}
+		for (auto& Node : CapturedNodes)
+		{
 			const bool bCall = Node.OperatorId == VoxelLandGraphFunctionCallId();
 			if (!bCall && !Node.FunctionPath.IsNull())
 			{
@@ -360,7 +394,7 @@ private:
 			Copy.Links = FunctionStamp.Source.Links;
 			Visiting.Add(Path);
 			int32 ChildHeight = 0;
-			if (!Visit(FunctionStamp, Copy.Nodes, Depth + 1, ChildHeight, IsCaptureCurrent))
+			if (!Visit(Copy.Nodes, Depth + 1, ChildHeight, IsCaptureCurrent))
 			{
 				return false;
 			}

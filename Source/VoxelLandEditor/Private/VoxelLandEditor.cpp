@@ -11,10 +11,8 @@
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/Assets/VoxelLandM4ControlGraph.h"
-#include "Data/Assets/VoxelLandFiniteWorld.h"
-#include "Data/Assets/VoxelLandInfiniteWorld.h"
-#include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
-#include "Data/Structs/VoxelLandInfiniteWorldSnapshot.h"
+#include "Data/Assets/VoxelLandWorldDefinition.h"
+#include "Data/Structs/VoxelLandWorldSourceSnapshot.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Graph/VoxelLandGraphPinFactory.h"
@@ -475,35 +473,11 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 			return;
 		}
 		FString Error;
-		FVoxelLandWorldCommonSnapshot Common;
-		bool bCaptured = false;
-		if (const UVoxelLandFiniteWorld* Finite = Cast<UVoxelLandFiniteWorld>(World))
-		{
-			FVoxelLandFiniteWorldSnapshot Snapshot;
-			bCaptured = Finite->CaptureSnapshot(Snapshot, Error);
-			if (bCaptured)
-			{
-				Common = MoveTemp(Snapshot.Common);
-			}
-		}
-		else if (const UVoxelLandInfiniteWorld* Infinite = Cast<UVoxelLandInfiniteWorld>(World))
-		{
-			FVoxelLandInfiniteWorldSnapshot Snapshot;
-			bCaptured = Infinite->CaptureSnapshot(Snapshot, Error);
-			if (bCaptured)
-			{
-				Common = MoveTemp(Snapshot.Common);
-			}
-		}
-		else
-		{
-			Error = TEXT("Unsupported world definition type.");
-		}
+		const auto Source = World->CaptureSource(Error);
 		bool bValid = false;
-		if (bCaptured && VoxelLandWorldEditorValidation::CanValidateSynchronously(Common, Error))
+		if (Source && VoxelLandWorldEditorValidation::CanValidateSynchronously(Source->GetCommon(), Error))
 		{
-			const EVoxelLandWorldKind Kind = World->GetWorldKind();
-			bValid = Async(EAsyncExecution::ThreadPool, [&Common, Kind, &Error]() {
+			bValid = Async(EAsyncExecution::ThreadPool, [Source, &Error]() {
 				TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 				if (!FVoxelLandM5Budget::TryCreate(64 * 1024 * 1024, 1000000000, Budget))
 				{
@@ -516,7 +490,8 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 				// provider dispatch even if a builtin ID was registered externally.
 				const FVoxelLandOperatorRegistrySnapshot Providers;
 				return VoxelLandWorldEditorValidation::ValidateSnapshot(
-					Common, Kind, Providers, Budget.ToSharedRef(), [] { return false; }, Error);
+					Source->GetCommon(), Source->GetWorldKind(), Providers, Budget.ToSharedRef(), [] { return false; },
+					Error);
 			}).Get();
 		}
 		if (!bValid)

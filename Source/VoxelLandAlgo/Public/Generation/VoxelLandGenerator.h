@@ -5,6 +5,7 @@
 #include "Data/Enums/VoxelLandChunkClassification.h"
 #include "Data/Structs/VoxelLandChunkData.h"
 #include "Data/Structs/VoxelLandError.h"
+#include "Data/Structs/VoxelLandM5Diagnostic.h"
 #include "Data/Structs/VoxelLandProgramDraft.h"
 #include "Data/Structs/VoxelLandZoneProfile.h"
 #include "Generation/VoxelLandGeneratorSettings.h"
@@ -12,6 +13,8 @@
 #include "Data/Structs/VoxelLandM4HeightDetailConfig.h"
 
 class IVoxelLandOperator;
+class FVoxelLandM5Budget;
+class FVoxelLandM5BudgetLease;
 class FVoxelLandOperatorRegistrySnapshot;
 class FVoxelLandWorkerContext;
 class FVoxelLandM4HeightGrid;
@@ -25,16 +28,28 @@ class VOXELLANDALGO_API FVoxelLandProgram
 public:
 	static FVoxelLandError Validate(
 		const FVoxelLandProgramDraft& Draft, TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
-	static FVoxelLandError Validate(const FVoxelLandProgramDraft& Draft, const FVoxelLandOperatorRegistrySnapshot& Providers,
-        TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
+	static FVoxelLandError Validate(const FVoxelLandProgramDraft& Draft,
+		const FVoxelLandOperatorRegistrySnapshot& Providers,
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
+	// Additive M5 path: rejects external providers until they have a bounded API.
+	// On failure OutProgram is unchanged; the validated program retains its memory lease.
+	static FVoxelLandM5Diagnostic ValidateMetered(const FVoxelLandProgramDraft& Draft,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
 	const FVoxelLandProgramDraft& GetData() const { return Data; }
 	uint64 GetFingerprint() const { return Fingerprint; }
 	const TArray<TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe>>& GetOperators() const { return Operators; }
 
 private:
+	static FVoxelLandError ValidateInternal(const FVoxelLandProgramDraft& Draft,
+		const FVoxelLandOperatorRegistrySnapshot& Providers, TFunctionRef<bool()> IsCancelled, bool bMetered,
+		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease,
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& OutProgram);
 	FVoxelLandProgram() = default;
 	FVoxelLandProgram(const FVoxelLandProgram&) = delete;
 	FVoxelLandProgram& operator=(const FVoxelLandProgram&) = delete;
+	// Declared first so the retained allocation lease is released after Data.
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> M5Lease;
 	FVoxelLandProgramDraft Data;
 	TArray<TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe>> Operators;
 	uint64 Fingerprint = 0;
@@ -76,8 +91,8 @@ public:
 		const FVoxelLandM4UnlimitedConfig& Config,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
-    // Proof-only hint; chunk sampling still runs and remains authoritative.
-    EVoxelLandChunkClassification ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const;
+	// Proof-only hint; chunk sampling still runs and remains authoritative.
+	EVoxelLandChunkClassification ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const;
 	// Thread-safe read-only demand gate. M3 returns success and retains its
 	// existing scheduler validation; M4 checks padded/filter/stencil XY and Z.
 	FVoxelLandError ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const;
@@ -117,9 +132,11 @@ private:
 		FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const;
 	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const;
-	FVoxelLandError GenerateExpandedDensity(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const;
-	FVoxelLandError GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
-        TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateExpandedDensity(
+		const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key,
+		FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
+		TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GeneratePureChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandGenerator() = default;

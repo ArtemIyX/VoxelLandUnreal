@@ -15,6 +15,7 @@
 #include "Graph/VoxelLandEditorOperator.h"
 #include "Graph/VoxelLandPreviewViewport.h"
 #include "Graph/VoxelLandM4Inspection.h"
+#include "Graph/VoxelLandM4StageMap.h"
 #include "Graph/VoxelLandPreviewScene.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
@@ -532,6 +533,7 @@ public:
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Continental;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Mountain;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Peaks;
+	TArray<uint8> M4StagePixels;
 	TArray<uint8> NoisePixels;
 	float NoiseMin = 0.0f;
 	float NoiseMax = 0.0f;
@@ -611,6 +613,8 @@ void FVoxelLandGraphToolkit::Stop()
 	WorkerTasks.Reset();
 	CompileWork.Reset();
 	PreviewWork.Reset();
+	M4StageBrush.SetResourceObject(nullptr);
+	M4StageTexture = nullptr;
 	NoiseBrush.SetResourceObject(nullptr);
 	NoiseTexture = nullptr;
 	ClearPreview();
@@ -623,6 +627,7 @@ void FVoxelLandGraphToolkit::AddReferencedObjects(FReferenceCollector& Collector
 	Collector.AddReferencedObjects(PreviewComponents);
 	Collector.AddReferencedObject(PreviewMaterial);
 	Collector.AddReferencedObject(NoiseTexture);
+	Collector.AddReferencedObject(M4StageTexture);
 	Collector.AddReferencedObject(PreviewSettings);
 	Collector.AddReferencedObject(M4PreviewConfig);
 }
@@ -962,7 +967,11 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArg
 			+ SVerticalBox::Slot().AutoHeight().Padding(
 				4)[SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(
-				4)[SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::M4StageInspectorText)]];
+				4)[SNew(STextBlock).AutoWrapText(true).Text_Raw(this, &FVoxelLandGraphToolkit::M4StageInspectorText)]
+			+ SVerticalBox::Slot().AutoHeight().Padding(
+				4)[SNew(SBox).WidthOverride(256).HeightOverride(256).Visibility_Lambda([this] {
+				  return M4StageTexture ? EVisibility::Visible : EVisibility::Collapsed;
+			  })[SNew(SImage).Image_Raw(this, &FVoxelLandGraphToolkit::GetM4StageBrush)]]];
 }
 
 FText FVoxelLandGraphToolkit::StatusText() const
@@ -1286,6 +1295,7 @@ void FVoxelLandGraphToolkit::SelectPreviewTarget(FGuid NodeId, FGuid PinId, FStr
 		return;
 	}
 	bM4Preview = false;
+	ClearM4StageMap();
 	bNoisePreview = false;
 	PreviewNodeId = NodeId;
 	PreviewPinId = PinId;
@@ -1301,6 +1311,7 @@ FReply FVoxelLandGraphToolkit::SelectNoisePreview(bool bStandalone)
 {
 	if (bStopped || bPIE || bReloadPaused || !GraphWidget) { return FReply::Handled(); }
 	bM4Preview = false;
+	ClearM4StageMap();
 	if (Asset && Asset->IsA<UVoxelLandGraphFunction>())
 	{
 		CancelPreview();
@@ -1400,6 +1411,7 @@ FReply FVoxelLandGraphToolkit::ReturnToRootPreview()
 	if (!bStopped && !bPIE && !bReloadPaused && (PreviewNodeId.IsValid() || bM4Preview))
 	{
 		bM4Preview = false;
+		ClearM4StageMap();
 		bNoisePreview = false;
 		PreviewNodeId.Invalidate();
 		PreviewPinId.Invalidate();
@@ -2159,8 +2171,16 @@ void FVoxelLandGraphToolkit::EndPIE(bool)
 	RequestCompile();
 }
 
+void FVoxelLandGraphToolkit::ClearM4StageMap()
+{
+	M4StageBrush.SetResourceObject(nullptr);
+	M4StageTexture = nullptr;
+	M4StageDiagnostics.Reset();
+}
+
 void FVoxelLandGraphToolkit::ClearPreview()
 {
+	ClearM4StageMap();
 	if (PreviewViewport)
 	{
 		PreviewViewport->SetTerrainBounds(FBox(ForceInit));
@@ -2823,6 +2843,13 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 				Grid->GetBoundsCm(Work->M4MinX, Work->M4MinY, Work->M4MaxX, Work->M4MaxY);
 				Work->bHasM4StageStats = Grid->GetStageStats(Work->M4StageStats);
 				Work->bHasM4HeightRange = true;
+				if (!VoxelLandM4StageMap::Build(*Grid, IsCancelled, Work->M4StagePixels))
+				{
+					Work->Error = TEXT("M4 stage map sampling failed or was cancelled");
+					Work->GenerationMs = (FPlatformTime::Seconds() - Started) * 1000.0;
+					Work->Done.Store(true);
+					return;
+				}
 			}
 			if (Work->bM4Inspection)
 			{
@@ -3027,6 +3054,45 @@ bool FVoxelLandGraphToolkit::PublishNoisePreview(const FVoxelLandPreviewWork& Fi
 	return true;
 }
 
+const FSlateBrush* FVoxelLandGraphToolkit::GetM4StageBrush() const
+{
+	return &M4StageBrush;
+}
+
+bool FVoxelLandGraphToolkit::PublishM4StageMap(const TArray<uint8>& Pixels)
+{
+	constexpr int32 Resolution = VoxelLandM4StageMap::Resolution;
+	if (Pixels.Num() != Resolution * Resolution * 4)
+	{
+		return false;
+	}
+	UTexture2D* Texture = M4StageTexture.Get();
+	if (!Texture)
+	{
+		Texture = UTexture2D::CreateTransient(Resolution, Resolution, PF_B8G8R8A8);
+	}
+	if (!Texture || !Texture->GetPlatformData() || Texture->GetPlatformData()->Mips.IsEmpty())
+	{
+		return false;
+	}
+	void* Destination = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+	if (!Destination)
+	{
+		Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+		return false;
+	}
+	FMemory::Memcpy(Destination, Pixels.GetData(), Pixels.Num());
+	Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+	Texture->SRGB = true;
+	Texture->NeverStream = true;
+	Texture->Filter = TF_Nearest;
+	Texture->UpdateResource();
+	M4StageTexture = Texture;
+	M4StageBrush.SetResourceObject(Texture);
+	M4StageBrush.SetImageSize(FVector2D(Resolution, Resolution));
+	return true;
+}
+
 bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finished)
 {
 	const double UploadStart = FPlatformTime::Seconds();
@@ -3068,6 +3134,12 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 		const FVoxelLandM4WorldSnapshot& Snapshot = *Finished.M4Snapshot;
 		if (Finished.bHasM4HeightRange)
 		{
+			const bool bMapPublished = PublishM4StageMap(Finished.M4StagePixels);
+			if (!bMapPublished)
+			{
+				M4StageBrush.SetResourceObject(nullptr);
+				M4StageTexture = nullptr;
+			}
 			M4StageDiagnostics = FString::Printf(
 				TEXT(
 					"M4 global-stage inspector (completed CPU prepass): grid XY [%lld,%lld] to [%lld,%lld] cm, %d x %d cells, spacing %lld cm; stored height range %.2f to %.2f cm. Erosion %s. Range excludes overhang and final smoothing."),
@@ -3075,6 +3147,11 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 				Snapshot.Domain.CellsY, Snapshot.Domain.GridSpacingCm, double(Finished.M4MinHeightQ8) / 256.0,
 				double(Finished.M4MaxHeightQ8) / 256.0,
 				Snapshot.Domain.bGlobalErosion ? TEXT("enabled") : TEXT("disabled"));
+			M4StageDiagnostics +=
+				bMapPublished
+					? TEXT(
+						  "\nHeight map: black = observed minimum, white = maximum; constant height = mid-gray. Left to right is +X, top to bottom is -Y. The image reflects the last published finite M4 preview and may be stale while inputs change. Height detail, overhang and smoothing are excluded.")
+					: TEXT("\nHeight map unavailable: image allocation or upload failed.");
 			if (Finished.bHasM4StageStats)
 			{
 				const FVoxelLandM4StageStats& S = Finished.M4StageStats;
@@ -3092,6 +3169,8 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 		}
 		else
 		{
+			M4StageBrush.SetResourceObject(nullptr);
+			M4StageTexture = nullptr;
 			M4StageDiagnostics =
 				TEXT("M4 local mode: no global prepass grid is generated. Per-control ranges are not measured.");
 		}

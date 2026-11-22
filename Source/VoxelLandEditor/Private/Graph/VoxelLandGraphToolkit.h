@@ -177,10 +177,13 @@ private:
 	void SetNoiseSpacing(float Value, ETextCommit::Type CommitType);
 	void SetNoiseSlice(float Value, ETextCommit::Type CommitType);
 	const FSlateBrush* GetNoiseBrush() const;
+	const FSlateBrush* GetM4StageBrush() const;
+	bool PublishM4StageMap(const TArray<uint8>& Pixels);
 	bool PublishNoisePreview(const FVoxelLandPreviewWork& Finished);
 	FReply ReturnToRootPreview();
 	void CancelPreview();
 	void ClearPreview();
+	void ClearM4StageMap();
 	void SeedCommitted(const FText& Text, ETextCommit::Type CommitType);
 	void CommitPreviewRadius(int32 Value, bool bHorizontal);
 	void MaterialSetupPropertyChanged(UObject* Object, FPropertyChangedEvent& Event);
@@ -224,6 +227,8 @@ private:
 	TObjectPtr<UMaterialInterface> PreviewMaterial = nullptr;
 	TObjectPtr<UTexture2D> NoiseTexture = nullptr;
 	FSlateBrush NoiseBrush;
+	TObjectPtr<UTexture2D> M4StageTexture = nullptr;
+	FSlateBrush M4StageBrush;
 	TSoftObjectPtr<UMaterialInterface> SelectedPreviewMaterial;
 	TSoftObjectPtr<UVoxelLandWorldSettings> SelectedPreviewSettings;
 	TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;

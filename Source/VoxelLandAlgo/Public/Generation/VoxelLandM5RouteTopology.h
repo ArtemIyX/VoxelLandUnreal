@@ -20,6 +20,9 @@ namespace VoxelLand::M5::RouteTopology
 // route decompositions return Unproven rather than receiving a false proof.
 // The immutable candidate owns its input lease; this function retains it for
 // the whole call, uses the same per-plan budget, and does not modify it.
+// Portal checks validate logical regional faces and bounded radii. This API
+// has no M4 voxel size; M5 world-identity validation remains mandatory to
+// establish voxel/grid compatibility before any regional publication.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic ValidateStructure(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);

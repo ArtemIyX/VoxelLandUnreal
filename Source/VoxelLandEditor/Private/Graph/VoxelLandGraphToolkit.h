@@ -121,6 +121,7 @@ public:
 	bool HasM4PreviewWorkForTests() const { return PreviewWork.IsValid(); }
 	void RequestCompileForTests() { RequestCompile(); }
 	bool HasCompileWorkForTests() const { return CompileWork.IsValid(); }
+	bool HasScheduledCompileForTests() const { return CompileDue > 0.0; }
 	void AddWorkerForTests(TFuture<void>&& Task) { WorkerTasks.Add(MoveTemp(Task)); }
 	bool IsStoppedForTests() const { return bStopped; }
 	bool IsPreviewPIEForTests() const { return bPIE; }

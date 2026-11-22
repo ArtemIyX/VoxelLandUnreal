@@ -1,6 +1,5 @@
 #include "Graph/VoxelLandEditorSchema.h"
 #include "Data/Assets/VoxelLandM4ControlGraph.h"
-#include "../VoxelLandM4EditorBake.h"
 #include "Graph/VoxelLandEditorFloat.h"
 #include "Operators/VoxelLandOperator.h"
 #include "Misc/DefaultValueHelper.h"
@@ -166,6 +165,59 @@ bool Reaches(const UEdGraphNode* Start, const UEdGraphNode* Target)
 }
 }
 
+bool UVoxelLandEditorSchema::AssignLegacyM4Output(
+	UVoxelLandM4ControlGraph& Graph, UEdGraph& EditorGraph, FGuid NodeId, int32 Slot)
+{
+	if (EditorGraph.GetOuter() != &Graph || !NodeId.IsValid() || Slot < 0 || Slot > 2)
+	{
+		return false;
+	}
+	const UVoxelLandEditorNode* Node = nullptr;
+	for (const UEdGraphNode* Candidate : EditorGraph.Nodes)
+	{
+		if (Candidate && Candidate->NodeGuid == NodeId)
+		{
+			Node = Cast<UVoxelLandEditorNode>(Candidate);
+			break;
+		}
+	}
+	if (!Node || Node->Kind != int32(EVoxelLandBuiltinNode::DensityOutput))
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("AssignM4Output", "Assign M4 control output"));
+	Graph.Modify();
+	Graph.HeightOutputId.Invalidate();
+	if (Graph.ContinentalOutputId == NodeId)
+	{
+		Graph.ContinentalOutputId.Invalidate();
+	}
+	if (Graph.MountainOutputId == NodeId)
+	{
+		Graph.MountainOutputId.Invalidate();
+	}
+	if (Graph.PeaksOutputId == NodeId)
+	{
+		Graph.PeaksOutputId.Invalidate();
+	}
+	if (Slot == 0)
+	{
+		Graph.ContinentalOutputId = NodeId;
+	}
+	else if (Slot == 1)
+	{
+		Graph.MountainOutputId = NodeId;
+	}
+	else
+	{
+		Graph.PeaksOutputId = NodeId;
+	}
+	Graph.MarkPackageDirty();
+	EditorGraph.NotifyGraphChanged();
+	Graph.PostEditChange();
+	return true;
+}
+
 void UVoxelLandEditorSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const
 {
 	if (!Context || !Context->Node)
@@ -210,43 +262,10 @@ void UVoxelLandEditorSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeCo
 		auto Assign = [WeakGraph, WeakEditorGraph, NodeId](int32 Slot) {
 			UVoxelLandM4ControlGraph* Graph = WeakGraph.Get();
 			UEdGraph* EditorGraph = WeakEditorGraph.Get();
-			if (!Graph || !EditorGraph)
+			if (Graph && EditorGraph)
 			{
-				return;
+				AssignLegacyM4Output(*Graph, *EditorGraph, NodeId, Slot);
 			}
-			const FScopedTransaction Transaction(LOCTEXT("AssignM4Output", "Assign M4 control output"));
-			Graph->Modify();
-			Graph->HeightOutputId.Invalidate();
-			// Assigning a node to another channel clears its old role.
-			if (Graph->ContinentalOutputId == NodeId)
-			{
-				Graph->ContinentalOutputId.Invalidate();
-			}
-			if (Graph->MountainOutputId == NodeId)
-			{
-				Graph->MountainOutputId.Invalidate();
-			}
-			if (Graph->PeaksOutputId == NodeId)
-			{
-				Graph->PeaksOutputId.Invalidate();
-			}
-			if (Slot == 0)
-			{
-				Graph->ContinentalOutputId = NodeId;
-			}
-			else if (Slot == 1)
-			{
-				Graph->MountainOutputId = NodeId;
-			}
-			else
-			{
-				Graph->PeaksOutputId = NodeId;
-			}
-			Graph->MarkPackageDirty();
-			EditorGraph->NotifyGraphChanged();
-			FString Error;
-			VoxelLandM4Editor::CompileNamedGraph(*Graph, Error);
-			Graph->PostEditChange();
 		};
 		Section.AddMenuEntry(TEXT("M4AssignContinental"), LOCTEXT("AssignContinental", "Use as Continental Output"),
 			FText(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([Assign] { Assign(0); })));

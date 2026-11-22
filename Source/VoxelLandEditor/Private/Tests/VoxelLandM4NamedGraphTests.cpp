@@ -10,6 +10,10 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4ControlGrid.h"
 #include "Graph/VoxelLandProgramCodec.h"
+#include "Graph/VoxelLandGraphToolkit.h"
+#include "Graph/VoxelLandEditorSchema.h"
+#include "Graph/VoxelLandEditorNode.h"
+#include "EdGraph/EdGraph.h"
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandM4Preparation.h"
 #include "World/VoxelLandM4WorldIdentity.h"
@@ -297,4 +301,61 @@ bool FVoxelLandM4HeightOutputTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("unlimited height uses the same graph combination"), int32(UnlimitedDensity), -1536);
 	return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4LegacyOutputAssignmentTest, "VoxelLand.M4.Editor.LegacyOutputAssignment", M4NamedGraphFlags)
+bool FVoxelLandM4LegacyOutputAssignmentTest::RunTest(const FString& Parameters)
+{
+	UVoxelLandM4ControlGraph* Graph = NewObject<UVoxelLandM4ControlGraph>();
+	M4NamedAppendChannel(*Graph, 0, -1.f, Graph->ContinentalOutputId);
+	M4NamedAppendChannel(*Graph, 1, 0.f, Graph->MountainOutputId);
+	M4NamedAppendChannel(*Graph, 2, 1.f, Graph->PeaksOutputId);
+	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
+	Toolkit->InitializeForTests(Graph);
+	UEdGraph* EditorGraph = Graph->EditorGraph.Get();
+	if (!TestNotNull(TEXT("legacy editor graph exists"), EditorGraph))
+	{
+		Toolkit->Stop();
+		return false;
+	}
+	FString Error;
+	if (!TestTrue(TEXT("baseline outputs compile"), VoxelLandM4Editor::CompileNamedGraph(*Graph, Error)))
+	{
+		AddError(Error);
+		Toolkit->Stop();
+		return false;
+	}
+	UVoxelLandEditorNode* Output = nullptr;
+	for (UEdGraphNode* Node : EditorGraph->Nodes)
+	{
+		if (Node && Node->NodeGuid == Graph->ContinentalOutputId)
+		{
+			Output = Cast<UVoxelLandEditorNode>(Node);
+			break;
+		}
+	}
+	if (!TestNotNull(TEXT("continental output exists"), Output))
+	{
+		Toolkit->Stop();
+		return false;
+	}
+	const uint64 Before = Toolkit->GetRevisionForTests();
+	Output->NodePosX += 10;
+	EditorGraph->NotifyGraphChanged();
+	TestEqual(TEXT("layout edit preserves graph revision"), Toolkit->GetRevisionForTests(), Before);
+	TestFalse(TEXT("layout edit does not schedule compile"), Toolkit->HasScheduledCompileForTests());
+	TestTrue(TEXT("assignment uses existing control terminal"),
+		UVoxelLandEditorSchema::AssignLegacyM4Output(*Graph, *EditorGraph, Output->NodeGuid, 1));
+	TestTrue(TEXT("assignment advances revision"), Toolkit->GetRevisionForTests() > Before);
+	TestTrue(TEXT("assignment schedules asynchronous compilation"), Toolkit->HasScheduledCompileForTests());
+	TestFalse(TEXT("assignment does not synchronously start worker"), Toolkit->HasCompileWorkForTests());
+	FVoxelLandGraphSnapshot Source, Projection;
+	TestTrue(TEXT("source still captures"), Graph->CaptureSnapshot(Source, Error));
+	TestFalse(TEXT("incomplete output assignment rejects prior programs"),
+		Graph->ProjectSnapshot(Source, EVoxelLandM4ControlChannel::Mountain, Projection, Error));
+	TestFalse(TEXT("invalid channel assignment rejected"),
+		UVoxelLandEditorSchema::AssignLegacyM4Output(*Graph, *EditorGraph, Output->NodeGuid, 3));
+	Toolkit->Stop();
+	return true;
+}
+
 #endif

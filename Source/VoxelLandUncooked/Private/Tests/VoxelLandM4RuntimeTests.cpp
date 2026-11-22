@@ -13,6 +13,7 @@
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandWorld.h"
 #include "World/VoxelLandM4Preparation.h"
@@ -449,6 +450,29 @@ bool FVoxelLandM4RuntimeSharedPrepassTest::RunTest(const FString& Parameters)
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Previous = First;
 	TestFalse(TEXT("stale program is rejected before a cache hit"), Prepare(Stale, Previous));
 	TestTrue(TEXT("failed request leaves previous generator unchanged"), Previous == First);
+	IConsoleVariable* Budget = IConsoleManager::Get().FindConsoleVariable(TEXT("voxel.M4.PrepassBudgetMiB"));
+	if (FirstOk && SecondOk && TestNotNull(TEXT("M4 process budget exists"), Budget))
+	{
+		const int32 PreviousBudget = Budget->GetInt();
+		Budget->SetWithCurrentPriority(128);
+		TestFalse(TEXT("live readers prevent external over-admission"), VoxelLandM4Preparation::Reserve().IsValid());
+		Previous.Reset();
+		First.Reset();
+		Second.Reset();
+		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> External;
+		const double Deadline = FPlatformTime::Seconds() + 5.0;
+		while (!External && FPlatformTime::Seconds() < Deadline)
+		{
+			External = VoxelLandM4Preparation::Reserve();
+			if (!External)
+			{
+				FPlatformProcess::Sleep(0.001f);
+			}
+		}
+		TestTrue(TEXT("external reservation can evict unused finite prepasses"), External.IsValid());
+		External.Reset();
+		Budget->SetWithCurrentPriority(PreviousBudget);
+	}
 	Config->RemoveFromRoot();
 	return true;
 }

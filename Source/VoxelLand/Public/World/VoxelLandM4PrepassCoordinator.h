@@ -32,6 +32,10 @@ public:
 	// results are joined before Reserve is invoked. OutError is filled on failure.
 	TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> Subscribe(
 		TConstArrayView<uint8> ExactKey, TFunctionRef<FLease()> Reserve, FProducer&& Produce, FString& OutError);
+	// On external admission pressure, release idle cache references and reap
+	// completed producer tasks. Active subscriptions and grid readers retain
+	// their own results and reservations. Never call from Reserve or Produce.
+	void ReleaseIdleResults();
 	void Shutdown();
 
 private:

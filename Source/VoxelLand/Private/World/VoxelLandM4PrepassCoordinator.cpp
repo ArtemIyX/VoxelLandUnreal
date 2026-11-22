@@ -258,6 +258,13 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 	return MakeShareable(new FM4PrepassSubscription(State, NewEntry));
 }
 
+void FM4PrepassCoordinator::ReleaseIdleResults()
+{
+	FScopeLock Lock(&State->Mutex);
+	M4CoordinatorReap(*State);
+	M4CoordinatorEvictIdle(*State);
+}
+
 void FM4PrepassCoordinator::Shutdown()
 {
 	TArray<TSharedPtr<FM4PrepassCoordinatorEntry, ESPMode::ThreadSafe>> Pending;

@@ -233,3 +233,62 @@ bool FVoxelLandM4CoordinatorExactKeyTest::RunTest(const FString& Parameters)
 	return true;
 }
 #endif
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM4CoordinatorExternalAdmissionTest, "VoxelLand.M4.CacheCoordinator.ExternalAdmission", M4CoordinatorFlags)
+bool FVoxelLandM4CoordinatorExternalAdmissionTest::RunTest(const FString& Parameters)
+{
+	FThreadSafeCounter Releases;
+	FM4PrepassCoordinator Coordinator(1, 1);
+	auto Reserve = [&]() -> FM4PrepassCoordinator::FLease {
+		return MakeShared<FM4CoordinatorTestLease, ESPMode::ThreadSafe>(Releases);
+	};
+	FM4PrepassCoordinator::FProducer Producer = [](const FM4PrepassCoordinator::FLease& Lease,
+													TFunctionRef<bool()> Cancelled, FM4PrepassCoordinator::FGrid& Grid,
+													FString&) {
+		const TArray<int32> Values = {0, 1, 2, 3};
+		return FVoxelLandM4HeightGrid::Create(0, 0, 1, 1, 1, Values, Grid, Cancelled, Lease);
+	};
+	const TArray<uint8> Key = {11};
+	FString Error;
+	auto Subscription = Coordinator.Subscribe(Key, Reserve, MoveTemp(Producer), Error);
+	TestTrue(TEXT("producer finishes"), M4CoordinatorWait(Subscription));
+	FM4PrepassCoordinator::FGrid Reader;
+	if (Subscription)
+	{
+		TestTrue(TEXT("subscriber receives grid"), Subscription->ReadResult(Reader, Error));
+		Coordinator.ReleaseIdleResults();
+		TestEqual(TEXT("active subscription retains grid"), Releases.GetValue(), 0);
+		Subscription->Cancel();
+	}
+	const double Deadline = FPlatformTime::Seconds() + 5.0;
+	Coordinator.ReleaseIdleResults();
+	TestEqual(TEXT("external reader retains reservation after idle eviction"), Releases.GetValue(), 0);
+	Reader.Reset();
+	while (Releases.GetValue() == 0 && FPlatformTime::Seconds() < Deadline)
+	{
+		Coordinator.ReleaseIdleResults();
+		FPlatformProcess::Sleep(0.001f);
+	}
+	TestEqual(TEXT("idle result and finished producer release reservation"), Releases.GetValue(), 1);
+	FM4PrepassCoordinator::FProducer Failed = [](const FM4PrepassCoordinator::FLease&, TFunctionRef<bool()>,
+												  FM4PrepassCoordinator::FGrid&, FString&) {
+		return false;
+	};
+	auto FailedSubscription = Coordinator.Subscribe(TArray<uint8>{12}, Reserve, MoveTemp(Failed), Error);
+	TestTrue(TEXT("failed producer finishes"), M4CoordinatorWait(FailedSubscription));
+	if (FailedSubscription)
+	{
+		FailedSubscription->Cancel();
+	}
+	const double FailureDeadline = FPlatformTime::Seconds() + 5.0;
+	while (Releases.GetValue() < 2 && FPlatformTime::Seconds() < FailureDeadline)
+	{
+		Coordinator.ReleaseIdleResults();
+		FPlatformProcess::Sleep(0.001f);
+	}
+	TestEqual(TEXT("failed producer admission can be reaped without another subscription"), Releases.GetValue(), 2);
+	Coordinator.Shutdown();
+	return true;
+}
+#endif

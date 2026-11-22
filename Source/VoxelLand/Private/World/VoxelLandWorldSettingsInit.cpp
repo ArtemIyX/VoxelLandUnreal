@@ -687,7 +687,30 @@ TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> VoxelLandM4Preparat
 	{
 		return nullptr;
 	}
-	return ReserveM4Budget();
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = ReserveM4Budget();
+	if (Lease)
+	{
+		return Lease;
+	}
+	// Finite cache entries and completed task leases share the process budget
+	// with unlimited worlds. Take a stable coordinator reference under the
+	// budget lock, then release that lock before entering the coordinator:
+	// its eviction releases leases that acquire the same budget lock.
+	TSharedPtr<FM4PrepassCoordinator, ESPMode::ThreadSafe> Coordinator;
+	{
+		FM4BudgetState& State = M4BudgetState();
+		FScopeLock Lock(&State.Mutex);
+		if (!State.bCoordinatorStopped)
+		{
+			Coordinator = State.Coordinator;
+		}
+	}
+	if (Coordinator)
+	{
+		Coordinator->ReleaseIdleResults();
+		Lease = ReserveM4Budget();
+	}
+	return Lease;
 }
 
 bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,

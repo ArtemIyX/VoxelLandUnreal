@@ -11,7 +11,6 @@ class UVoxelLandM4WorldConfig;
 class UPrimitiveComponent;
 class FVoxelLandInitializationJob;
 class FVoxelLandDemoJob;
-class FVoxelLandModule;
 class UMaterialInterface;
 #if WITH_EDITOR
 class FPackageReloadedEvent;
@@ -149,6 +148,8 @@ private:
 	void PumpCompletions();
 	void Dispatch();
 	void HandleWorldBeginTearDown(UWorld* World);
+	void BindWorldTearDown();
+	void UnbindWorldTearDown();
 	void ShutdownInternal(bool bDestroyRegionActors);
 	void StopPendingInitialization();
 #if WITH_EDITOR
@@ -164,7 +165,6 @@ private:
 	void PollInitialization();
 	void StopDemo();
 	void PollDemo();
-	friend class FVoxelLandModule;
 	TSharedPtr<FVoxelLandInitializationJob, ESPMode::ThreadSafe> PendingInitialization;
 	TFuture<void> InitializationTask;
 	TSharedPtr<FVoxelLandDemoJob, ESPMode::ThreadSafe> PendingDemo;

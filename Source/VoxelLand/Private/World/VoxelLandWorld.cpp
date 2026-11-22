@@ -247,12 +247,14 @@ AVoxelLandWorld::~AVoxelLandWorld() = default;
 void AVoxelLandWorld::BeginPlay()
 {
 	bLifecycleEnded = false;
+	BindWorldTearDown();
 	Super::BeginPlay();
 }
 
 void AVoxelLandWorld::EndPlay(const EEndPlayReason::Type Reason)
 {
 	bLifecycleEnded = true;
+	UnbindWorldTearDown();
 	Shutdown();
 	Super::EndPlay(Reason);
 }
@@ -261,6 +263,7 @@ void AVoxelLandWorld::Destroyed()
 {
 	// EndPlay is not routed for an actor that never began play.
 	bLifecycleEnded = true;
+	UnbindWorldTearDown();
 	Shutdown();
 	Super::Destroyed();
 }
@@ -270,6 +273,7 @@ void AVoxelLandWorld::BeginDestroy()
 	// World or level teardown may bypass Destroyed and EndPlay. Do not call
 	// Destroy on other UObjects from GC; world teardown owns those actors.
 	bLifecycleEnded = true;
+	UnbindWorldTearDown();
 	ShutdownInternal(false);
 	Super::BeginDestroy();
 }
@@ -279,7 +283,26 @@ void AVoxelLandWorld::HandleWorldBeginTearDown(UWorld* World)
 	if (World == GetWorld())
 	{
 		bLifecycleEnded = true;
+		UnbindWorldTearDown();
 		Shutdown();
+	}
+}
+
+void AVoxelLandWorld::BindWorldTearDown()
+{
+	if (!WorldTearDownHandle.IsValid())
+	{
+		WorldTearDownHandle =
+			FWorldDelegates::OnWorldBeginTearDown.AddUObject(this, &AVoxelLandWorld::HandleWorldBeginTearDown);
+	}
+}
+
+void AVoxelLandWorld::UnbindWorldTearDown()
+{
+	if (WorldTearDownHandle.IsValid())
+	{
+		FWorldDelegates::OnWorldBeginTearDown.Remove(WorldTearDownHandle);
+		WorldTearDownHandle.Reset();
 	}
 }
 
@@ -297,8 +320,7 @@ void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::
 	{
 		return;
 	}
-	WorldTearDownHandle =
-		FWorldDelegates::OnWorldBeginTearDown.AddUObject(this, &AVoxelLandWorld::HandleWorldBeginTearDown);
+	BindWorldTearDown();
 	State = MakeUnique<FVoxelLandWorldState>();
 	State->Generator = Generator;
 	State->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
@@ -334,11 +356,6 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 	++ConfigurationEpoch;
 	StopDemo();
 	StopPendingInitialization();
-	if (WorldTearDownHandle.IsValid())
-	{
-		FWorldDelegates::OnWorldBeginTearDown.Remove(WorldTearDownHandle);
-		WorldTearDownHandle.Reset();
-	}
 	if (!State)
 	{
 		return;

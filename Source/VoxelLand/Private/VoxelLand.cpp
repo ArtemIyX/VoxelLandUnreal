@@ -1,9 +1,7 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VoxelLand.h"
-#include "World/VoxelLandWorld.h"
 #include "World/VoxelLandM4Preparation.h"
-#include "UObject/UObjectIterator.h"
 
 #define LOCTEXT_NAMESPACE "FVoxelLandModule"
 
@@ -14,14 +12,8 @@ void FVoxelLandModule::StartupModule()
 
 void FVoxelLandModule::ShutdownModule()
 {
-	// No worker or queued callback may retain module code across unloading.
-	for (TObjectIterator<AVoxelLandWorld> It; It; ++It)
-	{
-		if (It->PendingInitialization || It->PendingDemo || It->State)
-		{
-			It->Shutdown();
-		}
-	}
+	// Actor jobs are stopped by their own world/actor teardown. The module
+	// owns only the shared prepass coordinator and its producers.
 	VoxelLandM4Preparation::ShutdownCoordinator();
 }
 

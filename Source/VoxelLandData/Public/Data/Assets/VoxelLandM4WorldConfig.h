@@ -17,8 +17,8 @@ class VOXELLANDDATA_API UVoxelLandM4WorldConfig : public UDataAsset
 {
 	GENERATED_BODY()
 public:
-#if WITH_EDITOR
 	virtual void Serialize(FArchive& Ar) override;
+#if WITH_EDITOR
 	virtual void PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext) override;
 	// Set by the editor's first concurrent cook PreSave after full source and LUT validation.
 	void SetCookPreparationResult(bool bSucceeded) { bCookPreparationSucceeded = bSucceeded; }

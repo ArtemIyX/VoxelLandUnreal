@@ -12,13 +12,15 @@
 #include "UObject/ObjectSaveContext.h"
 #endif
 
-#if WITH_EDITOR
 void UVoxelLandM4WorldConfig::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
+#if WITH_EDITOR
 	EnforceCookPreparation(Ar);
+#endif
 }
 
+#if WITH_EDITOR
 void UVoxelLandM4WorldConfig::EnforceCookPreparation(FArchive& Ar) const
 {
 	// Only reject the actual export write. Harvest and other archive traversals

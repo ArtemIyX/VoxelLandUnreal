@@ -12,8 +12,8 @@ class VOXELLANDDATA_API UVoxelLandM4ControlGraph : public UVoxelLandTerrainGraph
 {
 	GENERATED_BODY()
 public:
-#if WITH_EDITOR
 	virtual void Serialize(FArchive& Ar) override;
+#if WITH_EDITOR
 	virtual void PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext) override;
 	void SetCookPreparationResult(bool bSucceeded) { bCookPreparationSucceeded = bSucceeded; }
 #endif

@@ -113,18 +113,20 @@ bool M4ProjectionTerminalValid(const FVoxelLandGraphNodeRecord& Node, int32 Inpu
 }
 }
 
-#if WITH_EDITOR
 void UVoxelLandM4ControlGraph::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
+#if WITH_EDITOR
 	const FObjectSavePackageSerializeContext* Context = Ar.GetSavePackageSerializeContext();
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
 	    && Context->GetPhase() == EObjectSaveContextPhase::Write && !bCookPreparationSucceeded)
 	{
 		Ar.SetError();
 	}
+#endif
 }
 
+#if WITH_EDITOR
 void UVoxelLandM4ControlGraph::PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext)
 {
 	Super::PostSaveRoot(ObjectSaveContext);

@@ -186,9 +186,12 @@ bool FVoxelLandM4DeterminismCapture::RunTest(const FString& Parameters)
 	Store.Op = EVoxelLandOpcode::StoreDensity;
 	Draft.Instructions = {Load, Store};
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
-	if (const FVoxelLandError Error = FVoxelLandProgram::Validate(Draft, Program))
+	const FVoxelLandError ProgramError = Async(EAsyncExecution::ThreadPool, [&Draft, &Program] {
+		return FVoxelLandProgram::Validate(Draft, Program);
+	}).Get();
+	if (ProgramError)
 	{
-		AddError(Error.Message);
+		AddError(ProgramError.Message);
 		return false;
 	}
 
@@ -242,10 +245,13 @@ bool FVoxelLandM4DeterminismCapture::RunTest(const FString& Parameters)
 			M4DeterminismInputHash(Control.Heights)));
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
 		uint64 GridHash = 0;
-		if (const FVoxelLandError Error = VoxelLandM4Prepass::Generate(
-				Domain, Input, Seed, FGuid(1, 2, 3, 4), 7, 16, Erosion, Grid, GridHash, [] { return false; }))
+		const FVoxelLandError PrepassError = Async(EAsyncExecution::ThreadPool, [&] {
+			return VoxelLandM4Prepass::Generate(
+				Domain, Input, Seed, FGuid(1, 2, 3, 4), 7, 16, Erosion, Grid, GridHash, [] { return false; });
+		}).Get();
+		if (PrepassError)
 		{
-			AddError(FString::Printf(TEXT("Seed %d prepass: %s"), Seed, *Error.Message));
+			AddError(FString::Printf(TEXT("Seed %d prepass: %s"), Seed, *PrepassError.Message));
 			return false;
 		}
 		FVoxelLandGeneratorSettings Settings;
@@ -260,10 +266,12 @@ bool FVoxelLandM4DeterminismCapture::RunTest(const FString& Parameters)
 		Overhang.FrequencyPerCm = 0.004f;
 		Overhang.NodeId = FGuid(11, 22, 33, 44);
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
-		if (const FVoxelLandError Error =
-				FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, true, Overhang, Generator))
+		const FVoxelLandError GeneratorError = Async(EAsyncExecution::ThreadPool, [&] {
+			return FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, true, Overhang, Generator);
+		}).Get();
+		if (GeneratorError)
 		{
-			AddError(FString::Printf(TEXT("Seed %d generator: %s"), Seed, *Error.Message));
+			AddError(FString::Printf(TEXT("Seed %d generator: %s"), Seed, *GeneratorError.Message));
 			return false;
 		}
 		// Both serial and parallel requests create and use workers on their own threads.

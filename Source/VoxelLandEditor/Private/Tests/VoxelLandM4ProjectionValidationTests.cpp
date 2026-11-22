@@ -63,7 +63,8 @@ bool FVoxelLandM4ProjectionValidationTest::RunTest(const FString& Parameters)
 	Bad.Nodes[3].Pins[0].Id = Bad.Nodes[1].Pins[0].Id;
 	TestFalse(TEXT("duplicate pin in removed branch rejected"), Project(Bad));
 	Bad = Source;
-	Bad.Links.Add(Bad.Links[1]);
+	const FVoxelLandGraphLinkRecord DuplicateLink = Bad.Links[1];
+	Bad.Links.Add(DuplicateLink);
 	TestFalse(TEXT("duplicate link into removed branch rejected"), Project(Bad));
 	Bad = Source;
 	Bad.Nodes[3].OperatorVersion = 2;

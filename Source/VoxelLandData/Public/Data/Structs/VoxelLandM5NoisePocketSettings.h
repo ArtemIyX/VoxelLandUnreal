@@ -17,6 +17,10 @@ struct VOXELLANDDATA_API FVoxelLandM5NoisePocketSettings
 		meta = (ClampMin = "0", ClampMax = "65535", ToolTip = "Unsigned normalized noise threshold, from 0 to 65535."))
 	int32 ThresholdQ16 = 50000;
 	UPROPERTY(EditAnywhere, Category = "Pockets",
+		meta = (ClampMin = "0", ClampMax = "1048576",
+			ToolTip = "Maximum pocket carve contribution in centimetres; zero disables carving."))
+	int32 AmplitudeCm = 400;
+	UPROPERTY(EditAnywhere, Category = "Pockets",
 		meta = (ClampMin = "0", ToolTip = "Minimum depth below the proven surface in centimetres."))
 	int32 MinDepthCm = 1000;
 	UPROPERTY(EditAnywhere, Category = "Pockets",

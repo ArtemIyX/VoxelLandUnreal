@@ -75,6 +75,7 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 	bool bBadVersion = false, bCorrupt = false, bAtomic = false, bDisabled = false, bPocketOnly = false;
 	bool bUnsupportedMask = false, bUnsupportedWater = false, bInvalidBounds = false, bBaseRevalidated = false;
 	bool bBadCandidateLimit = false, bBadAttempts = false, bBadRadii = false, bBadPeriod = false;
+	bool bBadAmplitudeNegative = false, bBadAmplitudeHigh = false;
 	bool bRegionalCapture = false, bBadAlignment = false, bBadRegionVoxelMultiple = false, bZeroVoxel = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
@@ -187,6 +188,9 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 		++X.Caves.Pockets.ThresholdQ16;
 		bAllFields &= Changed(X);
 		X = S;
+		++X.Caves.Pockets.AmplitudeCm;
+		bAllFields &= Changed(X);
+		X = S;
 		++X.Caves.Pockets.MinDepthCm;
 		bAllFields &= Changed(X);
 		X = S;
@@ -261,6 +265,11 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 		X.Caves.Pockets.LatticeSpacingCm = 1048577;
 		bBadPeriod = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error);
 		X = S;
+		X.Caves.Pockets.AmplitudeCm = -1;
+		bBadAmplitudeNegative = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error);
+		X.Caves.Pockets.AmplitudeCm = 1048577;
+		bBadAmplitudeHigh = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error);
+		X = S;
 		X.Base.Domain.Mode = EVoxelLandM4DomainMode::Unlimited;
 		X.Caves.PlanningMode = EVoxelLandM5PlanningMode::Regional;
 		X.Caves.RegionSizeCm = 10000;
@@ -295,6 +304,8 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("planner attempt limit enforced"), bBadAttempts);
 	TestTrue(TEXT("tunnel cannot exceed chamber radius"), bBadRadii);
 	TestTrue(TEXT("pocket period respects sampler limit"), bBadPeriod);
+	TestTrue(TEXT("negative pocket amplitude rejected"), bBadAmplitudeNegative);
+	TestTrue(TEXT("pocket amplitude above limit rejected"), bBadAmplitudeHigh);
 	TestTrue(TEXT("aligned regional inputs accepted"), bRegionalCapture);
 	TestTrue(TEXT("unaligned regional bounds rejected"), bBadAlignment);
 	TestTrue(TEXT("region size must be a voxel multiple"), bBadRegionVoxelMultiple);

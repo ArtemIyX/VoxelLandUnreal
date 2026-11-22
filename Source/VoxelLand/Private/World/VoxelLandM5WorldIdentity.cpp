@@ -71,7 +71,8 @@ bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error)
 		|| T.MinChamberRadiusCm < T.MaxTunnelRadiusCm || T.MaxChamberRadiusCm < T.MinChamberRadiusCm
 		|| T.MaxChamberRadiusCm > M5IdentityCoordinateLimit || N.LatticeSpacingCm < 1
 		|| N.LatticeSpacingCm > M5IdentityCoordinateLimit || N.ThresholdQ16 < 0 || N.ThresholdQ16 > 65535
-		|| N.MinDepthCm < 0 || N.MaxDepthCm < N.MinDepthCm || N.MaxDepthCm > 2 * M5IdentityCoordinateLimit
+		|| N.AmplitudeCm < 0 || N.AmplitudeCm > M5IdentityCoordinateLimit || N.MinDepthCm < 0
+		|| N.MaxDepthCm < N.MinDepthCm || N.MaxDepthCm > 2 * M5IdentityCoordinateLimit
 		|| L.MaxCandidates < T.MaxChambers || L.MaxCandidates > 256 || L.MaxEdges < 1 || L.MaxEdges > 32640
 		|| L.MaxSegments < 1 || L.MaxSegments > 8192 || L.MaxAttempts < 1 || L.MaxAttempts > 64 || L.MaxBytes < 1
 		|| L.MaxBytes > 268435456 || L.MaxValidationWork < 1 || L.MaxValidationWork > 1000000000)
@@ -174,6 +175,7 @@ bool VoxelLandM5WorldIdentity::Capture(
 	W.U8(N.bEnabled ? 1 : 0);
 	W.U32(uint32(N.LatticeSpacingCm));
 	W.U32(uint32(N.ThresholdQ16));
+	W.U32(uint32(N.AmplitudeCm));
 	W.U32(uint32(N.MinDepthCm));
 	W.U32(uint32(N.MaxDepthCm));
 	W.U8(N.bAllowAttachment ? 1 : 0);

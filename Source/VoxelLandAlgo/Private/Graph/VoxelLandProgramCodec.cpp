@@ -11,9 +11,18 @@ namespace
 {
 bool LessGuid(const FGuid& A, const FGuid& B)
 {
-	if (A.A != B.A) { return A.A < B.A; }
-	if (A.B != B.B) { return A.B < B.B; }
-	if (A.C != B.C) { return A.C < B.C; }
+	if (A.A != B.A)
+	{
+		return A.A < B.A;
+	}
+	if (A.B != B.B)
+	{
+		return A.B < B.B;
+	}
+	if (A.C != B.C)
+	{
+		return A.C < B.C;
+	}
 	return A.D < B.D;
 }
 
@@ -62,9 +71,8 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 	W.U32(1);
 	W.U32(uint32(Snapshot.SourceVersion));
 	TArray<FVoxelLandGraphParameter> Parameters = Snapshot.Parameters;
-	Parameters.Sort([](const FVoxelLandGraphParameter& A, const FVoxelLandGraphParameter& B) {
-		return LessGuid(A.Id, B.Id);
-	});
+	Parameters.Sort(
+		[](const FVoxelLandGraphParameter& A, const FVoxelLandGraphParameter& B) { return LessGuid(A.Id, B.Id); });
 	W.U32(Parameters.Num());
 	for (const FVoxelLandGraphParameter& P : Parameters)
 	{
@@ -81,9 +89,8 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 		W.U32(uint32(P.IntMax));
 	}
 	TArray<FVoxelLandGraphNodeRecord> Nodes = Snapshot.Nodes;
-	Nodes.Sort([](const FVoxelLandGraphNodeRecord& A, const FVoxelLandGraphNodeRecord& B) {
-		return LessGuid(A.Id, B.Id);
-	});
+	Nodes.Sort(
+		[](const FVoxelLandGraphNodeRecord& A, const FVoxelLandGraphNodeRecord& B) { return LessGuid(A.Id, B.Id); });
 	W.U32(Nodes.Num());
 	for (const FVoxelLandGraphNodeRecord& N : Nodes)
 	{
@@ -108,9 +115,18 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 	}
 	TArray<FVoxelLandGraphLinkRecord> Links = Snapshot.Links;
 	Links.Sort([](const FVoxelLandGraphLinkRecord& A, const FVoxelLandGraphLinkRecord& B) {
-		if (A.TargetNode != B.TargetNode) { return LessGuid(A.TargetNode, B.TargetNode); }
-		if (A.TargetPin != B.TargetPin) { return LessGuid(A.TargetPin, B.TargetPin); }
-		if (A.SourceNode != B.SourceNode) { return LessGuid(A.SourceNode, B.SourceNode); }
+		if (A.TargetNode != B.TargetNode)
+		{
+			return LessGuid(A.TargetNode, B.TargetNode);
+		}
+		if (A.TargetPin != B.TargetPin)
+		{
+			return LessGuid(A.TargetPin, B.TargetPin);
+		}
+		if (A.SourceNode != B.SourceNode)
+		{
+			return LessGuid(A.SourceNode, B.SourceNode);
+		}
 		return LessGuid(A.SourcePin, B.SourcePin);
 	});
 	W.U32(Links.Num());
@@ -122,9 +138,8 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 		WriteGuid(W, Link.TargetPin);
 	}
 	// Preserve the v1 byte stream exactly for graphs without function calls.
-	const bool bHasFunctionCalls = Snapshot.Nodes.ContainsByPredicate([](const FVoxelLandGraphNodeRecord& Node) {
-		return !Node.FunctionPath.IsNull();
-	});
+	const bool bHasFunctionCalls = Snapshot.Nodes.ContainsByPredicate(
+		[](const FVoxelLandGraphNodeRecord& Node) { return !Node.FunctionPath.IsNull(); });
 	if (bHasFunctionCalls || !Snapshot.Functions.IsEmpty())
 	{
 		W.U32(0x31464c56); // Versioned function dependency extension.
@@ -190,9 +205,7 @@ bool FVoxelLandProgramCodec::Pack(const FVoxelLandGraphSnapshot& Source, const F
 	FVoxelLandSerializedProgram Payload;
 	Payload.ProgramVersion = int32(Draft.FormatVersion);
 	Payload.ExternalFilterIndex = Draft.ExternalFilterIndex;
-	Payload.CompilerSemanticVersion = Draft.FormatVersion >= 2
-		                                  ? int32(FVoxelLandProgramDraft::CompilerSemanticVersion)
-		                                  : 0;
+	Payload.CompilerSemanticVersion = int32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	Payload.RegisterCount = Draft.RegisterCount;
 	Payload.SourceFingerprint = SignedBits(SourceFingerprint(Source));
 	Payload.ProgramFingerprint = SignedBits(Program.GetFingerprint());
@@ -270,10 +283,10 @@ bool DecodeInstructions(const FVoxelLandSerializedProgram& Payload, FVoxelLandPr
 {
 	for (const FVoxelLandSerializedInstruction& Record : Payload.Instructions)
 	{
-		if (Record.Opcode < 0 || Record.Opcode > int32(EVoxelLandOpcode::ExternalOperator) || Record.Dst < 0 || Record.
-		    Dst > 65535 ||
-		    Record.A < 0 || Record.A > 65535 || Record.B < 0 || Record.B > 65535 || Record.C < 0 || Record.C > 65535 ||
-		    Record.D < 0 || Record.D > 65535 || Record.E < 0 || Record.E > 65535 || Record.F < 0 || Record.F > 65535)
+		if (Record.Opcode < 0 || Record.Opcode > int32(EVoxelLandOpcode::ExternalOperator) || Record.Dst < 0
+			|| Record.Dst > 65535 || Record.A < 0 || Record.A > 65535 || Record.B < 0 || Record.B > 65535
+			|| Record.C < 0 || Record.C > 65535 || Record.D < 0 || Record.D > 65535 || Record.E < 0 || Record.E > 65535
+			|| Record.F < 0 || Record.F > 65535)
 		{
 			OutError = TEXT("Invalid serialized instruction");
 			return false;
@@ -302,9 +315,9 @@ bool DecodeParameters(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSer
 	{
 		const FVoxelLandGraphParameter* SourceParameter = Source.Parameters.FindByPredicate(
 			[&Record](const FVoxelLandGraphParameter& P) { return P.Id == Record.Id; });
-		if (!SourceParameter || ParameterIds.Contains(Record.Id) ||
-		    !SourceParameter->Name.Equals(Record.Name, ESearchCase::IgnoreCase) ||
-		    uint8(SourceParameter->Type) != Record.Type)
+		if (!SourceParameter || ParameterIds.Contains(Record.Id)
+			|| !SourceParameter->Name.Equals(Record.Name, ESearchCase::IgnoreCase)
+			|| uint8(SourceParameter->Type) != Record.Type)
 		{
 			OutError = TEXT("Compiled parameter mapping does not match source");
 			return false;
@@ -334,11 +347,10 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
 {
 	OutProgram.Reset();
 	OutError.Reset();
-	const bool bHasFunctions = !Source.Functions.IsEmpty() || Source.Nodes.ContainsByPredicate(
-		                           [](const FVoxelLandGraphNodeRecord& Node) {
-			                           return Node.OperatorId == VoxelLandGraphFunctionCallId() || !Node.FunctionPath.
-			                                  IsNull();
-		                           });
+	const bool bHasFunctions =
+		!Source.Functions.IsEmpty() || Source.Nodes.ContainsByPredicate([](const FVoxelLandGraphNodeRecord& Node) {
+			return Node.OperatorId == VoxelLandGraphFunctionCallId() || !Node.FunctionPath.IsNull();
+		});
 	if (bHasFunctions)
 	{
 		FVoxelLandGraphDiagnostic Diagnostic;
@@ -348,17 +360,16 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
 			return false;
 		}
 	}
-	if (Payload.ProgramVersion >= 2 && Payload.CompilerSemanticVersion != int32(
-		    FVoxelLandProgramDraft::CompilerSemanticVersion))
+	if (Payload.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion))
 	{
 		OutError = TEXT("Compiled graph has an incompatible compiler semantic version; recompile and save the graph");
 		return false;
 	}
-	if (Payload.EnvelopeVersion != 1 || Payload.ProgramVersion < 1 || Payload.ProgramVersion > 2 ||
-	    Payload.RegisterCount < 1 || Payload.RegisterCount > 1024 || Payload.Instructions.Num() > 8192 ||
-	    Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096 ||
-	    Payload.Noise.Num() > 4096 || Payload.ExternalOperators.Num() > 4096 || UnsignedBits(Payload.SourceFingerprint)
-	    != SourceFingerprint(Source))
+	if (Payload.EnvelopeVersion != 1 || Payload.ProgramVersion != int32(FVoxelLandProgramDraft::CurrentFormatVersion)
+		|| Payload.RegisterCount < 1 || Payload.RegisterCount > 1024 || Payload.Instructions.Num() > 8192
+		|| Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096
+		|| Payload.Noise.Num() > 4096 || Payload.ExternalOperators.Num() > 4096
+		|| UnsignedBits(Payload.SourceFingerprint) != SourceFingerprint(Source))
 	{
 		OutError = TEXT("Compiled payload is stale, unsupported or exceeds limits");
 		return false;

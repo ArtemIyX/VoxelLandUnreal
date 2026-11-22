@@ -234,7 +234,7 @@ bool FVoxelLandM3CompilerCodec::RunTest(const FString& Parameters)
     }).Get();
     TestTrue(TEXT("Node and link storage order and unreachable nodes do not alter program identity"), bStable);
 
-    const bool bRoundTrip = Async(EAsyncExecution::ThreadPool, [Graph, A]() {
+	const bool bRoundTrip = Async(EAsyncExecution::ThreadPool, [Graph, A]() {
         TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program, Loaded;
         FString Failure;
         FVoxelLandSerializedProgram Payload;
@@ -243,24 +243,31 @@ bool FVoxelLandM3CompilerCodec::RunTest(const FString& Parameters)
         {
             return false;
         }
-        FVoxelLandGraphSnapshot Changed = Graph;
-        Changed.Nodes[1].Pins[0].FloatDefault = 3.f;
-        if (FVoxelLandProgramCodec::Load(Changed, Payload, Loaded, Failure))
-        {
-            return false;
-        }
-        FVoxelLandSerializedProgram StaleSemantic = Payload;
-        StaleSemantic.CompilerSemanticVersion = 0;
-        if (FVoxelLandProgramCodec::Load(Graph, StaleSemantic, Loaded, Failure) || !Failure.Contains(TEXT("semantic version")))
-        {
-            return false;
-        }
-        Payload.ProgramFingerprint ^= 1;
-        return !FVoxelLandProgramCodec::Load(Graph, Payload, Loaded, Failure);
-    }).Get();
-    TestTrue(TEXT("Serialized program round-trips and rejects stale source and fingerprint corruption"), bRoundTrip);
+		FVoxelLandGraphSnapshot Changed = Graph;
+		Changed.Nodes[1].Pins[0].FloatDefault = 3.f;
+		if (FVoxelLandProgramCodec::Load(Changed, Payload, Loaded, Failure))
+		{
+			return false;
+		}
+		FVoxelLandSerializedProgram StaleSemantic = Payload;
+		StaleSemantic.CompilerSemanticVersion = 0;
+		if (FVoxelLandProgramCodec::Load(Graph, StaleSemantic, Loaded, Failure)
+			|| !Failure.Contains(TEXT("semantic version")))
+		{
+			return false;
+		}
+		FVoxelLandSerializedProgram Obsolete = Payload;
+		Obsolete.ProgramVersion = 1;
+		if (FVoxelLandProgramCodec::Load(Graph, Obsolete, Loaded, Failure))
+		{
+			return false;
+		}
+		Payload.ProgramFingerprint ^= 1;
+		return !FVoxelLandProgramCodec::Load(Graph, Payload, Loaded, Failure);
+	}).Get();
+	TestTrue(TEXT("Serialized program round-trips and rejects stale source and fingerprint corruption"), bRoundTrip);
 
-    FVoxelLandGraphSnapshot Invalid = Graph;
+	FVoxelLandGraphSnapshot Invalid = Graph;
     Invalid.Nodes[1].Id = Invalid.Nodes[0].Id;
     TestFalse(TEXT("Duplicate IDs rejected"), FVoxelLandGraphCompiler::Compile(Invalid, B, Error));
     Invalid = Graph;

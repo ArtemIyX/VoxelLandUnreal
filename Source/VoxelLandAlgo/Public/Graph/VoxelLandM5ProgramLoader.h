@@ -9,10 +9,11 @@ class FVoxelLandProgram;
 struct FVoxelLandGraphSnapshot;
 struct FVoxelLandSerializedProgram;
 
-// Loads the bounded, function-free, built-in-only subset of existing v1/v2
-// payloads on a worker thread. Both source and program fingerprints must match.
-// External providers/functions and non-ASCII names are rejected; nothing is
-// recompiled or substituted. The returned program retains its admitted memory
+// Loads the bounded, built-in-only subset of current v2 payloads on a worker
+// thread. Captured zero-input functions are supported; functions with interface
+// inputs, external providers and non-ASCII names remain unsupported. Both source
+// and program fingerprints must match. Nothing is recompiled or substituted.
+// The returned program retains its admitted memory
 // lease. Caller retains immutable input/provider ownership and accounts for
 // allocator overhead. Failure or cancellation leaves OutProgram unchanged.
 class VOXELLANDALGO_API FVoxelLandM5ProgramLoader final

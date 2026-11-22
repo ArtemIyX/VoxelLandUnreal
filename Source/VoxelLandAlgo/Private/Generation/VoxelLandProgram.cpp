@@ -45,10 +45,7 @@ bool ComputeProgramFingerprint(
 {
 	FCanonicalWriter W;
 	W.U32(D.FormatVersion);
-	if (D.FormatVersion >= 2)
-	{
-		W.U32(FVoxelLandProgramDraft::CompilerSemanticVersion);
-	}
+	W.U32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	W.U32(uint32(D.RegisterCount));
 	W.U32(D.Instructions.Num());
 	for (const FVoxelLandInstruction& I : D.Instructions)
@@ -62,12 +59,9 @@ bool ComputeProgramFingerprint(
 		W.U16(I.A);
 		W.U16(I.B);
 		W.U16(I.C);
-		if (D.FormatVersion >= 2)
-		{
-			W.U16(I.D);
-			W.U16(I.E);
-			W.U16(I.F);
-		}
+		W.U16(I.D);
+		W.U16(I.E);
+		W.U16(I.F);
 		W.U32(I.Imm);
 	}
 	W.U32(D.Constants.Num());
@@ -117,7 +111,6 @@ bool ComputeProgramFingerprint(
 		W.Source(N.Gain);
 		W.Source(N.Lacunarity);
 	}
-	if (D.FormatVersion >= 2)
 	{
 		W.U32(uint32(D.ExternalFilterIndex));
 		W.U8(D.SmoothFilter.bPresent ? 1 : 0);
@@ -239,7 +232,7 @@ FVoxelLandError ValidateProgramInputs(FVoxelLandProgramDraft& D, TFunctionRef<bo
 		FString Name;
 		if (!NormalizeName(P.Name, Name) || Names.Contains(Name)
 			|| (P.Type != EVoxelLandParameterType::Float && P.Type != EVoxelLandParameterType::Int32
-				&& !(D.FormatVersion == 2 && P.Type == EVoxelLandParameterType::Bool))
+				&& P.Type != EVoxelLandParameterType::Bool)
 			|| (P.Type == EVoxelLandParameterType::Bool && P.IntDefault != 0 && P.IntDefault != 1)
 			|| !FMath::IsFinite(P.FloatDefault))
 		{
@@ -253,7 +246,7 @@ FVoxelLandError ValidateProgramInputs(FVoxelLandProgramDraft& D, TFunctionRef<bo
 	{
 		const FVoxelLandValueSource& Enabled = D.SmoothFilter.Enabled;
 		const FVoxelLandValueSource& Strength = D.SmoothFilter.Strength;
-		if (D.FormatVersion < 2 || !SourceValid(D, Enabled, EVoxelLandParameterType::Bool)
+		if (!SourceValid(D, Enabled, EVoxelLandParameterType::Bool)
 			|| !SourceValid(D, Strength, EVoxelLandParameterType::Float))
 		{
 			return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Invalid smooth filter source"));
@@ -365,7 +358,7 @@ FVoxelLandM5Diagnostic FVoxelLandProgram::ValidateMetered(const FVoxelLandProgra
 	const int64 Seeds = Draft.Seeds.Num();
 	const int64 Noise = Draft.Noise.Num();
 	if (Instructions > 8192 || Constants > 65536 || Parameters > 4096 || Seeds > 4096 || Noise > 4096
-		|| (Draft.FormatVersion != 1 && Draft.FormatVersion != 2) || Draft.RegisterCount < 1
+		|| Draft.FormatVersion != FVoxelLandProgramDraft::CurrentFormatVersion || Draft.RegisterCount < 1
 		|| Draft.RegisterCount > 1024)
 	{
 		return Failure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Program exceeds input limits"));
@@ -437,7 +430,8 @@ FVoxelLandError FVoxelLandProgram::ValidateInternal(const FVoxelLandProgramDraft
 						  : MakeVoxelLandError(
 								EVoxelLandErrorCode::InvalidProgram, TEXT("Program exceeds bounded input limits"));
 	}
-	if ((Draft.FormatVersion != 1 && Draft.FormatVersion != 2) || Draft.RegisterCount < 1 || Draft.RegisterCount > 1024)
+	if (Draft.FormatVersion != FVoxelLandProgramDraft::CurrentFormatVersion || Draft.RegisterCount < 1
+		|| Draft.RegisterCount > 1024)
 	{
 		return MakeVoxelLandError(EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported version or register count"));
 	}
@@ -507,8 +501,7 @@ FVoxelLandError FVoxelLandProgram::ValidateInternal(const FVoxelLandProgramDraft
 	{
 		return Error;
 	}
-	if ((D.FormatVersion == 1 && (!D.ExternalOperators.IsEmpty() || D.ExternalFilterIndex != INDEX_NONE))
-		|| D.ExternalOperators.Num() > 4096
+	if (D.ExternalOperators.Num() > 4096
 		|| (D.ExternalFilterIndex != INDEX_NONE
 			&& (!D.ExternalOperators.IsValidIndex(D.ExternalFilterIndex) || D.SmoothFilter.bPresent)))
 	{
@@ -565,11 +558,6 @@ FVoxelLandError FVoxelLandProgram::ValidateInternal(const FVoxelLandProgramDraft
 		bool A = false, B = false, C = false, ExtraD = false, ExtraE = false, ExtraF = false, ImmReg = false,
 			 Writes = true;
 		uint8 TypeA = 1, TypeB = 1, TypeC = 1, WriteType = 1;
-		if (D.FormatVersion == 1 && uint16(I.Op) > uint16(EVoxelLandOpcode::StoreDensity))
-		{
-			return MakeVoxelLandError(
-				EVoxelLandErrorCode::InvalidProgram, TEXT("Version 2 opcode in version 1 program"), Index);
-		}
 		switch (I.Op)
 		{
 			case EVoxelLandOpcode::LoadX:

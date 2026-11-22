@@ -13,7 +13,7 @@ constexpr EAutomationTestFlags M5MeteredProgramFlags =
 FVoxelLandProgramDraft M5MeteredProgramSimpleDraft()
 {
 	FVoxelLandProgramDraft Draft;
-	Draft.FormatVersion = 1;
+	Draft.FormatVersion = FVoxelLandProgramDraft::CurrentFormatVersion;
 	Draft.RegisterCount = 1;
 	FVoxelLandInstruction Load;
 	Load.Op = EVoxelLandOpcode::LoadZ;
@@ -53,10 +53,11 @@ bool FVoxelLandM5MeteredProgramTest::RunTest(const FString& Parameters)
 		{
 			return false;
 		}
-		// Independently encoded version 1 program: format, register count, two
-		// fixed-width instructions, and zero constants/parameters/seeds/noise.
-		const uint8 Bytes[] = {1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0,
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+		// Independently encoded current program with compiler semantic version,
+		// full-width instructions and an empty external-operator table.
+		const uint8 Bytes[] = {2, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0};
 		const uint64 Expected = FXxHash64::HashBuffer(Bytes, sizeof(Bytes)).Hash;
 		TestEqual(TEXT("independent canonical fingerprint"), Program->GetFingerprint(), Expected);
 		TestEqual(TEXT("legacy fingerprint preserved"), Program->GetFingerprint(), Legacy->GetFingerprint());
@@ -94,6 +95,12 @@ bool FVoxelLandM5MeteredProgramFailureTest::RunTest(const FString& Parameters)
 		FVoxelLandM5Budget::TryCreate(1024 * 1024, 1, SmallWork);
 		FVoxelLandM5Budget::TryCreate(1, 10000000, SmallBytes);
 		FVoxelLandM5Budget::TryCreate(8 * 1024 * 1024, 10000000, Sufficient);
+		FVoxelLandProgramDraft Obsolete = Draft;
+		Obsolete.FormatVersion = 1;
+		TestEqual(TEXT("obsolete program format rejected"),
+			int32(FVoxelLandProgram::ValidateMetered(Obsolete, Sufficient.ToSharedRef(), NeverCancel, Prior).Code),
+			int32(EVoxelLandM5ErrorCode::InvalidInput));
+		TestTrue(TEXT("obsolete program preserves previous output"), Prior.Get() == Original);
 		TestEqual(TEXT("work exhaustion"),
 			int32(FVoxelLandProgram::ValidateMetered(Draft, SmallWork.ToSharedRef(), NeverCancel, Prior).Code),
 			int32(EVoxelLandM5ErrorCode::BudgetExceeded));

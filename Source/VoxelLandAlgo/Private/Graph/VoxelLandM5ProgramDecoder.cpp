@@ -41,6 +41,103 @@ bool M5DecoderInstructionRange(const FVoxelLandSerializedInstruction& Record)
 		&& Record.C >= 0 && Record.C <= 65535 && Record.D >= 0 && Record.D <= 65535 && Record.E >= 0
 		&& Record.E <= 65535 && Record.F >= 0 && Record.F <= 65535;
 }
+
+// Reproduce the legacy function-source size/version checks without copying the
+// graphs or materializing FText. Function interfaces with inputs need bounded
+// native tooltip capture and are rejected before reading any tooltip.
+FVoxelLandM5Diagnostic M5DecoderValidateFunctionBounds(const FVoxelLandGraphSnapshot& Source,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
+	using namespace VoxelLand::M5::CheckedMath;
+	if (Source.Functions.IsEmpty())
+	{
+		return {};
+	}
+	if (Source.Functions.Num() > 128)
+	{
+		return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function count exceeds limit"));
+	}
+	if (!Budget->TryChargeWork(int64(Source.Functions.Num()) * 2 + 1))
+	{
+		return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function validation work exceeds budget"));
+	}
+	int64 TotalNodes = Source.Nodes.Num();
+	int64 TotalLinks = Source.Links.Num();
+	if (TotalNodes > 4096 || TotalLinks > 16384)
+	{
+		return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function graph exceeds legacy limits"));
+	}
+	for (const FVoxelLandGraphFunctionSnapshot& Function : Source.Functions)
+	{
+		if (IsCancelled())
+		{
+			return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		}
+		if (Function.SourceVersion != 1 || Function.Inputs.Num() > 63
+			|| !TryAdd(TotalNodes, Function.Nodes.Num(), TotalNodes)
+			|| !TryAdd(TotalLinks, Function.Links.Num(), TotalLinks) || TotalNodes > 4096 || TotalLinks > 16384)
+		{
+			return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Captured function exceeds legacy limits"));
+		}
+		if (!Function.Inputs.IsEmpty())
+		{
+			return M5DecoderError(
+				EVoxelLandM5ErrorCode::Unproven, TEXT("Function input tooltip capture is not metered"));
+		}
+	}
+	int64 TotalConfiguration = 0;
+	const auto CheckNodes = [&Budget, &IsCancelled, &TotalConfiguration](
+								const TArray<FVoxelLandGraphNodeRecord>& Nodes) -> FVoxelLandM5Diagnostic {
+		for (const FVoxelLandGraphNodeRecord& Node : Nodes)
+		{
+			if (!Budget->TryChargeWork(3))
+			{
+				return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function node work exceeds budget"));
+			}
+			if (IsCancelled())
+			{
+				return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			}
+			if (Node.Pins.Num() > 64 || Node.Configuration.Num() > 65536
+				|| !TryAdd(TotalConfiguration, Node.Configuration.Num(), TotalConfiguration)
+				|| TotalConfiguration > 1048576)
+			{
+				return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function node exceeds legacy limits"));
+			}
+			if (!Budget->TryChargeWork(int64(Node.Pins.Num()) * 2))
+			{
+				return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function pin work exceeds budget"));
+			}
+			for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+			{
+				if (IsCancelled())
+				{
+					return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				}
+				if (Pin.Name.Len() > 128)
+				{
+					return M5DecoderError(
+						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function pin name exceeds legacy limit"));
+				}
+			}
+		}
+		return {};
+	};
+	FVoxelLandM5Diagnostic D = CheckNodes(Source.Nodes);
+	if (D.Code != EVoxelLandM5ErrorCode::None)
+	{
+		return D;
+	}
+	for (const FVoxelLandGraphFunctionSnapshot& Function : Source.Functions)
+	{
+		D = CheckNodes(Function.Nodes);
+		if (D.Code != EVoxelLandM5ErrorCode::None)
+		{
+			return D;
+		}
+	}
+	return {};
+}
 }
 
 FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphSnapshot& Source,
@@ -52,9 +149,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	{
 		return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
-	if (Payload.EnvelopeVersion != 1 || Payload.ProgramVersion < 1 || Payload.ProgramVersion > 2
-		|| (Payload.ProgramVersion == 2
-			&& Payload.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion)))
+	if (Payload.EnvelopeVersion != 1 || Payload.ProgramVersion != int32(FVoxelLandProgramDraft::CurrentFormatVersion)
+		|| Payload.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion))
 	{
 		return M5DecoderError(
 			EVoxelLandM5ErrorCode::UnsupportedVersion, TEXT("Unsupported program envelope or compiler version"));
@@ -111,6 +207,11 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Non-ASCII parameter names are not metered"));
 			}
 		}
+	}
+	if (FVoxelLandM5Diagnostic D = M5DecoderValidateFunctionBounds(Source, Budget, IsCancelled);
+		D.Code != EVoxelLandM5ErrorCode::None)
+	{
+		return D;
 	}
 	uint64 SourceHash = 0;
 	if (FVoxelLandM5Diagnostic D = VoxelLand::M5::SourceFingerprint::Compute(Source, Budget, IsCancelled, SourceHash);

@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 
-// Serialized opcode IDs are stable; never renumber or reuse them. Version 1 ends at StoreDensity.
+// Serialized opcode IDs are stable; never renumber or reuse them.
 enum class EVoxelLandOpcode : uint16
 {
 	LoadX = 0,
@@ -29,7 +29,7 @@ enum class EVoxelLandOpcode : uint16
 	Fbm2 = 21,
 	Fbm3 = 22,
 	StoreDensity = 23,
-	// Version 2 only. Integer and boolean registers use exact int32 storage.
+	// Integer and boolean registers use exact int32 storage.
 	LoadIntConstant = 24,
 	LoadBoolConstant = 25,
 	LoadIntParameter = 26,

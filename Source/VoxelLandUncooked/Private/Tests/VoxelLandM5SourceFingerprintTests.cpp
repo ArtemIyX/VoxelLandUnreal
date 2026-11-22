@@ -296,6 +296,49 @@ bool FVoxelLandM5SourceFingerprintFunctionsTest::RunTest(const FString& Paramete
 		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, NoWork.ToSharedRef(), NeverCancel, Hash).Code),
 		int32(EVoxelLandM5ErrorCode::BudgetExceeded));
 	TestEqual(TEXT("work preserves output"), Hash, Sentinel);
+
+	// Independent worst-case precharge: 128 paths with 1900 common characters,
+	// no nodes, plus closure/reachability work for the 128-by-128 matrix.
+	FVoxelLandGraphSnapshot ManyFunctions;
+	const FString Prefix = FString::ChrN(1900, TEXT('a'));
+	for (int32 I = 0; I < 128; ++I)
+	{
+		FVoxelLandGraphFunctionSnapshot F;
+		F.AssetPath = FString::Printf(TEXT("%s%03d"), *Prefix, I);
+		ManyFunctions.Functions.Add(MoveTemp(F));
+	}
+	constexpr int64 FunctionWork = int64(128) * 4096 + 1 + int64(128) * 128 * (int64(128) * 4 + 4100) + 128;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> OneBelow;
+	FVoxelLandM5Budget::TryCreate(1024 * 1024, FunctionWork - 1, OneBelow);
+	TestEqual(TEXT("shared-prefix work rejected before comparisons"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(ManyFunctions, OneBelow.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::BudgetExceeded));
+	TestEqual(TEXT("shared-prefix exhaustion preserves output"), Hash, Sentinel);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Exact;
+	FVoxelLandM5Budget::TryCreate(1024 * 1024, FunctionWork, Exact);
+	TestEqual(TEXT("exact work reaches dependency validation"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(ManyFunctions, Exact.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::InvalidInput)); // unreferenced dependencies
+	int64 Live = -1, Peak = -1, Charged = -1;
+	Exact->GetUsage(Live, Peak, Charged);
+	TestEqual(TEXT("exact function work charged"), Charged, FunctionWork);
+	TestEqual(TEXT("dependency scratch released"), Live, int64(0));
+	TestEqual(TEXT("invalid dependency preserves output"), Hash, Sentinel);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> CancelBudget;
+	FVoxelLandM5Budget::TryCreate(1024 * 1024, FunctionWork, CancelBudget);
+	int32 FunctionPolls = 0;
+	const auto CancelComparisons = [&FunctionPolls] {
+		return ++FunctionPolls == 130;
+	};
+	TestEqual(TEXT("cancellation during duplicate-path comparisons"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(
+			ManyFunctions, CancelBudget.ToSharedRef(), CancelComparisons, Hash)
+				.Code),
+		int32(EVoxelLandM5ErrorCode::Cancelled));
+	TestEqual(TEXT("comparison cancellation point"), FunctionPolls, 130);
+	CancelBudget->GetUsage(Live, Peak, Charged);
+	TestEqual(TEXT("cancelled dependency scratch released"), Live, int64(0));
+	TestEqual(TEXT("cancelled dependency preserves output"), Hash, Sentinel);
 	return true;
 }
 #endif

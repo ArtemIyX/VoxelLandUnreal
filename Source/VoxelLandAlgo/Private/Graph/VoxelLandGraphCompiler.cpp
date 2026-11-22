@@ -18,10 +18,13 @@ class FCompiler
 {
 public:
 	FCompiler(const FVoxelLandGraphSnapshot& InSource, const FVoxelLandOperatorRegistrySnapshot& InProviders,
-		FVoxelLandGraphDiagnostic& InDiagnostic) : Source(InSource), Providers(InProviders), Diagnostic(InDiagnostic),
-		                                           Error(InDiagnostic.Message)
+		FVoxelLandGraphDiagnostic& InDiagnostic)
+		: Source(InSource)
+		, Providers(InProviders)
+		, Diagnostic(InDiagnostic)
+		, Error(InDiagnostic.Message)
 	{
-		Draft.FormatVersion = 2;
+		Draft.FormatVersion = FVoxelLandProgramDraft::CurrentFormatVersion;
 	}
 
 	bool Run(FVoxelLandProgramDraft& Out)

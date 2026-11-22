@@ -14,7 +14,8 @@ constexpr EAutomationTestFlags M5ProgramDecoderTestFlags =
 FVoxelLandSerializedProgram M5DecoderEmptyGraphPayload()
 {
 	FVoxelLandSerializedProgram Payload;
-	Payload.ProgramVersion = 1;
+	Payload.ProgramVersion = int32(FVoxelLandProgramDraft::CurrentFormatVersion);
+	Payload.CompilerSemanticVersion = int32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	Payload.RegisterCount = 1;
 	const uint64 SourceHash = 0xfe4f399ebe726e73ULL; // Independent canonical empty-source vector.
 	FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
@@ -49,7 +50,7 @@ bool FVoxelLandM5ProgramDecoderBasicTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestEqual(TEXT("format"), Result->GetDraft().FormatVersion, uint32(1));
+	TestEqual(TEXT("format"), Result->GetDraft().FormatVersion, FVoxelLandProgramDraft::CurrentFormatVersion);
 	TestEqual(TEXT("registers"), Result->GetDraft().RegisterCount, 1);
 	TestEqual(TEXT("instructions"), Result->GetDraft().Instructions.Num(), 2);
 	if (Result->GetDraft().Instructions.Num() == 2)
@@ -118,6 +119,17 @@ bool FVoxelLandM5ProgramDecoderFailureTest::RunTest(const FString& Parameters)
 		int32(FVoxelLandM5ProgramDecoder::Decode(Source, Payload, Budget.ToSharedRef(), NeverCancel, Result).Code),
 		int32(EVoxelLandM5ErrorCode::UnsupportedVersion));
 	TestTrue(TEXT("unknown envelope retains prior output"), Result.Get() == Previous);
+	Payload = M5DecoderEmptyGraphPayload();
+	Payload.ProgramVersion = 1;
+	TestEqual(TEXT("old program format rejected"),
+		int32(FVoxelLandM5ProgramDecoder::Decode(Source, Payload, Budget.ToSharedRef(), NeverCancel, Result).Code),
+		int32(EVoxelLandM5ErrorCode::UnsupportedVersion));
+	TestTrue(TEXT("old program retains prior output"), Result.Get() == Previous);
+	Payload.ProgramVersion = 3;
+	TestEqual(TEXT("unknown program format rejected"),
+		int32(FVoxelLandM5ProgramDecoder::Decode(Source, Payload, Budget.ToSharedRef(), NeverCancel, Result).Code),
+		int32(EVoxelLandM5ErrorCode::UnsupportedVersion));
+	TestTrue(TEXT("unknown program retains prior output"), Result.Get() == Previous);
 	Payload = M5DecoderEmptyGraphPayload();
 	int32 Polls = 0;
 	TestEqual(TEXT("partial cancellation"),
@@ -299,9 +311,9 @@ bool FVoxelLandM5ProgramDecoderVersionTwoTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("version error retains output"), Result.Get() == Previous);
 	Payload.CompilerSemanticVersion = int32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	Source.Functions.AddDefaulted();
-	TestEqual(TEXT("function dependencies unsupported"),
+	TestEqual(TEXT("malformed function dependency rejected"),
 		int32(FVoxelLandM5ProgramDecoder::Decode(Source, Payload, Budget.ToSharedRef(), NeverCancel, Result).Code),
-		int32(EVoxelLandM5ErrorCode::Unproven));
+		int32(EVoxelLandM5ErrorCode::InvalidInput));
 	TestTrue(TEXT("function rejection retains output"), Result.Get() == Previous);
 	return true;
 }

@@ -140,10 +140,13 @@ FVoxelLandM5Diagnostic M5FingerprintValidateFunctions(const FVoxelLandGraphSnaps
 	}
 	int64 Work = 0;
 	int64 MatrixCells = 0;
+	int64 MatrixWork = 0;
+	// Each pair of paths may share all 2048 characters. Reserve two full
+	// comparisons per pair in addition to transitive closure and polling.
 	if (!TryMultiplyNonNegative(Count, Count, MatrixCells)
+		|| !TryMultiplyNonNegative(MatrixCells, int64(Count) * 4 + 4100, MatrixWork)
 		|| !TryMultiplyNonNegative(TotalNodes, int64(Count) + 1, Work) || !TryMultiplyNonNegative(Work, 4096, Work)
-		|| !TryAdd(Work, MatrixCells * (int64(Count) * 4 + 4), Work) || !TryAdd(Work, 128, Work)
-		|| !Budget->TryChargeWork(Work))
+		|| !TryAdd(Work, MatrixWork, Work) || !TryAdd(Work, 128, Work) || !Budget->TryChargeWork(Work))
 	{
 		return M5FingerprintError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function dependency work exceeds limit"));

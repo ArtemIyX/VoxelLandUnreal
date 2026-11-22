@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Async/Async.h"
+#include "Data/VoxelLandGraphFunctionId.h"
 #include "Data/Structs/VoxelLandGraphSnapshot.h"
 #include "Data/Structs/VoxelLandSerializedProgram.h"
 #include "Generation/VoxelLandGenerator.h"
@@ -13,16 +14,16 @@ namespace
 constexpr EAutomationTestFlags M5ProgramLoaderFlags =
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
 
-FVoxelLandSerializedProgram M5ProgramLoaderPayload(int32 Version)
+FVoxelLandSerializedProgram M5ProgramLoaderPayload()
 {
 	FVoxelLandSerializedProgram Payload;
-	Payload.ProgramVersion = Version;
-	Payload.CompilerSemanticVersion = Version == 2 ? int32(FVoxelLandProgramDraft::CompilerSemanticVersion) : 0;
+	Payload.ProgramVersion = int32(FVoxelLandProgramDraft::CurrentFormatVersion);
+	Payload.CompilerSemanticVersion = int32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	Payload.RegisterCount = 1;
 	// Independently encoded fixed-width LE streams, calculated with standalone
-	// xxHash64: empty source, then LoadZ/StoreDensity program in each version.
+	// xxHash64: empty source, then a current-format LoadZ/StoreDensity program.
 	const uint64 SourceHash = 0xfe4f399ebe726e73ULL;
-	const uint64 ProgramHash = Version == 2 ? 0x65dfaa0518ea24e0ULL : 0x4412893f00431bf7ULL;
+	const uint64 ProgramHash = 0x65dfaa0518ea24e0ULL;
 	FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
 	FMemory::Memcpy(&Payload.ProgramFingerprint, &ProgramHash, sizeof(ProgramHash));
 	FVoxelLandSerializedInstruction Load;
@@ -40,14 +41,13 @@ bool FVoxelLandM5ProgramLoaderCompatibilityTest::RunTest(const FString& Paramete
 {
 	return Async(EAsyncExecution::ThreadPool, [this] {
 		const FVoxelLandGraphSnapshot Source;
-		for (int32 Version : {1, 2})
 		{
-			const FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload(Version);
-			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Legacy;
+			const FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload();
+			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Baseline;
 			FString Error;
-			if (!TestTrue(TEXT("legacy codec loads fixed payload"),
-					FVoxelLandProgramCodec::Load(Source, Payload, Legacy, Error))
-				|| !Legacy)
+			if (!TestTrue(TEXT("current codec loads fixed payload"),
+					FVoxelLandProgramCodec::Load(Source, Payload, Baseline, Error))
+				|| !Baseline)
 			{
 				return false;
 			}
@@ -64,10 +64,11 @@ bool FVoxelLandM5ProgramLoaderCompatibilityTest::RunTest(const FString& Paramete
 			{
 				return false;
 			}
-			const uint64 Expected = Version == 2 ? 0x65dfaa0518ea24e0ULL : 0x4412893f00431bf7ULL;
+			const uint64 Expected = 0x65dfaa0518ea24e0ULL;
 			TestEqual(TEXT("independent fingerprint"), Program->GetFingerprint(), Expected);
-			TestEqual(TEXT("legacy fingerprint"), Program->GetFingerprint(), Legacy->GetFingerprint());
-			TestEqual(TEXT("format preserved"), Program->GetData().FormatVersion, uint32(Version));
+			TestEqual(TEXT("current codec fingerprint"), Program->GetFingerprint(), Baseline->GetFingerprint());
+			TestEqual(TEXT("format preserved"), Program->GetData().FormatVersion,
+				FVoxelLandProgramDraft::CurrentFormatVersion);
 			int64 Live = 0, Peak = 0, Work = 0;
 			Budget->GetUsage(Live, Peak, Work);
 			TestTrue(TEXT("validated program retains admission"), Live > 0);
@@ -89,7 +90,7 @@ bool FVoxelLandM5ProgramLoaderFailuresTest::RunTest(const FString& Parameters)
 {
 	return Async(EAsyncExecution::ThreadPool, [this] {
 		const FVoxelLandGraphSnapshot Source;
-		FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload(2);
+		FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload();
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Prior;
 		FString Error;
 		if (!FVoxelLandProgramCodec::Load(Source, Payload, Prior, Error) || !Prior)
@@ -107,30 +108,41 @@ bool FVoxelLandM5ProgramLoaderFailuresTest::RunTest(const FString& Parameters)
 			int32(FVoxelLandM5ProgramLoader::Load(Source, Payload, Budget.ToSharedRef(), NeverCancel, Prior).Code),
 			int32(EVoxelLandM5ErrorCode::InvalidInput));
 		TestTrue(TEXT("corrupt program retains prior"), Prior.Get() == Original);
-		Payload = M5ProgramLoaderPayload(2);
+		Payload = M5ProgramLoaderPayload();
 		Payload.SourceFingerprint ^= 1;
 		TestEqual(TEXT("corrupt source fingerprint"),
 			int32(FVoxelLandM5ProgramLoader::Load(Source, Payload, Budget.ToSharedRef(), NeverCancel, Prior).Code),
 			int32(EVoxelLandM5ErrorCode::InvalidInput));
 		TestTrue(TEXT("corrupt source retains prior"), Prior.Get() == Original);
-		Payload = M5ProgramLoaderPayload(2);
+		Payload = M5ProgramLoaderPayload();
 		Payload.CompilerSemanticVersion += 1;
 		TestEqual(TEXT("incompatible semantics"),
 			int32(FVoxelLandM5ProgramLoader::Load(Source, Payload, Budget.ToSharedRef(), NeverCancel, Prior).Code),
 			int32(EVoxelLandM5ErrorCode::UnsupportedVersion));
-		Payload = M5ProgramLoaderPayload(2);
+		Payload = M5ProgramLoaderPayload();
+		Payload.ProgramVersion = 1;
+		TestEqual(TEXT("old program format rejected"),
+			int32(FVoxelLandM5ProgramLoader::Load(Source, Payload, Budget.ToSharedRef(), NeverCancel, Prior).Code),
+			int32(EVoxelLandM5ErrorCode::UnsupportedVersion));
+		TestTrue(TEXT("old format retains prior"), Prior.Get() == Original);
+		Payload.ProgramVersion = 3;
+		TestEqual(TEXT("unknown program format rejected"),
+			int32(FVoxelLandM5ProgramLoader::Load(Source, Payload, Budget.ToSharedRef(), NeverCancel, Prior).Code),
+			int32(EVoxelLandM5ErrorCode::UnsupportedVersion));
+		TestTrue(TEXT("unknown format retains prior"), Prior.Get() == Original);
+		Payload = M5ProgramLoaderPayload();
 		Payload.ExternalOperators.AddDefaulted();
 		TestEqual(TEXT("external provider rejected"),
 			int32(FVoxelLandM5ProgramLoader::Load(Source, Payload, Budget.ToSharedRef(), NeverCancel, Prior).Code),
 			int32(EVoxelLandM5ErrorCode::Unproven));
 		TestTrue(TEXT("provider rejection retains prior"), Prior.Get() == Original);
-		Payload = M5ProgramLoaderPayload(2);
+		Payload = M5ProgramLoaderPayload();
 		FVoxelLandGraphSnapshot FunctionSource;
 		FunctionSource.Functions.AddDefaulted();
-		TestEqual(TEXT("function dependency rejected"),
+		TestEqual(TEXT("malformed function dependency rejected"),
 			int32(FVoxelLandM5ProgramLoader::Load(FunctionSource, Payload, Budget.ToSharedRef(), NeverCancel, Prior)
 					.Code),
-			int32(EVoxelLandM5ErrorCode::Unproven));
+			int32(EVoxelLandM5ErrorCode::InvalidInput));
 		TestTrue(TEXT("function rejection retains prior"), Prior.Get() == Original);
 		TestEqual(TEXT("immediate cancellation"),
 			int32(FVoxelLandM5ProgramLoader::Load(
@@ -151,7 +163,7 @@ bool FVoxelLandM5ProgramLoaderBudgetTest::RunTest(const FString& Parameters)
 {
 	return Async(EAsyncExecution::ThreadPool, [this] {
 		const FVoxelLandGraphSnapshot Source;
-		const FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload(1);
+		const FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload();
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Probe;
 		FVoxelLandM5Budget::TryCreate(8 * 1024 * 1024, 10000000, Probe);
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Prior;
@@ -218,7 +230,7 @@ bool FVoxelLandM5ProgramLoaderV2CombinedTest::RunTest(const FString& Parameters)
 		Strength.Name = TEXT("Strength");
 		Strength.FloatDefault = 0.5f;
 		Source.Parameters = {Frequency, Enabled, Strength};
-		FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload(2);
+		FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload();
 		// Independently encoded canonical source (185 bytes) and program (210
 		// bytes), calculated using a standalone xxHash64 implementation.
 		const uint64 SourceHash = 0xf9ef65dcbe6e915dULL;
@@ -302,15 +314,122 @@ bool FVoxelLandM5ProgramLoaderV2CombinedTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("smooth enabled index"), Data.SmoothFilter.Enabled.Index, uint32(1));
 		TestTrue(TEXT("smooth strength parameter"), Data.SmoothFilter.Strength.bParameter);
 		TestEqual(TEXT("smooth strength index"), Data.SmoothFilter.Strength.Index, uint32(2));
-		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Legacy;
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Baseline;
 		FString Error;
-		if (!TestTrue(TEXT("legacy codec accepts same v2 payload"),
-				FVoxelLandProgramCodec::Load(Source, Payload, Legacy, Error))
-			|| !Legacy)
+		if (!TestTrue(TEXT("current codec accepts same v2 payload"),
+				FVoxelLandProgramCodec::Load(Source, Payload, Baseline, Error))
+			|| !Baseline)
 		{
 			return false;
 		}
-		TestEqual(TEXT("legacy fingerprint unchanged"), Legacy->GetFingerprint(), ProgramHash);
+		TestEqual(TEXT("current codec fingerprint unchanged"), Baseline->GetFingerprint(), ProgramHash);
+		return true;
+	}).Get();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5ProgramLoaderFunctionsTest, "VoxelLand.M5.Identity.ProgramLoader.Functions", M5ProgramLoaderFlags)
+bool FVoxelLandM5ProgramLoaderFunctionsTest::RunTest(const FString& Parameters)
+{
+	return Async(EAsyncExecution::ThreadPool, [this] {
+		FVoxelLandGraphSnapshot Source;
+		FVoxelLandGraphNodeRecord ACall;
+		ACall.Id = FGuid(1, 0, 0, 0);
+		ACall.OperatorId = VoxelLandGraphFunctionCallId();
+		ACall.FunctionPath = FSoftObjectPath(TEXT("/Game/A.A"));
+		FVoxelLandGraphNodeRecord BCall = ACall;
+		BCall.Id = FGuid(2, 0, 0, 0);
+		BCall.FunctionPath = FSoftObjectPath(TEXT("/Game/B.B"));
+		Source.Nodes = {ACall, BCall};
+		FVoxelLandGraphFunctionSnapshot A;
+		A.AssetPath = TEXT("/Game/A.A");
+		FVoxelLandGraphNodeRecord Nested = BCall;
+		Nested.Id = FGuid(10, 0, 0, 0);
+		A.Nodes.Add(Nested);
+		FVoxelLandGraphFunctionSnapshot B;
+		B.AssetPath = TEXT("/Game/B.B");
+		Source.Functions = {A, B};
+		// Independently encoded 342-byte graph/function extension from the
+		// source-fingerprint contract, including A -> B and a shared root B.
+		const uint64 SourceHash = 0x06b6c560852b27e2ULL;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+		if (!FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 200000000, Budget))
+		{
+			return false;
+		}
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+		const auto NeverCancel = [] {
+			return false;
+		};
+		{
+			FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload();
+			FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
+			const FVoxelLandM5Diagnostic D =
+				FVoxelLandM5ProgramLoader::Load(Source, Payload, Budget.ToSharedRef(), NeverCancel, Program);
+			if (!TestEqual(
+					TEXT("nested shared zero-input functions load"), int32(D.Code), int32(EVoxelLandM5ErrorCode::None))
+				|| !Program)
+			{
+				return false;
+			}
+			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Baseline;
+			FString Error;
+			if (!TestTrue(TEXT("current codec accepts captured dependencies"),
+					FVoxelLandProgramCodec::Load(Source, Payload, Baseline, Error))
+				|| !Baseline)
+			{
+				return false;
+			}
+			const uint64 Expected = 0x65dfaa0518ea24e0ULL;
+			TestEqual(TEXT("fixed program identity"), Program->GetFingerprint(), Expected);
+			TestEqual(TEXT("current codec program identity"), Baseline->GetFingerprint(), Expected);
+		}
+		const FVoxelLandProgram* Previous = Program.Get();
+		FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload();
+		FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
+		FVoxelLandGraphSnapshot Missing = Source;
+		Missing.Functions.RemoveAt(1);
+		TestEqual(TEXT("missing dependency rejected"),
+			int32(FVoxelLandM5ProgramLoader::Load(Missing, Payload, Budget.ToSharedRef(), NeverCancel, Program).Code),
+			int32(EVoxelLandM5ErrorCode::InvalidInput));
+		TestTrue(TEXT("missing preserves program"), Program.Get() == Previous);
+		FVoxelLandGraphSnapshot Cycle = Source;
+		Cycle.Functions[1].Nodes.Add(ACall);
+		TestEqual(TEXT("function cycle rejected"),
+			int32(FVoxelLandM5ProgramLoader::Load(Cycle, Payload, Budget.ToSharedRef(), NeverCancel, Program).Code),
+			int32(EVoxelLandM5ErrorCode::InvalidInput));
+		TestTrue(TEXT("cycle preserves program"), Program.Get() == Previous);
+		FVoxelLandGraphSnapshot InvalidVersion = Source;
+		InvalidVersion.Functions[0].SourceVersion = 2;
+		TestEqual(TEXT("function source version rejected"),
+			int32(FVoxelLandM5ProgramLoader::Load(InvalidVersion, Payload, Budget.ToSharedRef(), NeverCancel, Program)
+					.Code),
+			int32(EVoxelLandM5ErrorCode::InvalidInput));
+		FVoxelLandGraphSnapshot TooManyPins = Source;
+		TooManyPins.Nodes[0].Pins.SetNum(65);
+		TestEqual(TEXT("legacy pin limit enforced"),
+			int32(
+				FVoxelLandM5ProgramLoader::Load(TooManyPins, Payload, Budget.ToSharedRef(), NeverCancel, Program).Code),
+			int32(EVoxelLandM5ErrorCode::InvalidInput));
+		FVoxelLandGraphSnapshot InputInterface = Source;
+		InputInterface.Functions[0].Inputs.AddDefaulted();
+		TestEqual(TEXT("uncaptured tooltip remains unsupported"),
+			int32(FVoxelLandM5ProgramLoader::Load(InputInterface, Payload, Budget.ToSharedRef(), NeverCancel, Program)
+					.Code),
+			int32(EVoxelLandM5ErrorCode::Unproven));
+		TestTrue(TEXT("unsupported interface preserves program"), Program.Get() == Previous);
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> NoWork;
+		FVoxelLandM5Budget::TryCreate(1024 * 1024, 1, NoWork);
+		TestEqual(TEXT("dependency work exhausted"),
+			int32(FVoxelLandM5ProgramLoader::Load(Source, Payload, NoWork.ToSharedRef(), NeverCancel, Program).Code),
+			int32(EVoxelLandM5ErrorCode::BudgetExceeded));
+		TestTrue(TEXT("budget failure preserves program"), Program.Get() == Previous);
+		int32 Polls = 0;
+		TestEqual(TEXT("function preflight cancellation"),
+			int32(FVoxelLandM5ProgramLoader::Load(
+				Source, Payload, Budget.ToSharedRef(), [&Polls] { return ++Polls == 3; }, Program)
+					.Code),
+			int32(EVoxelLandM5ErrorCode::Cancelled));
+		TestTrue(TEXT("cancellation preserves program"), Program.Get() == Previous);
 		return true;
 	}).Get();
 }

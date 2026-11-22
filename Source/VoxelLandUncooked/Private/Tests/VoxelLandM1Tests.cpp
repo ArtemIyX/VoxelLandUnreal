@@ -222,6 +222,10 @@ bool FVoxelLandM1Validation::RunTest(const FString& Parameters)
 		}).Get();
 	};
 	FVoxelLandProgramDraft Bad = Plane();
+	Bad.FormatVersion = 1;
+	TestEqual(TEXT("obsolete program format rejected"), int32(Validate(Bad).Code),
+		int32(EVoxelLandErrorCode::InvalidProgram));
+	Bad = Plane();
 	Bad.FormatVersion = 999;
 	TestEqual(TEXT("version rejected"), int32(Validate(Bad).Code), int32(EVoxelLandErrorCode::InvalidProgram));
 	Bad = Plane();
@@ -408,8 +412,8 @@ bool FVoxelLandM1Validation::RunTest(const FString& Parameters)
 	Bad.Instructions[2].Op = EVoxelLandOpcode::Divide;
 	const FSampleResult DivideByZero =
 		Async(EAsyncExecution::ThreadPool, [Bad]() { return Sample(Bad, {}, 0, 1); }).Get();
-	TestEqual(TEXT("non-finite VM result rejected"), int32(DivideByZero.Error.Code),
-		int32(EVoxelLandErrorCode::NonFiniteDensity));
+	TestEqual(TEXT("division by zero rejected"), int32(DivideByZero.Error.Code),
+		int32(EVoxelLandErrorCode::InvalidMathDomain));
 	TestTrue(TEXT("failed evaluation publishes no samples"), DivideByZero.Values.IsEmpty());
 	return true;
 }

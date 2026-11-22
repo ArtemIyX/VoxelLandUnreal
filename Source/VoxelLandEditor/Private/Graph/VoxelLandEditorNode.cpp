@@ -15,17 +15,19 @@
 
 #define LOCTEXT_NAMESPACE "VoxelLandEditorNode"
 
-namespace
+class FVoxelLandEditorNodeInternals final
 {
-const FName FloatPin(TEXT("float"));
-const FName IntPin(TEXT("int"));
-const FName BoolPin(TEXT("bool"));
+public:
+	inline static const FName FloatPin{TEXT("float")};
+	inline static const FName IntPin{TEXT("int")};
+	inline static const FName BoolPin{TEXT("bool")};
 
-EVoxelLandBuiltinNode VariadicContractKind(int32 Kind)
-{
-    return Kind == int32(EVoxelLandBuiltinNode::Multiply) ? EVoxelLandBuiltinNode::Multiply : EVoxelLandBuiltinNode::Add;
-}
-}
+	static EVoxelLandBuiltinNode VariadicContractKind(int32 Kind)
+	{
+		return Kind == int32(EVoxelLandBuiltinNode::Multiply) ? EVoxelLandBuiltinNode::Multiply
+															  : EVoxelLandBuiltinNode::Add;
+	}
+};
 
 FText UVoxelLandEditorNode::DisplayName(int32 InKind)
 {
@@ -180,11 +182,10 @@ void UVoxelLandEditorNode::AllocateDefaultPins()
 	{
 		for (const FVoxelLandGraphPinRecord& Spec : ExternalPins)
 		{
-			const FName Category = Spec.Type == EVoxelLandGraphValueType::Float
-				                       ? FloatPin
-				                       : Spec.Type == EVoxelLandGraphValueType::Int32
-				                       ? IntPin
-				                       : BoolPin;
+			const FName Category =
+				Spec.Type == EVoxelLandGraphValueType::Float   ? FVoxelLandEditorNodeInternals::FloatPin
+				: Spec.Type == EVoxelLandGraphValueType::Int32 ? FVoxelLandEditorNodeInternals::IntPin
+															   : FVoxelLandEditorNodeInternals::BoolPin;
 			UEdGraphPin* Pin = CreatePin(Spec.bOutput ? EGPD_Output : EGPD_Input, Category, FName(*Spec.Name));
 			if (Spec.InterfaceId.IsValid())
 			{
@@ -225,8 +226,9 @@ void UVoxelLandEditorNode::AllocateDefaultPins()
 	}
 	for (const FVoxelLandBuiltinPinSpec& PinSpec : Spec.Pins)
 	{
-		const FName Category = PinSpec.Type == EVoxelLandGraphValueType::Float ? FloatPin :
-			PinSpec.Type == EVoxelLandGraphValueType::Int32 ? IntPin : BoolPin;
+		const FName Category = PinSpec.Type == EVoxelLandGraphValueType::Float ? FVoxelLandEditorNodeInternals::FloatPin
+							 : PinSpec.Type == EVoxelLandGraphValueType::Int32 ? FVoxelLandEditorNodeInternals::IntPin
+																			   : FVoxelLandEditorNodeInternals::BoolPin;
 		UEdGraphPin* Pin = CreatePin(PinSpec.bOutput ? EGPD_Output : EGPD_Input, Category, FName(*PinSpec.Name));
 		if (!PinSpec.bOutput)
 		{
@@ -320,11 +322,10 @@ void UVoxelLandEditorNode::RefreshFunctionInputs(const UVoxelLandGraphFunction& 
 				break;
 			}
 		}
-		const FName Category = Parameter.Type == EVoxelLandGraphValueType::Float
-			                       ? FloatPin
-			                       : Parameter.Type == EVoxelLandGraphValueType::Int32
-			                       ? IntPin
-			                       : BoolPin;
+		const FName Category =
+			Parameter.Type == EVoxelLandGraphValueType::Float   ? FVoxelLandEditorNodeInternals::FloatPin
+			: Parameter.Type == EVoxelLandGraphValueType::Int32 ? FVoxelLandEditorNodeInternals::IntPin
+																: FVoxelLandEditorNodeInternals::BoolPin;
 		if (!Pin)
 		{
 			Pin = CreatePin(EGPD_Input, Category, FName(*Parameter.Name));
@@ -374,11 +375,10 @@ void UVoxelLandEditorNode::RefreshFunctionOutput(const UVoxelLandGraphFunction& 
 			break;
 		}
 	}
-	const FName OutputCategory = Function.OutputType == EVoxelLandGraphValueType::Float
-		                             ? FloatPin
-		                             : Function.OutputType == EVoxelLandGraphValueType::Int32
-		                             ? IntPin
-		                             : BoolPin;
+	const FName OutputCategory =
+		Function.OutputType == EVoxelLandGraphValueType::Float   ? FVoxelLandEditorNodeInternals::FloatPin
+		: Function.OutputType == EVoxelLandGraphValueType::Int32 ? FVoxelLandEditorNodeInternals::IntPin
+																 : FVoxelLandEditorNodeInternals::BoolPin;
 	if (!Output) { Output = CreatePin(EGPD_Output, OutputCategory, TEXT("Result")); }
 	if (Output->PinType.PinCategory != OutputCategory)
 	{
@@ -428,11 +428,10 @@ void UVoxelLandEditorNode::UpdateFunctionPinTemplates()
 		Spec.InterfaceId = FunctionPinIds.FindRef(Pin->PinId);
 		Spec.Name = Pin->PinName.ToString();
 		Spec.bOutput = Pin->Direction == EGPD_Output;
-		Spec.Type = Pin->PinType.PinCategory == IntPin
-			            ? EVoxelLandGraphValueType::Int32
-			            : Pin->PinType.PinCategory == BoolPin
-			            ? EVoxelLandGraphValueType::Bool
-			            : EVoxelLandGraphValueType::Float;
+		Spec.Type = Pin->PinType.PinCategory == FVoxelLandEditorNodeInternals::IntPin ? EVoxelLandGraphValueType::Int32
+				  : Pin->PinType.PinCategory == FVoxelLandEditorNodeInternals::BoolPin
+					  ? EVoxelLandGraphValueType::Bool
+					  : EVoxelLandGraphValueType::Float;
 		if (Spec.Type == EVoxelLandGraphValueType::Float) { LexTryParseString(Spec.FloatDefault, *Pin->DefaultValue); }
 		else if (Spec.Type == EVoxelLandGraphValueType::Int32)
 		{
@@ -467,7 +466,8 @@ void UVoxelLandEditorNode::RefreshFunctionInterface()
 void UVoxelLandEditorNode::AddVariadicInput()
 {
 	FVoxelLandBuiltinNodeSpec Spec;
-	if (!FVoxelLandBuiltinCatalog::Find(VariadicContractKind(Kind), Spec) || VariadicInputs >= Spec.MaxVariadicInputs)
+	if (!FVoxelLandBuiltinCatalog::Find(FVoxelLandEditorNodeInternals::VariadicContractKind(Kind), Spec)
+		|| VariadicInputs >= Spec.MaxVariadicInputs)
 	{
 		return;
 	}
@@ -476,11 +476,12 @@ void UVoxelLandEditorNode::AddVariadicInput()
 	GetGraph()->Modify();
 	++VariadicInputs;
 	FVoxelLandBuiltinNodeSpec UpdatedSpec;
-	const bool bHasPinSpec = FVoxelLandBuiltinCatalog::Find(VariadicContractKind(Kind), UpdatedSpec, VariadicInputs) &&
-		UpdatedSpec.Pins.IsValidIndex(VariadicInputs - 1);
+	const bool bHasPinSpec = FVoxelLandBuiltinCatalog::Find(
+								 FVoxelLandEditorNodeInternals::VariadicContractKind(Kind), UpdatedSpec, VariadicInputs)
+						  && UpdatedSpec.Pins.IsValidIndex(VariadicInputs - 1);
 	const FString PinName = bHasPinSpec ? UpdatedSpec.Pins[VariadicInputs - 1].Name :
 		FString::Printf(TEXT("Input %d"), VariadicInputs);
-	UEdGraphPin* Pin = CreatePin(EGPD_Input, FloatPin, *PinName);
+	UEdGraphPin* Pin = CreatePin(EGPD_Input, FVoxelLandEditorNodeInternals::FloatPin, *PinName);
 	Pin->DefaultValue = bHasPinSpec ? UpdatedSpec.Pins[VariadicInputs - 1].DefaultLiteral :
 		(Kind == int32(EVoxelLandBuiltinNode::Multiply) ? TEXT("1") : TEXT("0"));
 	Pin->AutogeneratedDefaultValue = Pin->DefaultValue;
@@ -492,7 +493,8 @@ void UVoxelLandEditorNode::AddVariadicInput()
 void UVoxelLandEditorNode::RenumberVariadicInputs()
 {
 	FVoxelLandBuiltinNodeSpec Spec;
-	const bool bHasSpec = FVoxelLandBuiltinCatalog::Find(VariadicContractKind(Kind), Spec, VariadicInputs);
+	const bool bHasSpec =
+		FVoxelLandBuiltinCatalog::Find(FVoxelLandEditorNodeInternals::VariadicContractKind(Kind), Spec, VariadicInputs);
 	for (int32 Index = 0; Index < VariadicInputs; ++Index)
 	{
 		UEdGraphPin* Pin = Pins.IsValidIndex(Index) ? Pins[Index] : nullptr;
@@ -512,8 +514,8 @@ void UVoxelLandEditorNode::RemoveVariadicInput(FGuid PinId)
 		return Pin && Pin->PinId == PinId && Pin->Direction == EGPD_Input;
 	});
 	FVoxelLandBuiltinNodeSpec Spec;
-	if (!FVoxelLandBuiltinCatalog::Find(VariadicContractKind(Kind), Spec) ||
-		VariadicInputs <= Spec.MinVariadicInputs || Index < 0 || Index >= VariadicInputs)
+	if (!FVoxelLandBuiltinCatalog::Find(FVoxelLandEditorNodeInternals::VariadicContractKind(Kind), Spec)
+		|| VariadicInputs <= Spec.MinVariadicInputs || Index < 0 || Index >= VariadicInputs)
 	{
 		return;
 	}

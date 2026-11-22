@@ -5,19 +5,27 @@
 
 namespace VoxelLand::M5::Geometry
 {
-namespace
+class FVoxelLandM5GeometryInternals final
 {
-bool IsFiniteVector(const FVector3d& V)
+public:
+	static bool IsFiniteVector(const FVector3d& V);
+	static bool IsValidRadius(double Radius);
+	static bool TryDifference(const FVector3d& A, const FVector3d& B, FVector3d& Out);
+	static bool TryLength(const FVector3d& V, double& Out);
+	static bool TryBounds(FVector3d Low, FVector3d High, double Radius, FBox3d& Out);
+};
+
+bool FVoxelLandM5GeometryInternals::IsFiniteVector(const FVector3d& V)
 {
 	return std::isfinite(V.X) && std::isfinite(V.Y) && std::isfinite(V.Z);
 }
 
-bool IsValidRadius(double Radius)
+bool FVoxelLandM5GeometryInternals::IsValidRadius(double Radius)
 {
 	return std::isfinite(Radius) && Radius > 0.0;
 }
 
-bool TryDifference(const FVector3d& A, const FVector3d& B, FVector3d& Out)
+bool FVoxelLandM5GeometryInternals::TryDifference(const FVector3d& A, const FVector3d& B, FVector3d& Out)
 {
 	const double X = A.X - B.X;
 	const double Y = A.Y - B.Y;
@@ -30,7 +38,7 @@ bool TryDifference(const FVector3d& A, const FVector3d& B, FVector3d& Out)
 	return true;
 }
 
-bool TryLength(const FVector3d& V, double& Out)
+bool FVoxelLandM5GeometryInternals::TryLength(const FVector3d& V, double& Out)
 {
 	if (!IsFiniteVector(V))
 	{
@@ -45,7 +53,7 @@ bool TryLength(const FVector3d& V, double& Out)
 	return true;
 }
 
-bool TryBounds(FVector3d Low, FVector3d High, double Radius, FBox3d& Out)
+bool FVoxelLandM5GeometryInternals::TryBounds(FVector3d Low, FVector3d High, double Radius, FBox3d& Out)
 {
 	if (!IsFiniteVector(Low) || !IsFiniteVector(High) || !IsValidRadius(Radius))
 	{
@@ -68,17 +76,18 @@ bool TryBounds(FVector3d Low, FVector3d High, double Radius, FBox3d& Out)
 	Out = FBox3d(FVector3d(MinX, MinY, MinZ), FVector3d(MaxX, MaxY, MaxZ));
 	return true;
 }
-}
 
 bool TrySphereDistance(FVector3d P, FVector3d Center, double Radius, double& Out)
 {
-	if (!IsFiniteVector(P) || !IsFiniteVector(Center) || !IsValidRadius(Radius))
+	if (!FVoxelLandM5GeometryInternals::IsFiniteVector(P) || !FVoxelLandM5GeometryInternals::IsFiniteVector(Center)
+		|| !FVoxelLandM5GeometryInternals::IsValidRadius(Radius))
 	{
 		return false;
 	}
 	FVector3d Offset(0, 0, 0);
 	double Length = 0.0;
-	if (!TryDifference(P, Center, Offset) || !TryLength(Offset, Length))
+	if (!FVoxelLandM5GeometryInternals::TryDifference(P, Center, Offset)
+		|| !FVoxelLandM5GeometryInternals::TryLength(Offset, Length))
 	{
 		return false;
 	}
@@ -93,15 +102,17 @@ bool TrySphereDistance(FVector3d P, FVector3d Center, double Radius, double& Out
 
 bool TrySegmentDistance(FVector3d P, FVector3d A, FVector3d B, double Radius, double& Out)
 {
-	if (!IsFiniteVector(P) || !IsFiniteVector(A) || !IsFiniteVector(B) || !IsValidRadius(Radius))
+	if (!FVoxelLandM5GeometryInternals::IsFiniteVector(P) || !FVoxelLandM5GeometryInternals::IsFiniteVector(A)
+		|| !FVoxelLandM5GeometryInternals::IsFiniteVector(B) || !FVoxelLandM5GeometryInternals::IsValidRadius(Radius))
 	{
 		return false;
 	}
 	FVector3d Segment(0, 0, 0);
 	FVector3d Offset(0, 0, 0);
 	double SegmentLength = 0.0;
-	if (!TryDifference(B, A, Segment) || !TryDifference(P, A, Offset) || !TryLength(Segment, SegmentLength)
-		|| SegmentLength == 0.0)
+	if (!FVoxelLandM5GeometryInternals::TryDifference(B, A, Segment)
+		|| !FVoxelLandM5GeometryInternals::TryDifference(P, A, Offset)
+		|| !FVoxelLandM5GeometryInternals::TryLength(Segment, SegmentLength) || SegmentLength == 0.0)
 	{
 		return false;
 	}
@@ -129,7 +140,8 @@ bool TrySegmentDistance(FVector3d P, FVector3d A, FVector3d B, double Radius, do
 	const FVector3d Closest(X, Y, Z);
 	FVector3d Delta(0, 0, 0);
 	double Length = 0.0;
-	if (!TryDifference(P, Closest, Delta) || !TryLength(Delta, Length))
+	if (!FVoxelLandM5GeometryInternals::TryDifference(P, Closest, Delta)
+		|| !FVoxelLandM5GeometryInternals::TryLength(Delta, Length))
 	{
 		return false;
 	}
@@ -144,17 +156,18 @@ bool TrySegmentDistance(FVector3d P, FVector3d A, FVector3d B, double Radius, do
 
 bool TrySphereBounds(FVector3d Center, double Radius, FBox3d& Out)
 {
-	return TryBounds(Center, Center, Radius, Out);
+	return FVoxelLandM5GeometryInternals::TryBounds(Center, Center, Radius, Out);
 }
 
 bool TrySegmentBounds(FVector3d A, FVector3d B, double Radius, FBox3d& Out)
 {
-	if (!IsFiniteVector(A) || !IsFiniteVector(B) || A == B)
+	if (!FVoxelLandM5GeometryInternals::IsFiniteVector(A) || !FVoxelLandM5GeometryInternals::IsFiniteVector(B)
+		|| A == B)
 	{
 		return false;
 	}
 	const FVector3d Low(FMath::Min(A.X, B.X), FMath::Min(A.Y, B.Y), FMath::Min(A.Z, B.Z));
 	const FVector3d High(FMath::Max(A.X, B.X), FMath::Max(A.Y, B.Y), FMath::Max(A.Z, B.Z));
-	return TryBounds(Low, High, Radius, Out);
+	return FVoxelLandM5GeometryInternals::TryBounds(Low, High, Radius, Out);
 }
 }

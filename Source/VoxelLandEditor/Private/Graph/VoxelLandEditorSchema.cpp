@@ -23,147 +23,163 @@
 
 #define LOCTEXT_NAMESPACE "VoxelLandEditorSchema"
 
-namespace
-{
-bool ConfigureFunctionTemplate(UVoxelLandEditorNode& Template, const UVoxelLandGraphFunction& Function)
-{
-	if (Function.SourceVersion != 1 || Function.Parameters.Num() > 63 || !Function.OutputNode.IsValid() ||
-	    !Function.OutputPin.IsValid() || (Function.OutputType != EVoxelLandGraphValueType::Float &&
-	                                      Function.OutputType != EVoxelLandGraphValueType::Int32 && Function.OutputType
-	                                      != EVoxelLandGraphValueType::Bool))
-	{
-		return false;
-	}
-	const FVoxelLandGraphNodeRecord* OutputNode = Function.Nodes.FindByPredicate(
-		[&Function](const FVoxelLandGraphNodeRecord& Node) {
-			return Node.Id == Function.OutputNode;
-		});
-	if (!OutputNode || !OutputNode->Pins.ContainsByPredicate([&Function](const FVoxelLandGraphPinRecord& Pin) {
-		return Pin.Id == Function.OutputPin && Pin.bOutput && Pin.Type == Function.OutputType;
-	}))
-	{
-		return false;
-	}
-	TArray<FVoxelLandGraphPinRecord> Specs;
-	TSet<FGuid> Ids;
-	TSet<FString> Names;
-	for (const FVoxelLandGraphParameter& Parameter : Function.Parameters)
-	{
-		const FString Name = Parameter.Name.ToLower();
-		if (!Parameter.Id.IsValid() || Name.IsEmpty() || Ids.Contains(Parameter.Id) || Names.Contains(Name) ||
-		    (Parameter.Type != EVoxelLandGraphValueType::Float && Parameter.Type != EVoxelLandGraphValueType::Int32 &&
-		     Parameter.Type != EVoxelLandGraphValueType::Bool) || !FMath::IsFinite(Parameter.FloatDefault))
-		{
-			return false;
-		}
-		Ids.Add(Parameter.Id);
-		Names.Add(Name);
-		FVoxelLandGraphPinRecord Input;
-		Input.InterfaceId = Parameter.Id;
-		Input.Name = Parameter.Name;
-		Input.Type = Parameter.Type;
-		Input.FloatDefault = Parameter.FloatDefault;
-		Input.IntDefault = Parameter.IntDefault;
-		Input.BoolDefault = Parameter.BoolDefault;
-		Specs.Add(MoveTemp(Input));
-	}
-	FVoxelLandGraphPinRecord Output;
-	Output.Name = TEXT("Result");
-	Output.Type = Function.OutputType;
-	Output.bOutput = true;
-	Specs.Add(MoveTemp(Output));
-	Template.Kind = int32(VoxelLandGraphFunctionCallId().D);
-	Template.FunctionPath = FSoftObjectPath(&Function);
-	Template.ExternalTitle = FText::FromString(Function.GetName());
-	Template.ExternalPins = MoveTemp(Specs);
-	return true;
-}
-
-class FVoxelLandFunctionAction : public FEdGraphSchemaAction_NewNode
+class FVoxelLandEditorSchemaInternals final
 {
 public:
-	FVoxelLandFunctionAction(const FText& Category, const FText& Name, const FText& Tooltip)
-		: FEdGraphSchemaAction_NewNode(Category, Name, Tooltip, 0) {}
-
-	virtual UEdGraphNode* PerformAction(UEdGraph* ParentGraph, UEdGraphPin* FromPin,
-		const FVector2f& Location, bool bSelectNewNode = true) override
+	static bool ConfigureFunctionTemplate(UVoxelLandEditorNode& Template, const UVoxelLandGraphFunction& Function)
 	{
-		if (!Prepare(ParentGraph)) { return nullptr; }
-		return FEdGraphSchemaAction_NewNode::PerformAction(ParentGraph, FromPin, Location, bSelectNewNode);
-	}
-
-	virtual UEdGraphNode* PerformAction(UEdGraph* ParentGraph, TArray<UEdGraphPin*>& FromPins,
-		const FVector2f& Location, bool bSelectNewNode = true) override
-	{
-		if (!Prepare(ParentGraph)) { return nullptr; }
-		const FScopedTransaction Transaction(LOCTEXT("CreateFunctionCall", "Create function call"));
-		UEdGraphNode* Result = FEdGraphSchemaAction_NewNode::PerformAction(
-			ParentGraph, FromPins.IsEmpty() ? nullptr : FromPins[0], Location, bSelectNewNode);
-		if (!Result) { return nullptr; }
-		for (int32 Index = 1; Index < FromPins.Num(); ++Index)
+		if (Function.SourceVersion != 1 || Function.Parameters.Num() > 63 || !Function.OutputNode.IsValid()
+			|| !Function.OutputPin.IsValid()
+			|| (Function.OutputType != EVoxelLandGraphValueType::Float
+				&& Function.OutputType != EVoxelLandGraphValueType::Int32
+				&& Function.OutputType != EVoxelLandGraphValueType::Bool))
 		{
-			Result->AutowireNewNode(FromPins[Index]);
-		}
-		return Result;
-	}
-
-private:
-	bool Prepare(UEdGraph* ParentGraph)
-	{
-		if (!IsInGameThread()) { return false; }
-		UVoxelLandEditorNode* Template = Cast<UVoxelLandEditorNode>(NodeTemplate);
-		FAssetRegistryModule& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
-		const bool bExists = Template && Registry.Get().GetAssetByObjectPath(Template->FunctionPath).IsValid();
-		UVoxelLandGraphFunction* Function = bExists
-			                                    ? Cast<UVoxelLandGraphFunction>(Template->FunctionPath.TryLoad())
-			                                    : nullptr;
-		if (!ParentGraph || !Template || !Function || ParentGraph->GetOuter() == Function ||
-		    !ConfigureFunctionTemplate(*Template, *Function))
-		{
-			FNotificationInfo Info(LOCTEXT("StaleFunctionAction",
-				"Function is missing, invalid, recursive, or its interface changed. Refresh the palette and repair the function."));
-			Info.ExpireDuration = 5.0f;
-			FSlateNotificationManager::Get().AddNotification(Info);
 			return false;
 		}
+		const FVoxelLandGraphNodeRecord* OutputNode = Function.Nodes.FindByPredicate(
+			[&Function](const FVoxelLandGraphNodeRecord& Node) { return Node.Id == Function.OutputNode; });
+		if (!OutputNode || !OutputNode->Pins.ContainsByPredicate([&Function](const FVoxelLandGraphPinRecord& Pin) {
+				return Pin.Id == Function.OutputPin && Pin.bOutput && Pin.Type == Function.OutputType;
+			}))
+		{
+			return false;
+		}
+		TArray<FVoxelLandGraphPinRecord> Specs;
+		TSet<FGuid> Ids;
+		TSet<FString> Names;
+		for (const FVoxelLandGraphParameter& Parameter : Function.Parameters)
+		{
+			const FString Name = Parameter.Name.ToLower();
+			if (!Parameter.Id.IsValid() || Name.IsEmpty() || Ids.Contains(Parameter.Id) || Names.Contains(Name)
+				|| (Parameter.Type != EVoxelLandGraphValueType::Float
+					&& Parameter.Type != EVoxelLandGraphValueType::Int32
+					&& Parameter.Type != EVoxelLandGraphValueType::Bool)
+				|| !FMath::IsFinite(Parameter.FloatDefault))
+			{
+				return false;
+			}
+			Ids.Add(Parameter.Id);
+			Names.Add(Name);
+			FVoxelLandGraphPinRecord Input;
+			Input.InterfaceId = Parameter.Id;
+			Input.Name = Parameter.Name;
+			Input.Type = Parameter.Type;
+			Input.FloatDefault = Parameter.FloatDefault;
+			Input.IntDefault = Parameter.IntDefault;
+			Input.BoolDefault = Parameter.BoolDefault;
+			Specs.Add(MoveTemp(Input));
+		}
+		FVoxelLandGraphPinRecord Output;
+		Output.Name = TEXT("Result");
+		Output.Type = Function.OutputType;
+		Output.bOutput = true;
+		Specs.Add(MoveTemp(Output));
+		Template.Kind = int32(VoxelLandGraphFunctionCallId().D);
+		Template.FunctionPath = FSoftObjectPath(&Function);
+		Template.ExternalTitle = FText::FromString(Function.GetName());
+		Template.ExternalPins = MoveTemp(Specs);
 		return true;
 	}
-};
 
-bool Reaches(const UEdGraphNode* Start, const UEdGraphNode* Target)
-{
-	TArray<const UEdGraphNode*> Pending;
-	TSet<const UEdGraphNode*> Visited;
-	Pending.Add(Start);
-	while (!Pending.IsEmpty())
+	class FVoxelLandFunctionAction : public FEdGraphSchemaAction_NewNode
 	{
-		const UEdGraphNode* Node = Pending.Pop(EAllowShrinking::No);
-		if (Node == Target)
+	public:
+		FVoxelLandFunctionAction(const FText& Category, const FText& Name, const FText& Tooltip)
+			: FEdGraphSchemaAction_NewNode(Category, Name, Tooltip, 0)
 		{
+		}
+
+		virtual UEdGraphNode* PerformAction(
+			UEdGraph* ParentGraph, UEdGraphPin* FromPin, const FVector2f& Location, bool bSelectNewNode = true) override
+		{
+			if (!Prepare(ParentGraph))
+			{
+				return nullptr;
+			}
+			return FEdGraphSchemaAction_NewNode::PerformAction(ParentGraph, FromPin, Location, bSelectNewNode);
+		}
+
+		virtual UEdGraphNode* PerformAction(UEdGraph* ParentGraph, TArray<UEdGraphPin*>& FromPins,
+			const FVector2f& Location, bool bSelectNewNode = true) override
+		{
+			if (!Prepare(ParentGraph))
+			{
+				return nullptr;
+			}
+			const FScopedTransaction Transaction(LOCTEXT("CreateFunctionCall", "Create function call"));
+			UEdGraphNode* Result = FEdGraphSchemaAction_NewNode::PerformAction(
+				ParentGraph, FromPins.IsEmpty() ? nullptr : FromPins[0], Location, bSelectNewNode);
+			if (!Result)
+			{
+				return nullptr;
+			}
+			for (int32 Index = 1; Index < FromPins.Num(); ++Index)
+			{
+				Result->AutowireNewNode(FromPins[Index]);
+			}
+			return Result;
+		}
+
+	private:
+		bool Prepare(UEdGraph* ParentGraph)
+		{
+			if (!IsInGameThread())
+			{
+				return false;
+			}
+			UVoxelLandEditorNode* Template = Cast<UVoxelLandEditorNode>(NodeTemplate);
+			FAssetRegistryModule& Registry =
+				FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+			const bool bExists = Template && Registry.Get().GetAssetByObjectPath(Template->FunctionPath).IsValid();
+			UVoxelLandGraphFunction* Function =
+				bExists ? Cast<UVoxelLandGraphFunction>(Template->FunctionPath.TryLoad()) : nullptr;
+			if (!ParentGraph || !Template || !Function || ParentGraph->GetOuter() == Function
+				|| !ConfigureFunctionTemplate(*Template, *Function))
+			{
+				FNotificationInfo Info(LOCTEXT("StaleFunctionAction",
+					"Function is missing, invalid, recursive, or its interface changed. Refresh the palette and repair the function."));
+				Info.ExpireDuration = 5.0f;
+				FSlateNotificationManager::Get().AddNotification(Info);
+				return false;
+			}
 			return true;
 		}
-		if (Visited.Contains(Node))
+	};
+
+	static bool Reaches(const UEdGraphNode* Start, const UEdGraphNode* Target)
+	{
+		TArray<const UEdGraphNode*> Pending;
+		TSet<const UEdGraphNode*> Visited;
+		Pending.Add(Start);
+		while (!Pending.IsEmpty())
 		{
-			continue;
-		}
-		Visited.Add(Node);
-		for (const UEdGraphPin* Pin : Node->Pins)
-		{
-			if (Pin && Pin->Direction == EGPD_Output)
+			const UEdGraphNode* Node = Pending.Pop(EAllowShrinking::No);
+			if (Node == Target)
 			{
-				for (const UEdGraphPin* Linked : Pin->LinkedTo)
+				return true;
+			}
+			if (Visited.Contains(Node))
+			{
+				continue;
+			}
+			Visited.Add(Node);
+			for (const UEdGraphPin* Pin : Node->Pins)
+			{
+				if (Pin && Pin->Direction == EGPD_Output)
 				{
-					if (Linked && Linked->GetOwningNode())
+					for (const UEdGraphPin* Linked : Pin->LinkedTo)
 					{
-						Pending.Add(Linked->GetOwningNode());
+						if (Linked && Linked->GetOwningNode())
+						{
+							Pending.Add(Linked->GetOwningNode());
+						}
 					}
 				}
 			}
 		}
+		return false;
 	}
-	return false;
-}
-}
+};
 
 bool UVoxelLandEditorSchema::AssignLegacyM4Output(
 	UVoxelLandM4ControlGraph& Graph, UEdGraph& EditorGraph, FGuid NodeId, int32 Slot)
@@ -349,13 +365,14 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
 			continue;
 		}
 		UVoxelLandEditorNode* Template = NewObject<UVoxelLandEditorNode>(ContextMenuBuilder.OwnerOfTemporaries);
-		if (!ConfigureFunctionTemplate(*Template, *Function))
+		if (!FVoxelLandEditorSchemaInternals::ConfigureFunctionTemplate(*Template, *Function))
 		{
 			continue;
 		}
-		TSharedPtr<FVoxelLandFunctionAction> Action = MakeShared<FVoxelLandFunctionAction>(
-			LOCTEXT("Functions", "Graph functions"), Template->ExternalTitle,
-			LOCTEXT("FunctionActionTip", "Call this reusable terrain graph function."));
+		TSharedPtr<FVoxelLandEditorSchemaInternals::FVoxelLandFunctionAction> Action =
+			MakeShared<FVoxelLandEditorSchemaInternals::FVoxelLandFunctionAction>(
+				LOCTEXT("Functions", "Graph functions"), Template->ExternalTitle,
+				LOCTEXT("FunctionActionTip", "Call this reusable terrain graph function."));
 		Action->NodeTemplate = Template;
 		ContextMenuBuilder.AddAction(Action);
 	}
@@ -454,7 +471,7 @@ const FPinConnectionResponse UVoxelLandEditorSchema::CanCreateConnection(const U
 			}
 		}
 	}
-	if (Reaches(Input->GetOwningNode(), Output->GetOwningNode()))
+	if (FVoxelLandEditorSchemaInternals::Reaches(Input->GetOwningNode(), Output->GetOwningNode()))
 	{
 		return FPinConnectionResponse(CONNECT_RESPONSE_DISALLOW, LOCTEXT("Cycle", "Connections cannot form cycles."));
 	}

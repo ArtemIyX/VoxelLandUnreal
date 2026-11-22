@@ -3,7 +3,7 @@
 
 #define LOCTEXT_NAMESPACE "VoxelLandBuiltinPresentation"
 
-static FText ExplicitTitle(EVoxelLandBuiltinNode Kind)
+FText FVoxelLandBuiltinPresentationCatalog::ExplicitTitle(EVoxelLandBuiltinNode Kind)
 {
 	switch (Kind)
 	{
@@ -116,7 +116,7 @@ static FText ExplicitTitle(EVoxelLandBuiltinNode Kind)
 	}
 }
 
-static FText ExplicitDescription(EVoxelLandBuiltinNode Kind)
+FText FVoxelLandBuiltinPresentationCatalog::ExplicitDescription(EVoxelLandBuiltinNode Kind)
 {
 	switch (Kind)
 	{
@@ -244,7 +244,7 @@ static FText ExplicitDescription(EVoxelLandBuiltinNode Kind)
 	}
 }
 
-static FText ExplicitCategory(EVoxelLandBuiltinNode Kind)
+FText FVoxelLandBuiltinPresentationCatalog::ExplicitCategory(EVoxelLandBuiltinNode Kind)
 {
 	switch (Kind)
 	{
@@ -313,8 +313,6 @@ static FText ExplicitCategory(EVoxelLandBuiltinNode Kind)
 	}
 }
 
-static FLinearColor ExplicitTitleColor(EVoxelLandBuiltinNode Kind);
-
 bool FVoxelLandBuiltinPresentationCatalog::Validate(FString& OutError)
 {
 	if (!FVoxelLandBuiltinCatalog::Validate(OutError))
@@ -353,7 +351,7 @@ FText FVoxelLandBuiltinPresentationCatalog::Category(EVoxelLandBuiltinNode Kind)
 	return Value.IsEmpty() ? LOCTEXT("CategoryMath", "Math and control") : Value;
 }
 
-static FLinearColor ExplicitTitleColor(EVoxelLandBuiltinNode Kind)
+FLinearColor FVoxelLandBuiltinPresentationCatalog::ExplicitTitleColor(EVoxelLandBuiltinNode Kind)
 {
 	switch (Kind)
 	{
@@ -428,32 +426,33 @@ FLinearColor FVoxelLandBuiltinPresentationCatalog::TitleColor(EVoxelLandBuiltinN
 	return Value.R < 0.f ? FLinearColor(0.34f, 0.32f, 0.18f) : Value;
 }
 
-namespace
+class FVoxelLandBuiltinPresentationCatalogInternals final
 {
-bool IsNoise(EVoxelLandBuiltinNode Kind)
-{
-	switch (Kind)
+public:
+	static bool IsNoise(EVoxelLandBuiltinNode Kind)
 	{
-		case EVoxelLandBuiltinNode::Perlin2:
-		case EVoxelLandBuiltinNode::Perlin3:
-		case EVoxelLandBuiltinNode::Fbm2:
-		case EVoxelLandBuiltinNode::Fbm3:
-		case EVoxelLandBuiltinNode::Value2:
-		case EVoxelLandBuiltinNode::Value3:
-		case EVoxelLandBuiltinNode::Simplex2:
-		case EVoxelLandBuiltinNode::Simplex3:
-			return true;
-		default:
-			return false;
+		switch (Kind)
+		{
+			case EVoxelLandBuiltinNode::Perlin2:
+			case EVoxelLandBuiltinNode::Perlin3:
+			case EVoxelLandBuiltinNode::Fbm2:
+			case EVoxelLandBuiltinNode::Fbm3:
+			case EVoxelLandBuiltinNode::Value2:
+			case EVoxelLandBuiltinNode::Value3:
+			case EVoxelLandBuiltinNode::Simplex2:
+			case EVoxelLandBuiltinNode::Simplex3:
+				return true;
+			default:
+				return false;
+		}
 	}
-}
 
-bool IsShape(EVoxelLandBuiltinNode Kind)
-{
-	return Kind == EVoxelLandBuiltinNode::Plane || Kind == EVoxelLandBuiltinNode::Sphere || Kind ==
-	       EVoxelLandBuiltinNode::Box;
-}
-}
+	static bool IsShape(EVoxelLandBuiltinNode Kind)
+	{
+		return Kind == EVoxelLandBuiltinNode::Plane || Kind == EVoxelLandBuiltinNode::Sphere
+			|| Kind == EVoxelLandBuiltinNode::Box;
+	}
+};
 
 bool FVoxelLandBuiltinPresentationCatalog::TryPinLabel(EVoxelLandBuiltinNode Kind, FName PinName, FText& OutLabel)
 {
@@ -469,13 +468,13 @@ bool FVoxelLandBuiltinPresentationCatalog::TryPinLabel(EVoxelLandBuiltinNode Kin
 		OutLabel = NSLOCTEXT("VoxelLandEditorNode", "DensityPin", "Density (cm)");
 		return true;
 	}
-	if (IsNoise(Kind) && PinName == TEXT("Frequency"))
+	if (FVoxelLandBuiltinPresentationCatalogInternals::IsNoise(Kind) && PinName == TEXT("Frequency"))
 	{
 		OutLabel = NSLOCTEXT("VoxelLandEditorNode", "FrequencyPin", "Frequency (1/cm)");
 		return true;
 	}
-	if (IsShape(Kind) && (PinName == TEXT("Radius") || PinName == TEXT("Offset") || PinName.ToString().
-	                      StartsWith(TEXT("Extent"))))
+	if (FVoxelLandBuiltinPresentationCatalogInternals::IsShape(Kind)
+		&& (PinName == TEXT("Radius") || PinName == TEXT("Offset") || PinName.ToString().StartsWith(TEXT("Extent"))))
 	{
 		OutLabel = FText::Format(LOCTEXT("PinCentimeters", "{0} (cm)"), FText::FromName(PinName));
 		return true;

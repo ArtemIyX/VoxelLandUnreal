@@ -8,25 +8,32 @@
 #include "Hash/xxhash.h"
 #include "World/VoxelLandM4WorldIdentity.h"
 
-namespace
+class FVoxelLandM5WorldIdentityInternals final
 {
-constexpr int64 M5IdentityCoordinateLimit = 1048576;
-constexpr int32 M5IdentityMaxBytes = 8 * 1024 * 1024 + 4096;
+public:
+	static constexpr int64 M5IdentityCoordinateLimit = 1048576;
+	static constexpr int32 M5IdentityMaxBytes = 8 * 1024 * 1024 + 4096;
+	static void M5WriteU64(FCanonicalWriter& W, uint64 Value);
+	static void M5WritePoint(FCanonicalWriter& W, const FVoxelLandM5PointCm& P);
+	static int64 M5IdentityHash(const TArray<uint8>& Bytes);
+	static bool M5ValidAxis(int64 Min, int64 Max);
+	static bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error);
+};
 
-void M5WriteU64(FCanonicalWriter& W, uint64 Value)
+void FVoxelLandM5WorldIdentityInternals::M5WriteU64(FCanonicalWriter& W, uint64 Value)
 {
 	W.U32(uint32(Value));
 	W.U32(uint32(Value >> 32));
 }
 
-void M5WritePoint(FCanonicalWriter& W, const FVoxelLandM5PointCm& P)
+void FVoxelLandM5WorldIdentityInternals::M5WritePoint(FCanonicalWriter& W, const FVoxelLandM5PointCm& P)
 {
 	M5WriteU64(W, uint64(P.X));
 	M5WriteU64(W, uint64(P.Y));
 	M5WriteU64(W, uint64(P.Z));
 }
 
-int64 M5IdentityHash(const TArray<uint8>& Bytes)
+int64 FVoxelLandM5WorldIdentityInternals::M5IdentityHash(const TArray<uint8>& Bytes)
 {
 	const uint64 Hash = FXxHash64::HashBuffer(Bytes.GetData(), Bytes.Num()).Hash;
 	int64 Bits = 0;
@@ -34,12 +41,12 @@ int64 M5IdentityHash(const TArray<uint8>& Bytes)
 	return Bits;
 }
 
-bool M5ValidAxis(int64 Min, int64 Max)
+bool FVoxelLandM5WorldIdentityInternals::M5ValidAxis(int64 Min, int64 Max)
 {
 	return Min >= -M5IdentityCoordinateLimit && Max <= M5IdentityCoordinateLimit + 1 && Min < Max;
 }
 
-bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error)
+bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error)
 {
 	const auto& C = S.Caves;
 	const auto& M = S.Manifest;
@@ -111,13 +118,12 @@ bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error)
 	}
 	return true;
 }
-}
 
 bool VoxelLandM5WorldIdentity::Capture(
 	const FVoxelLandM5WorldSnapshot& S, FVoxelLandM5IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if (!M5ValidSettings(S, Error))
+	if (!FVoxelLandM5WorldIdentityInternals::M5ValidSettings(S, Error))
 	{
 		return false;
 	}
@@ -149,13 +155,13 @@ bool VoxelLandM5WorldIdentity::Capture(
 	W.U32(C.StageId.B);
 	W.U32(C.StageId.C);
 	W.U32(C.StageId.D);
-	M5WriteU64(W, uint64(C.Salt));
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.Salt));
 	W.U8(uint8(C.PlanningMode));
-	M5WritePoint(W, C.Bounds.MinInclusive);
-	M5WritePoint(W, C.Bounds.MaxExclusive);
-	M5WriteU64(W, uint64(C.RegionSizeCm));
-	M5WriteU64(W, uint64(C.RegionOriginXCm));
-	M5WriteU64(W, uint64(C.RegionOriginYCm));
+	FVoxelLandM5WorldIdentityInternals::M5WritePoint(W, C.Bounds.MinInclusive);
+	FVoxelLandM5WorldIdentityInternals::M5WritePoint(W, C.Bounds.MaxExclusive);
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.RegionSizeCm));
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.RegionOriginXCm));
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.RegionOriginYCm));
 	W.U32(uint32(C.RoofThicknessCm));
 	const auto& P = C.Capsule;
 	W.U32(uint32(P.StandingHeightCm));
@@ -182,11 +188,11 @@ bool VoxelLandM5WorldIdentity::Capture(
 	W.U32(uint32(N.MaxDepthCm));
 	W.U8(N.bAllowAttachment ? 1 : 0);
 	W.U8(N.bAllowEnclosedVoids ? 1 : 0);
-	M5WriteU64(W, uint64(N.Salt));
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(N.Salt));
 	W.U8(C.Protection.bProtectAll ? 1 : 0);
 	W.U8(C.Protection.bRequireMask ? 1 : 0);
 	W.U8(uint8(C.Water.Policy));
-	M5WriteU64(W, uint64(C.Water.LevelCm));
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.Water.LevelCm));
 	const auto& L = C.Limits;
 	W.U32(uint32(L.MaxCandidates));
 	W.U32(uint32(L.MaxEdges));
@@ -196,9 +202,9 @@ bool VoxelLandM5WorldIdentity::Capture(
 	W.U32(uint32(L.MaxRouteLegs));
 	W.U32(uint32(L.MaxRouteFeatureRefs));
 	W.U32(uint32(L.MaxAttempts));
-	M5WriteU64(W, uint64(L.MaxBytes));
-	M5WriteU64(W, uint64(L.MaxValidationWork));
-	if (W.Bytes.Num() > M5IdentityMaxBytes)
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(L.MaxBytes));
+	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(L.MaxValidationWork));
+	if (W.Bytes.Num() > FVoxelLandM5WorldIdentityInternals::M5IdentityMaxBytes)
 	{
 		Error = TEXT("M5 identity exceeds its supported size");
 		return false;
@@ -206,7 +212,7 @@ bool VoxelLandM5WorldIdentity::Capture(
 	FVoxelLandM5IdentityRecord Result;
 	Result.FormatVersion = 1;
 	Result.CanonicalBytes = MoveTemp(W.Bytes);
-	Result.FingerprintBits = M5IdentityHash(Result.CanonicalBytes);
+	Result.FingerprintBits = FVoxelLandM5WorldIdentityInternals::M5IdentityHash(Result.CanonicalBytes);
 	Out = MoveTemp(Result);
 	return true;
 }
@@ -215,8 +221,9 @@ bool VoxelLandM5WorldIdentity::Matches(
 	const FVoxelLandM5IdentityRecord& Record, const FVoxelLandM5WorldSnapshot& S, FString& Error)
 {
 	Error.Reset();
-	if (Record.FormatVersion != 1 || Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > M5IdentityMaxBytes
-		|| Record.FingerprintBits != M5IdentityHash(Record.CanonicalBytes))
+	if (Record.FormatVersion != 1 || Record.CanonicalBytes.Num() < 8
+		|| Record.CanonicalBytes.Num() > FVoxelLandM5WorldIdentityInternals::M5IdentityMaxBytes
+		|| Record.FingerprintBits != FVoxelLandM5WorldIdentityInternals::M5IdentityHash(Record.CanonicalBytes))
 	{
 		Error = TEXT("Unsupported or corrupt M5 identity record");
 		return false;

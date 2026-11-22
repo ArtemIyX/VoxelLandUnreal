@@ -4,15 +4,14 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogVoxelLandSampleProvider, Log, All);
 
-namespace
-{
-class FDoubleWorker final : public IVoxelLandOperatorWorker
+class FVoxelLandSampleDoubleWorker final : public IVoxelLandOperatorWorker
 {
 public:
 	bool Evaluate(
 		TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
 	{
-		if (Inputs.Num() != 1 || !Inputs[0] || Count < 1 || Count > 256 || Output.Num() != Count)
+		constexpr int32 MaxBatchSamples = 256;
+		if (Inputs.Num() != 1 || !Inputs[0] || Count < 1 || Count > MaxBatchSamples || Output.Num() != Count)
 		{
 			Error = TEXT("Invalid double batch");
 			return false;
@@ -30,7 +29,7 @@ public:
 	}
 };
 
-class FDoubleOperator final : public IVoxelLandOperator
+class FVoxelLandSampleDoubleOperator final : public IVoxelLandOperator
 {
 public:
 	EVoxelLandWorldRequirement WorldRequirement() const override { return EVoxelLandWorldRequirement::SampleLocal; }
@@ -38,7 +37,7 @@ public:
 	int32 Version() const override { return 1; }
 	TArray<EVoxelLandGraphValueType> InputTypes() const override { return {EVoxelLandGraphValueType::Float}; }
 	EVoxelLandGraphValueType OutputType() const override { return EVoxelLandGraphValueType::Float; }
-	uint32 MaximumWorkerBytes() const override { return sizeof(FDoubleWorker); }
+	uint32 MaximumWorkerBytes() const override { return sizeof(FVoxelLandSampleDoubleWorker); }
 	bool ValidateConfiguration(TConstArrayView<uint8> Configuration, FString& Error) const override
 	{
 		if (!Configuration.IsEmpty())
@@ -56,10 +55,9 @@ public:
 		{
 			return nullptr;
 		}
-		return MakeUnique<FDoubleWorker>();
+		return MakeUnique<FVoxelLandSampleDoubleWorker>();
 	}
 };
-}
 
 class FVoxelLandSampleProviderModule final : public IModuleInterface
 {
@@ -71,7 +69,8 @@ public:
 		FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("VoxelLandAlgo"));
 		FString Error;
 		bRegistered = FVoxelLandOperatorRegistry::RegisterV3(FName(TEXT("VoxelLandSampleProvider")),
-			MakeShared<FDoubleOperator, ESPMode::ThreadSafe>(), FVoxelLandOperatorRegistry::ProviderAbiVersion, Error);
+			MakeShared<FVoxelLandSampleDoubleOperator, ESPMode::ThreadSafe>(),
+			FVoxelLandOperatorRegistry::ProviderAbiVersion, Error);
 		if (!bRegistered)
 		{
 			UE_LOG(LogVoxelLandSampleProvider, Error, TEXT("Could not register sample provider: %s"), *Error);

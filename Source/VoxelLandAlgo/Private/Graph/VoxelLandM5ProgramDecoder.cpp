@@ -8,9 +8,19 @@
 #include "Graph/VoxelLandM5DecodedDraft.h"
 #include "Graph/VoxelLandM5SourceFingerprint.h"
 
-namespace
+class FVoxelLandM5ProgramDecoderInternals final
 {
-FVoxelLandM5Diagnostic M5DecoderError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+public:
+	static FVoxelLandM5Diagnostic M5DecoderError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static uint64 M5DecoderUnsignedBits(int64 Value);
+	static FVoxelLandValueSource M5DecoderValueSource(const FVoxelLandSerializedValueSource& Value);
+	static bool M5DecoderInstructionRange(const FVoxelLandSerializedInstruction& Record);
+	static FVoxelLandM5Diagnostic M5DecoderValidateFunctionBounds(const FVoxelLandGraphSnapshot& Source,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);
+};
+
+FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Result;
 	Result.Code = Code;
@@ -19,14 +29,15 @@ FVoxelLandM5Diagnostic M5DecoderError(EVoxelLandM5ErrorCode Code, const TCHAR* M
 	return Result;
 }
 
-uint64 M5DecoderUnsignedBits(int64 Value)
+uint64 FVoxelLandM5ProgramDecoderInternals::M5DecoderUnsignedBits(int64 Value)
 {
 	uint64 Result = 0;
 	FMemory::Memcpy(&Result, &Value, sizeof(Result));
 	return Result;
 }
 
-FVoxelLandValueSource M5DecoderValueSource(const FVoxelLandSerializedValueSource& Value)
+FVoxelLandValueSource FVoxelLandM5ProgramDecoderInternals::M5DecoderValueSource(
+	const FVoxelLandSerializedValueSource& Value)
 {
 	FVoxelLandValueSource Result;
 	Result.bParameter = Value.bParameter;
@@ -34,7 +45,7 @@ FVoxelLandValueSource M5DecoderValueSource(const FVoxelLandSerializedValueSource
 	return Result;
 }
 
-bool M5DecoderInstructionRange(const FVoxelLandSerializedInstruction& Record)
+bool FVoxelLandM5ProgramDecoderInternals::M5DecoderInstructionRange(const FVoxelLandSerializedInstruction& Record)
 {
 	return Record.Opcode >= 0 && Record.Opcode <= int32(EVoxelLandOpcode::ExternalOperator) && Record.Dst >= 0
 		&& Record.Dst <= 65535 && Record.A >= 0 && Record.A <= 65535 && Record.B >= 0 && Record.B <= 65535
@@ -45,8 +56,9 @@ bool M5DecoderInstructionRange(const FVoxelLandSerializedInstruction& Record)
 // Reproduce the legacy function-source size/version checks without copying the
 // graphs or materializing FText. Function interfaces with inputs need bounded
 // native tooltip capture and are rejected before reading any tooltip.
-FVoxelLandM5Diagnostic M5DecoderValidateFunctionBounds(const FVoxelLandGraphSnapshot& Source,
-	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoderInternals::M5DecoderValidateFunctionBounds(
+	const FVoxelLandGraphSnapshot& Source, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled)
 {
 	using namespace VoxelLand::M5::CheckedMath;
 	if (Source.Functions.IsEmpty())
@@ -138,7 +150,6 @@ FVoxelLandM5Diagnostic M5DecoderValidateFunctionBounds(const FVoxelLandGraphSnap
 	}
 	return {};
 }
-}
 
 FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphSnapshot& Source,
 	const FVoxelLandSerializedProgram& Payload, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
@@ -147,23 +158,25 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	using namespace VoxelLand::M5::CheckedMath;
 	if (IsCancelled())
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
 	if (Payload.EnvelopeVersion != 1 || Payload.ProgramVersion != int32(FVoxelLandProgramDraft::CurrentFormatVersion)
 		|| Payload.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion))
 	{
-		return M5DecoderError(
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
 			EVoxelLandM5ErrorCode::UnsupportedVersion, TEXT("Unsupported program envelope or compiler version"));
 	}
 	if (Payload.RegisterCount < 1 || Payload.RegisterCount > 1024 || Payload.Instructions.Num() > 8192
 		|| Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096
 		|| Payload.Noise.Num() > 4096 || Source.Parameters.Num() > 4096)
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program exceeds decode limits"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program exceeds decode limits"));
 	}
 	if (!Payload.ExternalOperators.IsEmpty() || Payload.ExternalFilterIndex != INDEX_NONE)
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::Unproven, TEXT("External provider decoding is not metered"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("External provider decoding is not metered"));
 	}
 	const int64 Counts = int64(Payload.Instructions.Num()) + Payload.Constants.Num() + Payload.Parameters.Num()
 					   + Payload.Seeds.Num() + Payload.Noise.Num() + Source.Parameters.Num();
@@ -182,33 +195,38 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 		|| !TryAdd(Work, MatchWork, Work) || !TryAdd(Work, DuplicateWork, Work) || !TryAdd(Work, NameWork, Work)
 		|| !TryAdd(Work, 64, Work) || !Budget->TryChargeWork(Work))
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program decode work exceeds budget"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program decode work exceeds budget"));
 	}
 	int64 NameBytes = 0;
 	for (const FVoxelLandSerializedParameter& P : Payload.Parameters)
 	{
 		if (IsCancelled())
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		if (P.Name.Len() > 256 || !TryAdd(NameBytes, (int64(P.Name.Len()) + 1) * sizeof(TCHAR), NameBytes))
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Parameter name exceeds decode limits"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Parameter name exceeds decode limits"));
 		}
 		for (int32 I = 0; I < P.Name.Len(); ++I)
 		{
 			if ((I & 63) == 0 && IsCancelled())
 			{
-				return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			if (P.Name[I] <= 0 || P.Name[I] > 127)
 			{
-				return M5DecoderError(
+				return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Non-ASCII parameter names are not metered"));
 			}
 		}
 	}
-	if (FVoxelLandM5Diagnostic D = M5DecoderValidateFunctionBounds(Source, Budget, IsCancelled);
+	if (FVoxelLandM5Diagnostic D =
+			FVoxelLandM5ProgramDecoderInternals::M5DecoderValidateFunctionBounds(Source, Budget, IsCancelled);
 		D.Code != EVoxelLandM5ErrorCode::None)
 	{
 		return D;
@@ -219,9 +237,10 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	{
 		return D;
 	}
-	if (SourceHash != M5DecoderUnsignedBits(Payload.SourceFingerprint))
+	if (SourceHash != FVoxelLandM5ProgramDecoderInternals::M5DecoderUnsignedBits(Payload.SourceFingerprint))
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Compiled source fingerprint mismatch"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Compiled source fingerprint mismatch"));
 	}
 	int64 PayloadBytes = 0;
 	int64 ItemBytes = 0;
@@ -236,12 +255,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 		|| !TryAdd(PayloadBytes, NameBytes, PayloadBytes) || !TryMultiplyNonNegative(PayloadBytes, 4, PayloadBytes)
 		|| !TryAdd(PayloadBytes, 4096, PayloadBytes))
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program decode memory exceeds budget"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program decode memory exceeds budget"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(PayloadBytes, Lease))
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program decode memory exceeds budget"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Program decode memory exceeds budget"));
 	}
 	TSharedPtr<FVoxelLandM5DecodedDraft, ESPMode::ThreadSafe> Result =
 		MakeShareable(new FVoxelLandM5DecodedDraft(Budget, Lease));
@@ -250,22 +271,27 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	Draft.RegisterCount = Payload.RegisterCount;
 	Draft.ExternalFilterIndex = INDEX_NONE;
 	Draft.SmoothFilter.bPresent = Payload.SmoothFilter.bPresent;
-	Draft.SmoothFilter.Enabled = M5DecoderValueSource(Payload.SmoothFilter.Enabled);
-	Draft.SmoothFilter.Strength = M5DecoderValueSource(Payload.SmoothFilter.Strength);
+	Draft.SmoothFilter.Enabled =
+		FVoxelLandM5ProgramDecoderInternals::M5DecoderValueSource(Payload.SmoothFilter.Enabled);
+	Draft.SmoothFilter.Strength =
+		FVoxelLandM5ProgramDecoderInternals::M5DecoderValueSource(Payload.SmoothFilter.Strength);
 	Draft.Instructions.Reserve(Payload.Instructions.Num());
 	for (const FVoxelLandSerializedInstruction& Record : Payload.Instructions)
 	{
 		if (IsCancelled())
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
-		if (!M5DecoderInstructionRange(Record))
+		if (!FVoxelLandM5ProgramDecoderInternals::M5DecoderInstructionRange(Record))
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid serialized instruction"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid serialized instruction"));
 		}
 		if (Record.Opcode == int32(EVoxelLandOpcode::ExternalOperator))
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::Unproven, TEXT("External operators are not metered"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::Unproven, TEXT("External operators are not metered"));
 		}
 		FVoxelLandInstruction I;
 		I.Op = EVoxelLandOpcode(Record.Opcode);
@@ -284,7 +310,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	{
 		if ((I & 255) == 0 && IsCancelled())
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		Draft.Constants.Add(Payload.Constants[I]);
 	}
@@ -293,7 +320,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	{
 		if (IsCancelled())
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		const FVoxelLandSerializedParameter& Record = Payload.Parameters[I];
 		const FVoxelLandGraphParameter* Match = nullptr;
@@ -301,7 +329,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 		{
 			if (IsCancelled())
 			{
-				return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			if (Parameter.Id == Record.Id)
 			{
@@ -313,16 +342,19 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 		{
 			if (IsCancelled())
 			{
-				return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			if (Payload.Parameters[Earlier].Id == Record.Id)
 			{
-				return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate serialized parameter ID"));
+				return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate serialized parameter ID"));
 			}
 		}
 		if (!Match || !Match->Name.Equals(Record.Name, ESearchCase::IgnoreCase) || uint8(Match->Type) != Record.Type)
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Parameter mapping does not match source"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Parameter mapping does not match source"));
 		}
 		FVoxelLandParameterSlot Parameter;
 		Parameter.Name = Record.Name;
@@ -336,7 +368,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	{
 		if (IsCancelled())
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		FVoxelLandSeedSlot Seed;
 		Seed.NodeId = Record.NodeId;
@@ -348,21 +381,23 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoder::Decode(const FVoxelLandGraphS
 	{
 		if (IsCancelled())
 		{
-			return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		FVoxelLandNoiseConfig Noise;
 		Noise.SeedSlot = uint32(Record.SeedSlot);
-		Noise.Frequency = M5DecoderValueSource(Record.Frequency);
-		Noise.Octaves = M5DecoderValueSource(Record.Octaves);
-		Noise.Gain = M5DecoderValueSource(Record.Gain);
-		Noise.Lacunarity = M5DecoderValueSource(Record.Lacunarity);
+		Noise.Frequency = FVoxelLandM5ProgramDecoderInternals::M5DecoderValueSource(Record.Frequency);
+		Noise.Octaves = FVoxelLandM5ProgramDecoderInternals::M5DecoderValueSource(Record.Octaves);
+		Noise.Gain = FVoxelLandM5ProgramDecoderInternals::M5DecoderValueSource(Record.Gain);
+		Noise.Lacunarity = FVoxelLandM5ProgramDecoderInternals::M5DecoderValueSource(Record.Lacunarity);
 		Draft.Noise.Add(Noise);
 	}
 	if (IsCancelled())
 	{
-		return M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM5ProgramDecoderInternals::M5DecoderError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
-	Result->ExpectedProgramFingerprint = M5DecoderUnsignedBits(Payload.ProgramFingerprint);
+	Result->ExpectedProgramFingerprint =
+		FVoxelLandM5ProgramDecoderInternals::M5DecoderUnsignedBits(Payload.ProgramFingerprint);
 	OutDraft = MoveTemp(Result);
 	return {};
 }

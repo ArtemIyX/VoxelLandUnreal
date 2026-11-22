@@ -15,15 +15,22 @@
 #include "World/VoxelLandM4CurveValidation.h"
 #include "World/VoxelLandM4Preparation.h"
 
-namespace
+class FVoxelLandM4WorldIdentityInternals final
 {
-void M4WorldIdentityU64(FCanonicalWriter& W, uint64 V)
+public:
+	static void M4WorldIdentityU64(FCanonicalWriter& W, uint64 V);
+	static void M4WorldIdentityGuid(FCanonicalWriter& W, const FGuid& G);
+	static bool M4WorldIdentityOverrides(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel);
+	static int64 M4WorldIdentityHash(const TArray<uint8>& Bytes);
+};
+
+void FVoxelLandM4WorldIdentityInternals::M4WorldIdentityU64(FCanonicalWriter& W, uint64 V)
 {
 	W.U32(uint32(V));
 	W.U32(uint32(V >> 32));
 }
 
-void M4WorldIdentityGuid(FCanonicalWriter& W, const FGuid& G)
+void FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(FCanonicalWriter& W, const FGuid& G)
 {
 	W.U32(G.A);
 	W.U32(G.B);
@@ -31,7 +38,8 @@ void M4WorldIdentityGuid(FCanonicalWriter& W, const FGuid& G)
 	W.U32(G.D);
 }
 
-bool M4WorldIdentityOverrides(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel)
+bool FVoxelLandM4WorldIdentityInternals::M4WorldIdentityOverrides(
+	FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel)
 {
 	TArray<const FVoxelLandParameterOverride*> Sorted;
 	for (const FVoxelLandParameterOverride& Override : Channel.Overrides)
@@ -82,13 +90,12 @@ bool M4WorldIdentityOverrides(FCanonicalWriter& W, const FVoxelLandM4ControlSnap
 	return true;
 }
 
-int64 M4WorldIdentityHash(const TArray<uint8>& Bytes)
+int64 FVoxelLandM4WorldIdentityInternals::M4WorldIdentityHash(const TArray<uint8>& Bytes)
 {
 	const uint64 Hash = FXxHash64::HashBuffer(Bytes.GetData(), Bytes.Num()).Hash;
 	int64 Bits = 0;
 	FMemory::Memcpy(&Bits, &Hash, sizeof(Bits));
 	return Bits;
-}
 }
 
 bool VoxelLandM4WorldIdentity::CaptureVersion(
@@ -200,7 +207,7 @@ bool VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(const FVoxelLandM4Wo
 	const FVoxelLandProgram* Programs[] = {&Continental, &Mountain, &Peaks};
 	for (const auto* Program : Programs)
 	{
-		M4WorldIdentityU64(W, Program->GetFingerprint());
+		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityU64(W, Program->GetFingerprint());
 	}
 	W.U8(S.bNormalizeSlope ? 1 : 0);
 	W.U32(S.Smooth.Version);
@@ -215,7 +222,7 @@ bool VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(const FVoxelLandM4Wo
 		W.U32(uint32(S.OverhangAmplitudeQ8));
 		W.U32(uint32(S.OverhangBandQ8));
 		W.Float(S.OverhangFrequencyPerCm);
-		M4WorldIdentityGuid(W, S.OverhangNodeId);
+		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.OverhangNodeId);
 		W.U32(uint32(S.OverhangSalt));
 	}
 	W.U32(uint32(S.HeightDetail.AlgorithmVersion));
@@ -224,24 +231,24 @@ bool VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(const FVoxelLandM4Wo
 	{
 		W.U32(uint32(S.HeightDetail.AmplitudeQ8));
 		W.Float(S.HeightDetail.FrequencyPerCm);
-		M4WorldIdentityGuid(W, S.HeightDetail.NodeId);
+		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.HeightDetail.NodeId);
 		W.U32(S.HeightDetail.Salt);
 	}
 	const FVoxelLandM4ControlSnapshot* Channels[] = {&S.Continental, &S.Mountain, &S.Peaks};
 	for (const FVoxelLandM4ControlSnapshot* Channel : Channels)
 	{
-		M4WorldIdentityU64(W, uint64(Channel->Payload.SourceFingerprint));
-		if (!M4WorldIdentityOverrides(W, *Channel))
+		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityU64(W, uint64(Channel->Payload.SourceFingerprint));
+		if (!FVoxelLandM4WorldIdentityInternals::M4WorldIdentityOverrides(W, *Channel))
 		{
 			Error = TEXT("Invalid world identity override");
 			return false;
 		}
 	}
 	W.U32(uint32(S.HeightStage.Version));
-	M4WorldIdentityGuid(W, S.HeightStage.OutputNodeId);
-	M4WorldIdentityGuid(W, S.HeightStage.ContinentalInputId);
-	M4WorldIdentityGuid(W, S.HeightStage.MountainInputId);
-	M4WorldIdentityGuid(W, S.HeightStage.PeaksInputId);
+	FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.HeightStage.OutputNodeId);
+	FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.HeightStage.ContinentalInputId);
+	FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.HeightStage.MountainInputId);
+	FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.HeightStage.PeaksInputId);
 	W.U32(1); // fixed-lattice numeric/noise contract
 	W.U32(1); // fixed-lattice 2D/3D shaping contract
 
@@ -253,7 +260,7 @@ bool VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(const FVoxelLandM4Wo
 	FVoxelLandM4IdentityRecord Result;
 	Result.FormatVersion = Version;
 	Result.CanonicalBytes = MoveTemp(W.Bytes);
-	Result.FingerprintBits = M4WorldIdentityHash(Result.CanonicalBytes);
+	Result.FingerprintBits = FVoxelLandM4WorldIdentityInternals::M4WorldIdentityHash(Result.CanonicalBytes);
 	Out = MoveTemp(Result);
 	return true;
 }
@@ -268,7 +275,7 @@ bool VoxelLandM4WorldIdentity::Matches(
 	const FVoxelLandM4IdentityRecord& Record, const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error)
 {
 	if (Record.FormatVersion != 1 || Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > 8 * 1024 * 1024
-		|| Record.FingerprintBits != M4WorldIdentityHash(Record.CanonicalBytes))
+		|| Record.FingerprintBits != FVoxelLandM4WorldIdentityInternals::M4WorldIdentityHash(Record.CanonicalBytes))
 	{
 		Error = TEXT("Unsupported or corrupt M4 identity record");
 		return false;

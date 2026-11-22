@@ -37,12 +37,12 @@ TRACE_DECLARE_MEMORY_COUNTER(VoxelMeshBytes, TEXT("VoxelLand/MeshBytes"));
 
 namespace VoxelLandWorldPrivate
 {
-constexpr int32 MaxWorkers = 4;
-constexpr int32 MaxRecords = 8192;
-
 class FWorker final : public FRunnable
 {
 public:
+	static constexpr int32 MaxWorkers = 4;
+	static constexpr int32 MaxRecords = 8192;
+
 	explicit FWorker(TSharedRef<FSharedWork, ESPMode::ThreadSafe> InWork)
 		: Work(InWork) {}
 
@@ -326,7 +326,7 @@ void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::
 	State->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
 	State->RegionDimensions = FIntVector(
 		FMath::Clamp(RegionSize.X, 1, 32), FMath::Clamp(RegionSize.Y, 1, 32), FMath::Clamp(RegionSize.Z, 1, 8));
-	const int32 Count = FMath::Clamp(WorkerCount, 1, MaxWorkers);
+	const int32 Count = FMath::Clamp(WorkerCount, 1, FWorker::MaxWorkers);
 	for (int32 I = 0; I < Count; ++I)
 	{
 		auto Worker = MakeUnique<FWorker>(State->Work);
@@ -397,9 +397,10 @@ bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 {
 	check(IsInGameThread());
 	if (!State || Key.LOD != 0
-	    || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
-		    Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited())
-	    || (State->Records.Num() >= FMath::Clamp(MaxResidentChunks, 1, MaxRecords) && !State->Records.Contains(Key)))
+		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
+			Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited())
+		|| (State->Records.Num() >= FMath::Clamp(MaxResidentChunks, 1, FWorker::MaxRecords)
+			&& !State->Records.Contains(Key)))
 	{
 		return false;
 	}
@@ -499,7 +500,7 @@ void AVoxelLandWorld::SetRegionHidden(FIntVector Region, bool bRegionHidden)
 	}
 	if (bRegionHidden)
 	{
-		if (State->HiddenRegions.Num() >= MaxRecords && !State->HiddenRegions.Contains(Region))
+		if (State->HiddenRegions.Num() >= FWorker::MaxRecords && !State->HiddenRegions.Contains(Region))
 		{
 			return;
 		}
@@ -653,7 +654,7 @@ void AVoxelLandWorld::UpdateDemand()
 	const FIntVector NewChunk(
 		FMath::FloorToInt(Position.X), FMath::FloorToInt(Position.Y), FMath::FloorToInt(Position.Z));
 	const int32 H = FMath::Clamp(HorizontalRadius, 1, 8) + 1, V = FMath::Clamp(VerticalRadius, 1, 4) + 1;
-	const int32 Limit = FMath::Clamp(MaxResidentChunks, 1, MaxRecords);
+	const int32 Limit = FMath::Clamp(MaxResidentChunks, 1, FWorker::MaxRecords);
 	const FVector Direction = State->ViewVelocity.GetSafeNormal();
 	auto SectorAxis = [](double Value) {
 		return Value > 0.25 ? 1 : Value < -0.25 ? -1 : 0;

@@ -1,22 +1,25 @@
 #include "Generation/VoxelLandM4ControlPipeline.h"
 
+#include "Data/Structs/VoxelLandM4LatticeGeometry.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4ControlGrid.h"
+#include "Generation/VoxelLandM4ControlPipelineInputs.h"
 #include "Generation/VoxelLandM4Domain.h"
 #include "Generation/VoxelLandM4HeightPrepass.h"
 
 namespace VoxelLandM4ControlPipeline
 {
-namespace
+class FVoxelLandM4ControlPipelineInternals final
 {
-FVoxelLandError M4ControlPipelineError(EVoxelLandErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandError Error;
-	Error.Code = Code;
-	Error.Message = Message;
-	return Error;
-}
-}
+public:
+	static FVoxelLandError M4ControlPipelineError(EVoxelLandErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandError Error;
+		Error.Code = Code;
+		Error.Message = Message;
+		return Error;
+	}
+};
 
 FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, const FVoxelLandGenerator& ContinentalGenerator,
 	FVoxelLandWorkerContext& ContinentalWorker, const FVoxelLandM4CurveLut& ContinentalCurve,
@@ -41,62 +44,76 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, const FVoxelL
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease)
 {
+	return Generate({Domain, {ContinentalGenerator, ContinentalWorker, ContinentalCurve},
+						{MountainGenerator, MountainWorker, MountainCurve}, {PeaksGenerator, PeaksWorker, PeaksCurve},
+						BaseQ8, WorldSeed, StageId, Salt, DropletCount, Erosion},
+		OutGrid, OutHash, IsCancelled, MoveTemp(Lease));
+}
+
+FVoxelLandError Generate(const FVoxelLandM4ControlPipelineInputs& Inputs,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease)
+{
+	const FVoxelLandM4DomainSettings& Domain = Inputs.Domain;
 	if (const FVoxelLandError Error = VoxelLandM4Domain::Validate(Domain))
 	{
 		return Error;
 	}
 	if (Domain.Mode != EVoxelLandM4DomainMode::Finite)
 	{
-		return M4ControlPipelineError(
+		return FVoxelLandM4ControlPipelineInternals::M4ControlPipelineError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M4 control prepass requires a finite domain"));
 	}
-	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::ValidateProgram(ContinentalGenerator.GetProgram()))
+	if (const FVoxelLandError Error =
+			VoxelLandM4ControlGrid::ValidateProgram(Inputs.Continental.Generator.GetProgram()))
 	{
 		return Error;
 	}
-	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::ValidateProgram(MountainGenerator.GetProgram()))
+	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::ValidateProgram(Inputs.Mountain.Generator.GetProgram()))
 	{
 		return Error;
 	}
-	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::ValidateProgram(PeaksGenerator.GetProgram()))
+	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::ValidateProgram(Inputs.Peaks.Generator.GetProgram()))
 	{
 		return Error;
 	}
 	if (IsCancelled())
 	{
-		return M4ControlPipelineError(EVoxelLandErrorCode::Cancelled, TEXT("M4 control prepass cancelled"));
+		return FVoxelLandM4ControlPipelineInternals::M4ControlPipelineError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M4 control prepass cancelled"));
 	}
 
+	const FVoxelLandM4LatticeGeometry Geometry{
+		Domain.OriginXCm, Domain.OriginYCm, Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY};
 	TArray<uint16> Continental, Mountain, Peaks;
-	if (const FVoxelLandError Error =
-		VoxelLandM4ControlGrid::Evaluate(ContinentalGenerator, ContinentalWorker, Domain.OriginXCm,
-			Domain.OriginYCm, Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Continental, IsCancelled))
+	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::Evaluate(
+			Inputs.Continental.Generator, Inputs.Continental.Worker, Geometry, Continental, IsCancelled))
+	{
+		return Error;
+	}
+	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::Evaluate(
+			Inputs.Mountain.Generator, Inputs.Mountain.Worker, Geometry, Mountain, IsCancelled))
 	{
 		return Error;
 	}
 	if (const FVoxelLandError Error =
-		VoxelLandM4ControlGrid::Evaluate(MountainGenerator, MountainWorker, Domain.OriginXCm, Domain.OriginYCm,
-			Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Mountain, IsCancelled))
-	{
-		return Error;
-	}
-	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::Evaluate(PeaksGenerator, PeaksWorker, Domain.OriginXCm,
-		Domain.OriginYCm, Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Peaks, IsCancelled))
+			VoxelLandM4ControlGrid::Evaluate(Inputs.Peaks.Generator, Inputs.Peaks.Worker, Geometry, Peaks, IsCancelled))
 	{
 		return Error;
 	}
 
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
 	uint64 Hash = 0;
-	if (const FVoxelLandError Error =
-		VoxelLandM4HeightPrepass::Generate(Domain, Continental, ContinentalCurve, Mountain, MountainCurve, Peaks,
-			PeaksCurve, BaseQ8, WorldSeed, StageId, Salt, DropletCount, Erosion, Grid, Hash, IsCancelled, Lease))
+	if (const FVoxelLandError Error = VoxelLandM4HeightPrepass::Generate(Domain, Continental, Inputs.Continental.Curve,
+			Mountain, Inputs.Mountain.Curve, Peaks, Inputs.Peaks.Curve, Inputs.BaseQ8, Inputs.WorldSeed, Inputs.StageId,
+			Inputs.Salt, Inputs.DropletCount, Inputs.Erosion, Grid, Hash, IsCancelled, Lease))
 	{
 		return Error;
 	}
 	if (IsCancelled())
 	{
-		return M4ControlPipelineError(EVoxelLandErrorCode::Cancelled, TEXT("M4 control prepass cancelled"));
+		return FVoxelLandM4ControlPipelineInternals::M4ControlPipelineError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M4 control prepass cancelled"));
 	}
 	OutGrid = MoveTemp(Grid);
 	OutHash = Hash;

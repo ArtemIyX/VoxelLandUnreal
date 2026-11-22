@@ -3,22 +3,23 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5FeetProposalBuilder.h"
 
-namespace
+class FVoxelLandM5FeetChainInternals final
 {
-FVoxelLandM5Diagnostic M5ChainError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Error;
-	Error.Code = Code;
-	Error.Stage = TEXT("M5.FeetChain");
-	Error.Message = Message;
-	return Error;
-}
+public:
+	static FVoxelLandM5Diagnostic M5ChainError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Error;
+		Error.Code = Code;
+		Error.Stage = TEXT("M5.FeetChain");
+		Error.Message = Message;
+		return Error;
+	}
 
-bool M5ChainSame(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
-{
-	return A.X == B.X && A.Y == B.Y && A.Z == B.Z;
-}
-}
+	static bool M5ChainSame(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
+	{
+		return A.X == B.X && A.Y == B.Y && A.Z == B.Z;
+	}
+};
 
 FVoxelLandM5Diagnostic FVoxelLandM5FeetChain::Build(TConstArrayView<FVoxelLandM5Segment> Segments, uint64 ConnectionId,
 	bool bReverseFirst, const FVoxelLandM5CapsuleProfile& Capsule, int32 MaxSegments,
@@ -27,11 +28,13 @@ FVoxelLandM5Diagnostic FVoxelLandM5FeetChain::Build(TConstArrayView<FVoxelLandM5
 {
 	if (IsCancelled())
 	{
-		return M5ChainError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
+		return FVoxelLandM5FeetChainInternals::M5ChainError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
 	}
 	if (MaxSegments < 1 || MaxSegments > 8192 || Segments.IsEmpty() || Segments.Num() > MaxSegments)
 	{
-		return M5ChainError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid segment count or limit"));
+		return FVoxelLandM5FeetChainInternals::M5ChainError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid segment count or limit"));
 	}
 	// Bound output plus TArray/control-block slack. The cap above guarantees
 	// every product is representable; caller accounts for its borrowed input.
@@ -40,12 +43,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5FeetChain::Build(TConstArrayView<FVoxelLandM5
 	const int64 Work = 64 + 4 * Count * Count + 8 * Count;
 	if (!Budget->TryChargeWork(Work))
 	{
-		return M5ChainError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Feet chain work limit exceeded"));
+		return FVoxelLandM5FeetChainInternals::M5ChainError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Feet chain work limit exceeded"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(Bytes, Lease))
 	{
-		return M5ChainError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Feet chain memory limit exceeded"));
+		return FVoxelLandM5FeetChainInternals::M5ChainError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Feet chain memory limit exceeded"));
 	}
 	TArray<FVoxelLandM5FeetChainLeg> Scratch;
 	Scratch.Reserve(Segments.Num());
@@ -54,32 +59,37 @@ FVoxelLandM5Diagnostic FVoxelLandM5FeetChain::Build(TConstArrayView<FVoxelLandM5
 	{
 		if (IsCancelled())
 		{
-			return M5ChainError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
+			return FVoxelLandM5FeetChainInternals::M5ChainError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
 		}
 		const FVoxelLandM5Segment& Input = Segments[I];
 		if (!Input.bHasId || !Input.bHasConnectionId || Input.ConnectionId != ConnectionId)
 		{
-			return M5ChainError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing ID or wrong connection"));
+			return FVoxelLandM5FeetChainInternals::M5ChainError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing ID or wrong connection"));
 		}
 		for (int32 J = 0; J < I; ++J)
 		{
 			if ((J & 63) == 0 && IsCancelled())
 			{
-				return M5ChainError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
+				return FVoxelLandM5FeetChainInternals::M5ChainError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
 			}
 			if (Segments[J].Id == Input.Id)
 			{
-				return M5ChainError(EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate segment ID"));
+				return FVoxelLandM5FeetChainInternals::M5ChainError(
+					EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate segment ID"));
 			}
 		}
 		FVoxelLandM5Segment Oriented = Input;
-		if ((I == 0 && bReverseFirst) || (I > 0 && M5ChainSame(Previous, Input.EndCm)))
+		if ((I == 0 && bReverseFirst) || (I > 0 && FVoxelLandM5FeetChainInternals::M5ChainSame(Previous, Input.EndCm)))
 		{
 			Swap(Oriented.StartCm, Oriented.EndCm);
 		}
-		if (I > 0 && !M5ChainSame(Previous, Oriented.StartCm))
+		if (I > 0 && !FVoxelLandM5FeetChainInternals::M5ChainSame(Previous, Oriented.StartCm))
 		{
-			return M5ChainError(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Segment chain is disconnected"));
+			return FVoxelLandM5FeetChainInternals::M5ChainError(
+				EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Segment chain is disconnected"));
 		}
 		FVoxelLandM5FeetChainLeg Leg;
 		Leg.SegmentId = Input.Id;
@@ -89,16 +99,18 @@ FVoxelLandM5Diagnostic FVoxelLandM5FeetChain::Build(TConstArrayView<FVoxelLandM5
 		{
 			return Error;
 		}
-		if (I > 0 && !M5ChainSame(Scratch.Last().Feet.EndFeetCm, Leg.Feet.StartFeetCm))
+		if (I > 0 && !FVoxelLandM5FeetChainInternals::M5ChainSame(Scratch.Last().Feet.EndFeetCm, Leg.Feet.StartFeetCm))
 		{
-			return M5ChainError(EVoxelLandM5ErrorCode::Unproven, TEXT("Feet proposals do not meet"));
+			return FVoxelLandM5FeetChainInternals::M5ChainError(
+				EVoxelLandM5ErrorCode::Unproven, TEXT("Feet proposals do not meet"));
 		}
 		Scratch.Add(MoveTemp(Leg));
 		Previous = Oriented.EndCm;
 	}
 	if (IsCancelled())
 	{
-		return M5ChainError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
+		return FVoxelLandM5FeetChainInternals::M5ChainError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet chain cancelled"));
 	}
 	TSharedPtr<const FVoxelLandM5FeetChain, ESPMode::ThreadSafe> Complete =
 		MakeShareable(new FVoxelLandM5FeetChain(MoveTemp(Lease), MoveTemp(Scratch)));

@@ -5,9 +5,16 @@
 #include <cmath>
 #include <limits>
 
-namespace
+class FVoxelLandM5FixedMeshInternals final
 {
-FVoxelLandM5Diagnostic M5FixedMeshFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+public:
+	static FVoxelLandM5Diagnostic M5FixedMeshFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static bool M5FixedMeshCoordinate(double Value, int64 GridQ18, int64& Out);
+	static bool M5FixedMeshErrorBound(double ErrorCm, int64& Out);
+};
+
+FVoxelLandM5Diagnostic FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Error;
 	Error.Code = Code;
@@ -16,7 +23,7 @@ FVoxelLandM5Diagnostic M5FixedMeshFailure(EVoxelLandM5ErrorCode Code, const TCHA
 	return Error;
 }
 
-bool M5FixedMeshCoordinate(double Value, int64 GridQ18, int64& Out)
+bool FVoxelLandM5FixedMeshInternals::M5FixedMeshCoordinate(double Value, int64 GridQ18, int64& Out)
 {
 	constexpr double MeshLimitCm = 1048576.0;
 	constexpr double Scale = 262144.0;
@@ -42,7 +49,7 @@ bool M5FixedMeshCoordinate(double Value, int64 GridQ18, int64& Out)
 	return true;
 }
 
-bool M5FixedMeshErrorBound(double ErrorCm, int64& Out)
+bool FVoxelLandM5FixedMeshInternals::M5FixedMeshErrorBound(double ErrorCm, int64& Out)
 {
 	constexpr double MeshLimitCm = 1048576.0;
 	constexpr double Scale = 262144.0;
@@ -68,7 +75,6 @@ bool M5FixedMeshErrorBound(double ErrorCm, int64& Out)
 	Out = static_cast<int64>(std::ceil(Upper));
 	return true;
 }
-}
 
 FVoxelLandM5Diagnostic VoxelLand::M5::FixedMesh::Convert(const FVoxelLandM5ValidationTriangle& Triangle,
 	int32 VoxelSizeCm, bool bVerifiedProvenance, const FVector3d& RendererErrorCm,
@@ -78,27 +84,30 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedMesh::Convert(const FVoxelLandM5Valid
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
 	{
-		return M5FixedMeshFailure(E::Cancelled, TEXT("Conversion cancelled"));
+		return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(E::Cancelled, TEXT("Conversion cancelled"));
 	}
 	if (!bVerifiedProvenance)
 	{
-		return M5FixedMeshFailure(E::Unproven, TEXT("Mesh provenance is not established"));
+		return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(
+			E::Unproven, TEXT("Mesh provenance is not established"));
 	}
 	if (VoxelSizeCm < 1 || VoxelSizeCm > 134217 || Triangle.SourceTriangle < 0)
 	{
-		return M5FixedMeshFailure(E::InvalidInput, TEXT("Invalid voxel size or triangle index"));
+		return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(
+			E::InvalidInput, TEXT("Invalid voxel size or triangle index"));
 	}
 	// Nine coordinates, three error bounds, and bounded fixed overhead. The
 	// caller separately accounts for the input and output storage lifetimes.
 	if (!Budget->TryChargeWork(32))
 	{
-		return M5FixedMeshFailure(E::BudgetExceeded, TEXT("Fixed mesh conversion work exhausted"));
+		return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(
+			E::BudgetExceeded, TEXT("Fixed mesh conversion work exhausted"));
 	}
 	const double Grid = VoxelLandMeshCoordinates::Grid(static_cast<float>(VoxelSizeCm));
 	const int64 GridQ18 = static_cast<int64>(Grid * 262144.0);
 	if (GridQ18 <= 0 || double(GridQ18) != Grid * 262144.0)
 	{
-		return M5FixedMeshFailure(E::Unproven, TEXT("Unsupported mesh snap grid"));
+		return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(E::Unproven, TEXT("Unsupported mesh snap grid"));
 	}
 	FVoxelLandM5FixedTriangleQ18 Scratch;
 	Scratch.SourceTriangle = Triangle.SourceTriangle;
@@ -108,24 +117,27 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedMesh::Convert(const FVoxelLandM5Valid
 	{
 		if (IsCancelled())
 		{
-			return M5FixedMeshFailure(E::Cancelled, TEXT("Conversion cancelled"));
+			return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(E::Cancelled, TEXT("Conversion cancelled"));
 		}
-		if (!M5FixedMeshCoordinate(Vertices[Index]->X, GridQ18, Fixed[Index]->X)
-			|| !M5FixedMeshCoordinate(Vertices[Index]->Y, GridQ18, Fixed[Index]->Y)
-			|| !M5FixedMeshCoordinate(Vertices[Index]->Z, GridQ18, Fixed[Index]->Z))
+		if (!FVoxelLandM5FixedMeshInternals::M5FixedMeshCoordinate(Vertices[Index]->X, GridQ18, Fixed[Index]->X)
+			|| !FVoxelLandM5FixedMeshInternals::M5FixedMeshCoordinate(Vertices[Index]->Y, GridQ18, Fixed[Index]->Y)
+			|| !FVoxelLandM5FixedMeshInternals::M5FixedMeshCoordinate(Vertices[Index]->Z, GridQ18, Fixed[Index]->Z))
 		{
-			return M5FixedMeshFailure(E::Unproven, TEXT("Mesh vertex is outside the envelope or snap grid"));
+			return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(
+				E::Unproven, TEXT("Mesh vertex is outside the envelope or snap grid"));
 		}
 	}
-	if (!M5FixedMeshErrorBound(RendererErrorCm.X, Scratch.RendererErrorQ18.X)
-		|| !M5FixedMeshErrorBound(RendererErrorCm.Y, Scratch.RendererErrorQ18.Y)
-		|| !M5FixedMeshErrorBound(RendererErrorCm.Z, Scratch.RendererErrorQ18.Z))
+	if (!FVoxelLandM5FixedMeshInternals::M5FixedMeshErrorBound(RendererErrorCm.X, Scratch.RendererErrorQ18.X)
+		|| !FVoxelLandM5FixedMeshInternals::M5FixedMeshErrorBound(RendererErrorCm.Y, Scratch.RendererErrorQ18.Y)
+		|| !FVoxelLandM5FixedMeshInternals::M5FixedMeshErrorBound(RendererErrorCm.Z, Scratch.RendererErrorQ18.Z))
 	{
-		return M5FixedMeshFailure(E::Unproven, TEXT("Renderer uncertainty is invalid or unbounded"));
+		return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(
+			E::Unproven, TEXT("Renderer uncertainty is invalid or unbounded"));
 	}
 	if (IsCancelled())
 	{
-		return M5FixedMeshFailure(E::Cancelled, TEXT("Conversion cancelled before publication"));
+		return FVoxelLandM5FixedMeshInternals::M5FixedMeshFailure(
+			E::Cancelled, TEXT("Conversion cancelled before publication"));
 	}
 	OutTriangle = Scratch;
 	return FVoxelLandM5Diagnostic();

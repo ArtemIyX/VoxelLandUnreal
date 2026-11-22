@@ -5,11 +5,21 @@ static_assert(sizeof(float) == 4 && sizeof(double) == 8 &&
               std::numeric_limits<float>::is_iec559 && std::numeric_limits<double>::is_iec559,
 	"VoxelLand Power requires IEEE-754 binary32 and binary64");
 
-namespace
+class FVoxelLandPowerInternals final
 {
+public:
+	static double PowerOfTwo(int32 Exponent);
+	static void Decompose(uint32 Magnitude, double& Mantissa, int32& Exponent);
+	static double Decode(uint32 Magnitude);
+	static double Log2Mantissa(double Mantissa);
+	static double Exp2Fraction(double Fraction);
+	static uint32 RoundEven(double Value);
+	static bool PackResult(double Log2Result, bool bNegative, float& Result);
+};
+
 // Inputs and outputs use IEEE binary32, and intermediates IEEE binary64. Construct
 // powers of two directly so subnormal inputs are not subject to flush-to-zero.
-double PowerOfTwo(int32 Exponent)
+double FVoxelLandPowerInternals::PowerOfTwo(int32 Exponent)
 {
 	const uint64 Bits = uint64(Exponent + 1023) << 52;
 	double Value;
@@ -17,7 +27,7 @@ double PowerOfTwo(int32 Exponent)
 	return Value;
 }
 
-void Decompose(uint32 Magnitude, double& Mantissa, int32& Exponent)
+void FVoxelLandPowerInternals::Decompose(uint32 Magnitude, double& Mantissa, int32& Exponent)
 {
 	const uint32 Fraction = Magnitude & 0x7fffffu;
 	const uint32 EncodedExponent = Magnitude >> 23;
@@ -38,7 +48,7 @@ void Decompose(uint32 Magnitude, double& Mantissa, int32& Exponent)
 	Exponent = Highest - 149;
 }
 
-double Decode(uint32 Magnitude)
+double FVoxelLandPowerInternals::Decode(uint32 Magnitude)
 {
 	if (Magnitude == 0)
 	{
@@ -50,7 +60,7 @@ double Decode(uint32 Magnitude)
 	return Mantissa * PowerOfTwo(Exponent);
 }
 
-double Log2Mantissa(double Mantissa)
+double FVoxelLandPowerInternals::Log2Mantissa(double Mantissa)
 {
 	const double T = (Mantissa - 1.0) / (Mantissa + 1.0);
 	const double T2 = T * T;
@@ -64,7 +74,7 @@ double Log2Mantissa(double Mantissa)
 	return (2.0 * Sum) * 1.44269504088896340735992468100189214;
 }
 
-double Exp2Fraction(double Fraction)
+double FVoxelLandPowerInternals::Exp2Fraction(double Fraction)
 {
 	const double X = Fraction * 0.693147180559945309417232121458176568;
 	double Sum = 1.0;
@@ -77,14 +87,14 @@ double Exp2Fraction(double Fraction)
 	return Sum;
 }
 
-uint32 RoundEven(double Value)
+uint32 FVoxelLandPowerInternals::RoundEven(double Value)
 {
 	const uint32 Integer = uint32(Value);
 	const double Fraction = Value - double(Integer);
 	return Integer + uint32(Fraction > 0.5 || (Fraction == 0.5 && (Integer & 1u) != 0));
 }
 
-bool PackResult(double Log2Result, bool bNegative, float& Result)
+bool FVoxelLandPowerInternals::PackResult(double Log2Result, bool bNegative, float& Result)
 {
 	uint32 Bits = bNegative ? 0x80000000u : 0u;
 	if (Log2Result < -150.0)
@@ -124,7 +134,6 @@ bool PackResult(double Log2Result, bool bNegative, float& Result)
 	FMemory::Memcpy(&Result, &Bits, sizeof(Result));
 	return true;
 }
-}
 
 bool FVoxelLandPower::Evaluate(float Base, float Exponent, float& Result)
 {
@@ -140,7 +149,7 @@ bool FVoxelLandPower::Evaluate(float Base, float Exponent, float& Result)
 	}
 	const bool bNegativeBase = (BaseBits & 0x80000000u) != 0 && BaseMagnitude != 0;
 	const bool bNegativeExponent = (ExponentBits & 0x80000000u) != 0 && ExponentMagnitude != 0;
-	const double ExponentValue = Decode(ExponentMagnitude) * (bNegativeExponent ? -1.0 : 1.0);
+	const double ExponentValue = FVoxelLandPowerInternals::Decode(ExponentMagnitude) * (bNegativeExponent ? -1.0 : 1.0);
 	bool bNegativeResult = false;
 	if (bNegativeBase)
 	{
@@ -161,7 +170,7 @@ bool FVoxelLandPower::Evaluate(float Base, float Exponent, float& Result)
 	}
 	double Mantissa;
 	int32 BaseExponent;
-	Decompose(BaseMagnitude, Mantissa, BaseExponent);
-	const double Logarithm = double(BaseExponent) + Log2Mantissa(Mantissa);
-	return PackResult(Logarithm * ExponentValue, bNegativeResult, Result);
+	FVoxelLandPowerInternals::Decompose(BaseMagnitude, Mantissa, BaseExponent);
+	const double Logarithm = double(BaseExponent) + FVoxelLandPowerInternals::Log2Mantissa(Mantissa);
+	return FVoxelLandPowerInternals::PackResult(Logarithm * ExponentValue, bNegativeResult, Result);
 }

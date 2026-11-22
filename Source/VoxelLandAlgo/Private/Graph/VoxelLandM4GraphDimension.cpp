@@ -4,9 +4,15 @@
 
 namespace VoxelLandM4GraphDimension
 {
-namespace
+class FVoxelLandM4GraphDimensionInternals final
 {
-FVoxelLandError GraphDimensionFailure(const TCHAR* Message)
+public:
+	static FVoxelLandError GraphDimensionFailure(const TCHAR* Message);
+	static bool GraphDimensionAllowed(EVoxelLandBuiltinNode Kind);
+	static bool GraphDimensionGuidLess(const FGuid& A, const FGuid& B);
+};
+
+FVoxelLandError FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(const TCHAR* Message)
 {
 	FVoxelLandError Error;
 	Error.Code = EVoxelLandErrorCode::InvalidProgram;
@@ -15,7 +21,7 @@ FVoxelLandError GraphDimensionFailure(const TCHAR* Message)
 }
 
 // Explicit allowlist: new builtin IDs do not inherit a 2D proof automatically.
-bool GraphDimensionAllowed(EVoxelLandBuiltinNode Kind)
+bool FVoxelLandM4GraphDimensionInternals::GraphDimensionAllowed(EVoxelLandBuiltinNode Kind)
 {
 	switch (Kind)
 	{
@@ -65,7 +71,7 @@ bool GraphDimensionAllowed(EVoxelLandBuiltinNode Kind)
 	}
 }
 
-bool GraphDimensionGuidLess(const FGuid& A, const FGuid& B)
+bool FVoxelLandM4GraphDimensionInternals::GraphDimensionGuidLess(const FGuid& A, const FGuid& B)
 {
 	if (A.A != B.A)
 	{
@@ -81,7 +87,6 @@ bool GraphDimensionGuidLess(const FGuid& A, const FGuid& B)
 	}
 	return A.D < B.D;
 }
-}
 
 FVoxelLandError CollectProven2DBranch(
 	const FVoxelLandGraphSnapshot& Snapshot, const FGuid& RootNode, TArray<FVoxelLandM4StageNode>& OutNodes)
@@ -89,7 +94,8 @@ FVoxelLandError CollectProven2DBranch(
 	if (Snapshot.SourceVersion != 1 || Snapshot.Nodes.IsEmpty() || Snapshot.Nodes.Num() > 4096
 		|| Snapshot.Links.Num() > 16384)
 	{
-		return GraphDimensionFailure(TEXT("Unsupported graph version or node/link count"));
+		return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+			TEXT("Unsupported graph version or node/link count"));
 	}
 	TMap<FGuid, int32> NodeById;
 	TMap<FGuid, const FVoxelLandGraphPinRecord*> PinById;
@@ -99,7 +105,8 @@ FVoxelLandError CollectProven2DBranch(
 		const FVoxelLandGraphNodeRecord& Node = Snapshot.Nodes[Index];
 		if (!Node.Id.IsValid() || NodeById.Contains(Node.Id) || Node.Pins.Num() > 64)
 		{
-			return GraphDimensionFailure(TEXT("Invalid or duplicate graph node ID or pin count"));
+			return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+				TEXT("Invalid or duplicate graph node ID or pin count"));
 		}
 		NodeById.Add(Node.Id, Index);
 		for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
@@ -109,7 +116,8 @@ FVoxelLandError CollectProven2DBranch(
 				|| (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
 					&& Pin.Type != EVoxelLandGraphValueType::Bool))
 			{
-				return GraphDimensionFailure(TEXT("Invalid or duplicate graph pin ID, type or default"));
+				return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+					TEXT("Invalid or duplicate graph pin ID, type or default"));
 			}
 			PinById.Add(Pin.Id, &Pin);
 			PinOwner.Add(Pin.Id, Index);
@@ -118,7 +126,7 @@ FVoxelLandError CollectProven2DBranch(
 	const int32* RootIndex = NodeById.Find(RootNode);
 	if (!RootIndex)
 	{
-		return GraphDimensionFailure(TEXT("Requested M4 graph root is missing"));
+		return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(TEXT("Requested M4 graph root is missing"));
 	}
 	TArray<TArray<int32>> Producers, Consumers;
 	Producers.SetNum(Snapshot.Nodes.Num());
@@ -136,7 +144,8 @@ FVoxelLandError CollectProven2DBranch(
 			|| Snapshot.Nodes[*TargetOwner].Id != Link.TargetNode || !(*Source)->bOutput || (*Target)->bOutput
 			|| (*Source)->Type != (*Target)->Type || LinkedInputs.Contains(Link.TargetPin))
 		{
-			return GraphDimensionFailure(TEXT("Invalid pin ownership, direction, type or multiple input sources"));
+			return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+				TEXT("Invalid pin ownership, direction, type or multiple input sources"));
 		}
 		LinkedInputs.Add(Link.TargetPin);
 		Producers[*TargetOwner].Add(*SourceOwner);
@@ -163,7 +172,7 @@ FVoxelLandError CollectProven2DBranch(
 	}
 	if (Ready.Num() != Snapshot.Nodes.Num())
 	{
-		return GraphDimensionFailure(TEXT("Graph contains a cycle"));
+		return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(TEXT("Graph contains a cycle"));
 	}
 
 	TArray<bool> Seen;
@@ -178,12 +187,13 @@ FVoxelLandError CollectProven2DBranch(
 		if (Node.OperatorId.A != 0x564c4d33 || Node.OperatorId.B != 1 || Node.OperatorId.C != 0
 			|| !Node.FunctionPath.IsNull())
 		{
-			return GraphDimensionFailure(TEXT("2D proof does not support providers or graph functions"));
+			return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+				TEXT("2D proof does not support providers or graph functions"));
 		}
 		const EVoxelLandBuiltinNode Kind = static_cast<EVoxelLandBuiltinNode>(Node.OperatorId.D);
-		if (!GraphDimensionAllowed(Kind))
+		if (!FVoxelLandM4GraphDimensionInternals::GraphDimensionAllowed(Kind))
 		{
-			return GraphDimensionFailure(TEXT("Node is not a proven 2D builtin"));
+			return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(TEXT("Node is not a proven 2D builtin"));
 		}
 		const bool bVariadic = Kind == EVoxelLandBuiltinNode::Add || Kind == EVoxelLandBuiltinNode::Multiply;
 		FVoxelLandBuiltinNodeSpec Spec;
@@ -191,19 +201,22 @@ FVoxelLandError CollectProven2DBranch(
 			|| Node.OperatorVersion != Spec.OperatorVersion || !Node.Configuration.IsEmpty()
 			|| Node.Pins.Num() != Spec.Pins.Num())
 		{
-			return GraphDimensionFailure(TEXT("Invalid builtin version, configuration or pin count"));
+			return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+				TEXT("Invalid builtin version, configuration or pin count"));
 		}
 		for (int32 PinIndex = 0; PinIndex < Node.Pins.Num(); ++PinIndex)
 		{
 			if (Node.Pins[PinIndex].Type != Spec.Pins[PinIndex].Type
 				|| Node.Pins[PinIndex].bOutput != Spec.Pins[PinIndex].bOutput)
 			{
-				return GraphDimensionFailure(TEXT("Invalid builtin pin direction or type"));
+				return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+					TEXT("Invalid builtin pin direction or type"));
 			}
 		}
 		if (Node.Pins.IsEmpty() || !Node.Pins.Last().bOutput)
 		{
-			return GraphDimensionFailure(TEXT("Selected builtin must have a value output"));
+			return FVoxelLandM4GraphDimensionInternals::GraphDimensionFailure(
+				TEXT("Selected builtin must have a value output"));
 		}
 		FVoxelLandM4StageNode StageNode;
 		StageNode.Id = Node.Id;
@@ -224,11 +237,11 @@ FVoxelLandError CollectProven2DBranch(
 				Pending.Add(Producer);
 			}
 		}
-		StageNode.Dependencies.Sort(GraphDimensionGuidLess);
+		StageNode.Dependencies.Sort(FVoxelLandM4GraphDimensionInternals::GraphDimensionGuidLess);
 		Result.Add(MoveTemp(StageNode));
 	}
 	Result.Sort([](const FVoxelLandM4StageNode& A, const FVoxelLandM4StageNode& B) {
-		return GraphDimensionGuidLess(A.Id, B.Id);
+		return FVoxelLandM4GraphDimensionInternals::GraphDimensionGuidLess(A.Id, B.Id);
 	});
 	OutNodes = MoveTemp(Result);
 	return {};

@@ -10,6 +10,7 @@ class FVoxelLandWorkerContext;
 class FVoxelLandM4CurveLut;
 class FVoxelLandM4HeightGrid;
 class FVoxelLandM4GridLease;
+struct FVoxelLandM4ControlPipelineInputs;
 
 // Opt-in CPU pipeline from three existing single-output VM programs to an
 // immutable, finite height prepass. Each generator must own its corresponding
@@ -24,6 +25,10 @@ class FVoxelLandM4GridLease;
 // world initialization, and the output hash is not a prepass dependency key.
 namespace VoxelLandM4ControlPipeline
 {
+VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4ControlPipelineInputs& Inputs,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, uint64& OutHash,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = nullptr);
+
 VOXELLANDALGO_API FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain,
 	const FVoxelLandGenerator& ContinentalGenerator, FVoxelLandWorkerContext& ContinentalWorker,
 	const FVoxelLandM4CurveLut& ContinentalCurve, const FVoxelLandGenerator& MountainGenerator,

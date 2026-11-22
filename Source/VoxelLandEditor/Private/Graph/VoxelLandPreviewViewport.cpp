@@ -5,31 +5,36 @@
 #include "InputCoreTypes.h"
 #include "UnrealClient.h"
 
-namespace
-{
-class FVoxelLandPreviewViewportClient final : public FEditorViewportClient
+class FVoxelLandPreviewViewportInternals final
 {
 public:
-	FVoxelLandPreviewViewportClient(FAdvancedPreviewScene* Scene, const TSharedRef<SVoxelLandPreviewViewport>& Widget)
-		: FEditorViewportClient(nullptr, Scene, Widget), PreviewWidget(Widget) {}
-
-	virtual bool InputKey(const FInputKeyEventArgs& Args) override
+	class FVoxelLandPreviewViewportClient final : public FEditorViewportClient
 	{
-		if (Args.Key == EKeys::F && Args.Event == IE_Pressed)
+	public:
+		FVoxelLandPreviewViewportClient(
+			FAdvancedPreviewScene* Scene, const TSharedRef<SVoxelLandPreviewViewport>& Widget)
+			: FEditorViewportClient(nullptr, Scene, Widget)
+			, PreviewWidget(Widget)
 		{
-			if (TSharedPtr<SVoxelLandPreviewViewport> PinnedPreview = PreviewWidget.Pin())
-			{
-				PinnedPreview->FrameTerrain();
-				return true;
-			}
 		}
-		return FEditorViewportClient::InputKey(Args);
-	}
 
-private:
-	TWeakPtr<SVoxelLandPreviewViewport> PreviewWidget;
+		virtual bool InputKey(const FInputKeyEventArgs& Args) override
+		{
+			if (Args.Key == EKeys::F && Args.Event == IE_Pressed)
+			{
+				if (TSharedPtr<SVoxelLandPreviewViewport> PinnedPreview = PreviewWidget.Pin())
+				{
+					PinnedPreview->FrameTerrain();
+					return true;
+				}
+			}
+			return FEditorViewportClient::InputKey(Args);
+		}
+
+	private:
+		TWeakPtr<SVoxelLandPreviewViewport> PreviewWidget;
+	};
 };
-}
 
 void SVoxelLandPreviewViewport::Construct(const FArguments& Args)
 {
@@ -39,8 +44,9 @@ void SVoxelLandPreviewViewport::Construct(const FArguments& Args)
 
 TSharedRef<FEditorViewportClient> SVoxelLandPreviewViewport::MakeEditorViewportClient()
 {
-	TSharedRef<FEditorViewportClient> ViewportClient = MakeShared<FVoxelLandPreviewViewportClient>(PreviewScene.Get(),
-		SharedThis(this));
+	TSharedRef<FEditorViewportClient> ViewportClient =
+		MakeShared<FVoxelLandPreviewViewportInternals::FVoxelLandPreviewViewportClient>(
+			PreviewScene.Get(), SharedThis(this));
 	ViewportClient->SetViewLocation(FVector(-7000.0, -7000.0, 5000.0));
 	ViewportClient->SetViewRotation(FRotator(-25.0, 45.0, 0.0));
 	ViewportClient->SetViewMode(VMI_Lit);

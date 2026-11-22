@@ -4,17 +4,18 @@
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 
-namespace
+class FVoxelLandM5CarveMasksInternals final
 {
-FVoxelLandM5Diagnostic CarveMasksError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = FName(TEXT("CarveMasks"));
-	Result.Message = Message;
-	return Result;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic CarveMasksError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = FName(TEXT("CarveMasks"));
+		Result.Message = Message;
+		return Result;
+	}
+};
 
 FVoxelLandM5CarveMasks::FVoxelLandM5CarveMasks(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
 	: Lease(MoveTemp(InLease))
@@ -38,22 +39,26 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 		|| RoofThicknessCm > Limit || MinPocketDepthCm < 0 || MaxPocketDepthCm < MinPocketDepthCm
 		|| MaxPocketDepthCm > 2 * Limit || !InRange(OriginCm.X) || !InRange(OriginCm.Y) || !InRange(OriginCm.Z))
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid carve mask dimensions or settings"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid carve mask dimensions or settings"));
 	}
 	if (!bWaterPolicySatisfied)
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::Unproven, TEXT("Water policy has not been certified"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Water policy has not been certified"));
 	}
 	int64 XY = 0, Samples = 0, OutputXY = 0, Outputs = 0;
 	if (!TryMultiplyNonNegative(Size.X, Size.Y, XY) || !TryMultiplyNonNegative(XY, Size.Z, Samples)
 		|| !TryMultiplyNonNegative(Count.X, Count.Y, OutputXY) || !TryMultiplyNonNegative(OutputXY, Count.Z, Outputs))
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask grid overflow"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask grid overflow"));
 	}
 	if (Samples > MAX_int32 || Outputs > MAX_int32 || Baseline.Num() != Samples || Protection.Num() != Samples
 		|| EntranceAuthorized.Num() != Samples)
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Carve mask input size mismatch"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Carve mask input size mismatch"));
 	}
 	int64 Delta = 0, End = 0;
 	for (int32 Axis = 0; Axis < 3; ++Axis)
@@ -62,7 +67,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 		const int64 O = Axis == 0 ? OriginCm.X : Axis == 1 ? OriginCm.Y : OriginCm.Z;
 		if (!TryMultiply(N - 1, SpacingCm, Delta) || !TryAdd(O, Delta, End) || !InRange(End))
 		{
-			return CarveMasksError(
+			return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Carve mask grid exceeds coordinate limit"));
 		}
 	}
@@ -77,7 +82,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 		const int64 C = Axis == 0 ? Count.X : Axis == 1 ? Count.Y : Count.Z;
 		if (S < Halo || S + C > N - Halo)
 		{
-			return CarveMasksError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Incomplete roof and mesher halo"));
+			return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Incomplete roof and mesher halo"));
 		}
 	}
 	int64 Side = 0, CellsXY = 0, Cells = 0, PerSample = 0, Work = 0, PocketWork = 0, Bytes = 0;
@@ -90,16 +96,19 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 		|| !TryMultiplyNonNegative(Outputs, PerSample, Work) || !TryAdd(Work, 1, Work)
 		|| !TryMultiplyNonNegative(Outputs, 3, Bytes) || !TryAdd(Bytes, 4096, Bytes))
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask work or memory overflow"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask work or memory overflow"));
 	}
 	if (IsCancelled())
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(Work))
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask admission exhausted"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask admission exhausted"));
 	}
 	TSharedPtr<FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Scratch =
 		MakeShareable(new FVoxelLandM5CarveMasks(MoveTemp(Lease)));
@@ -118,7 +127,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 				const int64 Dest = OX + int64(Count.X) * OY + OutputXY * OZ;
 				if (Protection[Source] > 1 || EntranceAuthorized[Source] > 1)
 				{
-					return CarveMasksError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Carve mask input is not binary"));
+					return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Carve mask input is not binary"));
 				}
 				bool bRoof = false;
 				for (int64 CZ = Z - Radius - 1; CZ <= Z + Radius; ++CZ)
@@ -129,7 +139,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 						{
 							if ((Visits++ & 63) == 0 && IsCancelled())
 							{
-								return CarveMasksError(
+								return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 									EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
 							}
 							bool bSolid = false, bAir = false;
@@ -164,13 +174,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 							{
 								if ((Visits++ & 63) == 0 && IsCancelled())
 								{
-									return CarveMasksError(
+									return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 										EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
 								}
 								const int16 Q = Baseline[(X + DX) + int64(Size.X) * (Y + DY) + XY * K];
 								if (Q == 0 || (bAirSeen && Q < 0))
 								{
-									return CarveMasksError(EVoxelLandM5ErrorCode::Unproven,
+									return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+										EVoxelLandM5ErrorCode::Unproven,
 										TEXT("Pocket surface is ambiguous or has multiple crossings"));
 								}
 								if (Q > 0 && !bAirSeen)
@@ -181,7 +192,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 							}
 							if (Crossing < 1 || Crossing + 2 >= Size.Z)
 							{
-								return CarveMasksError(EVoxelLandM5ErrorCode::Unproven,
+								return FVoxelLandM5CarveMasksInternals::CarveMasksError(EVoxelLandM5ErrorCode::Unproven,
 									TEXT("Pocket surface lacks an enclosed vertical halo"));
 							}
 							Lowest = FMath::Min(Lowest, Crossing - 1);
@@ -201,7 +212,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 	}
 	if (IsCancelled())
 	{
-		return CarveMasksError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
 	}
 	OutMasks = MoveTemp(Scratch);
 	return {};

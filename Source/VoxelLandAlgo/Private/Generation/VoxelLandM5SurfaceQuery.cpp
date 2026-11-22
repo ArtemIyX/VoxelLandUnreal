@@ -3,17 +3,18 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 
-namespace
+class FVoxelLandM5SurfaceQueryInternals final
 {
-FVoxelLandM5Diagnostic SurfaceQueryError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = FName(TEXT("SurfaceQuery"));
-	Result.Message = Message;
-	return Result;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic SurfaceQueryError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = FName(TEXT("SurfaceQuery"));
+		Result.Message = Message;
+		return Result;
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, FIntVector SampleCounts,
@@ -32,18 +33,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 		|| RadiusCm < 0 || MaxSamplesToInspect < 0 || !InRange(Origin.X) || !InRange(Origin.Y) || !InRange(Origin.Z)
 		|| !InRange(X) || !InRange(Y) || (bHasWaterLevel && !InRange(WaterLevelCm)))
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid flat surface query input"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid flat surface query input"));
 	}
 	int64 XY = 0;
 	int64 Count = 0;
 	if (!TryMultiplyNonNegative(SampleCounts.X, SampleCounts.Y, XY)
 		|| !TryMultiplyNonNegative(XY, SampleCounts.Z, Count))
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface grid size overflow"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface grid size overflow"));
 	}
 	if (Count > MAX_int32 || Samples.Num() != Count || ProtectionColumns.Num() != XY)
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Surface grid or protection size mismatch"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Surface grid or protection size mismatch"));
 	}
 	int64 EndX = 0, EndY = 0, EndZ = 0, Delta = 0;
 	if (!TryMultiply(SampleCounts.X - 1, SpacingCm, Delta) || !TryAdd(Origin.X, Delta, EndX)
@@ -51,14 +55,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 		|| !TryMultiply(SampleCounts.Z - 1, SpacingCm, Delta) || !TryAdd(Origin.Z, Delta, EndZ) || !InRange(EndX)
 		|| !InRange(EndY) || !InRange(EndZ))
 	{
-		return SurfaceQueryError(
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
 			EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Surface grid exceeds supported coordinates"));
 	}
 	int64 MinX = 0, MaxX = 0, MinY = 0, MaxY = 0;
 	if (!TrySubtract(X, RadiusCm, MinX) || !TryAdd(X, RadiusCm, MaxX) || !TrySubtract(Y, RadiusCm, MinY)
 		|| !TryAdd(Y, RadiusCm, MaxY) || MinX < Origin.X || MaxX > EndX || MinY < Origin.Y || MaxY > EndY)
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Surface footprint is outside the grid"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Surface footprint is outside the grid"));
 	}
 	// Differences are nonnegative after domain checks, so integer division is floor.
 	const int64 LowX = (MinX - Origin.X) / SpacingCm - 2;
@@ -67,32 +72,37 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 	const int64 HighY = (MaxY - Origin.Y) / SpacingCm + 3;
 	if (LowX < 0 || LowY < 0 || HighX >= SampleCounts.X || HighY >= SampleCounts.Y)
 	{
-		return SurfaceQueryError(
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
 			EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Surface query needs a complete mesher halo"));
 	}
 	int64 Columns = 0, Work = 0;
 	if (!TryMultiplyNonNegative(HighX - LowX + 1, HighY - LowY + 1, Columns)
 		|| !TryMultiplyNonNegative(Columns, SampleCounts.Z, Work))
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface query work overflow"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface query work overflow"));
 	}
 	if (Work > MaxSamplesToInspect)
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Surface query work budget exceeded"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Surface query work budget exceeded"));
 	}
 	int64 ColumnWork = 0, ChargedWork = 0;
 	if (!TryMultiplyNonNegative(Columns, 3, ColumnWork) || !TryAdd(Work, ColumnWork, ChargedWork)
 		|| !TryAdd(ChargedWork, 1, ChargedWork))
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface query work charge overflow"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface query work charge overflow"));
 	}
 	if (IsCancelled())
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Surface query cancelled"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Surface query cancelled"));
 	}
 	if (!Budget->TryChargeWork(ChargedWork))
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared surface work budget exceeded"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared surface work budget exceeded"));
 	}
 	int64 CommonCrossing = -1;
 	int16 CommonBelow = 0, CommonAbove = 0;
@@ -105,7 +115,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 			const int64 Column = CX + int64(SampleCounts.X) * CY;
 			if (ProtectionColumns[Column] > 1)
 			{
-				return SurfaceQueryError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Protection column is not binary"));
+				return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Protection column is not binary"));
 			}
 			bProtected |= ProtectionColumns[Column] != 0;
 			int64 Crossing = -1;
@@ -114,12 +125,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 			{
 				if ((Inspected++ & 63) == 0 && IsCancelled())
 				{
-					return SurfaceQueryError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Surface query cancelled"));
+					return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Surface query cancelled"));
 				}
 				const int16 Q = Samples[Column + XY * Z];
 				if (Q == 0 || (bAirSeen && Q < 0))
 				{
-					return SurfaceQueryError(
+					return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
 						EVoxelLandM5ErrorCode::Unproven, TEXT("Ambiguous or multiple surface crossings"));
 				}
 				if (Q > 0 && !bAirSeen)
@@ -130,7 +142,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 			}
 			if (Crossing < 0 || !bAirSeen)
 			{
-				return SurfaceQueryError(
+				return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Surface crossing not enclosed vertically"));
 			}
 			const int16 Below = Samples[Column + XY * Crossing];
@@ -139,7 +151,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 				|| (CommonCrossing >= 0
 					&& (Crossing != CommonCrossing || Below != CommonBelow || Above != CommonAbove)))
 			{
-				return SurfaceQueryError(
+				return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Surface is not a certified flat midpoint"));
 			}
 			CommonCrossing = Crossing;
@@ -151,11 +163,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 	if (!TryMultiply(CommonCrossing, SpacingCm, Offset) || !TryAdd(Offset, SpacingCm / 2, Offset)
 		|| !TryAdd(Origin.Z, Offset, Surface) || !InRange(Surface))
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface height overflow"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Surface height overflow"));
 	}
 	if (IsCancelled())
 	{
-		return SurfaceQueryError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Surface query cancelled"));
+		return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Surface query cancelled"));
 	}
 	OutSurfaceZ = OutMinSurfaceZ = OutMaxSurfaceZ = Surface;
 	OutSlopeDegrees = 0;

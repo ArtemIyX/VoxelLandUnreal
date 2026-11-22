@@ -1,8 +1,14 @@
 #include "Generation/VoxelLandM5FloorSupport.h"
 
-namespace
+class FVoxelLandM5FloorSupportInternals final
 {
-FVoxelLandM5Diagnostic FloorError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+public:
+	static FVoxelLandM5Diagnostic FloorError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static bool GetRectangleTriangle(
+		const FVoxelLandM5FloorTriangleCm& Triangle, int64 Z, FVoxelLandM5ClosedBoxCm& Bounds, uint8& OutMask);
+};
+
+FVoxelLandM5Diagnostic FVoxelLandM5FloorSupportInternals::FloorError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Result;
 	Result.Code = Code;
@@ -13,7 +19,7 @@ FVoxelLandM5Diagnostic FloorError(EVoxelLandM5ErrorCode Code, const TCHAR* Messa
 
 // Coordinates are compared only: no coordinate arithmetic, and therefore no
 // cross-product overflow even at the ends of the int64 domain.
-bool GetRectangleTriangle(
+bool FVoxelLandM5FloorSupportInternals::GetRectangleTriangle(
 	const FVoxelLandM5FloorTriangleCm& Triangle, int64 Z, FVoxelLandM5ClosedBoxCm& Bounds, uint8& OutMask)
 {
 	const FVoxelLandM5PointCm* Points[3] = {&Triangle.A, &Triangle.B, &Triangle.C};
@@ -52,7 +58,6 @@ bool GetRectangleTriangle(
 	OutMask = Mask;
 	return true;
 }
-}
 
 FVoxelLandM5Diagnostic VoxelLand::M5::FloorSupport::CheckHorizontalRectangularSupport(
 	const FVoxelLandM5ClosedBoxCm& Footprint, TConstArrayView<FVoxelLandM5FloorTriangleCm> Triangles, int64 MaxChecks,
@@ -60,16 +65,19 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FloorSupport::CheckHorizontalRectangularSu
 {
 	if (IsCancelled())
 	{
-		return FloorError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
+		return FVoxelLandM5FloorSupportInternals::FloorError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
 	}
 	if (Footprint.Min.X >= Footprint.Max.X || Footprint.Min.Y >= Footprint.Max.Y || Footprint.Min.Z != Footprint.Max.Z
 		|| MaxChecks < 0)
 	{
-		return FloorError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid horizontal footprint or work budget"));
+		return FVoxelLandM5FloorSupportInternals::FloorError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid horizontal footprint or work budget"));
 	}
 	if (Triangles.Num() > 256)
 	{
-		return FloorError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Too many floor triangles"));
+		return FVoxelLandM5FloorSupportInternals::FloorError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Too many floor triangles"));
 	}
 	TArray<FVoxelLandM5ClosedBoxCm> TriangleBounds;
 	TArray<uint8> Masks;
@@ -79,13 +87,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FloorSupport::CheckHorizontalRectangularSu
 	{
 		if (IsCancelled())
 		{
-			return FloorError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
+			return FVoxelLandM5FloorSupportInternals::FloorError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
 		}
 		FVoxelLandM5ClosedBoxCm Bounds;
 		uint8 Mask = 0;
-		if (!GetRectangleTriangle(Triangle, Footprint.Min.Z, Bounds, Mask))
+		if (!FVoxelLandM5FloorSupportInternals::GetRectangleTriangle(Triangle, Footprint.Min.Z, Bounds, Mask))
 		{
-			return FloorError(EVoxelLandM5ErrorCode::Unproven, TEXT("Unsupported or misoriented floor triangle"));
+			return FVoxelLandM5FloorSupportInternals::FloorError(
+				EVoxelLandM5ErrorCode::Unproven, TEXT("Unsupported or misoriented floor triangle"));
 		}
 		TriangleBounds.Add(Bounds);
 		Masks.Add(Mask);
@@ -99,11 +109,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FloorSupport::CheckHorizontalRectangularSu
 		{
 			if (IsCancelled())
 			{
-				return FloorError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
+				return FVoxelLandM5FloorSupportInternals::FloorError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
 			}
 			if (Checks >= MaxChecks)
 			{
-				return FloorError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Floor support work budget exceeded"));
+				return FVoxelLandM5FloorSupportInternals::FloorError(
+					EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Floor support work budget exceeded"));
 			}
 			++Checks;
 			const auto& A = TriangleBounds[I];
@@ -134,11 +146,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FloorSupport::CheckHorizontalRectangularSu
 		{
 			if (IsCancelled())
 			{
-				return FloorError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
+				return FVoxelLandM5FloorSupportInternals::FloorError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
 			}
 			if (Checks >= MaxChecks)
 			{
-				return FloorError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Floor support work budget exceeded"));
+				return FVoxelLandM5FloorSupportInternals::FloorError(
+					EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Floor support work budget exceeded"));
 			}
 			++Checks;
 			if (Rectangle.Min.X > XBoundaries[I] || Rectangle.Max.X < XBoundaries[I + 1]
@@ -155,12 +169,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FloorSupport::CheckHorizontalRectangularSu
 		}
 		if (!bStarted || CoveredY < Footprint.Max.Y)
 		{
-			return FloorError(EVoxelLandM5ErrorCode::Unproven, TEXT("Floor tiles do not cover the complete footprint"));
+			return FVoxelLandM5FloorSupportInternals::FloorError(
+				EVoxelLandM5ErrorCode::Unproven, TEXT("Floor tiles do not cover the complete footprint"));
 		}
 	}
 	if (IsCancelled())
 	{
-		return FloorError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
+		return FVoxelLandM5FloorSupportInternals::FloorError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Floor support check cancelled"));
 	}
 	return FVoxelLandM5Diagnostic{};
 }

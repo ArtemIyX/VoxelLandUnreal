@@ -1,39 +1,49 @@
 #include "Generation/VoxelLandMeshing.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
-namespace
+class FVoxelLandMeshingInternals final
 {
-constexpr int32 CellCount = 34;
-constexpr int32 Corner[8][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0}, {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1}};
-constexpr int32 Edges[12][2] = {
-	{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+public:
+	static constexpr int32 CellCount = 34;
+	static constexpr int32 Corner[8][3] = {
+		{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0}, {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1}};
+	static constexpr int32 Edges[12][2] = {
+		{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+	static int32 SampleIndex(int32 X, int32 Y, int32 Z);
+	static int32 CellIndex(int32 X, int32 Y, int32 Z);
+	static int16 Sample(const FVoxelLandChunkData& Chunk, int32 X, int32 Y, int32 Z);
+	static bool IsSolid(int16 Q);
+	static FVector3f Axis(int32 I);
+	static FVector3f Gradient(const int16* Q, const FVector3f& P);
+	static void AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float Scale);
+};
 
-int32 SampleIndex(int32 X, int32 Y, int32 Z)
+int32 FVoxelLandMeshingInternals::SampleIndex(int32 X, int32 Y, int32 Z)
 {
 	return (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
 }
 
-int32 CellIndex(int32 X, int32 Y, int32 Z)
+int32 FVoxelLandMeshingInternals::CellIndex(int32 X, int32 Y, int32 Z)
 {
 	return (X + 1) + CellCount * ((Y + 1) + CellCount * (Z + 1));
 }
 
-int16 Sample(const FVoxelLandChunkData& Chunk, int32 X, int32 Y, int32 Z)
+int16 FVoxelLandMeshingInternals::Sample(const FVoxelLandChunkData& Chunk, int32 X, int32 Y, int32 Z)
 {
 	return Chunk.Density[SampleIndex(X, Y, Z)];
 }
 
-bool IsSolid(int16 Q)
+bool FVoxelLandMeshingInternals::IsSolid(int16 Q)
 {
 	return Q < 0;
 }
 
-FVector3f Axis(int32 I)
+FVector3f FVoxelLandMeshingInternals::Axis(int32 I)
 {
 	return I == 0 ? FVector3f(1, 0, 0) : I == 1 ? FVector3f(0, 1, 0) : FVector3f(0, 0, 1);
 }
 
-FVector3f Gradient(const int16* Q, const FVector3f& P)
+FVector3f FVoxelLandMeshingInternals::Gradient(const int16* Q, const FVector3f& P)
 {
 	const float X = P.X, Y = P.Y, Z = P.Z;
 	const float DX = (1 - Y) * (1 - Z) * (Q[1] - Q[0]) + Y * (1 - Z) * (Q[3] - Q[2]) + (1 - Y) * Z * (Q[5] - Q[4])
@@ -45,7 +55,7 @@ FVector3f Gradient(const int16* Q, const FVector3f& P)
 	return FVector3f(DX, DY, DZ);
 }
 
-void AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float Scale)
+void FVoxelLandMeshingInternals::AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float Scale)
 {
 	if (A == B || B == C || C == A)
 	{
@@ -60,7 +70,6 @@ void AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float S
 	Mesh.Indices.Add(A);
 	Mesh.Indices.Add(B);
 	Mesh.Indices.Add(C);
-}
 }
 
 EVoxelLandChunkClassification VoxelLandMeshing::ClassifyBeforeSampling()
@@ -78,8 +87,8 @@ EVoxelLandChunkClassification VoxelLandMeshing::Classify(const FVoxelLandChunkDa
 	bool bSolid = false, bAir = false;
 	for (const int16 Q : Chunk.Density)
 	{
-		bSolid |= IsSolid(Q);
-		bAir |= !IsSolid(Q);
+		bSolid |= FVoxelLandMeshingInternals::IsSolid(Q);
+		bAir |= !FVoxelLandMeshingInternals::IsSolid(Q);
 		if (bSolid && bAir)
 		{
 			return EVoxelLandChunkClassification::Surface;
@@ -108,7 +117,8 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 	FVoxelLandMeshData Mesh;
 	const double Grid = VoxelLandMeshCoordinates::Grid(VoxelSizeCm);
 	const FVector Origin = VoxelLandMeshCoordinates::RenderOrigin(Chunk.Key.Coordinate, VoxelSizeCm);
-	Scratch.CellVertices.Init(INDEX_NONE, CellCount * CellCount * CellCount);
+	Scratch.CellVertices.Init(INDEX_NONE, FVoxelLandMeshingInternals::CellCount * FVoxelLandMeshingInternals::CellCount
+											  * FVoxelLandMeshingInternals::CellCount);
 	for (int32 Z = -1; Z <= 32; ++Z)
 	{
 		if (IsCancelled())
@@ -123,9 +133,10 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 				bool bSolid = false, bAir = false;
 				for (int32 I = 0; I < 8; ++I)
 				{
-					Q[I] = Sample(Chunk, X + Corner[I][0], Y + Corner[I][1], Z + Corner[I][2]);
-					bSolid |= IsSolid(Q[I]);
-					bAir |= !IsSolid(Q[I]);
+					Q[I] = FVoxelLandMeshingInternals::Sample(Chunk, X + FVoxelLandMeshingInternals::Corner[I][0],
+						Y + FVoxelLandMeshingInternals::Corner[I][1], Z + FVoxelLandMeshingInternals::Corner[I][2]);
+					bSolid |= FVoxelLandMeshingInternals::IsSolid(Q[I]);
+					bAir |= !FVoxelLandMeshingInternals::IsSolid(Q[I]);
 				}
 				if (!bSolid || !bAir)
 				{
@@ -133,22 +144,26 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 				}
 				FVector3f Sum = FVector3f::ZeroVector, Fallback = FVector3f::ZeroVector;
 				int32 Crossings = 0;
-				for (const auto& Edge : Edges)
+				for (const auto& Edge : FVoxelLandMeshingInternals::Edges)
 				{
 					const int32 A = Edge[0], B = Edge[1];
-					if (IsSolid(Q[A]) == IsSolid(Q[B]))
+					if (FVoxelLandMeshingInternals::IsSolid(Q[A]) == FVoxelLandMeshingInternals::IsSolid(Q[B]))
 					{
 						continue;
 					}
 					const float T = float(Q[A]) / float(int32(Q[A]) - int32(Q[B]));
-					const FVector3f PA{float(Corner[A][0]), float(Corner[A][1]), float(Corner[A][2])};
-					const FVector3f PB{float(Corner[B][0]), float(Corner[B][1]), float(Corner[B][2])};
+					const FVector3f PA{float(FVoxelLandMeshingInternals::Corner[A][0]),
+						float(FVoxelLandMeshingInternals::Corner[A][1]),
+						float(FVoxelLandMeshingInternals::Corner[A][2])};
+					const FVector3f PB{float(FVoxelLandMeshingInternals::Corner[B][0]),
+						float(FVoxelLandMeshingInternals::Corner[B][1]),
+						float(FVoxelLandMeshingInternals::Corner[B][2])};
 					Sum += PA + (PB - PA) * T;
 					++Crossings;
 					Fallback += (PB - PA) * (Q[B] > Q[A] ? 1.f : -1.f);
 				}
 				const FVector3f P = Sum / float(Crossings);
-				FVector3f N = Gradient(Q, P).GetSafeNormal();
+				FVector3f N = FVoxelLandMeshingInternals::Gradient(Q, P).GetSafeNormal();
 				if (N.IsNearlyZero())
 				{
 					++Mesh.NormalFallbacks;
@@ -160,7 +175,9 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 				}
 				const FVector3f Abs = N.GetAbs();
 				const FVector3f Reference =
-					Abs.X <= Abs.Y && Abs.X <= Abs.Z ? Axis(0) : (Abs.Y <= Abs.Z ? Axis(1) : Axis(2));
+					Abs.X <= Abs.Y && Abs.X <= Abs.Z
+						? FVoxelLandMeshingInternals::Axis(0)
+						: (Abs.Y <= Abs.Z ? FVoxelLandMeshingInternals::Axis(1) : FVoxelLandMeshingInternals::Axis(2));
 				FVoxelLandMeshVertex V;
 				// Construct shared cell vertices in global integer-cell space, then snap
 				// once to a scale-derived binary grid shared by all chunks.
@@ -175,7 +192,7 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 				V.Tangent = FVector3f::CrossProduct(Reference, N).GetSafeNormal();
 				V.UV = FVector2f(V.Position.X, V.Position.Y) / 100.f;
 				Mesh.Bounds += V.Position;
-				Scratch.CellVertices[CellIndex(X, Y, Z)] = Mesh.Vertices.Add(V);
+				Scratch.CellVertices[FVoxelLandMeshingInternals::CellIndex(X, Y, Z)] = Mesh.Vertices.Add(V);
 			}
 		}
 	}
@@ -195,8 +212,11 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 					int32 P[3] = {X, Y, Z};
 					int32 End[3] = {X, Y, Z};
 					++End[AxisIndex];
-					const bool bStartSolid = IsSolid(Sample(Chunk, P[0], P[1], P[2]));
-					if (bStartSolid == IsSolid(Sample(Chunk, End[0], End[1], End[2])))
+					const bool bStartSolid = FVoxelLandMeshingInternals::IsSolid(
+						FVoxelLandMeshingInternals::Sample(Chunk, P[0], P[1], P[2]));
+					if (bStartSolid
+						== FVoxelLandMeshingInternals::IsSolid(
+							FVoxelLandMeshingInternals::Sample(Chunk, End[0], End[1], End[2])))
 					{
 						continue;
 					}
@@ -208,7 +228,7 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 						int32 C[3] = {X, Y, Z};
 						C[U] += Offsets[I][0];
 						C[V] += Offsets[I][1];
-						const int32 Id = Scratch.CellVertices[CellIndex(C[0], C[1], C[2])];
+						const int32 Id = Scratch.CellVertices[FVoxelLandMeshingInternals::CellIndex(C[0], C[1], C[2])];
 						if (Id == INDEX_NONE)
 						{
 							return EVoxelLandMeshResult::InvalidInput;
@@ -220,8 +240,8 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 					{
 						Swap(Vertices[1], Vertices[3]);
 					}
-					AddTriangle(Mesh, Vertices[0], Vertices[1], Vertices[2], VoxelSizeCm);
-					AddTriangle(Mesh, Vertices[0], Vertices[2], Vertices[3], VoxelSizeCm);
+					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[1], Vertices[2], VoxelSizeCm);
+					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[2], Vertices[3], VoxelSizeCm);
 				}
 			}
 		}

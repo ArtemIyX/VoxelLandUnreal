@@ -5,9 +5,15 @@
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 
-namespace
+class FVoxelLandM5BaselineWindowInternals final
 {
-FVoxelLandM5Diagnostic M5BaselineWindowError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+public:
+	static FVoxelLandM5Diagnostic M5BaselineWindowError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static FVoxelLandM5Diagnostic M5BaselineWindowM4Error(const FVoxelLandError& Error, bool bDemand);
+};
+
+FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Result;
 	Result.Code = Code;
@@ -16,7 +22,8 @@ FVoxelLandM5Diagnostic M5BaselineWindowError(EVoxelLandM5ErrorCode Code, const T
 	return Result;
 }
 
-FVoxelLandM5Diagnostic M5BaselineWindowM4Error(const FVoxelLandError& Error, bool bDemand)
+FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindowInternals::M5BaselineWindowM4Error(
+	const FVoxelLandError& Error, bool bDemand)
 {
 	using E = EVoxelLandM5ErrorCode;
 	E Code = E::Unproven;
@@ -39,7 +46,6 @@ FVoxelLandM5Diagnostic M5BaselineWindowM4Error(const FVoxelLandError& Error, boo
 		int32(Error.Code), *Error.Message);
 	return Result;
 }
-}
 
 FVoxelLandM5BaselineWindow::FVoxelLandM5BaselineWindow(
 	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> InGenerator,
@@ -58,18 +64,21 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
 	{
-		return M5BaselineWindowError(E::Cancelled, TEXT("Baseline generation cancelled"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::Cancelled, TEXT("Baseline generation cancelled"));
 	}
 	if (IsInGameThread() || MaxChunks < 1 || MaxChunks > 512
 		|| (!Generator->IsM4Unlimited() && !Generator->GetM4HeightGrid().IsValid()))
 	{
-		return M5BaselineWindowError(E::InvalidInput, TEXT("Expected an M4 generator and worker thread"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::InvalidInput, TEXT("Expected an M4 generator and worker thread"));
 	}
 	const float RawSpacing = Generator->GetProfile().VoxelSizeCm;
 	if (!FMath::IsFinite(RawSpacing) || RawSpacing < 1.f || RawSpacing > 65536.f
 		|| RawSpacing != static_cast<float>(static_cast<int32>(RawSpacing)))
 	{
-		return M5BaselineWindowError(E::InvalidInput, TEXT("M5 requires integer voxel spacing in centimetres"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::InvalidInput, TEXT("M5 requires integer voxel spacing in centimetres"));
 	}
 	const int32 Spacing = static_cast<int32>(RawSpacing);
 	int64 ChunkCounts[3] = {}, Sizes[3] = {}, Origins[3] = {};
@@ -86,7 +95,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 			|| !TryMultiply(MinSample, Spacing, Origins[Axis]) || !TryMultiply(MaxSample, Spacing, Last)
 			|| Origins[Axis] < -1048576 || Last > 1048576)
 		{
-			return M5BaselineWindowError(E::OutOfDomain, TEXT("Chunk rectangle or sample footprint is unsupported"));
+			return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+				E::OutOfDomain, TEXT("Chunk rectangle or sample footprint is unsupported"));
 		}
 		ChunkCounts[Axis] = Count;
 	}
@@ -96,11 +106,13 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 		|| !TryMultiplyNonNegative(ChunkCount, int64(FVoxelLandChunkData::SampleCount) * 8, Work)
 		|| !TryAdd(Work, Samples, Work) || !TryAdd(Work, ChunkCount * 2 + 1, Work))
 	{
-		return M5BaselineWindowError(E::ArithmeticOverflow, TEXT("Baseline admission overflow"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::ArithmeticOverflow, TEXT("Baseline admission overflow"));
 	}
 	if (!Budget->TryChargeWork(Work))
 	{
-		return M5BaselineWindowError(E::BudgetExceeded, TEXT("Baseline assembly budget exhausted"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::BudgetExceeded, TEXT("Baseline assembly budget exhausted"));
 	}
 	// Prove every upstream M4 filter/slope footprint before allocating either
 	// the output or a worker. M4 demand validation is read-only and covers both
@@ -113,36 +125,40 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 			{
 				if (IsCancelled())
 				{
-					return M5BaselineWindowError(E::Cancelled, TEXT("Baseline demand preflight cancelled"));
+					return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+						E::Cancelled, TEXT("Baseline demand preflight cancelled"));
 				}
 				FVoxelLandChunkKey Key;
 				Key.Coordinate = FIntVector(
 					int32(int64(MinChunk.X) + X), int32(int64(MinChunk.Y) + Y), int32(int64(MinChunk.Z) + Z));
 				if (const FVoxelLandError Error = Generator->ValidateM4ChunkDemand(Key))
 				{
-					return M5BaselineWindowM4Error(Error, true);
+					return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowM4Error(Error, true);
 				}
 			}
 		}
 	}
 	if (IsCancelled())
 	{
-		return M5BaselineWindowError(E::Cancelled, TEXT("Baseline demand preflight cancelled"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::Cancelled, TEXT("Baseline demand preflight cancelled"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> OutputLease, ScratchLease;
 	if (!Budget->TryReserveBytes(OutputBytes, OutputLease) || !Budget->TryReserveBytes(ScratchBytes, ScratchLease))
 	{
-		return M5BaselineWindowError(E::BudgetExceeded, TEXT("Baseline assembly budget exhausted"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::BudgetExceeded, TEXT("Baseline assembly budget exhausted"));
 	}
 	TUniquePtr<FVoxelLandWorkerContext> Worker;
 	const FVoxelLandError WorkerError = Generator->CreateWorker(Worker);
 	if (WorkerError)
 	{
-		return M5BaselineWindowM4Error(WorkerError, false);
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowM4Error(WorkerError, false);
 	}
 	if (!Worker)
 	{
-		return M5BaselineWindowError(E::ProviderUnavailable, TEXT("M4 worker could not be created"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::ProviderUnavailable, TEXT("M4 worker could not be created"));
 	}
 	TSharedPtr<FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Scratch =
 		MakeShareable(new FVoxelLandM5BaselineWindow(Generator, MoveTemp(OutputLease)));
@@ -163,7 +179,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 			{
 				if (IsCancelled())
 				{
-					return M5BaselineWindowError(E::Cancelled, TEXT("Baseline generation cancelled"));
+					return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+						E::Cancelled, TEXT("Baseline generation cancelled"));
 				}
 				FVoxelLandChunkKey Key;
 				Key.Coordinate = FIntVector(
@@ -172,11 +189,12 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 				const FVoxelLandError Error = Generator->GenerateChunkCancellable(Key, *Worker, Chunk, IsCancelled);
 				if (Error)
 				{
-					return M5BaselineWindowM4Error(Error, false);
+					return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowM4Error(Error, false);
 				}
 				if (!Chunk || !(Chunk->Key == Key) || Chunk->Density.Num() != FVoxelLandChunkData::SampleCount)
 				{
-					return M5BaselineWindowError(E::Unproven, TEXT("M4 chunk generation returned malformed data"));
+					return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+						E::Unproven, TEXT("M4 chunk generation returned malformed data"));
 				}
 				for (int32 K = 0; K < 35; ++K)
 				{
@@ -186,13 +204,15 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 						{
 							if ((Visits++ & 63) == 0 && IsCancelled())
 							{
-								return M5BaselineWindowError(E::Cancelled, TEXT("Baseline assembly cancelled"));
+								return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+									E::Cancelled, TEXT("Baseline assembly cancelled"));
 							}
 							const int64 Target = X * 32 + I + Sizes[0] * (Y * 32 + J + Sizes[1] * (Z * 32 + K));
 							const int16 Value = Chunk->Density[I + 35 * (J + 35 * K)];
 							if (Seen[int32(Target)] && Scratch->Density[int32(Target)] != Value)
 							{
-								return M5BaselineWindowError(E::Unproven, TEXT("M4 chunk overlap disagrees"));
+								return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+									E::Unproven, TEXT("M4 chunk overlap disagrees"));
 							}
 							Scratch->Density[int32(Target)] = Value;
 							Seen[int32(Target)] = 1;
@@ -204,7 +224,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 	}
 	if (IsCancelled())
 	{
-		return M5BaselineWindowError(E::Cancelled, TEXT("Baseline generation cancelled"));
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::Cancelled, TEXT("Baseline generation cancelled"));
 	}
 	OutWindow = MoveTemp(Scratch);
 	return {};

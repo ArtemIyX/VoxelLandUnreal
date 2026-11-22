@@ -13,17 +13,18 @@
 #include "Generation/VoxelLandM5SweptTriangle.h"
 #include "Generation/VoxelLandMeshing.h"
 
-namespace
+class FVoxelLandM5MultiChunkRouteInternals final
 {
-FVoxelLandM5Diagnostic M5MultiRouteError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = TEXT("M5.MultiChunkRoute");
-	Result.Message = Message;
-	return Result;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic M5MultiRouteError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = TEXT("M5.MultiChunkRoute");
+		Result.Message = Message;
+		return Result;
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<FVoxelLandChunkData> Chunks,
 	const FIntVector& MinInclusive, const FIntVector& MaxExclusive, int32 VoxelSizeCm, bool bUnlimitedM4,
@@ -39,13 +40,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 	constexpr int32 MaxTriangles = 32 * 32 * 32 * 3 * 2;
 	if (IsCancelled())
 	{
-		return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+		return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+			E::Cancelled, TEXT("Multi-chunk route cancelled"));
 	}
 	if (VoxelSizeCm < 1 || VoxelSizeCm > 134217 || RadiusCm < 1 || RadiusCm > Limit || HeightCm < 2 * RadiusCm
 		|| HeightCm > Limit || MarginCm < 0 || MarginCm > Limit || ContactSkinCm < 0 || ContactSkinCm > Limit
 		|| MaxSlopeNumerator < 0 || MaxSlopeDenominator <= 0 || SupportFaces.IsEmpty() || SupportFaces.Num() > 256)
 	{
-		return M5MultiRouteError(E::InvalidInput, TEXT("Invalid multi-chunk route inputs"));
+		return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+			E::InvalidInput, TEXT("Invalid multi-chunk route inputs"));
 	}
 	const auto Agreement =
 		ChunkSet::CheckSampleAgreement(Chunks, MinInclusive, MaxExclusive, MaxChunks, Budget, IsCancelled);
@@ -64,7 +67,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 		{
 			if (Values[Axis] < -Limit || Values[Axis] > Limit)
 			{
-				return M5MultiRouteError(E::OutOfDomain, TEXT("Route point outside logical domain"));
+				return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+					E::OutOfDomain, TEXT("Route point outside logical domain"));
 			}
 			const int64 Lower = Values[Axis] - (Axis == 2 ? MarginCm : Radius);
 			const int64 Upper = Values[Axis] + (Axis == 2 ? HeightCm + MarginCm : Radius);
@@ -72,7 +76,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 			const int64 BoxMax = int64(MaxExclusive[Axis]) * 32 * Scale;
 			if (Lower <= BoxMin + 2 * Scale || Upper >= BoxMax - 2 * Scale)
 			{
-				return M5MultiRouteError(E::Unproven, TEXT("Sweep requires omitted neighboring mesh owners"));
+				return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+					E::Unproven, TEXT("Sweep requires omitted neighboring mesh owners"));
 			}
 		}
 	}
@@ -90,20 +95,23 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 					 + int64(SupportFaces.Num()) * (SupportFaces.Num() + 2);
 	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(Work))
 	{
-		return M5MultiRouteError(E::BudgetExceeded, TEXT("Multi-chunk mesh admission exhausted"));
+		return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+			E::BudgetExceeded, TEXT("Multi-chunk mesh admission exhausted"));
 	}
 	for (int32 I = 0; I < SupportFaces.Num(); ++I)
 	{
 		if (IsCancelled())
 		{
-			return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+			return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+				E::Cancelled, TEXT("Multi-chunk route cancelled"));
 		}
 		for (int32 J = 0; J < I; ++J)
 		{
 			if (SupportFaces[I].ChunkCoordinate == SupportFaces[J].ChunkCoordinate
 				&& SupportFaces[I].FaceIndex == SupportFaces[J].FaceIndex)
 			{
-				return M5MultiRouteError(E::InvalidInput, TEXT("Duplicate support face"));
+				return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+					E::InvalidInput, TEXT("Duplicate support face"));
 			}
 		}
 	}
@@ -115,7 +123,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 	{
 		if (IsCancelled())
 		{
-			return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+			return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+				E::Cancelled, TEXT("Multi-chunk route cancelled"));
 		}
 		FVoxelLandMeshingScratch Scratch;
 		FVoxelLandMeshData Mesh;
@@ -123,7 +132,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 			VoxelLandMeshing::BuildSurfaceNets(Chunk, float(VoxelSizeCm), Scratch, Mesh, IsCancelled, bUnlimitedM4);
 		if (MeshResult != EVoxelLandMeshResult::Success)
 		{
-			return M5MultiRouteError(MeshResult == EVoxelLandMeshResult::Cancelled ? E::Cancelled : E::Unproven,
+			return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+				MeshResult == EVoxelLandMeshResult::Cancelled ? E::Cancelled : E::Unproven,
 				TEXT("Actual CPU meshing failed"));
 		}
 		TArray<FVoxelLandM5ValidationTriangle> Triangles;
@@ -137,7 +147,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 		{
 			if ((Index & 63) == 0 && IsCancelled())
 			{
-				return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+				return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+					E::Cancelled, TEXT("Multi-chunk route cancelled"));
 			}
 			bool bSupport = false;
 			for (const auto& Face : SupportFaces)
@@ -168,7 +179,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 	}
 	if (Matched != SupportFaces.Num())
 	{
-		return M5MultiRouteError(E::InvalidInput, TEXT("Support face references an absent chunk or face"));
+		return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
+			E::InvalidInput, TEXT("Support face references an absent chunk or face"));
 	}
 	constexpr int64 Q = int64(1) << 18;
 	FVoxelLandM5FixedPointQ18 A, B;

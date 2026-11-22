@@ -6,9 +6,24 @@
 #include "Generation/VoxelLandM5FeetChain.h"
 #include "Generation/VoxelLandM5Seed.h"
 
-namespace
+class FVoxelLandM5RouteBuilderInternals final
 {
-FVoxelLandM5Diagnostic M5RouteBuilderFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+public:
+	static FVoxelLandM5Diagnostic M5RouteBuilderFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static bool M5RouteBuilderSameRegion(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B);
+	static bool M5RouteBuilderSamePoint(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B);
+	static bool M5RouteBuilderSameNode(const FVoxelLandM5Endpoint& A, const FVoxelLandM5Endpoint& B);
+	static bool M5RouteBuilderSameAnchor(const FVoxelLandM5Endpoint& A, const FVoxelLandM5Endpoint& B);
+	static bool M5RouteBuilderSamePortalKey(const FVoxelLandM5PortalKey& A, const FVoxelLandM5PortalKey& B);
+	static EVoxelLandM5RouteFeatureKind M5RouteBuilderFeatureKind(EVoxelLandM5EndpointKind Kind);
+	static FVoxelLandM5RouteFeatureRef M5RouteBuilderRef(
+		EVoxelLandM5RouteFeatureKind Kind, const FVoxelLandM5RegionCoord& Region, uint64 Id);
+	static bool M5RouteBuilderSetAnchor(FVoxelLandM5CavePlan& Plan, const FVoxelLandM5RouteAnchorChoice& Choice,
+		const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed, TFunctionRef<bool()> IsCancelled, bool& bCancelled);
+};
+
+FVoxelLandM5Diagnostic FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Error;
 	Error.Code = Code;
@@ -16,28 +31,33 @@ FVoxelLandM5Diagnostic M5RouteBuilderFailure(EVoxelLandM5ErrorCode Code, const T
 	Error.Message = Message;
 	return Error;
 }
-bool M5RouteBuilderSameRegion(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
+bool FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameRegion(
+	const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
 {
 	return A.X == B.X && A.Y == B.Y;
 }
-bool M5RouteBuilderSamePoint(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
+bool FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(
+	const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
 {
 	return A.X == B.X && A.Y == B.Y && A.Z == B.Z;
 }
-bool M5RouteBuilderSameNode(const FVoxelLandM5Endpoint& A, const FVoxelLandM5Endpoint& B)
+bool FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameNode(
+	const FVoxelLandM5Endpoint& A, const FVoxelLandM5Endpoint& B)
 {
 	return A.bValid && B.bValid && A.Kind == B.Kind && A.Id == B.Id && M5RouteBuilderSameRegion(A.Region, B.Region);
 }
-bool M5RouteBuilderSameAnchor(const FVoxelLandM5Endpoint& A, const FVoxelLandM5Endpoint& B)
+bool FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameAnchor(
+	const FVoxelLandM5Endpoint& A, const FVoxelLandM5Endpoint& B)
 {
 	return M5RouteBuilderSameNode(A, B) && A.AnchorRole == B.AnchorRole;
 }
-bool M5RouteBuilderSamePortalKey(const FVoxelLandM5PortalKey& A, const FVoxelLandM5PortalKey& B)
+bool FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePortalKey(
+	const FVoxelLandM5PortalKey& A, const FVoxelLandM5PortalKey& B)
 {
 	return A.WorldSeed == B.WorldSeed && A.StageId == B.StageId && A.Salt == B.Salt && A.Axis == B.Axis
 		&& M5RouteBuilderSameRegion(A.RegionA, B.RegionA) && M5RouteBuilderSameRegion(A.RegionB, B.RegionB);
 }
-EVoxelLandM5RouteFeatureKind M5RouteBuilderFeatureKind(EVoxelLandM5EndpointKind Kind)
+EVoxelLandM5RouteFeatureKind FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFeatureKind(EVoxelLandM5EndpointKind Kind)
 {
 	switch (Kind)
 	{
@@ -51,7 +71,7 @@ EVoxelLandM5RouteFeatureKind M5RouteBuilderFeatureKind(EVoxelLandM5EndpointKind 
 			return EVoxelLandM5RouteFeatureKind::Junction;
 	}
 }
-FVoxelLandM5RouteFeatureRef M5RouteBuilderRef(
+FVoxelLandM5RouteFeatureRef FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
 	EVoxelLandM5RouteFeatureKind Kind, const FVoxelLandM5RegionCoord& Region, uint64 Id)
 {
 	FVoxelLandM5RouteFeatureRef Result;
@@ -63,8 +83,9 @@ FVoxelLandM5RouteFeatureRef M5RouteBuilderRef(
 }
 // Require exactly one destination and never overwrite an existing different
 // anchor. Portal sides are selected by the canonical key, not array order.
-bool M5RouteBuilderSetAnchor(FVoxelLandM5CavePlan& Plan, const FVoxelLandM5RouteAnchorChoice& Choice,
-	const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed, TFunctionRef<bool()> IsCancelled, bool& bCancelled)
+bool FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSetAnchor(FVoxelLandM5CavePlan& Plan,
+	const FVoxelLandM5RouteAnchorChoice& Choice, const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	TFunctionRef<bool()> IsCancelled, bool& bCancelled)
 {
 	const auto& E = Choice.Endpoint;
 	if (!E.bValid || (E.Kind != EVoxelLandM5EndpointKind::Portal && !M5RouteBuilderSameRegion(E.Region, Plan.Region)))
@@ -184,7 +205,6 @@ bool M5RouteBuilderSetAnchor(FVoxelLandM5CavePlan& Plan, const FVoxelLandM5Route
 	}
 	return Matches == 1;
 }
-}
 
 FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
@@ -194,7 +214,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 {
 	if (IsCancelled())
 	{
-		return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+		return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 	}
 	const auto& Input = Candidate->GetPlan();
 	const auto& Limits = Settings.Limits;
@@ -202,13 +223,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	Budget->GetLimits(BudgetBytes, BudgetWork);
 	if (!Candidate->UsesBudget(Budget.Get()) || !Candidate->MatchesSource(Settings, WorldSeed, Region)
 		|| BudgetBytes > Limits.MaxBytes || BudgetWork > Limits.MaxValidationWork || !Input.Routes.IsEmpty()
-		|| !M5RouteBuilderSameRegion(Input.Region, Region) || Limits.MaxRoutes < 1 || Limits.MaxRoutes > 16384
-		|| Limits.MaxRouteLegs < 1 || Limits.MaxRouteLegs > 65536 || Limits.MaxRouteFeatureRefs < 1
-		|| Limits.MaxRouteFeatureRefs > 131072 || Limits.MaxSegments < 1 || Limits.MaxSegments > 8192
-		|| Choices.IsEmpty() || Choices.Num() != Input.Connections.Num() || Choices.Num() > Limits.MaxRoutes
-		|| Input.Segments.Num() > Limits.MaxSegments || Anchors.Num() > 2 * Limits.MaxRouteFeatureRefs)
+		|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameRegion(Input.Region, Region) || Limits.MaxRoutes < 1
+		|| Limits.MaxRoutes > 16384 || Limits.MaxRouteLegs < 1 || Limits.MaxRouteLegs > 65536
+		|| Limits.MaxRouteFeatureRefs < 1 || Limits.MaxRouteFeatureRefs > 131072 || Limits.MaxSegments < 1
+		|| Limits.MaxSegments > 8192 || Choices.IsEmpty() || Choices.Num() != Input.Connections.Num()
+		|| Choices.Num() > Limits.MaxRoutes || Input.Segments.Num() > Limits.MaxSegments
+		|| Anchors.Num() > 2 * Limits.MaxRouteFeatureRefs)
 	{
-		return M5RouteBuilderFailure(
+		return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid source, choices or plan limits"));
 	}
 	// Fixed public caps bound all products below int64 limits. Charge before
@@ -219,7 +241,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	// the same conservative SHA allowance used by topology validation.
 	if (Count > 300000 || !Budget->TryChargeWork(256 + 32 * Count * Count + 1024 * int64(Anchors.Num())))
 	{
-		return M5RouteBuilderFailure(
+		return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route construction work limit exceeded"));
 	}
 	int64 TotalLegs = 0;
@@ -227,23 +249,26 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	{
 		if (IsCancelled())
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 		}
 		if (!Choice.bHasConnectionId || Choice.SegmentIds.IsEmpty() || Choice.SegmentIds.Num() > Limits.MaxSegments)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing connection or segment chain"));
 		}
 		TotalLegs += Choice.SegmentIds.Num();
 		if (TotalLegs > Limits.MaxRouteLegs || TotalLegs > Input.Segments.Num())
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route leg limit exceeded"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route leg limit exceeded"));
 		}
 	}
 	const int64 MaxRefs = TotalLegs + 3 * int64(Choices.Num());
 	if (MaxRefs > Limits.MaxRouteFeatureRefs)
 	{
-		return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route feature limit exceeded"));
+		return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route feature limit exceeded"));
 	}
 	const int64 Bytes =
 		32768
@@ -253,7 +278,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(Bytes, Lease))
 	{
-		return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route memory limit exceeded"));
+		return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route memory limit exceeded"));
 	}
 	FVoxelLandM5CavePlan Scratch = Input;
 	// A compact ID may resolve to only one full key within a plan. Reject even
@@ -262,18 +288,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	{
 		if (IsCancelled())
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 		}
 		for (int32 J = 0; J < I; ++J)
 		{
 			if ((J & 63) == 0 && IsCancelled())
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 			}
 			if (Scratch.Portals[I].bHasId && Scratch.Portals[J].bHasId
 				&& Scratch.Portals[I].Id == Scratch.Portals[J].Id)
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate portal ID"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate portal ID"));
 			}
 		}
 	}
@@ -281,23 +310,27 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	{
 		if (IsCancelled())
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 		}
 		for (int32 J = 0; J < I; ++J)
 		{
 			if ((J & 63) == 0 && IsCancelled())
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 			}
-			if (M5RouteBuilderSameAnchor(Anchors[I].Endpoint, Anchors[J].Endpoint))
+			if (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameAnchor(Anchors[I].Endpoint, Anchors[J].Endpoint))
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate anchor choice"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate anchor choice"));
 			}
 		}
 		bool bCancelled = false;
-		if (!M5RouteBuilderSetAnchor(Scratch, Anchors[I], Settings, WorldSeed, IsCancelled, bCancelled))
+		if (!FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSetAnchor(
+				Scratch, Anchors[I], Settings, WorldSeed, IsCancelled, bCancelled))
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				bCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::InvalidInput,
 				TEXT("Invalid, conflicting or cancelled anchor"));
 		}
@@ -310,7 +343,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	{
 		if (IsCancelled())
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 		}
 		int32 At = Order.Num();
 		Order.Add(I);
@@ -318,7 +352,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		{
 			if ((At & 63) == 0 && IsCancelled())
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 			}
 			Order[At] = Order[At - 1];
 			--At;
@@ -329,23 +364,26 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	{
 		if (IsCancelled())
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 		}
 		if (Choices[Order[I - 1]].ConnectionId == Choices[Order[I]].ConnectionId)
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate connection choice"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate connection choice"));
 		}
 	}
 	for (const int32 Index : Order)
 	{
 		if (IsCancelled())
 		{
-			return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 		}
 		const auto& Choice = Choices[Index];
-		if (M5RouteBuilderSameNode(Choice.Start, Choice.End))
+		if (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameNode(Choice.Start, Choice.End))
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Self-connected route is unsupported"));
 		}
 		int32 Connections = 0;
@@ -353,19 +391,22 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		{
 			if (IsCancelled())
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 			}
 			if (C.bHasId && C.Id == Choice.ConnectionId && C.Start.AnchorRole == EVoxelLandM5AnchorRole::None
 				&& C.End.AnchorRole == EVoxelLandM5AnchorRole::None
-				&& ((M5RouteBuilderSameNode(C.Start, Choice.Start) && M5RouteBuilderSameNode(C.End, Choice.End))
-					|| (M5RouteBuilderSameNode(C.Start, Choice.End) && M5RouteBuilderSameNode(C.End, Choice.Start))))
+				&& ((FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameNode(C.Start, Choice.Start)
+						&& FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameNode(C.End, Choice.End))
+					|| (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameNode(C.Start, Choice.End)
+						&& FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameNode(C.End, Choice.Start))))
 			{
 				++Connections;
 			}
 		}
 		if (Connections != 1)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Connection endpoints do not match"));
 		}
 		const FVoxelLandM5RouteAnchorChoice* Start = nullptr;
@@ -374,20 +415,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		{
 			if (IsCancelled())
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 			}
-			if (M5RouteBuilderSameAnchor(A.Endpoint, Choice.Start))
+			if (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameAnchor(A.Endpoint, Choice.Start))
 			{
 				Start = &A;
 			}
-			if (M5RouteBuilderSameAnchor(A.Endpoint, Choice.End))
+			if (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameAnchor(A.Endpoint, Choice.End))
 			{
 				End = &A;
 			}
 		}
 		if (!Start || !End)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::Unproven, TEXT("Explicit endpoint anchors are required"));
 		}
 		TArray<FVoxelLandM5Segment> Segments;
@@ -396,21 +438,22 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		{
 			if (IsCancelled())
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 			}
 			const FVoxelLandM5Segment* Found = nullptr;
 			for (const auto& S : Input.Segments)
 			{
 				if (IsCancelled())
 				{
-					return M5RouteBuilderFailure(
+					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 						EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 				}
 				if (S.bHasId && S.Id == Id)
 				{
 					if (Found)
 					{
-						return M5RouteBuilderFailure(
+						return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 							EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate segment ID"));
 					}
 					Found = &S;
@@ -418,7 +461,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 			}
 			if (!Found || !Found->bHasConnectionId || Found->ConnectionId != Choice.ConnectionId)
 			{
-				return M5RouteBuilderFailure(
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 					EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Segment does not belong to connection"));
 			}
 			Segments.Add(*Found);
@@ -431,10 +474,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 			return Error;
 		}
 		if (!Chain.IsValid() || Chain->GetLegs().IsEmpty()
-			|| !M5RouteBuilderSamePoint(Chain->GetLegs()[0].Feet.StartFeetCm, Start->FeetCm)
-			|| !M5RouteBuilderSamePoint(Chain->GetLegs().Last().Feet.EndFeetCm, End->FeetCm))
+			|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(
+				Chain->GetLegs()[0].Feet.StartFeetCm, Start->FeetCm)
+			|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(
+				Chain->GetLegs().Last().Feet.EndFeetCm, End->FeetCm))
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::Unproven, TEXT("Feet chain does not match explicit anchors"));
 		}
 		FVoxelLandM5Route Route;
@@ -442,24 +487,27 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		Route.Id = Choice.ConnectionId;
 		Route.Start = Choice.Start;
 		Route.End = Choice.End;
-		Route.CoveredFeatures.Add(
-			M5RouteBuilderRef(EVoxelLandM5RouteFeatureKind::Connection, Region, Choice.ConnectionId));
+		Route.CoveredFeatures.Add(FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
+			EVoxelLandM5RouteFeatureKind::Connection, Region, Choice.ConnectionId));
 		for (const auto& Leg : Chain->GetLegs())
 		{
 			if (IsCancelled())
 			{
-				return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 			}
 			FVoxelLandM5RouteLeg R;
 			R.StartFeetCm = Leg.Feet.StartFeetCm;
 			R.EndFeetCm = Leg.Feet.EndFeetCm;
-			R.Feature = M5RouteBuilderRef(EVoxelLandM5RouteFeatureKind::Segment, Region, Leg.SegmentId);
+			R.Feature = FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
+				EVoxelLandM5RouteFeatureKind::Segment, Region, Leg.SegmentId);
 			Route.Legs.Add(R);
 			Route.CoveredFeatures.Add(R.Feature);
 		}
 		for (const FVoxelLandM5Endpoint* E : {&Choice.Start, &Choice.End})
 		{
-			const auto Wanted = M5RouteBuilderRef(M5RouteBuilderFeatureKind(E->Kind), Region, E->Id);
+			const auto Wanted = FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
+				FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFeatureKind(E->Kind), Region, E->Id);
 			bool bOwned = false;
 			for (const auto& Previous : Scratch.Routes)
 			{
@@ -467,11 +515,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 				{
 					if (IsCancelled())
 					{
-						return M5RouteBuilderFailure(
+						return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 							EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 					}
-					bOwned |= Existing.Kind == Wanted.Kind && Existing.Id == Wanted.Id
-						   && M5RouteBuilderSameRegion(Existing.Region, Wanted.Region);
+					bOwned |=
+						Existing.Kind == Wanted.Kind && Existing.Id == Wanted.Id
+						&& FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameRegion(Existing.Region, Wanted.Region);
 				}
 			}
 			if (!bOwned)
@@ -492,7 +541,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 			{
 				if (IsCancelled())
 				{
-					return M5RouteBuilderFailure(
+					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 						EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 				}
 				Uses += Leg.Feature.Kind == EVoxelLandM5RouteFeatureKind::Segment && Leg.Feature.Id == Segment.Id;
@@ -500,7 +549,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		}
 		if (!Segment.bHasId || Uses != 1)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Segment does not have exactly one route leg"));
 		}
 	}
@@ -521,7 +570,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 					bCoverageCancelled = true;
 					return -1;
 				}
-				CountMatches += F.bValid && F.Kind == Kind && F.Id == Id && M5RouteBuilderSameRegion(F.Region, Region);
+				CountMatches += F.bValid && F.Kind == Kind && F.Id == Id
+							 && FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameRegion(F.Region, Region);
 			}
 		}
 		return CountMatches;
@@ -530,7 +580,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	{
 		if (!C.bHasFeetAnchor || Covered(EVoxelLandM5RouteFeatureKind::Chamber, C.bHasId, C.Id) != 1)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				bCoverageCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Unproven,
 				TEXT("Chamber anchor or route is missing"));
 		}
@@ -540,7 +590,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		if (!P.bHasRegionAFeetAnchor || !P.bHasRegionBFeetAnchor
 			|| Covered(EVoxelLandM5RouteFeatureKind::Portal, P.bHasId, P.Id) != 1)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				bCoverageCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Unproven,
 				TEXT("Portal route is missing"));
 		}
@@ -549,7 +599,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	{
 		if (!J.bHasFeetAnchor || Covered(EVoxelLandM5RouteFeatureKind::Junction, J.bHasId, J.Id) != 1)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				bCoverageCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Unproven,
 				TEXT("Junction anchor or route is missing"));
 		}
@@ -559,7 +609,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		if (!E.bHasInsideFeetAnchor || !E.bHasOutsideFeetAnchor
 			|| Covered(EVoxelLandM5RouteFeatureKind::Entrance, E.bHasId, E.Id) != 1)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				bCoverageCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Unproven,
 				TEXT("Entrance anchors or route are missing"));
 		}
@@ -571,35 +621,38 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 			{
 				if (IsCancelled())
 				{
-					return M5RouteBuilderFailure(
+					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 						EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 				}
 				bOwned |= F.bValid && F.Kind == EVoxelLandM5RouteFeatureKind::Entrance && F.Id == E.Id
-					   && M5RouteBuilderSameRegion(F.Region, Region);
+					   && FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSameRegion(F.Region, Region);
 			}
 			for (const auto& Leg : Route.Legs)
 			{
 				if (IsCancelled())
 				{
-					return M5RouteBuilderFailure(
+					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 						EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 				}
-				bInside |= M5RouteBuilderSamePoint(Leg.StartFeetCm, E.InsideFeetAnchorCm)
-						|| M5RouteBuilderSamePoint(Leg.EndFeetCm, E.InsideFeetAnchorCm);
-				bOutside |= M5RouteBuilderSamePoint(Leg.StartFeetCm, E.OutsideFeetAnchorCm)
-						 || M5RouteBuilderSamePoint(Leg.EndFeetCm, E.OutsideFeetAnchorCm);
+				bInside |=
+					FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(Leg.StartFeetCm, E.InsideFeetAnchorCm)
+					|| FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(Leg.EndFeetCm, E.InsideFeetAnchorCm);
+				bOutside |=
+					FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(Leg.StartFeetCm, E.OutsideFeetAnchorCm)
+					|| FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(Leg.EndFeetCm, E.OutsideFeetAnchorCm);
 			}
 			bBoth |= bOwned && bInside && bOutside;
 		}
 		if (!bBoth)
 		{
-			return M5RouteBuilderFailure(
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::Unproven, TEXT("Entrance route does not join both anchors"));
 		}
 	}
 	if (IsCancelled())
 	{
-		return M5RouteBuilderFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+		return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 	}
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Complete = MakeShareable(
 		new FVoxelLandM5CandidateResult(Budget, Settings, WorldSeed, Region, MoveTemp(Scratch), MoveTemp(Lease)));

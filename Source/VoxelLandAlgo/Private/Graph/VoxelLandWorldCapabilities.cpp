@@ -9,58 +9,60 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 
-namespace
+class FVoxelLandWorldCapabilitiesInternals final
 {
-constexpr int32 WorldCapabilitiesMaxFunctions = 128;
-constexpr int32 WorldCapabilitiesMaxNodes = 4096;
-constexpr int32 WorldCapabilitiesMaxProviders = 256;
-constexpr int32 WorldCapabilitiesMaxPath = 2048;
+public:
+	static constexpr int32 WorldCapabilitiesMaxFunctions = 128;
+	static constexpr int32 WorldCapabilitiesMaxNodes = 4096;
+	static constexpr int32 WorldCapabilitiesMaxProviders = 256;
+	static constexpr int32 WorldCapabilitiesMaxPath = 2048;
 
-FVoxelLandWorldCapabilityDiagnostic WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError Code, const TCHAR* Message,
-	const FGuid& NodeId = FGuid(), const FString& FunctionPath = FString())
-{
-	FVoxelLandWorldCapabilityDiagnostic Result;
-	Result.Code = Code;
-	Result.NodeId = NodeId;
-	Result.FunctionPath = FunctionPath;
-	Result.Message = Message;
-	return Result;
-}
-
-bool WorldCapabilitiesValidRequirement(EVoxelLandWorldRequirement Requirement)
-{
-	switch (Requirement)
+	static FVoxelLandWorldCapabilityDiagnostic WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError Code,
+		const TCHAR* Message, const FGuid& NodeId = FGuid(), const FString& FunctionPath = FString())
 	{
-		case EVoxelLandWorldRequirement::SampleLocal:
-		case EVoxelLandWorldRequirement::BoundedNeighborhood:
-		case EVoxelLandWorldRequirement::BoundedRegion:
-		case EVoxelLandWorldRequirement::FiniteGlobal:
+		FVoxelLandWorldCapabilityDiagnostic Result;
+		Result.Code = Code;
+		Result.NodeId = NodeId;
+		Result.FunctionPath = FunctionPath;
+		Result.Message = Message;
+		return Result;
+	}
+
+	static bool WorldCapabilitiesValidRequirement(EVoxelLandWorldRequirement Requirement)
+	{
+		switch (Requirement)
+		{
+			case EVoxelLandWorldRequirement::SampleLocal:
+			case EVoxelLandWorldRequirement::BoundedNeighborhood:
+			case EVoxelLandWorldRequirement::BoundedRegion:
+			case EVoxelLandWorldRequirement::FiniteGlobal:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	// Check the bounded lengths of the stored native path components before ToString
+	// can allocate. No referenced UObject is loaded or dereferenced on the worker.
+	static bool WorldCapabilitiesPath(const FSoftObjectPath& Path, FString& Out)
+	{
+		if (Path.IsNull())
+		{
+			Out.Reset();
 			return true;
-		default:
+		}
+		const FTopLevelAssetPath Asset = Path.GetAssetPath();
+		const uint64 Upper = uint64(Asset.GetPackageName().GetStringLength())
+						   + uint64(Asset.GetAssetName().GetStringLength()) + uint64(Path.GetSubPathUtf8String().Len())
+						   + 2;
+		if (Upper > WorldCapabilitiesMaxPath)
+		{
 			return false;
+		}
+		Out = Path.ToString();
+		return !Out.IsEmpty() && Out.Len() <= WorldCapabilitiesMaxPath;
 	}
-}
-
-// Check the bounded lengths of the stored native path components before ToString
-// can allocate. No referenced UObject is loaded or dereferenced on the worker.
-bool WorldCapabilitiesPath(const FSoftObjectPath& Path, FString& Out)
-{
-	if (Path.IsNull())
-	{
-		Out.Reset();
-		return true;
-	}
-	const FTopLevelAssetPath Asset = Path.GetAssetPath();
-	const uint64 Upper = uint64(Asset.GetPackageName().GetStringLength())
-					   + uint64(Asset.GetAssetName().GetStringLength()) + uint64(Path.GetSubPathUtf8String().Len()) + 2;
-	if (Upper > WorldCapabilitiesMaxPath)
-	{
-		return false;
-	}
-	Out = Path.ToString();
-	return !Out.IsEmpty() && Out.Len() <= WorldCapabilitiesMaxPath;
-}
-}
+};
 
 FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const FVoxelLandGraphSnapshot& Source,
 	EVoxelLandWorldKind Kind, TConstArrayView<FVoxelLandWorldOperatorCapability> ProviderCapabilities,
@@ -68,20 +70,21 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 {
 	if (IsCancelled())
 	{
-		return WorldCapabilitiesFailure(
+		return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 			EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 	}
 	if ((Kind != EVoxelLandWorldKind::Finite && Kind != EVoxelLandWorldKind::Infinite)
-		|| Source.Nodes.Num() > WorldCapabilitiesMaxNodes || Source.Functions.Num() > WorldCapabilitiesMaxFunctions
-		|| ProviderCapabilities.Num() > WorldCapabilitiesMaxProviders)
+		|| Source.Nodes.Num() > FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesMaxNodes
+		|| Source.Functions.Num() > FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesMaxFunctions
+		|| ProviderCapabilities.Num() > FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesMaxProviders)
 	{
-		return WorldCapabilitiesFailure(
+		return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 			EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Invalid world kind or capability input limits"));
 	}
 	const int32 FunctionCount = Source.Functions.Num();
 	if (!Budget->TryChargeWork(int64(FunctionCount) * 4 + 1))
 	{
-		return WorldCapabilitiesFailure(
+		return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 			EVoxelLandWorldCapabilityError::BudgetExceeded, TEXT("World capability preflight work exceeds budget"));
 	}
 	int64 TotalNodes = Source.Nodes.Num();
@@ -89,13 +92,14 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 	{
 		if (IsCancelled())
 		{
-			return WorldCapabilitiesFailure(
+			return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 				EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 		}
-		if (Function.AssetPath.IsEmpty() || Function.AssetPath.Len() > WorldCapabilitiesMaxPath
-			|| Function.Nodes.Num() > WorldCapabilitiesMaxNodes - TotalNodes)
+		if (Function.AssetPath.IsEmpty()
+			|| Function.AssetPath.Len() > FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesMaxPath
+			|| Function.Nodes.Num() > FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesMaxNodes - TotalNodes)
 		{
-			return WorldCapabilitiesFailure(
+			return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 				EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Invalid or oversized captured function"));
 		}
 		TotalNodes += Function.Nodes.Num();
@@ -105,46 +109,50 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 	// dependency closure before allocating scratch or invoking comparisons.
 	const int64 Functions = FunctionCount;
 	const int64 Providers = ProviderCapabilities.Num();
-	const int64 Work = 4096 + TotalNodes * (Functions * (WorldCapabilitiesMaxPath + 4) + Providers * 8 + 32)
-					 + TotalNodes * TotalNodes * 4
-					 + Functions * Functions * (WorldCapabilitiesMaxPath + Functions * 4 + 16)
-					 + Providers * Providers * 8;
+	const int64 Work =
+		4096
+		+ TotalNodes
+			  * (Functions * (FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesMaxPath + 4) + Providers * 8 + 32)
+		+ TotalNodes * TotalNodes * 4
+		+ Functions * Functions * (FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesMaxPath + Functions * 4 + 16)
+		+ Providers * Providers * 8;
 	if (!Budget->TryChargeWork(Work))
 	{
-		return WorldCapabilitiesFailure(
+		return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 			EVoxelLandWorldCapabilityError::BudgetExceeded, TEXT("World capability work exceeds budget"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> ScratchLease;
 	const int64 Bytes = 32768 + 2 * Functions * Functions + 4 * Functions;
 	if (!Budget->TryReserveBytes(Bytes, ScratchLease))
 	{
-		return WorldCapabilitiesFailure(
+		return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 			EVoxelLandWorldCapabilityError::BudgetExceeded, TEXT("World capability scratch exceeds budget"));
 	}
 	for (int32 I = 0; I < ProviderCapabilities.Num(); ++I)
 	{
 		if (IsCancelled())
 		{
-			return WorldCapabilitiesFailure(
+			return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 				EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 		}
 		const FVoxelLandWorldOperatorCapability& A = ProviderCapabilities[I];
-		if (!A.OperatorId.IsValid() || A.OperatorVersion < 1 || !WorldCapabilitiesValidRequirement(A.Requirement))
+		if (!A.OperatorId.IsValid() || A.OperatorVersion < 1
+			|| !FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesValidRequirement(A.Requirement))
 		{
-			return WorldCapabilitiesFailure(
+			return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 				EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Invalid provider capability"));
 		}
 		for (int32 J = 0; J < I; ++J)
 		{
 			if (IsCancelled())
 			{
-				return WorldCapabilitiesFailure(
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 					EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 			}
 			const FVoxelLandWorldOperatorCapability& B = ProviderCapabilities[J];
 			if (A.OperatorId == B.OperatorId && A.OperatorVersion == B.OperatorVersion)
 			{
-				return WorldCapabilitiesFailure(
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 					EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Duplicate provider capability"));
 			}
 		}
@@ -155,12 +163,12 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 		{
 			if (IsCancelled())
 			{
-				return WorldCapabilitiesFailure(
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 					EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 			}
 			if (Source.Functions[I].AssetPath == Source.Functions[J].AssetPath)
 			{
-				return WorldCapabilitiesFailure(
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 					EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Duplicate captured function path"));
 			}
 		}
@@ -177,31 +185,36 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 			const FVoxelLandGraphNodeRecord& Node = Nodes[NodeIndex];
 			if (IsCancelled())
 			{
-				return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::Cancelled,
-					TEXT("World capability validation cancelled"), Node.Id, Owner);
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+					EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"), Node.Id,
+					Owner);
 			}
 			if (!Node.Id.IsValid() || !Node.OperatorId.IsValid() || Node.OperatorVersion < 1)
 			{
-				return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::InvalidInput,
-					TEXT("Invalid node or operator identifier"), Node.Id, Owner);
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+					EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Invalid node or operator identifier"), Node.Id,
+					Owner);
 			}
 			for (int32 Prior = 0; Prior < NodeIndex; ++Prior)
 			{
 				if (IsCancelled())
 				{
-					return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::Cancelled,
-						TEXT("World capability validation cancelled"), Node.Id, Owner);
+					return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+						EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"),
+						Node.Id, Owner);
 				}
 				if (Nodes[Prior].Id == Node.Id)
 				{
-					return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::InvalidInput,
-						TEXT("Duplicate node identifier"), Node.Id, Owner);
+					return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+						EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Duplicate node identifier"), Node.Id,
+						Owner);
 				}
 			}
 			const bool bCall = Node.OperatorId == VoxelLandGraphFunctionCallId();
-			if (bCall != !Node.FunctionPath.IsNull() || !WorldCapabilitiesPath(Node.FunctionPath, Path))
+			if (bCall != !Node.FunctionPath.IsNull()
+				|| !FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesPath(Node.FunctionPath, Path))
 			{
-				return WorldCapabilitiesFailure(
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 					EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Invalid function call path"), Node.Id, Owner);
 			}
 			if (bCall)
@@ -211,8 +224,9 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 				{
 					if (IsCancelled())
 					{
-						return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::Cancelled,
-							TEXT("World capability validation cancelled"), Node.Id, Owner);
+						return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+							EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"),
+							Node.Id, Owner);
 					}
 					if (Source.Functions[I].AssetPath == Path)
 					{
@@ -222,8 +236,9 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 				}
 				if (Target == INDEX_NONE)
 				{
-					return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::InvalidInput,
-						TEXT("Missing captured function dependency"), Node.Id, Owner);
+					return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+						EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Missing captured function dependency"),
+						Node.Id, Owner);
 				}
 				if (Parent == INDEX_NONE)
 				{
@@ -264,8 +279,9 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 				{
 					if (IsCancelled())
 					{
-						return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::Cancelled,
-							TEXT("World capability validation cancelled"), Node.Id, Owner);
+						return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+							EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"),
+							Node.Id, Owner);
 					}
 					if (Capability.OperatorId == Node.OperatorId && Capability.OperatorVersion == Node.OperatorVersion)
 					{
@@ -277,12 +293,14 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 			}
 			if (!bKnown)
 			{
-				return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::UnknownCapability,
-					TEXT("Operator has no known world requirement"), Node.Id, Owner);
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+					EVoxelLandWorldCapabilityError::UnknownCapability, TEXT("Operator has no known world requirement"),
+					Node.Id, Owner);
 			}
 			if (Kind == EVoxelLandWorldKind::Infinite && Requirement == EVoxelLandWorldRequirement::FiniteGlobal)
 			{
-				return WorldCapabilitiesFailure(EVoxelLandWorldCapabilityError::FiniteWorldRequired,
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
+					EVoxelLandWorldCapabilityError::FiniteWorldRequired,
 					TEXT("Operator requires a complete finite world"), Node.Id, Owner);
 			}
 		}
@@ -312,7 +330,7 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 			{
 				if (IsCancelled())
 				{
-					return WorldCapabilitiesFailure(
+					return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 						EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 				}
 				Closure[I * FunctionCount + J] |= Closure[I * FunctionCount + K] && Closure[K * FunctionCount + J];
@@ -323,12 +341,12 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 	{
 		if (IsCancelled())
 		{
-			return WorldCapabilitiesFailure(
+			return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 				EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 		}
 		if (Closure[I * FunctionCount + I])
 		{
-			return WorldCapabilitiesFailure(
+			return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 				EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Cyclic captured function dependency"));
 		}
 		bool bReachable = Roots[I] != 0;
@@ -336,20 +354,20 @@ FVoxelLandWorldCapabilityDiagnostic FVoxelLandWorldCapabilities::Validate(const 
 		{
 			if (IsCancelled())
 			{
-				return WorldCapabilitiesFailure(
+				return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 					EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 			}
 			bReachable = Roots[J] && Closure[J * FunctionCount + I];
 		}
 		if (!bReachable)
 		{
-			return WorldCapabilitiesFailure(
+			return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 				EVoxelLandWorldCapabilityError::InvalidInput, TEXT("Unreferenced captured function dependency"));
 		}
 	}
 	if (IsCancelled())
 	{
-		return WorldCapabilitiesFailure(
+		return FVoxelLandWorldCapabilitiesInternals::WorldCapabilitiesFailure(
 			EVoxelLandWorldCapabilityError::Cancelled, TEXT("World capability validation cancelled"));
 	}
 	return {};

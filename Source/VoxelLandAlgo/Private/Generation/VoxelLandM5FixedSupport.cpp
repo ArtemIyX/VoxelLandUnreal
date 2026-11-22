@@ -6,12 +6,20 @@
 #include "Generation/VoxelLandM5SupportPlane.h"
 #include "Generation/VoxelLandM5TriangleSupport.h"
 
-namespace
+class FVoxelLandM5FixedSupportInternals final
 {
-constexpr int64 Q18Limit = int64(1048576) << 18;
-constexpr int64 ReducedLimit = 1048576;
+public:
+	static constexpr int64 Q18Limit = int64(1048576) << 18;
+	static constexpr int64 ReducedLimit = 1048576;
+	static FVoxelLandM5Diagnostic FixedSupportError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static bool InQ18Range(const FVoxelLandM5FixedPointQ18& P);
+	static bool ReducePoint(const FVoxelLandM5FixedPointQ18& P, const FVoxelLandM5FixedPointQ18& Origin, int64 Scale,
+		FVoxelLandM5PointCm& Out);
+	static int64 GcdPositive(int64 A, int64 B);
+};
 
-FVoxelLandM5Diagnostic FixedSupportError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+FVoxelLandM5Diagnostic FVoxelLandM5FixedSupportInternals::FixedSupportError(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Result;
 	Result.Code = Code;
@@ -20,13 +28,13 @@ FVoxelLandM5Diagnostic FixedSupportError(EVoxelLandM5ErrorCode Code, const TCHAR
 	return Result;
 }
 
-bool InQ18Range(const FVoxelLandM5FixedPointQ18& P)
+bool FVoxelLandM5FixedSupportInternals::InQ18Range(const FVoxelLandM5FixedPointQ18& P)
 {
 	return P.X >= -Q18Limit && P.X <= Q18Limit && P.Y >= -Q18Limit && P.Y <= Q18Limit && P.Z >= -Q18Limit
 		&& P.Z <= Q18Limit;
 }
 
-bool ReducePoint(
+bool FVoxelLandM5FixedSupportInternals::ReducePoint(
 	const FVoxelLandM5FixedPointQ18& P, const FVoxelLandM5FixedPointQ18& Origin, int64 Scale, FVoxelLandM5PointCm& Out)
 {
 	// Inputs are within +/- 2^38, so these differences are safely in int64.
@@ -47,7 +55,7 @@ bool ReducePoint(
 	return true;
 }
 
-int64 GcdPositive(int64 A, int64 B)
+int64 FVoxelLandM5FixedSupportInternals::GcdPositive(int64 A, int64 B)
 {
 	// Cross products below are bounded by 2^43; negation cannot hit MIN_int64.
 	A = A < 0 ? -A : A;
@@ -60,7 +68,6 @@ int64 GcdPositive(int64 A, int64 B)
 	}
 	return A;
 }
-}
 
 FVoxelLandM5Diagnostic VoxelLand::M5::FixedSupport::CertifyLinearContact(const FVoxelLandM5FixedPointQ18& FeetStart,
 	const FVoxelLandM5FixedPointQ18& FeetEnd, int64 RadiusQ18, int64 HeightQ18, int64 ContactSkinQ18,
@@ -69,22 +76,30 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedSupport::CertifyLinearContact(const F
 {
 	if (IsCancelled())
 	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
 	}
-	if (!InQ18Range(FeetStart) || !InQ18Range(FeetEnd) || RadiusQ18 <= 0 || RadiusQ18 > Q18Limit
-		|| HeightQ18 < 2 * RadiusQ18 || HeightQ18 > Q18Limit || ContactSkinQ18 < 0 || ContactSkinQ18 > Q18Limit
-		|| Triangles.IsEmpty() || Triangles.Num() > 256)
+	if (!FVoxelLandM5FixedSupportInternals::InQ18Range(FeetStart)
+		|| !FVoxelLandM5FixedSupportInternals::InQ18Range(FeetEnd) || RadiusQ18 <= 0
+		|| RadiusQ18 > FVoxelLandM5FixedSupportInternals::Q18Limit || HeightQ18 < 2 * RadiusQ18
+		|| HeightQ18 > FVoxelLandM5FixedSupportInternals::Q18Limit || ContactSkinQ18 < 0
+		|| ContactSkinQ18 > FVoxelLandM5FixedSupportInternals::Q18Limit || Triangles.IsEmpty() || Triangles.Num() > 256)
 	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid fixed support inputs"));
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid fixed support inputs"));
 	}
 	const int64 Extent = RadiusQ18 + ContactSkinQ18;
 	for (const FVoxelLandM5FixedPointQ18* Feet : {&FeetStart, &FeetEnd})
 	{
 		// All operands above are bounded by 2^38; these sums are safe in int64.
-		if (Extent > Q18Limit || Feet->X - Extent < -Q18Limit || Feet->X + Extent > Q18Limit
-			|| Feet->Y - Extent < -Q18Limit || Feet->Y + Extent > Q18Limit || Feet->Z + HeightQ18 > Q18Limit)
+		if (Extent > FVoxelLandM5FixedSupportInternals::Q18Limit
+			|| Feet->X - Extent < -FVoxelLandM5FixedSupportInternals::Q18Limit
+			|| Feet->X + Extent > FVoxelLandM5FixedSupportInternals::Q18Limit
+			|| Feet->Y - Extent < -FVoxelLandM5FixedSupportInternals::Q18Limit
+			|| Feet->Y + Extent > FVoxelLandM5FixedSupportInternals::Q18Limit
+			|| Feet->Z + HeightQ18 > FVoxelLandM5FixedSupportInternals::Q18Limit)
 		{
-			return FixedSupportError(
+			return FVoxelLandM5FixedSupportInternals::FixedSupportError(
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Capsule footprint exceeds fixed domain"));
 		}
 	}
@@ -92,21 +107,27 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedSupport::CertifyLinearContact(const F
 	// proof charges its own (quadratic) work on the same budget.
 	if (!Budget->TryChargeWork(64 + int64(Triangles.Num()) * 128))
 	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fixed support work exhausted"));
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fixed support work exhausted"));
 	}
 	for (const auto& Triangle : Triangles)
 	{
 		if (IsCancelled())
 		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
+			return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
 		}
-		if (!InQ18Range(Triangle.A) || !InQ18Range(Triangle.B) || !InQ18Range(Triangle.C))
+		if (!FVoxelLandM5FixedSupportInternals::InQ18Range(Triangle.A)
+			|| !FVoxelLandM5FixedSupportInternals::InQ18Range(Triangle.B)
+			|| !FVoxelLandM5FixedSupportInternals::InQ18Range(Triangle.C))
 		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Mesh vertex exceeds fixed domain"));
+			return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Mesh vertex exceeds fixed domain"));
 		}
 		if (Triangle.RendererErrorQ18.X != 0 || Triangle.RendererErrorQ18.Y != 0 || Triangle.RendererErrorQ18.Z != 0)
 		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Renderer uncertainty is not supported"));
+			return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+				EVoxelLandM5ErrorCode::Unproven, TEXT("Renderer uncertainty is not supported"));
 		}
 	}
 	const FVoxelLandM5FixedPointQ18 Origin = Triangles[0].A;
@@ -115,25 +136,30 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedSupport::CertifyLinearContact(const F
 	{
 		if (IsCancelled())
 		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
+			return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
 		}
 		const int64 Scale = int64(1) << Shift;
 		if (RadiusQ18 % Scale != 0 || HeightQ18 % Scale != 0 || ContactSkinQ18 % Scale != 0
-			|| RadiusQ18 / Scale > ReducedLimit || HeightQ18 / Scale > ReducedLimit
-			|| ContactSkinQ18 / Scale > ReducedLimit)
+			|| RadiusQ18 / Scale > FVoxelLandM5FixedSupportInternals::ReducedLimit
+			|| HeightQ18 / Scale > FVoxelLandM5FixedSupportInternals::ReducedLimit
+			|| ContactSkinQ18 / Scale > FVoxelLandM5FixedSupportInternals::ReducedLimit)
 		{
 			continue;
 		}
 		FVoxelLandM5PointCm Temp;
-		bool bFits = ReducePoint(FeetStart, Origin, Scale, Temp) && ReducePoint(FeetEnd, Origin, Scale, Temp);
+		bool bFits = FVoxelLandM5FixedSupportInternals::ReducePoint(FeetStart, Origin, Scale, Temp)
+				  && FVoxelLandM5FixedSupportInternals::ReducePoint(FeetEnd, Origin, Scale, Temp);
 		for (const auto& T : Triangles)
 		{
 			if (IsCancelled())
 			{
-				return FixedSupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
+				return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
 			}
-			bFits = bFits && ReducePoint(T.A, Origin, Scale, Temp) && ReducePoint(T.B, Origin, Scale, Temp)
-				 && ReducePoint(T.C, Origin, Scale, Temp);
+			bFits = bFits && FVoxelLandM5FixedSupportInternals::ReducePoint(T.A, Origin, Scale, Temp)
+				 && FVoxelLandM5FixedSupportInternals::ReducePoint(T.B, Origin, Scale, Temp)
+				 && FVoxelLandM5FixedSupportInternals::ReducePoint(T.C, Origin, Scale, Temp);
 		}
 		if (bFits)
 		{
@@ -143,14 +169,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedSupport::CertifyLinearContact(const F
 	}
 	if (SelectedScale == 0)
 	{
-		return FixedSupportError(
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
 			EVoxelLandM5ErrorCode::Unproven, TEXT("Lossless local fixed representation exceeds limits"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	const int64 Bytes = int64(Triangles.Num()) * int64(sizeof(FVoxelLandM5FloorTriangleCm)) * 2 + 4096;
 	if (!Budget->TryReserveBytes(Bytes, Lease))
 	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fixed support scratch exhausted"));
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fixed support scratch exhausted"));
 	}
 	TArray<FVoxelLandM5FloorTriangleCm> Reduced;
 	Reduced.Reserve(Triangles.Num());
@@ -158,20 +185,25 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedSupport::CertifyLinearContact(const F
 	{
 		if (IsCancelled())
 		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
+			return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
 		}
 		FVoxelLandM5FloorTriangleCm Entry;
-		if (!ReducePoint(T.A, Origin, SelectedScale, Entry.A) || !ReducePoint(T.B, Origin, SelectedScale, Entry.B)
-			|| !ReducePoint(T.C, Origin, SelectedScale, Entry.C))
+		if (!FVoxelLandM5FixedSupportInternals::ReducePoint(T.A, Origin, SelectedScale, Entry.A)
+			|| !FVoxelLandM5FixedSupportInternals::ReducePoint(T.B, Origin, SelectedScale, Entry.B)
+			|| !FVoxelLandM5FixedSupportInternals::ReducePoint(T.C, Origin, SelectedScale, Entry.C))
 		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Fixed support reduction failed"));
+			return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+				EVoxelLandM5ErrorCode::Unproven, TEXT("Fixed support reduction failed"));
 		}
 		Reduced.Add(Entry);
 	}
 	FVoxelLandM5PointCm Start, End;
-	if (!ReducePoint(FeetStart, Origin, SelectedScale, Start) || !ReducePoint(FeetEnd, Origin, SelectedScale, End))
+	if (!FVoxelLandM5FixedSupportInternals::ReducePoint(FeetStart, Origin, SelectedScale, Start)
+		|| !FVoxelLandM5FixedSupportInternals::ReducePoint(FeetEnd, Origin, SelectedScale, End))
 	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Fixed route reduction failed"));
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Fixed route reduction failed"));
 	}
 	const auto& T = Reduced[0];
 	const int64 UX = T.B.X - T.A.X, UY = T.B.Y - T.A.Y, UZ = T.B.Z - T.A.Z;
@@ -179,13 +211,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FixedSupport::CertifyLinearContact(const F
 	const int64 GX = -(UY * VZ - UZ * VY), GY = -(UZ * VX - UX * VZ), Den = UX * VY - UY * VX;
 	if (Den <= 0)
 	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("First triangle is not upward oriented"));
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("First triangle is not upward oriented"));
 	}
-	const int64 Divisor = GcdPositive(GcdPositive(GX, GY), Den);
+	const int64 Divisor =
+		FVoxelLandM5FixedSupportInternals::GcdPositive(FVoxelLandM5FixedSupportInternals::GcdPositive(GX, GY), Den);
 	if (Divisor <= 0 || GX / Divisor < -32767 || GX / Divisor > 32767 || GY / Divisor < -32767 || GY / Divisor > 32767
 		|| Den / Divisor > 32767)
 	{
-		return FixedSupportError(
+		return FVoxelLandM5FixedSupportInternals::FixedSupportError(
 			EVoxelLandM5ErrorCode::Unproven, TEXT("Exact support plane exceeds coefficient limits"));
 	}
 	FVoxelLandM5SupportPlane Plane;

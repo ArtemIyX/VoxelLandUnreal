@@ -14,15 +14,13 @@
 #include "Graph/VoxelLandWorldCapabilities.h"
 #include <cmath>
 
-namespace
+class FVoxelLandGraphCompilePass final
 {
-constexpr int32 MaxInstructions = 8192;
+	static constexpr int32 MaxInstructions = 8192;
 
-class FCompiler
-{
 public:
-	FCompiler(const FVoxelLandGraphSnapshot& InSource, const FVoxelLandOperatorRegistrySnapshot& InProviders,
-		FVoxelLandGraphDiagnostic& InDiagnostic)
+	FVoxelLandGraphCompilePass(const FVoxelLandGraphSnapshot& InSource,
+		const FVoxelLandOperatorRegistrySnapshot& InProviders, FVoxelLandGraphDiagnostic& InDiagnostic)
 		: Source(InSource)
 		, Providers(InProviders)
 		, Diagnostic(InDiagnostic)
@@ -644,7 +642,7 @@ private:
 	TSet<FGuid> Visiting;
 };
 
-bool FCompiler::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Result)
+bool FVoxelLandGraphCompilePass::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Result)
 {
 	if (Node.OperatorId.A != 0x564c4d33 || Node.OperatorId.B != 1 || Node.OperatorId.C != 0)
 	{
@@ -698,7 +696,7 @@ bool FCompiler::CompileBuiltin(const FVoxelLandGraphNodeRecord& Node, uint16& Re
 	return CompileFloatBuiltin(Node, Kind, Result);
 }
 
-bool FCompiler::CompileExternal(const FVoxelLandGraphNodeRecord& Node, uint16& Result)
+bool FVoxelLandGraphCompilePass::CompileExternal(const FVoxelLandGraphNodeRecord& Node, uint16& Result)
 {
 	TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider =
 		Providers.Resolve(Node.OperatorId, Node.OperatorVersion);
@@ -752,7 +750,7 @@ bool FCompiler::CompileExternal(const FVoxelLandGraphNodeRecord& Node, uint16& R
 	return Emit(EVoxelLandOpcode::ExternalOperator, R[0], R[1], R[2], Index, Result);
 }
 
-bool FCompiler::NoiseSource(
+bool FVoxelLandGraphCompilePass::NoiseSource(
 	const FVoxelLandGraphNodeRecord& Node, int32 Index, EVoxelLandGraphValueType Type, FVoxelLandValueSource& Out)
 {
 	FVoxelLandBuiltinNodeSpec Spec;
@@ -802,7 +800,7 @@ bool FCompiler::NoiseSource(
 	return true;
 }
 
-bool FCompiler::ValidateNoiseDefaults(
+bool FVoxelLandGraphCompilePass::ValidateNoiseDefaults(
 	const FVoxelLandGraphNodeRecord& Node, int32 Dimensions, const FVoxelLandNoiseConfig& Config)
 {
 	const auto FloatDefault = [this](const FVoxelLandValueSource& Source) {
@@ -832,7 +830,8 @@ bool FCompiler::ValidateNoiseDefaults(
 	return true;
 }
 
-bool FCompiler::CompileNoise(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
+bool FVoxelLandGraphCompilePass::CompileNoise(
+	const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
 {
 	const bool b3D = Kind == EVoxelLandBuiltinNode::Perlin3 || Kind == EVoxelLandBuiltinNode::Fbm3
 				  || Kind == EVoxelLandBuiltinNode::Value3 || Kind == EVoxelLandBuiltinNode::Simplex3;
@@ -899,7 +898,8 @@ bool FCompiler::CompileNoise(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
 	return Emit(Op, Coordinates[0], Coordinates[1], Coordinates[2], ConfigIndex, Result);
 }
 
-bool FCompiler::CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
+bool FVoxelLandGraphCompilePass::CompileFloatBuiltin(
+	const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
 {
 	if (Kind == EVoxelLandBuiltinNode::HeightToDensity)
 	{
@@ -1009,7 +1009,8 @@ bool FCompiler::CompileFloatBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
 	return true;
 }
 
-bool FCompiler::CompileTypedBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
+bool FVoxelLandGraphCompilePass::CompileTypedBuiltin(
+	const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
 {
 	if (Kind == EVoxelLandBuiltinNode::IntConstant || Kind == EVoxelLandBuiltinNode::BoolConstant)
 	{
@@ -1080,7 +1081,8 @@ bool FCompiler::CompileTypedBuiltin(const FVoxelLandGraphNodeRecord& Node, EVoxe
 	return Fail(TEXT("Unsupported typed operator"));
 }
 
-bool FCompiler::CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
+bool FVoxelLandGraphCompilePass::CompileShape(
+	const FVoxelLandGraphNodeRecord& Node, EVoxelLandBuiltinNode Kind, uint16& Result)
 {
 	if (Kind == EVoxelLandBuiltinNode::Plane || Kind == EVoxelLandBuiltinNode::Sphere
 		|| Kind == EVoxelLandBuiltinNode::Box)
@@ -1161,8 +1163,6 @@ bool FCompiler::CompileShape(const FVoxelLandGraphNodeRecord& Node, EVoxelLandBu
 	return Fail(TEXT("Unsupported shape operator"));
 }
 
-}
-
 bool FVoxelLandGraphCompiler::Compile(
 	const FVoxelLandGraphSnapshot& Snapshot, FVoxelLandProgramDraft& OutDraft, FString& OutError)
 {
@@ -1210,7 +1210,7 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot,
 		{
 			return false;
 		}
-		FCompiler Compiler(Expanded, Providers, OutDiagnostic);
+		FVoxelLandGraphCompilePass Compiler(Expanded, Providers, OutDiagnostic);
 		if (!Compiler.Run(OutDraft))
 		{
 			FVoxelLandGraphFunctionFlatten::TranslateDiagnostic(OutDiagnostic, OriginCalls, OriginDescriptions);
@@ -1218,7 +1218,7 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot,
 		}
 		return true;
 	}
-	FCompiler Compiler(Snapshot, Providers, OutDiagnostic);
+	FVoxelLandGraphCompilePass Compiler(Snapshot, Providers, OutDiagnostic);
 	return Compiler.Run(OutDraft);
 }
 

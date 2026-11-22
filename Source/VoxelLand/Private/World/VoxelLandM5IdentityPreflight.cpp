@@ -6,17 +6,18 @@
 #include "World/VoxelLandM5IdentityPreflightLimits.h"
 #include "World/VoxelLandM5IdentityPreflightStats.h"
 
-namespace
+class FVoxelLandM5IdentityPreflightInternals final
 {
-FVoxelLandM5Diagnostic M5IdentityPreflightFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = TEXT("M5.IdentityPreflight");
-	Result.Message = Message;
-	return Result;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic M5IdentityPreflightFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = TEXT("M5.IdentityPreflight");
+		Result.Message = Message;
+		return Result;
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::IdentityPreflight::Inspect(const FVoxelLandM5WorldSnapshot& Snapshot,
 	const FVoxelLandM5IdentityPreflightLimits& Limits, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
@@ -24,11 +25,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdentityPreflight::Inspect(const FVoxelLan
 {
 	if (IsCancelled())
 	{
-		return M5IdentityPreflightFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Identity preflight cancelled"));
+		return FVoxelLandM5IdentityPreflightInternals::M5IdentityPreflightFailure(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Identity preflight cancelled"));
 	}
 	if (Limits.MaxElements < 0 || Limits.MaxStringCodeUnits < 0 || Limits.MaxConfigurationBytes < 0)
 	{
-		return M5IdentityPreflightFailure(
+		return FVoxelLandM5IdentityPreflightInternals::M5IdentityPreflightFailure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Negative identity preflight limit"));
 	}
 	FVoxelLandM5IdentityPreflightStats Scratch;
@@ -163,13 +165,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdentityPreflight::Inspect(const FVoxelLan
 	}
 	if (Completed != UE_ARRAY_COUNT(Channels))
 	{
-		return M5IdentityPreflightFailure(
+		return FVoxelLandM5IdentityPreflightInternals::M5IdentityPreflightFailure(
 			FailureCode == EVoxelLandM5ErrorCode::None ? EVoxelLandM5ErrorCode::BudgetExceeded : FailureCode,
 			TEXT("Identity input inventory exceeds a limit, work budget, or was cancelled"));
 	}
 	if (IsCancelled())
 	{
-		return M5IdentityPreflightFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Identity preflight cancelled"));
+		return FVoxelLandM5IdentityPreflightInternals::M5IdentityPreflightFailure(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Identity preflight cancelled"));
 	}
 	OutStats = Scratch;
 	return {};

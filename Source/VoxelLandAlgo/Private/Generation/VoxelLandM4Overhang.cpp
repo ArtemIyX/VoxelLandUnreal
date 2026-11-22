@@ -5,17 +5,19 @@
 
 namespace VoxelLandM4Overhang
 {
-namespace
+class FVoxelLandM4OverhangInternals final
 {
-constexpr int32 MaxAmplitudeQ8 = 128000;
-constexpr int32 MaxBandQ8 = 1280000;
-constexpr int32 NoiseScale = 32767;
-}
+public:
+	static constexpr int32 MaxAmplitudeQ8 = 128000;
+	static constexpr int32 MaxBandQ8 = 1280000;
+	static constexpr int32 NoiseScale = 32767;
+};
 
 bool IsValid(const FVoxelLandM4OverhangSettings& Settings)
 {
-	return Settings.AmplitudeQ8 >= 0 && Settings.AmplitudeQ8 <= MaxAmplitudeQ8 && Settings.BandHalfWidthQ8 >= 1
-	       && Settings.BandHalfWidthQ8 <= MaxBandQ8 && Settings.AmplitudeQ8 <= Settings.BandHalfWidthQ8;
+	return Settings.AmplitudeQ8 >= 0 && Settings.AmplitudeQ8 <= FVoxelLandM4OverhangInternals::MaxAmplitudeQ8
+		&& Settings.BandHalfWidthQ8 >= 1 && Settings.BandHalfWidthQ8 <= FVoxelLandM4OverhangInternals::MaxBandQ8
+		&& Settings.AmplitudeQ8 <= Settings.BandHalfWidthQ8;
 }
 
 bool QuantizeNoise(float Noise, int32& OutNoise)
@@ -25,7 +27,7 @@ bool QuantizeNoise(float Noise, int32& OutNoise)
 		return false;
 	}
 	const double Clamped = FMath::Clamp(double(Noise), -1.0, 1.0);
-	const int32 Magnitude = int32(std::floor(std::abs(Clamped) * NoiseScale + 0.5));
+	const int32 Magnitude = int32(std::floor(std::abs(Clamped) * FVoxelLandM4OverhangInternals::NoiseScale + 0.5));
 	OutNoise = Clamped < 0.0 ? -Magnitude : Magnitude;
 	return true;
 }
@@ -33,7 +35,8 @@ bool QuantizeNoise(float Noise, int32& OutNoise)
 bool DisplacementQ8(
 	const FVoxelLandM4OverhangSettings& Settings, int64 HeightDifferenceQ8, int32 NoiseQ, int32& OutDeltaQ8)
 {
-	if (!IsValid(Settings) || NoiseQ < -NoiseScale || NoiseQ > NoiseScale)
+	if (!IsValid(Settings) || NoiseQ < -FVoxelLandM4OverhangInternals::NoiseScale
+		|| NoiseQ > FVoxelLandM4OverhangInternals::NoiseScale)
 	{
 		return false;
 	}
@@ -61,11 +64,11 @@ bool DisplacementQ8(
 		return false;
 	}
 	const int64 Numerator = WeightedAmplitude * AbsNoise;
-	if (Band > Max / NoiseScale)
+	if (Band > Max / FVoxelLandM4OverhangInternals::NoiseScale)
 	{
 		return false;
 	}
-	const int64 Denominator = Band * NoiseScale;
+	const int64 Denominator = Band * FVoxelLandM4OverhangInternals::NoiseScale;
 	// Quotient and remainder avoid a potential overflow from numerator + denominator/2.
 	int64 Rounded = Numerator / Denominator;
 	const int64 Remainder = Numerator % Denominator;
@@ -73,7 +76,7 @@ bool DisplacementQ8(
 	{
 		++Rounded;
 	}
-	if (Rounded > MaxAmplitudeQ8)
+	if (Rounded > FVoxelLandM4OverhangInternals::MaxAmplitudeQ8)
 	{
 		return false;
 	}

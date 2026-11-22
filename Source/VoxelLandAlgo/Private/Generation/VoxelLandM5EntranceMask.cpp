@@ -8,11 +8,24 @@
 #include "Generation/VoxelLandM5Topology.h"
 #include "Data/Enums/VoxelLandM5PortalAxis.h"
 
-namespace
+class FVoxelLandM5EntranceMaskInternals final
 {
-constexpr int64 M5EntranceMaskLimitCm = 1048576;
+public:
+	static constexpr int64 M5EntranceMaskLimitCm = 1048576;
+	static FVoxelLandM5Diagnostic M5EntranceMaskError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static int64 M5EntranceMaskAxis(const FVoxelLandM5PointCm& Point, int32 Axis);
+	static int64 M5EntranceMaskAxis(const FIntVector& Point, int32 Axis);
+	static bool M5EntranceMaskBoundsValid(const FVoxelLandM5Bounds& Bounds);
+	static bool M5EntranceMaskContains(const FVoxelLandM5Bounds& Outer, const FVoxelLandM5Bounds& Inner);
+	static bool M5EntranceMaskOverlaps(const FVoxelLandM5Bounds& A, const FVoxelLandM5Bounds& B);
+	static bool M5EntranceMaskRegionBounds(
+		const FVoxelLandM5CaveSettings& Settings, const FVoxelLandM5RegionCoord& Region, FVoxelLandM5Bounds& Out);
+	static bool M5EntranceMaskSameBounds(const FVoxelLandM5Bounds& A, const FVoxelLandM5Bounds& B);
+	static bool M5EntranceMaskPortalFits(const FVoxelLandM5CaveSettings& Settings, const FVoxelLandM5Portal& Portal);
+};
 
-FVoxelLandM5Diagnostic M5EntranceMaskError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+FVoxelLandM5Diagnostic FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Result;
 	Result.Code = Code;
@@ -21,17 +34,17 @@ FVoxelLandM5Diagnostic M5EntranceMaskError(EVoxelLandM5ErrorCode Code, const TCH
 	return Result;
 }
 
-int64 M5EntranceMaskAxis(const FVoxelLandM5PointCm& Point, int32 Axis)
+int64 FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(const FVoxelLandM5PointCm& Point, int32 Axis)
 {
 	return Axis == 0 ? Point.X : Axis == 1 ? Point.Y : Point.Z;
 }
 
-int64 M5EntranceMaskAxis(const FIntVector& Point, int32 Axis)
+int64 FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(const FIntVector& Point, int32 Axis)
 {
 	return Axis == 0 ? Point.X : Axis == 1 ? Point.Y : Point.Z;
 }
 
-bool M5EntranceMaskBoundsValid(const FVoxelLandM5Bounds& Bounds)
+bool FVoxelLandM5EntranceMaskInternals::M5EntranceMaskBoundsValid(const FVoxelLandM5Bounds& Bounds)
 {
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
@@ -45,7 +58,8 @@ bool M5EntranceMaskBoundsValid(const FVoxelLandM5Bounds& Bounds)
 	return true;
 }
 
-bool M5EntranceMaskContains(const FVoxelLandM5Bounds& Outer, const FVoxelLandM5Bounds& Inner)
+bool FVoxelLandM5EntranceMaskInternals::M5EntranceMaskContains(
+	const FVoxelLandM5Bounds& Outer, const FVoxelLandM5Bounds& Inner)
 {
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
@@ -58,7 +72,7 @@ bool M5EntranceMaskContains(const FVoxelLandM5Bounds& Outer, const FVoxelLandM5B
 	return true;
 }
 
-bool M5EntranceMaskOverlaps(const FVoxelLandM5Bounds& A, const FVoxelLandM5Bounds& B)
+bool FVoxelLandM5EntranceMaskInternals::M5EntranceMaskOverlaps(const FVoxelLandM5Bounds& A, const FVoxelLandM5Bounds& B)
 {
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
@@ -71,7 +85,7 @@ bool M5EntranceMaskOverlaps(const FVoxelLandM5Bounds& A, const FVoxelLandM5Bound
 	return true;
 }
 
-bool M5EntranceMaskRegionBounds(
+bool FVoxelLandM5EntranceMaskInternals::M5EntranceMaskRegionBounds(
 	const FVoxelLandM5CaveSettings& Settings, const FVoxelLandM5RegionCoord& Region, FVoxelLandM5Bounds& Out)
 {
 	using namespace VoxelLand::M5::CheckedMath;
@@ -103,7 +117,8 @@ bool M5EntranceMaskRegionBounds(
 	return true;
 }
 
-bool M5EntranceMaskSameBounds(const FVoxelLandM5Bounds& A, const FVoxelLandM5Bounds& B)
+bool FVoxelLandM5EntranceMaskInternals::M5EntranceMaskSameBounds(
+	const FVoxelLandM5Bounds& A, const FVoxelLandM5Bounds& B)
 {
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
@@ -116,7 +131,8 @@ bool M5EntranceMaskSameBounds(const FVoxelLandM5Bounds& A, const FVoxelLandM5Bou
 	return true;
 }
 
-bool M5EntranceMaskPortalFits(const FVoxelLandM5CaveSettings& Settings, const FVoxelLandM5Portal& Portal)
+bool FVoxelLandM5EntranceMaskInternals::M5EntranceMaskPortalFits(
+	const FVoxelLandM5CaveSettings& Settings, const FVoxelLandM5Portal& Portal)
 {
 	using namespace VoxelLand::M5::CheckedMath;
 	FVoxelLandM5Bounds A, B;
@@ -150,7 +166,6 @@ bool M5EntranceMaskPortalFits(const FVoxelLandM5CaveSettings& Settings, const FV
 	}
 	return false;
 }
-}
 
 FVoxelLandM5EntranceMask::FVoxelLandM5EntranceMask(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
 	: Lease(MoveTemp(InLease))
@@ -167,44 +182,53 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 	using namespace VoxelLand::M5::CheckedMath;
 	if (IsCancelled())
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 	}
-	if (!Settings.bEnabled || !Settings.StageId.IsValid() || !M5EntranceMaskBoundsValid(Settings.Bounds)
-		|| Candidates.IsEmpty() || Candidates.Num() > 64 || SpacingCm <= 0 || SpacingCm > 65536
-		|| Settings.Limits.MaxBytes < 1 || Settings.Limits.MaxValidationWork < 1
+	if (!Settings.bEnabled || !Settings.StageId.IsValid()
+		|| !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskBoundsValid(Settings.Bounds) || Candidates.IsEmpty()
+		|| Candidates.Num() > 64 || SpacingCm <= 0 || SpacingCm > 65536 || Settings.Limits.MaxBytes < 1
+		|| Settings.Limits.MaxValidationWork < 1
 		|| (Settings.PlanningMode == EVoxelLandM5PlanningMode::Finite && Candidates.Num() != 1)
 		|| (Settings.PlanningMode != EVoxelLandM5PlanningMode::Finite
 			&& Settings.PlanningMode != EVoxelLandM5PlanningMode::Regional))
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance mask inputs"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance mask inputs"));
 	}
 	int64 BudgetBytes = 0, BudgetWork = 0;
 	Budget->GetLimits(BudgetBytes, BudgetWork);
 	if (BudgetBytes > Settings.Limits.MaxBytes || BudgetWork > Settings.Limits.MaxValidationWork)
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Shared budget exceeds plan limits"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Shared budget exceeds plan limits"));
 	}
 	int64 OutputXY = 0, Outputs = 0, Influence = 0;
 	if (Count.X <= 0 || Count.Y <= 0 || Count.Z <= 0 || !TryMultiplyNonNegative(Count.X, Count.Y, OutputXY)
 		|| !TryMultiplyNonNegative(OutputXY, Count.Z, Outputs) || Outputs > MAX_int32 || Protection.Num() != Outputs
 		|| !TryMultiply(SpacingCm, 2, Influence))
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance mask grid size"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance mask grid size"));
 	}
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
-		const int64 N = M5EntranceMaskAxis(Size, Axis), S = M5EntranceMaskAxis(Start, Axis);
-		const int64 C = M5EntranceMaskAxis(Count, Axis), O = M5EntranceMaskAxis(OriginCm, Axis);
+		const int64 N = FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Size, Axis),
+					S = FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Start, Axis);
+		const int64 C = FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Count, Axis),
+					O = FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(OriginCm, Axis);
 		int64 GridDelta = 0, GridEnd = 0, FirstDelta = 0, LastDelta = 0, First = 0, Last = 0;
-		if (N < 5 || S < 2 || C < 1 || S + C > N - 2 || O < -M5EntranceMaskLimitCm || O > M5EntranceMaskLimitCm
-			|| !TryMultiply(N - 1, SpacingCm, GridDelta) || !TryAdd(O, GridDelta, GridEnd)
-			|| GridEnd > M5EntranceMaskLimitCm || !TryMultiply(S, SpacingCm, FirstDelta)
-			|| !TryMultiply(S + C - 1, SpacingCm, LastDelta) || !TryAdd(O, FirstDelta, First)
-			|| !TryAdd(O, LastDelta, Last) || !TrySubtract(First, Influence, First) || !TryAdd(Last, Influence, Last)
-			|| First < M5EntranceMaskAxis(Settings.Bounds.MinInclusive, Axis)
-			|| Last >= M5EntranceMaskAxis(Settings.Bounds.MaxExclusive, Axis))
+		if (N < 5 || S < 2 || C < 1 || S + C > N - 2 || O < -FVoxelLandM5EntranceMaskInternals::M5EntranceMaskLimitCm
+			|| O > FVoxelLandM5EntranceMaskInternals::M5EntranceMaskLimitCm || !TryMultiply(N - 1, SpacingCm, GridDelta)
+			|| !TryAdd(O, GridDelta, GridEnd) || GridEnd > FVoxelLandM5EntranceMaskInternals::M5EntranceMaskLimitCm
+			|| !TryMultiply(S, SpacingCm, FirstDelta) || !TryMultiply(S + C - 1, SpacingCm, LastDelta)
+			|| !TryAdd(O, FirstDelta, First) || !TryAdd(O, LastDelta, Last) || !TrySubtract(First, Influence, First)
+			|| !TryAdd(Last, Influence, Last)
+			|| First < FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MinInclusive, Axis)
+			|| Last >= FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MaxExclusive, Axis))
 		{
-			return M5EntranceMaskError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Missing entrance influence halo"));
+			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Missing entrance influence halo"));
 		}
 	}
 	// Charge provenance, cancellation and the bounded quadratic region scan
@@ -216,11 +240,12 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 		|| !TryMultiplyNonNegative(Candidates.Num(), 64, PreflightLinear)
 		|| !TryAdd(Preflight, PreflightLinear, Preflight) || !TryAdd(Preflight, 64, Preflight))
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Entrance preflight work overflow"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Entrance preflight work overflow"));
 	}
 	if (!Budget->TryChargeWork(Preflight))
 	{
-		return M5EntranceMaskError(
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance preflight admission exhausted"));
 	}
 	int64 TotalOpenings = 0;
@@ -228,27 +253,32 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 	{
 		if (IsCancelled())
 		{
-			return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 		}
 		if (!Candidates[I].IsValid() || !Candidates[I]->UsesBudget(Budget.Get()))
 		{
-			return M5EntranceMaskError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing plan or mismatched budget"));
+			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing plan or mismatched budget"));
 		}
 		const FVoxelLandM5CavePlan& Plan = Candidates[I]->GetPlan();
-		if (!Candidates[I]->MatchesSource(Settings, WorldSeed, Plan.Region) || !M5EntranceMaskBoundsValid(Plan.Bounds)
-			|| !M5EntranceMaskContains(Settings.Bounds, Plan.Bounds)
+		if (!Candidates[I]->MatchesSource(Settings, WorldSeed, Plan.Region)
+			|| !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskBoundsValid(Plan.Bounds)
+			|| !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskContains(Settings.Bounds, Plan.Bounds)
 			|| !TryAdd(TotalOpenings, Plan.Entrances.Num(), TotalOpenings) || TotalOpenings > 4096)
 		{
-			return M5EntranceMaskError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid plan provenance or bounds"));
+			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid plan provenance or bounds"));
 		}
 		FVoxelLandM5Bounds ExpectedBounds;
 		if ((Settings.PlanningMode == EVoxelLandM5PlanningMode::Regional
-				&& (!M5EntranceMaskRegionBounds(Settings, Plan.Region, ExpectedBounds)
-					|| !M5EntranceMaskSameBounds(ExpectedBounds, Plan.Bounds)))
+				&& (!FVoxelLandM5EntranceMaskInternals::M5EntranceMaskRegionBounds(
+						Settings, Plan.Region, ExpectedBounds)
+					|| !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskSameBounds(ExpectedBounds, Plan.Bounds)))
 			|| (Settings.PlanningMode == EVoxelLandM5PlanningMode::Finite
-				&& !M5EntranceMaskSameBounds(Settings.Bounds, Plan.Bounds)))
+				&& !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskSameBounds(Settings.Bounds, Plan.Bounds)))
 		{
-			return M5EntranceMaskError(
+			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Plan does not match its planning domain"));
 		}
 		for (int32 J = 0; J < I; ++J)
@@ -256,7 +286,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 			const FVoxelLandM5RegionCoord& Other = Candidates[J]->GetPlan().Region;
 			if (Other.X == Plan.Region.X && Other.Y == Plan.Region.Y)
 			{
-				return M5EntranceMaskError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate plan region"));
+				return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate plan region"));
 			}
 		}
 	}
@@ -271,12 +302,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 			2 * sizeof(TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>), PlansBytes)
 		|| !TryAdd(Bytes, PlansBytes, Bytes) || !TryAdd(Bytes, Outputs, Bytes) || !TryAdd(Bytes, 4096, Bytes))
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Entrance mask admission overflow"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Entrance mask admission overflow"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(Work))
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance mask admission exhausted"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance mask admission exhausted"));
 	}
 	TArray<FVoxelLandM5Bounds> Openings;
 	Openings.Reserve(static_cast<int32>(TotalOpenings));
@@ -297,12 +330,13 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 		{
 			if (IsCancelled())
 			{
-				return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+				return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 			}
 			if (Settings.PlanningMode != EVoxelLandM5PlanningMode::Regional
-				|| !M5EntranceMaskPortalFits(Settings, Portal))
+				|| !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskPortalFits(Settings, Portal))
 			{
-				return M5EntranceMaskError(
+				return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 					EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Portal does not fit its shared region face"));
 			}
 		}
@@ -310,23 +344,26 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 		{
 			if (IsCancelled())
 			{
-				return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+				return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 			}
-			if (!Entrance.bHasId || !Entrance.bHasConnectionId || !M5EntranceMaskBoundsValid(Entrance.OpeningBoundsCm)
-				|| !M5EntranceMaskContains(Plan.Bounds, Entrance.OpeningBoundsCm))
+			if (!Entrance.bHasId || !Entrance.bHasConnectionId
+				|| !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskBoundsValid(Entrance.OpeningBoundsCm)
+				|| !FVoxelLandM5EntranceMaskInternals::M5EntranceMaskContains(Plan.Bounds, Entrance.OpeningBoundsCm))
 			{
-				return M5EntranceMaskError(
+				return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance opening bounds"));
 			}
 			for (const FVoxelLandM5Bounds& Existing : Openings)
 			{
 				if (IsCancelled())
 				{
-					return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+					return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 				}
-				if (M5EntranceMaskOverlaps(Existing, Entrance.OpeningBoundsCm))
+				if (FVoxelLandM5EntranceMaskInternals::M5EntranceMaskOverlaps(Existing, Entrance.OpeningBoundsCm))
 				{
-					return M5EntranceMaskError(
+					return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 						EVoxelLandM5ErrorCode::Unproven, TEXT("Overlapping openings are ambiguous"));
 				}
 			}
@@ -345,12 +382,13 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 			{
 				if (IsCancelled())
 				{
-					return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+					return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 				}
 				const int64 Index = X + int64(Count.X) * Y + OutputXY * Z;
 				if (Protection[Index] > 1)
 				{
-					return M5EntranceMaskError(
+					return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Protection mask is not binary"));
 				}
 				const int64 Point[3] = {OriginCm.X + (int64(Start.X) + X) * SpacingCm,
@@ -360,13 +398,16 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 				{
 					if (IsCancelled())
 					{
-						return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+						return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+							EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 					}
 					bool bFits = true;
 					for (int32 Axis = 0; Axis < 3; ++Axis)
 					{
-						bFits &= Point[Axis] - Influence >= M5EntranceMaskAxis(Opening.MinInclusive, Axis)
-							  && Point[Axis] + Influence < M5EntranceMaskAxis(Opening.MaxExclusive, Axis);
+						bFits &= Point[Axis] - Influence
+								  >= FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Opening.MinInclusive, Axis)
+							  && Point[Axis] + Influence < FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(
+									 Opening.MaxExclusive, Axis);
 					}
 					bInside |= bFits;
 				}
@@ -376,7 +417,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 	}
 	if (IsCancelled())
 	{
-		return M5EntranceMaskError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
+		return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 	}
 	OutMask = MoveTemp(Scratch);
 	return {};

@@ -24,79 +24,80 @@
 #define VOXELLAND_HAS_VM_SIMD 0
 #endif
 
-namespace
+class FVoxelLandGeneratorValidation final
 {
-constexpr int32 BatchSize = 256;
-constexpr int32 NoiseFamilyCount = 4;
+public:
+	static constexpr int32 BatchSize = 256;
+	static constexpr int32 NoiseFamilyCount = 4;
 
-int32 NoiseVariant(EVoxelLandOpcode Op)
-{
-	switch (Op)
+	static int32 NoiseVariant(EVoxelLandOpcode Op)
 	{
-		case EVoxelLandOpcode::Perlin2:
-		case EVoxelLandOpcode::Perlin3:
-			return 0;
-		case EVoxelLandOpcode::Fbm2:
-		case EVoxelLandOpcode::Fbm3:
-			return 1;
-		case EVoxelLandOpcode::Value2:
-		case EVoxelLandOpcode::Value3:
-			return 2;
-		case EVoxelLandOpcode::Simplex2:
-		case EVoxelLandOpcode::Simplex3:
-			return 3;
-		default:
-			return INDEX_NONE;
-	}
-}
-
-bool IsNoise3D(EVoxelLandOpcode Op)
-{
-	return Op == EVoxelLandOpcode::Perlin3 || Op == EVoxelLandOpcode::Fbm3 || Op == EVoxelLandOpcode::Value3
-		|| Op == EVoxelLandOpcode::Simplex3;
-}
-
-FVoxelLandError Fail(EVoxelLandErrorCode Code, const TCHAR* Message, const FString& Parameter = {})
-{
-	FVoxelLandError E;
-	E.Code = Code;
-	E.Message = Message;
-	E.Parameter = Parameter;
-	return E;
-}
-
-bool NameOf(const FString& In, FString& Out)
-{
-	if (In.IsEmpty())
-	{
-		return false;
-	}
-	Out.Reset();
-	for (TCHAR C : In)
-	{
-		if (C >= 'A' && C <= 'Z')
+		switch (Op)
 		{
-			C += 'a' - 'A';
+			case EVoxelLandOpcode::Perlin2:
+			case EVoxelLandOpcode::Perlin3:
+				return 0;
+			case EVoxelLandOpcode::Fbm2:
+			case EVoxelLandOpcode::Fbm3:
+				return 1;
+			case EVoxelLandOpcode::Value2:
+			case EVoxelLandOpcode::Value3:
+				return 2;
+			case EVoxelLandOpcode::Simplex2:
+			case EVoxelLandOpcode::Simplex3:
+				return 3;
+			default:
+				return INDEX_NONE;
 		}
-		if (!((C >= 'a' && C <= 'z') || (C >= '0' && C <= '9') || C == '_'))
+	}
+
+	static bool IsNoise3D(EVoxelLandOpcode Op)
+	{
+		return Op == EVoxelLandOpcode::Perlin3 || Op == EVoxelLandOpcode::Fbm3 || Op == EVoxelLandOpcode::Value3
+			|| Op == EVoxelLandOpcode::Simplex3;
+	}
+
+	static FVoxelLandError Fail(EVoxelLandErrorCode Code, const TCHAR* Message, const FString& Parameter = {})
+	{
+		FVoxelLandError E;
+		E.Code = Code;
+		E.Message = Message;
+		E.Parameter = Parameter;
+		return E;
+	}
+
+	static bool NameOf(const FString& In, FString& Out)
+	{
+		if (In.IsEmpty())
 		{
 			return false;
 		}
-		Out.AppendChar(C);
+		Out.Reset();
+		for (TCHAR C : In)
+		{
+			if (C >= 'A' && C <= 'Z')
+			{
+				C += 'a' - 'A';
+			}
+			if (!((C >= 'a' && C <= 'z') || (C >= '0' && C <= '9') || C == '_'))
+			{
+				return false;
+			}
+			Out.AppendChar(C);
+		}
+		return true;
 	}
-	return true;
-}
 
-FVoxelLandError NativeError(const FString& Message)
-{
-	FVoxelLandError E;
-	E.Code = Message.StartsWith(TEXT("NativeLibraryUnavailable:")) ? EVoxelLandErrorCode::NativeLibraryUnavailable
-		   : Message.StartsWith(TEXT("InvalidNoiseInput:"))        ? EVoxelLandErrorCode::NonFiniteCoordinate
-																   : EVoxelLandErrorCode::BackendUnavailable;
-	E.Message = Message;
-	return E;
-}
-}
+	static FVoxelLandError NativeError(const FString& Message)
+	{
+		FVoxelLandError E;
+		E.Code = Message.StartsWith(TEXT("NativeLibraryUnavailable:")) ? EVoxelLandErrorCode::NativeLibraryUnavailable
+			   : Message.StartsWith(TEXT("InvalidNoiseInput:"))        ? EVoxelLandErrorCode::NonFiniteCoordinate
+																	   : EVoxelLandErrorCode::BackendUnavailable;
+		E.Message = Message;
+		return E;
+	}
+};
 
 FVoxelLandWorkerContextImpl::FVoxelLandWorkerContextImpl() = default;
 FVoxelLandWorkerContextImpl::~FVoxelLandWorkerContextImpl() = default;
@@ -140,28 +141,30 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 	if (!VoxelLandM4Overhang::IsValid(Overhang.Displacement) || !FMath::IsFinite(Overhang.FrequencyPerCm)
 		|| Overhang.FrequencyPerCm <= 0.f || Overhang.FrequencyPerCm > 1.f || !Overhang.NodeId.IsValid())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 overhang configuration"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 overhang configuration"));
 	}
 	if (Settings.bM4FixedLatticeShaping && Overhang.Displacement.bEnabled && Overhang.Displacement.AmplitudeQ8 != 0
 		&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Overhang.FrequencyPerCm))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter,
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("Fixed-lattice overhang frequency must be representable in Q24"));
 	}
 	if (!HeightGrid)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height grid is required"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height grid is required"));
 	}
 	const float Size = Settings.Profile.VoxelSizeCm;
 	if (!FMath::IsFinite(Size) || Size < 1.f || Size > 2000000.f || FMath::FloorToDouble(double(Size)) != double(Size))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidProfile,
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidProfile,
 			TEXT("M4 voxel size must be an integral centimeter value in [1, 2000000]"));
 	}
 	if (!Settings.Program || Settings.Program->GetData().ExternalFilterIndex != INDEX_NONE
 		|| !Settings.Program->GetData().ExternalOperators.IsEmpty())
 	{
-		return Fail(
+		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::InvalidProgram, TEXT("M4 height fields do not support external operators or filters"));
 	}
 	// Build locally so failure never changes a caller's existing generator.
@@ -181,7 +184,8 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 {
 	if (Smooth.Version != 1 || !FMath::IsFinite(Smooth.Strength) || Smooth.Strength < 0.f || Smooth.Strength > 1.f)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
 	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
 	if (FVoxelLandError Error = CreateM4HeightField(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Overhang, Result))
@@ -204,7 +208,7 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 		|| (Config.HeightDetail.bEnabled && Config.HeightDetail.AmplitudeQ8 != 0
 			&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Config.HeightDetail.FrequencyPerCm)))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter,
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("Fixed-lattice shaping frequency must be representable in Q24"));
 	}
 	const auto& Detail = Config.HeightDetail;
@@ -212,11 +216,12 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 		|| !FMath::IsFinite(Detail.FrequencyPerCm) || Detail.FrequencyPerCm <= 0.f || Detail.FrequencyPerCm > 1.f
 		|| !Detail.NodeId.IsValid())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height detail settings"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height detail settings"));
 	}
 	if (IsInGameThread())
 	{
-		return Fail(
+		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("M4 local generator setup requires a worker thread"));
 	}
 	const float Size = Settings.Profile.VoxelSizeCm;
@@ -224,32 +229,35 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 		|| !Settings.Program || Settings.Program->GetData().ExternalFilterIndex != INDEX_NONE
 		|| !Settings.Program->GetData().ExternalOperators.IsEmpty())
 	{
-		return Fail(
+		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local terrain settings or unsupported provider"));
 	}
 	if (!VoxelLandM4Overhang::IsValid(Config.Overhang.Displacement) || !FMath::IsFinite(Config.Overhang.FrequencyPerCm)
 		|| Config.Overhang.FrequencyPerCm <= 0.f || Config.Overhang.FrequencyPerCm > 1.f
 		|| !Config.Overhang.NodeId.IsValid())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local overhang settings"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local overhang settings"));
 	}
 	if (Config.SmoothOverride.IsSet()
 		&& (Config.SmoothOverride->Version != 1 || !FMath::IsFinite(Config.SmoothOverride->Strength)
 			|| Config.SmoothOverride->Strength < 0.f || Config.SmoothOverride->Strength > 1.f))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
 	}
 	const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Controls[] = {
 		Config.ContinentalGenerator, Config.MountainGenerator, Config.PeaksGenerator};
 	if (!Config.ContinentalCurve || !Config.MountainCurve || !Config.PeaksCurve)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local control curves are required"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local control curves are required"));
 	}
 	for (const auto& Control : Controls)
 	{
 		if (!Control || Control->M4HeightGrid || Control->M4Unlimited)
 		{
-			return Fail(
+			return FVoxelLandGeneratorValidation::Fail(
 				EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local controls must be ordinary VM generators"));
 		}
 		const FVoxelLandError Error = VoxelLandM4FixedLattice::Validate(*Control);
@@ -280,12 +288,13 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 		|| !FMath::IsFinite(Detail.FrequencyPerCm) || Detail.FrequencyPerCm <= 0.f || Detail.FrequencyPerCm > 1.f
 		|| !Detail.NodeId.IsValid())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height detail settings"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height detail settings"));
 	}
 	if (Settings.bM4FixedLatticeShaping && Detail.bEnabled && Detail.AmplitudeQ8 != 0
 		&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Detail.FrequencyPerCm))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter,
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("Fixed-lattice height detail frequency must be representable in Q24"));
 	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
@@ -309,7 +318,8 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 {
 	if (Smooth.Version != 1 || !FMath::IsFinite(Smooth.Strength) || Smooth.Strength < 0.f || Smooth.Strength > 1.f)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or unsupported M4 smooth filter settings"));
 	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
 	if (FVoxelLandError Error =
@@ -332,7 +342,8 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	OutGenerator.Reset();
 	if (IsInGameThread())
 	{
-		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Generator setup requires a worker thread"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Generator setup requires a worker thread"));
 	}
 	const TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe>& Program = Settings.Program;
 	const FVoxelLandZoneProfile& Profile = Settings.Profile;
@@ -340,11 +351,12 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	const uint64 WorldSeed = Settings.WorldSeed;
 	if (!Program.IsValid())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("Program is null"));
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("Program is null"));
 	}
 	if (!FMath::IsFinite(Profile.VoxelSizeCm) || Profile.VoxelSizeCm <= 0)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidProfile, TEXT("Voxel size must be positive and finite"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidProfile, TEXT("Voxel size must be positive and finite"));
 	}
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandGenerator);
 	Result->Program = Program;
@@ -375,15 +387,16 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	for (const TPair<FString, float>& Entry : Profile.FloatOverrides)
 	{
 		FString Name;
-		if (!NameOf(Entry.Key, Name) || Seen.Contains(Name))
+		if (!FVoxelLandGeneratorValidation::NameOf(Entry.Key, Name) || Seen.Contains(Name))
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
 		}
 		Seen.Add(Name);
 		const int32* Slot = Slots.Find(Name);
 		if (!Slot || D.Parameters[*Slot].Type != EVoxelLandParameterType::Float || !FMath::IsFinite(Entry.Value))
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter,
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 				TEXT("Unknown, wrong type, or non-finite float override"), Entry.Key);
 		}
 		Result->FloatParameters[*Slot] = Entry.Value;
@@ -391,30 +404,34 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	for (const TPair<FString, int32>& Entry : Profile.IntOverrides)
 	{
 		FString Name;
-		if (!NameOf(Entry.Key, Name) || Seen.Contains(Name))
+		if (!FVoxelLandGeneratorValidation::NameOf(Entry.Key, Name) || Seen.Contains(Name))
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
 		}
 		Seen.Add(Name);
 		const int32* Slot = Slots.Find(Name);
 		if (!Slot || D.Parameters[*Slot].Type != EVoxelLandParameterType::Int32)
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type int override"), Entry.Key);
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type int override"), Entry.Key);
 		}
 		Result->IntParameters[*Slot] = Entry.Value;
 	}
 	for (const TPair<FString, bool>& Entry : Profile.BoolOverrides)
 	{
 		FString Name;
-		if (!NameOf(Entry.Key, Name) || Seen.Contains(Name))
+		if (!FVoxelLandGeneratorValidation::NameOf(Entry.Key, Name) || Seen.Contains(Name))
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid or duplicate override"), Entry.Key);
 		}
 		Seen.Add(Name);
 		const int32* Slot = Slots.Find(Name);
 		if (!Slot || D.Parameters[*Slot].Type != EVoxelLandParameterType::Bool)
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type bool override"), Entry.Key);
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type bool override"), Entry.Key);
 		}
 		Result->IntParameters[*Slot] = Entry.Value ? 1 : 0;
 	}
@@ -440,7 +457,7 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 		if (!FMath::IsFinite(Frequency) || Frequency <= 0 || !FMath::IsFinite(Gain) || Gain < 0 || Gain > 1
 			|| !FMath::IsFinite(Lacunarity) || Lacunarity < 1 || Octaves < 1 || Octaves > 16)
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter,
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 				TEXT("Noise frequency, octaves, gain or lacunarity out of range"));
 		}
 	}
@@ -454,48 +471,52 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 			Strength.bParameter ? Result->FloatParameters[Strength.Index] : D.Constants[Strength.Index];
 		if (!FMath::IsFinite(Result->SmoothStrength) || Result->SmoothStrength < 0.f || Result->SmoothStrength > 1.f)
 		{
-			return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Smooth strength must be in [0,1]"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("Smooth strength must be in [0,1]"));
 		}
 	}
 	OutGenerator = Result;
 	return {};
 }
 
-namespace
+class FVoxelLandGeneratorBounds final
 {
-FVoxelLandError SelectVMBackend(EVoxelLandVMBackend Requested, EVoxelLandVMBackend& Selected)
-{
-	if (Requested != EVoxelLandVMBackend::Auto && Requested != EVoxelLandVMBackend::Scalar
-		&& Requested != EVoxelLandVMBackend::Simd4)
+public:
+	static FVoxelLandError SelectVMBackend(EVoxelLandVMBackend Requested, EVoxelLandVMBackend& Selected)
 	{
-		return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown VM backend"));
-	}
+		if (Requested != EVoxelLandVMBackend::Auto && Requested != EVoxelLandVMBackend::Scalar
+			&& Requested != EVoxelLandVMBackend::Simd4)
+		{
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown VM backend"));
+		}
 #if VOXELLAND_HAS_VM_SIMD
-	Selected = Requested == EVoxelLandVMBackend::Scalar ? EVoxelLandVMBackend::Scalar : EVoxelLandVMBackend::Simd4;
+		Selected = Requested == EVoxelLandVMBackend::Scalar ? EVoxelLandVMBackend::Scalar : EVoxelLandVMBackend::Simd4;
 #else
-	if (Requested == EVoxelLandVMBackend::Simd4)
-	{
-		return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("SIMD VM is unavailable"));
-	}
-	Selected = EVoxelLandVMBackend::Scalar;
+		if (Requested == EVoxelLandVMBackend::Simd4)
+		{
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::BackendUnavailable, TEXT("SIMD VM is unavailable"));
+		}
+		Selected = EVoxelLandVMBackend::Scalar;
 #endif
-	return {};
-}
-}
+		return {};
+	}
+};
 
 FVoxelLandError FVoxelLandWorkerContextImpl::InitializeNoise(const FVoxelLandProgramDraft& Program,
 	const FVoxelLandBackendOptions& Options, const TArray<float>& FloatParameters, const TArray<int32>& IntParameters)
 {
-	NoiseIndices.Init(INDEX_NONE, Program.Noise.Num() * NoiseFamilyCount);
+	NoiseIndices.Init(INDEX_NONE, Program.Noise.Num() * FVoxelLandGeneratorValidation::NoiseFamilyCount);
 	TArray<VoxelLandNative::FConfig> Configs;
 	for (const FVoxelLandInstruction& Instruction : Program.Instructions)
 	{
-		const int32 Variant = NoiseVariant(Instruction.Op);
+		const int32 Variant = FVoxelLandGeneratorValidation::NoiseVariant(Instruction.Op);
 		if (Variant == INDEX_NONE)
 		{
 			continue;
 		}
-		const int32 Lookup = int32(Instruction.Imm) * NoiseFamilyCount + Variant;
+		const int32 Lookup = int32(Instruction.Imm) * FVoxelLandGeneratorValidation::NoiseFamilyCount + Variant;
 		if (NoiseIndices[Lookup] != INDEX_NONE)
 		{
 			continue;
@@ -527,13 +548,14 @@ FVoxelLandError FVoxelLandWorkerContextImpl::InitializeNoise(const FVoxelLandPro
 	}
 	else if (Options.Noise != EVoxelLandNoiseBackend::Auto)
 	{
-		return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown noise backend"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown noise backend"));
 	}
 	FString Error;
 	Noise = VoxelLandNative::FWorker::Create(Backend, Configs, Error);
 	if (!Noise)
 	{
-		return NativeError(Error);
+		return FVoxelLandGeneratorValidation::NativeError(Error);
 	}
 	NoiseBackend = Noise->GetBackend() == VoxelLandNative::EBackend::SSE2 ? EVoxelLandNoiseBackend::SSE2
 																		  : EVoxelLandNoiseBackend::Scalar;
@@ -542,31 +564,33 @@ FVoxelLandError FVoxelLandWorkerContextImpl::InitializeNoise(const FVoxelLandPro
 
 void FVoxelLandWorkerContextImpl::AllocateScratch(int32 RegisterCount)
 {
-	Registers.SetNumUninitialized(RegisterCount * BatchSize);
-	IntRegisters.SetNumUninitialized(RegisterCount * BatchSize);
-	X.SetNumUninitialized(BatchSize);
-	Y.SetNumUninitialized(BatchSize);
-	Z.SetNumUninitialized(BatchSize);
-	Output.SetNumUninitialized(BatchSize);
-	NoiseX.SetNumUninitialized(BatchSize);
-	NoiseY.SetNumUninitialized(BatchSize);
-	NoiseZ.SetNumUninitialized(BatchSize);
+	Registers.SetNumUninitialized(RegisterCount * FVoxelLandGeneratorValidation::BatchSize);
+	IntRegisters.SetNumUninitialized(RegisterCount * FVoxelLandGeneratorValidation::BatchSize);
+	X.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
+	Y.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
+	Z.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
+	Output.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
+	NoiseX.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
+	NoiseY.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
+	NoiseZ.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
 }
 
 FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const
 {
 	if (IsInGameThread())
 	{
-		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Worker setup requires a worker thread"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Worker setup requires a worker thread"));
 	}
 	if (OutWorker && OutWorker->Impl && OutWorker->Impl->Thread != FPlatformTLS::GetCurrentThreadId())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Existing worker belongs to a different thread"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidContext, TEXT("Existing worker belongs to a different thread"));
 	}
 	// Destroy existing worker-owned resources only on the thread that created them.
 	OutWorker.Reset();
 	EVoxelLandVMBackend SelectedVM = EVoxelLandVMBackend::Scalar;
-	if (FVoxelLandError Error = SelectVMBackend(Options.VM, SelectedVM))
+	if (FVoxelLandError Error = FVoxelLandGeneratorBounds::SelectVMBackend(Options.VM, SelectedVM))
 	{
 		return Error;
 	}
@@ -600,7 +624,8 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 			}
 			else if (Options.Noise != EVoxelLandNoiseBackend::Auto)
 			{
-				return Fail(EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown noise backend"));
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::BackendUnavailable, TEXT("Unknown noise backend"));
 			}
 			VoxelLandNative::FConfig Config;
 			Config.Family = EVoxelLandNoiseFamily::Perlin;
@@ -610,7 +635,7 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 			W.Noise = VoxelLandNative::FWorker::Create(Backend, Configs, Error);
 			if (!W.Noise)
 			{
-				return NativeError(Error);
+				return FVoxelLandGeneratorValidation::NativeError(Error);
 			}
 			W.NoiseBackend = W.Noise->GetBackend() == VoxelLandNative::EBackend::SSE2 ? EVoxelLandNoiseBackend::SSE2
 																					  : EVoxelLandNoiseBackend::Scalar;
@@ -631,7 +656,8 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 			Program->GetOperators()[Index]->CreateWorker(Operator.Configuration, FullSeeds[Operator.SeedSlot], Error);
 		if (!OperatorWorker)
 		{
-			return Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("External operator worker creation failed"), Error);
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidProgram, TEXT("External operator worker creation failed"), Error);
 		}
 		W.OperatorWorkers.Add(MoveTemp(OperatorWorker));
 		const EVoxelLandOperatorSimdRequirement Requirement = Program->GetOperators()[Index]->SimdRequirement();
@@ -654,8 +680,8 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	}
 	if (W.OperatorSimdEnabled.Contains(true))
 	{
-		W.OperatorSimdFloatScratch.SetNumUninitialized(BatchSize);
-		W.OperatorSimdIntScratch.SetNumUninitialized(BatchSize);
+		W.OperatorSimdFloatScratch.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
+		W.OperatorSimdIntScratch.SetNumUninitialized(FVoxelLandGeneratorValidation::BatchSize);
 	}
 	W.AllocateScratch(ProgramData.RegisterCount);
 	OutWorker = MoveTemp(Worker);
@@ -671,7 +697,8 @@ FVoxelLandError FVoxelLandWorkerContextImpl::LoadPositions(TConstArrayView<FVect
 		const FVector3f P = Positions[SampleIndex];
 		if (!FMath::IsFinite(P.X) || !FMath::IsFinite(P.Y) || !FMath::IsFinite(P.Z))
 		{
-			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Non-finite sample coordinate"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Non-finite sample coordinate"));
 		}
 		W.X[SampleIndex] = P.X;
 		W.Y[SampleIndex] = P.Y;
@@ -688,7 +715,7 @@ FVoxelLandError FVoxelLandWorkerContextImpl::EvaluateNoise(const FVoxelLandInstr
 	const FVoxelLandNoiseConfig& Config = D.Noise[I.Imm];
 	const float Frequency =
 		Config.Frequency.bParameter ? FloatParameters[Config.Frequency.Index] : D.Constants[Config.Frequency.Index];
-	const bool b3D = IsNoise3D(I.Op);
+	const bool b3D = FVoxelLandGeneratorValidation::IsNoise3D(I.Op);
 	for (int32 SampleIndex = 0; SampleIndex < N; ++SampleIndex)
 	{
 		W.NoiseX[SampleIndex] = A[SampleIndex] * Frequency;
@@ -696,10 +723,11 @@ FVoxelLandError FVoxelLandWorkerContextImpl::EvaluateNoise(const FVoxelLandInstr
 		W.NoiseZ[SampleIndex] = b3D ? C[SampleIndex] * Frequency : 0.f;
 	}
 	FString Error;
-	if (!W.Noise->Sample(NoiseIndices[int32(I.Imm) * NoiseFamilyCount + NoiseVariant(I.Op)], b3D,
-			Seeds[Config.SeedSlot], N, W.NoiseX.GetData(), W.NoiseY.GetData(), W.NoiseZ.GetData(), Dest, Error))
+	if (!W.Noise->Sample(NoiseIndices[int32(I.Imm) * FVoxelLandGeneratorValidation::NoiseFamilyCount
+									  + FVoxelLandGeneratorValidation::NoiseVariant(I.Op)],
+			b3D, Seeds[Config.SeedSlot], N, W.NoiseX.GetData(), W.NoiseY.GetData(), W.NoiseZ.GetData(), Dest, Error))
 	{
-		return NativeError(Error);
+		return FVoxelLandGeneratorValidation::NativeError(Error);
 	}
 	return {};
 }
@@ -714,7 +742,7 @@ void FVoxelLandWorkerContextImpl::ResolveOperands(
 		case EVoxelLandOpcode::Abs:
 		case EVoxelLandOpcode::Negate:
 		case EVoxelLandOpcode::StoreDensity:
-			A = W.Registers.GetData() + int32(I.A) * BatchSize;
+			A = W.Registers.GetData() + int32(I.A) * FVoxelLandGeneratorValidation::BatchSize;
 			break;
 		case EVoxelLandOpcode::Add:
 		case EVoxelLandOpcode::Subtract:
@@ -729,8 +757,8 @@ void FVoxelLandWorkerContextImpl::ResolveOperands(
 		case EVoxelLandOpcode::Fbm2:
 		case EVoxelLandOpcode::Value2:
 		case EVoxelLandOpcode::Simplex2:
-			A = W.Registers.GetData() + int32(I.A) * BatchSize;
-			B = W.Registers.GetData() + int32(I.B) * BatchSize;
+			A = W.Registers.GetData() + int32(I.A) * FVoxelLandGeneratorValidation::BatchSize;
+			B = W.Registers.GetData() + int32(I.B) * FVoxelLandGeneratorValidation::BatchSize;
 			break;
 		case EVoxelLandOpcode::Plane:
 		case EVoxelLandOpcode::Sphere:
@@ -739,9 +767,9 @@ void FVoxelLandWorkerContextImpl::ResolveOperands(
 		case EVoxelLandOpcode::Fbm3:
 		case EVoxelLandOpcode::Value3:
 		case EVoxelLandOpcode::Simplex3:
-			A = W.Registers.GetData() + int32(I.A) * BatchSize;
-			B = W.Registers.GetData() + int32(I.B) * BatchSize;
-			C = W.Registers.GetData() + int32(I.C) * BatchSize;
+			A = W.Registers.GetData() + int32(I.A) * FVoxelLandGeneratorValidation::BatchSize;
+			B = W.Registers.GetData() + int32(I.B) * FVoxelLandGeneratorValidation::BatchSize;
+			C = W.Registers.GetData() + int32(I.C) * FVoxelLandGeneratorValidation::BatchSize;
 			break;
 		default:
 			break;
@@ -862,7 +890,8 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteScalar(const FVoxelLandInstr
 				Dest[SampleIndex] = A[SampleIndex];
 				break;
 			default:
-				return Fail(EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported opcode during evaluation"));
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::InvalidProgram, TEXT("Unsupported opcode during evaluation"));
 		}
 	}
 	return {};
@@ -876,12 +905,12 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteExternal(
 	TArray<const void*, TInlineAllocator<3>> Inputs;
 	for (int32 Index = 0; Index < Operator.Inputs.Num(); ++Index)
 	{
-		const int32 Offset = int32(RegistersUsed[Index]) * BatchSize;
+		const int32 Offset = int32(RegistersUsed[Index]) * FVoxelLandGeneratorValidation::BatchSize;
 		Inputs.Add(Operator.Inputs[Index] == EVoxelLandGraphValueType::Float
 					   ? static_cast<const void*>(Registers.GetData() + Offset)
 					   : static_cast<const void*>(IntRegisters.GetData() + Offset));
 	}
-	const int32 Offset = int32(I.Dst) * BatchSize;
+	const int32 Offset = int32(I.Dst) * FVoxelLandGeneratorValidation::BatchSize;
 	void* OutputData = Operator.Output == EVoxelLandGraphValueType::Float
 						 ? static_cast<void*>(Registers.GetData() + Offset)
 						 : static_cast<void*>(IntRegisters.GetData() + Offset);
@@ -889,7 +918,7 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteExternal(
 	FVoxelLandOperatorOutput Writer(Operator.Output, OutputData, N);
 	if (!OperatorWorkers[I.Imm]->Evaluate(Inputs, Writer, N, Error) || !Writer.IsComplete(Error))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidMathDomain,
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidMathDomain,
 			TEXT("External operator evaluation failed or output was incomplete"), Error);
 	}
 	CheckOperatorSimd(I.Imm, Operator.Output, Inputs, OutputData, N);
@@ -938,12 +967,14 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteInstruction(const FVoxelLand
 	{
 		return ExecuteExternal(I, D, N);
 	}
-	if (uint16(I.Op) > uint16(EVoxelLandOpcode::StoreDensity) && NoiseVariant(I.Op) == INDEX_NONE)
+	if (uint16(I.Op) > uint16(EVoxelLandOpcode::StoreDensity)
+		&& FVoxelLandGeneratorValidation::NoiseVariant(I.Op) == INDEX_NONE)
 	{
 		return ExecuteTyped(I, IntParameters, N);
 	}
-	float* Dest =
-		I.Op == EVoxelLandOpcode::StoreDensity ? Output.GetData() : Registers.GetData() + int32(I.Dst) * BatchSize;
+	float* Dest = I.Op == EVoxelLandOpcode::StoreDensity
+					? Output.GetData()
+					: Registers.GetData() + int32(I.Dst) * FVoxelLandGeneratorValidation::BatchSize;
 	const float* A = nullptr;
 	const float* B = nullptr;
 	const float* C = nullptr;
@@ -954,11 +985,12 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteInstruction(const FVoxelLand
 		{
 			if (B[SampleIndex] == 0.f)
 			{
-				return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("Division by zero"));
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::InvalidMathDomain, TEXT("Division by zero"));
 			}
 		}
 	}
-	if (NoiseVariant(I.Op) != INDEX_NONE)
+	if (FVoxelLandGeneratorValidation::NoiseVariant(I.Op) != INDEX_NONE)
 	{
 		if (FVoxelLandError Error = EvaluateNoise(I, D, FloatParameters, Seeds, N, A, B, C, Dest))
 		{
@@ -980,7 +1012,8 @@ FVoxelLandError FVoxelLandWorkerContextImpl::ExecuteInstruction(const FVoxelLand
 	{
 		if (!FMath::IsFinite(Dest[SampleIndex]))
 		{
-			return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("Non-finite VM result"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidMathDomain, TEXT("Non-finite VM result"));
 		}
 	}
 	return {};
@@ -1007,20 +1040,23 @@ FVoxelLandError FVoxelLandGenerator::EvaluateToWorkerBuffer(
 {
 	if (M4HeightGrid || M4Unlimited)
 	{
-		return Fail(
+		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::InvalidContext, TEXT("M4 height fields require exact chunk lattice coordinates"));
 	}
 	if (IsInGameThread())
 	{
-		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Evaluation requires a worker thread"));
 	}
 	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
 	}
-	if (Positions.Num() < 1 || Positions.Num() > BatchSize)
+	if (Positions.Num() < 1 || Positions.Num() > FVoxelLandGeneratorValidation::BatchSize)
 	{
-		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("A batch must contain 1..256 samples"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidContext, TEXT("A batch must contain 1..256 samples"));
 	}
 
 	FVoxelLandWorkerContextImpl& W = *Worker.Impl;
@@ -1062,31 +1098,35 @@ FVoxelLandError FVoxelLandGenerator::EvaluateSamplesRaw(
 	return {};
 }
 
-namespace
+class FVoxelLandGeneratorSampling final
 {
-FVoxelLandError FillChunkPositions(
-	const FVoxelLandChunkKey& Key, float VoxelSizeCm, int32 Start, TArrayView<FVector3f> Positions)
-{
-	for (int32 SampleIndex = 0; SampleIndex < Positions.Num(); ++SampleIndex)
+public:
+	static FVoxelLandError FillChunkPositions(
+		const FVoxelLandChunkKey& Key, float VoxelSizeCm, int32 Start, TArrayView<FVector3f> Positions)
 	{
-		const int32 Index = Start + SampleIndex, X = Index % 35, Y = (Index / 35) % 35, Z = Index / (35 * 35);
-		const double PX = double(int64(Key.Coordinate.X) * 32 + X - 1) * double(VoxelSizeCm);
-		const double PY = double(int64(Key.Coordinate.Y) * 32 + Y - 1) * double(VoxelSizeCm);
-		const double PZ = double(int64(Key.Coordinate.Z) * 32 + Z - 1) * double(VoxelSizeCm);
-		if (FMath::Abs(PX) > double(FLT_MAX) || FMath::Abs(PY) > double(FLT_MAX) || FMath::Abs(PZ) > double(FLT_MAX))
+		for (int32 SampleIndex = 0; SampleIndex < Positions.Num(); ++SampleIndex)
 		{
-			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Chunk coordinate cannot be represented"));
+			const int32 Index = Start + SampleIndex, X = Index % 35, Y = (Index / 35) % 35, Z = Index / (35 * 35);
+			const double PX = double(int64(Key.Coordinate.X) * 32 + X - 1) * double(VoxelSizeCm);
+			const double PY = double(int64(Key.Coordinate.Y) * 32 + Y - 1) * double(VoxelSizeCm);
+			const double PZ = double(int64(Key.Coordinate.Z) * 32 + Z - 1) * double(VoxelSizeCm);
+			if (FMath::Abs(PX) > double(FLT_MAX) || FMath::Abs(PY) > double(FLT_MAX)
+				|| FMath::Abs(PZ) > double(FLT_MAX))
+			{
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Chunk coordinate cannot be represented"));
+			}
+			Positions[SampleIndex] = FVector3f(float(PX), float(PY), float(PZ));
+			if (!FMath::IsFinite(Positions[SampleIndex].X) || !FMath::IsFinite(Positions[SampleIndex].Y)
+				|| !FMath::IsFinite(Positions[SampleIndex].Z))
+			{
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Chunk coordinate cannot be represented"));
+			}
 		}
-		Positions[SampleIndex] = FVector3f(float(PX), float(PY), float(PZ));
-		if (!FMath::IsFinite(Positions[SampleIndex].X) || !FMath::IsFinite(Positions[SampleIndex].Y)
-			|| !FMath::IsFinite(Positions[SampleIndex].Z))
-		{
-			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Chunk coordinate cannot be represented"));
-		}
+		return {};
 	}
-	return {};
-}
-}
+};
 
 uint64 FVoxelLandWorkerContextImpl::HashChunkDensity(const TArray<int16>& Density)
 {
@@ -1116,13 +1156,13 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	{
 		if (IsInGameThread())
 		{
-			return Fail(
+			return FVoxelLandGeneratorValidation::Fail(
 				EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("M4 local generation requires a worker thread"));
 		}
 		if (!Worker.Impl || Worker.Impl->Owner.Get() != this
 			|| Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
 		{
-			return Fail(EVoxelLandErrorCode::InvalidContext,
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidContext,
 				TEXT("M4 local worker belongs to a different generator or thread"));
 		}
 		if (FVoxelLandError Error = ValidateM4ChunkDemand(Key))
@@ -1148,7 +1188,8 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunk
 	{
 		if (Key.LOD != 0)
 		{
-			return Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 local terrain supports only LOD 0"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 local terrain supports only LOD 0"));
 		}
 		const int64 Size = int64(Profile.VoxelSizeCm);
 		const int64 X = int64(Key.Coordinate.X) * 32, Y = int64(Key.Coordinate.Y) * 32,
@@ -1162,7 +1203,7 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunk
 			|| !VoxelLandM4Control::LatticePositionCm(Z + 34, Size, MaxZ)
 			|| MinZ < -2000000 || MaxZ > 2000000)
 		{
-			return Fail(EVoxelLandErrorCode::NonFiniteCoordinate,
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::NonFiniteCoordinate,
 				TEXT("M4 local terrain demand exceeds supported exact coordinates"));
 		}
 		return {};
@@ -1178,11 +1219,13 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 {
 	if (!M4HeightGrid || (Axis != 35 && Axis != 37))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Invalid M4 height-field evaluation"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidContext, TEXT("Invalid M4 height-field evaluation"));
 	}
 	if (Key.LOD != 0)
 	{
-		return Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 height field supports only LOD 0"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 height field supports only LOD 0"));
 	}
 	const int64 VoxelSize = int64(Profile.VoxelSizeCm);
 	const int64 BaseX = int64(Key.Coordinate.X) * 32;
@@ -1195,7 +1238,8 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 		|| !VoxelLandM4Control::LatticePositionCm(BaseY + Offset - Margin, VoxelSize, MinY)
 		|| !VoxelLandM4Control::LatticePositionCm(BaseY + Offset + Axis - 1 + Margin, VoxelSize, MaxY))
 	{
-		return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field footprint overflows"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field footprint overflows"));
 	}
 	// Native noise receives exact integer centimeter positions converted to float.
 	if (!bM4FixedLatticeShaping
@@ -1203,13 +1247,13 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 			|| (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0))
 		&& (MinX < -16777216 || MaxX > 16777216 || MinY < -16777216 || MaxY > 16777216))
 	{
-		return Fail(
+		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 overhang coordinates exceed exact float lattice"));
 	}
 	int32 Check = 0;
 	if (!M4HeightGrid->Sample(MinX, MinY, Check) || !M4HeightGrid->Sample(MaxX, MaxY, Check))
 	{
-		return Fail(EVoxelLandErrorCode::InvalidParameter,
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("M4 chunk including padding, filter halo and slope stencil is outside the height grid"));
 	}
 	int64 MinZ = 0, MaxZ = 0;
@@ -1217,7 +1261,8 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 		|| !VoxelLandM4Control::LatticePositionCm(BaseZ + Offset + Axis - 1, VoxelSize, MaxZ) || MinZ < -2000000
 		|| MaxZ > 2000000)
 	{
-		return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));
 	}
 	return {};
 }
@@ -1248,7 +1293,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 	{
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 		}
 		const int64 YCm = (BaseY + Offset + Y) * VoxelSize;
 		for (int32 X = 0; X < Axis; ++X)
@@ -1257,7 +1303,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 			const int32 Column = X + Axis * Y;
 			if (!M4HeightGrid->Sample(XCm, YCm, Centers[Column]))
 			{
-				return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height sample outside grid"));
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height sample outside grid"));
 			}
 			if (bM4NormalizeSlope
 				&& (!M4HeightGrid->Sample(XCm + VoxelSize, YCm, PlusX[Column])
@@ -1265,7 +1312,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 					|| !M4HeightGrid->Sample(XCm, YCm + VoxelSize, PlusY[Column])
 					|| !M4HeightGrid->Sample(XCm, YCm - VoxelSize, MinusY[Column])))
 			{
-				return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 slope stencil outside grid"));
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::InvalidParameter, TEXT("M4 slope stencil outside grid"));
 			}
 		}
 	}
@@ -1273,7 +1321,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 	{
 		if (!bM4FixedLatticeShaping && (!Worker.Impl || !Worker.Impl->Noise))
 		{
-			return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("M4 height detail worker missing"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidContext, TEXT("M4 height detail worker missing"));
 		}
 		const int32 Margin = bM4NormalizeSlope ? 1 : 0;
 		const int32 DetailAxis = Axis + 2 * Margin;
@@ -1283,7 +1332,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 		{
 			if (IsCancelled())
 			{
-				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height detail generation cancelled"));
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::Cancelled, TEXT("M4 height detail generation cancelled"));
 			}
 			const int64 YCm = (BaseY + Offset + Y - Margin) * VoxelSize;
 			float XNoise[39], YNoise[39], Noise[39];
@@ -1298,7 +1348,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 				if (!Worker.Impl->Noise->Sample(
 						0, false, M4HeightDetailSeed, DetailAxis, XNoise, YNoise, nullptr, Noise, Error))
 				{
-					return NativeError(Error);
+					return FVoxelLandGeneratorValidation::NativeError(Error);
 				}
 			}
 			for (int32 X = 0; X < DetailAxis; ++X)
@@ -1311,7 +1361,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 																: VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ);
 				if (!M4HeightGrid->Sample(XCm, YCm, BaseHeight) || !bNoiseValid)
 				{
-					return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 height detail sample"));
+					return FVoxelLandGeneratorValidation::Fail(
+						EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 height detail sample"));
 				}
 				const int64 Product = int64(M4HeightDetail.AmplitudeQ8) * NoiseQ;
 				const int64 Magnitude = Product < 0 ? -Product : Product;
@@ -1323,7 +1374,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 				const int64 Height = int64(BaseHeight) + Delta;
 				if (Height < -512000000 || Height > 512000000)
 				{
-					return Fail(
+					return FVoxelLandGeneratorValidation::Fail(
 						EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 detailed height exceeds fixed-point range"));
 				}
 				DetailedHeights[X + DetailAxis * Y] = int32(Height);
@@ -1352,20 +1403,22 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 	{
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 		}
 		int64 ZCm = 0;
 		if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Offset + Z, VoxelSize, ZCm) || ZCm < -2000000
 			|| ZCm > 2000000)
 		{
-			return Fail(
+			return FVoxelLandGeneratorValidation::Fail(
 				EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));
 		}
 		for (int32 Y = 0; Y < Axis; ++Y)
 		{
 			if (IsCancelled())
 			{
-				return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 			}
 			float NX[37], NY[37], NZ[37], Noise[37];
 			const bool bOverhang = M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0;
@@ -1373,7 +1426,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 			{
 				if (!bM4FixedLatticeShaping && (!Worker.Impl || !Worker.Impl->Noise))
 				{
-					return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("M4 overhang worker missing"));
+					return FVoxelLandGeneratorValidation::Fail(
+						EVoxelLandErrorCode::InvalidContext, TEXT("M4 overhang worker missing"));
 				}
 				if (!bM4FixedLatticeShaping)
 				{
@@ -1386,7 +1440,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 					FString Error;
 					if (!Worker.Impl->Noise->Sample(0, true, M4OverhangSeed, Axis, NX, NY, NZ, Noise, Error))
 					{
-						return NativeError(Error);
+						return FVoxelLandGeneratorValidation::NativeError(Error);
 					}
 				}
 			}
@@ -1400,7 +1454,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 					if (!VoxelLandM4Slope::DensityQ8(ZCm * 256, Center, PlusX[Column], MinusX[Column], PlusY[Column],
 							MinusY[Column], int32(VoxelSize), DensityQ8))
 					{
-						return Fail(EVoxelLandErrorCode::InvalidMathDomain,
+						return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidMathDomain,
 							TEXT("M4 slope stencil is outside its supported range"));
 					}
 				}
@@ -1417,7 +1471,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 						|| !VoxelLandM4Overhang::DisplacementQ8(
 							M4Overhang.Displacement, ZCm * 256 - Center, NoiseQ, DeltaQ8))
 					{
-						return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 overhang result"));
+						return FVoxelLandGeneratorValidation::Fail(
+							EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 overhang result"));
 					}
 					DensityQ8 += DeltaQ8;
 				}
@@ -1440,7 +1495,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 	}
 	if (IsCancelled())
 	{
-		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 	}
 	OutDensity = MoveTemp(Density);
 	return {};
@@ -1456,15 +1512,17 @@ FVoxelLandError FVoxelLandGenerator::GeneratePureChunkCancellable(const FVoxelLa
 	}
 	if (IsInGameThread())
 	{
-		return Fail(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Chunk generation requires a worker thread"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Chunk generation requires a worker thread"));
 	}
 	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
 	{
-		return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
 	}
 	if (Key.LOD != 0)
 	{
-		return Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M1 supports only LOD 0"));
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::UnsupportedLod, TEXT("M1 supports only LOD 0"));
 	}
 	TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
 	Chunk->Key = Key;
@@ -1477,28 +1535,32 @@ FVoxelLandError FVoxelLandGenerator::GeneratePureChunkCancellable(const FVoxelLa
 		}
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
 		}
 		Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
 		}
 		OutChunk = MoveTemp(Chunk);
 		return {};
 	}
-	FVector3f Positions[BatchSize];
+	FVector3f Positions[FVoxelLandGeneratorValidation::BatchSize];
 	TArray<int16> Batch;
-	Batch.Reserve(BatchSize);
-	for (int32 Start = 0; Start < FVoxelLandChunkData::SampleCount; Start += BatchSize)
+	Batch.Reserve(FVoxelLandGeneratorValidation::BatchSize);
+	for (int32 Start = 0; Start < FVoxelLandChunkData::SampleCount; Start += FVoxelLandGeneratorValidation::BatchSize)
 	{
 		if (IsCancelled())
 		{
-			return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
 		}
-		const int32 Count = FMath::Min(BatchSize, FVoxelLandChunkData::SampleCount - Start);
-		if (FVoxelLandError Error =
-				FillChunkPositions(Key, Profile.VoxelSizeCm, Start, MakeArrayView(Positions, Count)))
+		const int32 Count =
+			FMath::Min(FVoxelLandGeneratorValidation::BatchSize, FVoxelLandChunkData::SampleCount - Start);
+		if (FVoxelLandError Error = FVoxelLandGeneratorSampling::FillChunkPositions(
+				Key, Profile.VoxelSizeCm, Start, MakeArrayView(Positions, Count)))
 		{
 			return Error;
 		}
@@ -1510,12 +1572,12 @@ FVoxelLandError FVoxelLandGenerator::GeneratePureChunkCancellable(const FVoxelLa
 	}
 	if (IsCancelled())
 	{
-		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
 	}
 	Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);
 	if (IsCancelled())
 	{
-		return Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
 	}
 	OutChunk = Chunk;
 	return {};

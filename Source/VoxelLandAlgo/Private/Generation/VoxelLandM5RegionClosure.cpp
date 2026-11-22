@@ -6,37 +6,41 @@
 #include "Generation/VoxelLandM5PortalHandshake.h"
 #include "Generation/VoxelLandM5Topology.h"
 
-namespace
+class FVoxelLandM5RegionClosureInternals final
 {
-using namespace VoxelLand::M5::CheckedMath;
-constexpr int32 MaxClosureRegions = 256;
+public:
+	static constexpr int32 MaxClosureRegions = 256;
 
-FVoxelLandM5Diagnostic ClosureError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic D;
-	D.Code = Code;
-	D.Stage = TEXT("M5.RegionClosure");
-	D.Message = Message;
-	return D;
-}
+	static FVoxelLandM5Diagnostic ClosureError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic D;
+		D.Code = Code;
+		D.Stage = TEXT("M5.RegionClosure");
+		D.Message = Message;
+		return D;
+	}
 
-bool Same(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
-{
-	return A.X == B.X && A.Y == B.Y;
-}
+	static bool Same(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
+	{
+		return A.X == B.X && A.Y == B.Y;
+	}
 
-bool Less(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
-{
-	return A.X != B.X ? A.X < B.X : A.Y < B.Y;
-}
+	static bool Less(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
+	{
+		return A.X != B.X ? A.X < B.X : A.Y < B.Y;
+	}
 
-bool Adjacent(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
-{
-	int64 Next = 0;
-	return (A.Y == B.Y && ((TryAdd(A.X, 1, Next) && Next == B.X) || (TryAdd(B.X, 1, Next) && Next == A.X)))
-		|| (A.X == B.X && ((TryAdd(A.Y, 1, Next) && Next == B.Y) || (TryAdd(B.Y, 1, Next) && Next == A.Y)));
-}
-}
+	static bool Adjacent(const FVoxelLandM5RegionCoord& A, const FVoxelLandM5RegionCoord& B)
+	{
+		int64 Next = 0;
+		return (A.Y == B.Y
+				   && ((VoxelLand::M5::CheckedMath::TryAdd(A.X, 1, Next) && Next == B.X)
+					   || (VoxelLand::M5::CheckedMath::TryAdd(B.X, 1, Next) && Next == A.X)))
+			|| (A.X == B.X
+				&& ((VoxelLand::M5::CheckedMath::TryAdd(A.Y, 1, Next) && Next == B.Y)
+					|| (VoxelLand::M5::CheckedMath::TryAdd(B.Y, 1, Next) && Next == A.Y)));
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	TConstArrayView<FVoxelLandM5RegionCoord> Required, TConstArrayView<FVoxelLandM5RegionInput> Regions,
@@ -46,19 +50,22 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 		VerifyDescriptor,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5RegionClosure, ESPMode::ThreadSafe>& OutClosure)
 {
+	using namespace VoxelLand::M5::CheckedMath;
 	if (IsCancelled())
 	{
-		return ClosureError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
+		return FVoxelLandM5RegionClosureInternals::ClosureError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
 	}
 	const int32 N = Required.Num();
 	int64 MaxBytes = 0, MaxWork = 0;
 	Budget->GetLimits(MaxBytes, MaxWork);
 	if (!Settings.bEnabled || Settings.PlanningMode != EVoxelLandM5PlanningMode::Regional || N < 1
-		|| N > MaxClosureRegions || Regions.Num() != N || Edges.Num() > 2 * N || ExpectedDescriptor.IsEmpty()
-		|| ExpectedDescriptor.Num() > 4 * 1024 * 1024 || VoxelSizeCm <= 0 || HaloSamples < 1
-		|| MaxBytes > Settings.Limits.MaxBytes || MaxWork > Settings.Limits.MaxValidationWork)
+		|| N > FVoxelLandM5RegionClosureInternals::MaxClosureRegions || Regions.Num() != N || Edges.Num() > 2 * N
+		|| ExpectedDescriptor.IsEmpty() || ExpectedDescriptor.Num() > 4 * 1024 * 1024 || VoxelSizeCm <= 0
+		|| HaloSamples < 1 || MaxBytes > Settings.Limits.MaxBytes || MaxWork > Settings.Limits.MaxValidationWork)
 	{
-		return ClosureError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid region closure inputs or budget"));
+		return FVoxelLandM5RegionClosureInternals::ClosureError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid region closure inputs or budget"));
 	}
 	// Bound membership, sorting, edge matching, connectivity and descriptor
 	// comparisons. Handshakes and descriptor providers charge their own work.
@@ -76,12 +83,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 		|| !TryMultiplyNonNegative(N, int64(sizeof(int32)) * 4, ScratchBytes)
 		|| !TryAdd(ScratchBytes, 4096, ScratchBytes) || !Budget->TryChargeWork(Work))
 	{
-		return ClosureError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Region closure work or size exceeds budget"));
+		return FVoxelLandM5RegionClosureInternals::ClosureError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Region closure work or size exceeds budget"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> ResultLease, ScratchLease;
 	if (!Budget->TryReserveBytes(ResultBytes, ResultLease) || !Budget->TryReserveBytes(ScratchBytes, ScratchLease))
 	{
-		return ClosureError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Region closure memory budget exhausted"));
+		return FVoxelLandM5RegionClosureInternals::ClosureError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Region closure memory budget exhausted"));
 	}
 	FVoxelLandM5Diagnostic D = VerifyDescriptor(ExpectedDescriptor, Budget);
 	if (D.Code != EVoxelLandM5ErrorCode::None)
@@ -94,29 +103,33 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 	{
 		if (IsCancelled())
 		{
-			return ClosureError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
+			return FVoxelLandM5RegionClosureInternals::ClosureError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
 		}
 		int32 Match = INDEX_NONE;
 		for (int32 J = 0; J < N; ++J)
 		{
-			if (Same(Required[I], Regions[J].Region))
+			if (FVoxelLandM5RegionClosureInternals::Same(Required[I], Regions[J].Region))
 			{
 				if (Match != INDEX_NONE)
 				{
-					return ClosureError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate supplied region"));
+					return FVoxelLandM5RegionClosureInternals::ClosureError(
+						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate supplied region"));
 				}
 				Match = J;
 			}
 		}
 		if (Match == INDEX_NONE || !Regions[Match].Candidate.IsValid())
 		{
-			return ClosureError(EVoxelLandM5ErrorCode::ProviderUnavailable, TEXT("Required region unavailable"));
+			return FVoxelLandM5RegionClosureInternals::ClosureError(
+				EVoxelLandM5ErrorCode::ProviderUnavailable, TEXT("Required region unavailable"));
 		}
 		for (int32 J = 0; J < I; ++J)
 		{
-			if (Same(Required[I], Required[J]))
+			if (FVoxelLandM5RegionClosureInternals::Same(Required[I], Required[J]))
 			{
-				return ClosureError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate required region"));
+				return FVoxelLandM5RegionClosureInternals::ClosureError(
+					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate required region"));
 			}
 		}
 		const FVoxelLandM5RegionInput& Input = Regions[Match];
@@ -124,17 +137,20 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 			|| !Input.Candidate->MatchesSource(Settings, WorldSeed, Input.Region)
 			|| Input.Descriptor.Num() != ExpectedDescriptor.Num())
 		{
-			return ClosureError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Region provenance mismatch"));
+			return FVoxelLandM5RegionClosureInternals::ClosureError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Region provenance mismatch"));
 		}
 		for (int32 J = 0; J < ExpectedDescriptor.Num(); ++J)
 		{
 			if ((J & 63) == 0 && IsCancelled())
 			{
-				return ClosureError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
+				return FVoxelLandM5RegionClosureInternals::ClosureError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
 			}
 			if (Input.Descriptor[J] != ExpectedDescriptor[J])
 			{
-				return ClosureError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Region descriptor mismatch"));
+				return FVoxelLandM5RegionClosureInternals::ClosureError(
+					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Region descriptor mismatch"));
 			}
 		}
 		Order.Add(Match);
@@ -144,11 +160,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 	{
 		const int32 Item = Order[I];
 		int32 J = I;
-		while (J > 0 && Less(Regions[Item].Region, Regions[Order[J - 1]].Region))
+		while (J > 0 && FVoxelLandM5RegionClosureInternals::Less(Regions[Item].Region, Regions[Order[J - 1]].Region))
 		{
 			if (IsCancelled())
 			{
-				return ClosureError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
+				return FVoxelLandM5RegionClosureInternals::ClosureError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
 			}
 			Order[J] = Order[J - 1];
 			--J;
@@ -168,11 +185,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 		{
 			if (IsCancelled())
 			{
-				return ClosureError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
+				return FVoxelLandM5RegionClosureInternals::ClosureError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
 			}
 			const FVoxelLandM5RegionInput& A = Regions[Order[I]];
 			const FVoxelLandM5RegionInput& B = Regions[Order[J]];
-			if (!Adjacent(A.Region, B.Region))
+			if (!FVoxelLandM5RegionClosureInternals::Adjacent(A.Region, B.Region))
 			{
 				continue;
 			}
@@ -180,13 +198,16 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 			bool bReverse = false;
 			for (int32 K = 0; K < Edges.Num(); ++K)
 			{
-				const bool Forward = Same(Edges[K].A, A.Region) && Same(Edges[K].B, B.Region);
-				const bool Reverse = Same(Edges[K].B, A.Region) && Same(Edges[K].A, B.Region);
+				const bool Forward = FVoxelLandM5RegionClosureInternals::Same(Edges[K].A, A.Region)
+								  && FVoxelLandM5RegionClosureInternals::Same(Edges[K].B, B.Region);
+				const bool Reverse = FVoxelLandM5RegionClosureInternals::Same(Edges[K].B, A.Region)
+								  && FVoxelLandM5RegionClosureInternals::Same(Edges[K].A, B.Region);
 				if (Forward || Reverse)
 				{
 					if (Match != INDEX_NONE)
 					{
-						return ClosureError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate regional overlap"));
+						return FVoxelLandM5RegionClosureInternals::ClosureError(
+							EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate regional overlap"));
 					}
 					Match = K;
 					bReverse = Reverse;
@@ -194,7 +215,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 			}
 			if (Match == INDEX_NONE)
 			{
-				return ClosureError(
+				return FVoxelLandM5RegionClosureInternals::ClosureError(
 					EVoxelLandM5ErrorCode::ProviderUnavailable, TEXT("Required regional overlap missing"));
 			}
 			const FVoxelLandM5RegionEdgeInput& Edge = Edges[Match];
@@ -221,7 +242,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 	}
 	if (Handshakes != Edges.Num())
 	{
-		return ClosureError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Unexpected or duplicate overlap"));
+		return FVoxelLandM5RegionClosureInternals::ClosureError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Unexpected or duplicate overlap"));
 	}
 	for (int32 I = 1; I < N; ++I)
 	{
@@ -236,7 +258,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 		}
 		if (RootA != RootB)
 		{
-			return ClosureError(EVoxelLandM5ErrorCode::Blocked, TEXT("Required region set is disconnected"));
+			return FVoxelLandM5RegionClosureInternals::ClosureError(
+				EVoxelLandM5ErrorCode::Blocked, TEXT("Required region set is disconnected"));
 		}
 	}
 	if (N == 1)
@@ -255,7 +278,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 	}
 	if (IsCancelled())
 	{
-		return ClosureError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
+		return FVoxelLandM5RegionClosureInternals::ClosureError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
 	}
 	TArray<FVoxelLandM5RegionCoord> SortedRegions;
 	TArray<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates;
@@ -273,7 +297,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RegionClosure::Build(const FVoxelLandM5Cav
 			Budget, MoveTemp(ResultLease), MoveTemp(SortedRegions), MoveTemp(Candidates), MoveTemp(Descriptor)));
 	if (IsCancelled())
 	{
-		return ClosureError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
+		return FVoxelLandM5RegionClosureInternals::ClosureError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Region closure cancelled"));
 	}
 	OutClosure = MoveTemp(Result);
 	return {};

@@ -11,9 +11,18 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogVoxelLandSampleGraphFactory, Log, All);
 
-namespace
+class FVoxelLandSampleGraphBuilder final
 {
-FVoxelLandGraphPinRecord MakePin(const TCHAR* Name, bool bOutput)
+public:
+	static void PopulateSample(UVoxelLandTerrainGraph& Graph);
+	static bool ValidateSample(UVoxelLandTerrainGraph& Graph, FString& Error);
+
+private:
+	static FVoxelLandGraphPinRecord MakePin(const TCHAR* Name, bool bOutput);
+	static void AddLink(UVoxelLandTerrainGraph& Graph, int32 From, int32 To);
+};
+
+FVoxelLandGraphPinRecord FVoxelLandSampleGraphBuilder::MakePin(const TCHAR* Name, bool bOutput)
 {
     FVoxelLandGraphPinRecord Pin;
     Pin.Id = FGuid::NewGuid();
@@ -23,7 +32,7 @@ FVoxelLandGraphPinRecord MakePin(const TCHAR* Name, bool bOutput)
     return Pin;
 }
 
-void AddLink(UVoxelLandTerrainGraph& Graph, int32 From, int32 To)
+void FVoxelLandSampleGraphBuilder::AddLink(UVoxelLandTerrainGraph& Graph, int32 From, int32 To)
 {
     FVoxelLandGraphLinkRecord& Link = Graph.Links.AddDefaulted_GetRef();
     Link.SourceNode = Graph.Nodes[From].Id;
@@ -32,7 +41,7 @@ void AddLink(UVoxelLandTerrainGraph& Graph, int32 From, int32 To)
     Link.TargetPin = Graph.Nodes[To].Pins[0].Id;
 }
 
-void PopulateSample(UVoxelLandTerrainGraph& Graph)
+void FVoxelLandSampleGraphBuilder::PopulateSample(UVoxelLandTerrainGraph& Graph)
 {
     FVoxelLandGraphNodeRecord Position;
     Position.Id = FGuid::NewGuid();
@@ -52,16 +61,18 @@ void PopulateSample(UVoxelLandTerrainGraph& Graph)
     Output.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
     Output.Pins.Add(MakePin(TEXT("Density"), false));
     Graph.Nodes.Add(MoveTemp(Output));
-    AddLink(Graph, 0, 1);
-    AddLink(Graph, 1, 2);
+	constexpr int32 PositionIndex = 0;
+	constexpr int32 DoubleIndex = 1;
+	constexpr int32 OutputIndex = 2;
+	AddLink(Graph, PositionIndex, DoubleIndex);
+	AddLink(Graph, DoubleIndex, OutputIndex);
 }
 
-bool ValidateSample(UVoxelLandTerrainGraph& Graph, FString& Error)
+bool FVoxelLandSampleGraphBuilder::ValidateSample(UVoxelLandTerrainGraph& Graph, FString& Error)
 {
     FVoxelLandGraphSnapshot Snapshot;
     FVoxelLandProgramDraft Draft;
     return Graph.CaptureSnapshot(Snapshot, Error) && FVoxelLandGraphCompiler::Compile(Snapshot, Draft, Error);
-}
 }
 
 UVoxelLandSampleGraphFactory::UVoxelLandSampleGraphFactory()
@@ -93,10 +104,10 @@ UObject* UVoxelLandSampleGraphFactory::FactoryCreateNew(UClass* InClass, UObject
         return nullptr;
     }
     UVoxelLandTerrainGraph* Candidate = NewObject<UVoxelLandTerrainGraph>(GetTransientPackage());
-    PopulateSample(*Candidate);
-    FString Error;
-    if (!ValidateSample(*Candidate, Error))
-    {
+	FVoxelLandSampleGraphBuilder::PopulateSample(*Candidate);
+	FString Error;
+	if (!FVoxelLandSampleGraphBuilder::ValidateSample(*Candidate, Error))
+	{
         UE_LOG(LogVoxelLandSampleGraphFactory, Error, TEXT("Sample graph cannot compile: %s"), *Error);
         return nullptr;
     }

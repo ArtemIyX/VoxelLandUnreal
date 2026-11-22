@@ -8,95 +8,97 @@
 #include "Windows/WindowsHWrapper.h"
 #endif
 
-namespace
+class FVoxelLandOperatorInternals final
 {
+public:
 #if !IS_MONOLITHIC
-void* AcquireModuleReference(const FString& Filename)
-{
+	static void* AcquireModuleReference(const FString& Filename)
+	{
 #if PLATFORM_WINDOWS
-	// UE 5.7 GetDllHandle can return a borrowed GetModuleHandle result for
-	// already-loaded DLLs. LoadLibraryW takes a new OS reference instead.
-	const FString Absolute = FPaths::ConvertRelativePathToFull(Filename);
-	return reinterpret_cast<void*>(::LoadLibraryW(*Absolute));
+		// UE 5.7 GetDllHandle can return a borrowed GetModuleHandle result for
+		// already-loaded DLLs. LoadLibraryW takes a new OS reference instead.
+		const FString Absolute = FPaths::ConvertRelativePathToFull(Filename);
+		return reinterpret_cast<void*>(::LoadLibraryW(*Absolute));
 #elif PLATFORM_LINUX
-	// UnixPlatformProcess uses dlopen, which takes a reference balanced by dlclose.
-	return FPlatformProcess::GetDllHandle(*Filename);
+		// UnixPlatformProcess uses dlopen, which takes a reference balanced by dlclose.
+		return FPlatformProcess::GetDllHandle(*Filename);
 #else
-	// A platform without known owning-handle semantics must not fabricate a pin.
-	return nullptr;
+		// A platform without known owning-handle semantics must not fabricate a pin.
+		return nullptr;
 #endif
-}
-#endif
-
-class FProviderLease final : public IVoxelLandOperator
-{
-public:
-	FProviderLease(TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> InProvider, void* InHandle,
-		const FGuid& InId, int32 InVersion, EVoxelLandOperatorStage InStage, EVoxelLandWorldRequirement InRequirement)
-		: Provider(InProvider)
-		, Handle(InHandle)
-		, FrozenId(InId)
-		, FrozenVersion(InVersion)
-		, FrozenStage(InStage)
-		, FrozenRequirement(InRequirement)
-	{
 	}
+#endif
 
-	virtual ~FProviderLease() override
+	class FProviderLease final : public IVoxelLandOperator
 	{
-		Provider.Reset();
-		if (Handle)
+	public:
+		FProviderLease(TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> InProvider, void* InHandle,
+			const FGuid& InId, int32 InVersion, EVoxelLandOperatorStage InStage,
+			EVoxelLandWorldRequirement InRequirement)
+			: Provider(InProvider)
+			, Handle(InHandle)
+			, FrozenId(InId)
+			, FrozenVersion(InVersion)
+			, FrozenStage(InStage)
+			, FrozenRequirement(InRequirement)
 		{
-			FPlatformProcess::FreeDllHandle(Handle);
 		}
-	}
 
-	EVoxelLandOperatorStage Stage() const override { return FrozenStage; }
-	EVoxelLandWorldRequirement WorldRequirement() const override { return FrozenRequirement; }
-	FGuid Id() const override { return FrozenId; }
-	int32 Version() const override { return FrozenVersion; }
-	TArray<EVoxelLandGraphValueType> InputTypes() const override { return Provider->InputTypes(); }
-	EVoxelLandGraphValueType OutputType() const override { return Provider->OutputType(); }
-	uint32 MaximumWorkerBytes() const override { return Provider->MaximumWorkerBytes(); }
-	EVoxelLandOperatorSimdRequirement SimdRequirement() const override { return Provider->SimdRequirement(); }
+		virtual ~FProviderLease() override
+		{
+			Provider.Reset();
+			if (Handle)
+			{
+				FPlatformProcess::FreeDllHandle(Handle);
+			}
+		}
 
-	bool ValidateConfiguration(TConstArrayView<uint8> Config, FString& Error) const override
+		EVoxelLandOperatorStage Stage() const override { return FrozenStage; }
+		EVoxelLandWorldRequirement WorldRequirement() const override { return FrozenRequirement; }
+		FGuid Id() const override { return FrozenId; }
+		int32 Version() const override { return FrozenVersion; }
+		TArray<EVoxelLandGraphValueType> InputTypes() const override { return Provider->InputTypes(); }
+		EVoxelLandGraphValueType OutputType() const override { return Provider->OutputType(); }
+		uint32 MaximumWorkerBytes() const override { return Provider->MaximumWorkerBytes(); }
+		EVoxelLandOperatorSimdRequirement SimdRequirement() const override { return Provider->SimdRequirement(); }
+
+		bool ValidateConfiguration(TConstArrayView<uint8> Config, FString& Error) const override
+		{
+			return Provider->ValidateConfiguration(Config, Error);
+		}
+
+		TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(
+			TConstArrayView<uint8> Config, uint64 Seed, FString& Error) const override
+		{
+			return Provider->CreateWorker(Config, Seed, Error);
+		}
+
+	private:
+		TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider;
+		void* Handle = nullptr;
+		const FGuid FrozenId;
+		const int32 FrozenVersion;
+		const EVoxelLandOperatorStage FrozenStage;
+		const EVoxelLandWorldRequirement FrozenRequirement;
+	};
+
+	// Registry state is process-lifetime. A live program may release its final provider on
+	// any worker after module shutdown. Never destroy the state or execute its lease code
+	// from an already-unloaded module during static teardown.
+	class FRegistryState
 	{
-		return Provider->ValidateConfiguration(Config, Error);
-	}
+	public:
+		FCriticalSection Lock;
+		TArray<TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe>> Providers;
+		void* FrameworkHandle = nullptr;
+	};
 
-	TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(
-		TConstArrayView<uint8> Config, uint64 Seed, FString& Error) const override
+	static FRegistryState& Registry()
 	{
-		return Provider->CreateWorker(Config, Seed, Error);
+		static FRegistryState* State = new FRegistryState();
+		return *State;
 	}
-
-private:
-	TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider;
-	void* Handle = nullptr;
-	const FGuid FrozenId;
-	const int32 FrozenVersion;
-	const EVoxelLandOperatorStage FrozenStage;
-	const EVoxelLandWorldRequirement FrozenRequirement;
 };
-
-// Registry state is process-lifetime. A live program may release its final provider on
-// any worker after module shutdown. Never destroy the state or execute its lease code
-// from an already-unloaded module during static teardown.
-class FRegistryState
-{
-public:
-	FCriticalSection Lock;
-	TArray<TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe>> Providers;
-	void* FrameworkHandle = nullptr;
-};
-
-FRegistryState& Registry()
-{
-	static FRegistryState* State = new FRegistryState();
-	return *State;
-}
-}
 
 bool FVoxelLandOperatorRegistry::RegisterV3(FName ModuleName,
 	TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Provider, uint32 CallerAbiVersion, FString& Error)
@@ -162,15 +164,16 @@ bool FVoxelLandOperatorRegistry::RegisterV3(FName ModuleName,
 		return false;
 	}
 	const FString Filename = FModuleManager::Get().GetModuleFilename(ModuleName);
-	if (Filename.IsEmpty() || !(Handle = AcquireModuleReference(Filename)))
+	if (Filename.IsEmpty() || !(Handle = FVoxelLandOperatorInternals::AcquireModuleReference(Filename)))
 	{
 		Error = TEXT("Cannot pin operator provider module binary");
 		return false;
 	}
 #endif
-	TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Lease = MakeShared<FProviderLease, ESPMode::ThreadSafe>(
-		Provider, Handle, OperatorId, OperatorVersion, OperatorStage, Requirement);
-	FRegistryState& State = Registry();
+	TSharedRef<const IVoxelLandOperator, ESPMode::ThreadSafe> Lease =
+		MakeShared<FVoxelLandOperatorInternals::FProviderLease, ESPMode::ThreadSafe>(
+			Provider, Handle, OperatorId, OperatorVersion, OperatorStage, Requirement);
+	FVoxelLandOperatorInternals::FRegistryState& State = FVoxelLandOperatorInternals::Registry();
 	FScopeLock Lock(&State.Lock);
 #if !IS_MONOLITHIC
 	if (!State.FrameworkHandle)
@@ -182,7 +185,8 @@ bool FVoxelLandOperatorRegistry::RegisterV3(FName ModuleName,
 			return false;
 		}
 		const FString FrameworkPath = FModuleManager::Get().GetModuleFilename(FrameworkName);
-		State.FrameworkHandle = FrameworkPath.IsEmpty() ? nullptr : AcquireModuleReference(FrameworkPath);
+		State.FrameworkHandle =
+			FrameworkPath.IsEmpty() ? nullptr : FVoxelLandOperatorInternals::AcquireModuleReference(FrameworkPath);
 		if (!State.FrameworkHandle)
 		{
 			Error = TEXT("Cannot pin VoxelLand operator framework");
@@ -204,7 +208,7 @@ bool FVoxelLandOperatorRegistry::RegisterV3(FName ModuleName,
 
 bool FVoxelLandOperatorRegistry::Unregister(const FGuid& Id, int32 Version, FString& Error)
 {
-	FRegistryState& State = Registry();
+	FVoxelLandOperatorInternals::FRegistryState& State = FVoxelLandOperatorInternals::Registry();
 	FScopeLock Lock(&State.Lock);
 	Error.Reset();
 	for (int32 Index = 0; Index < State.Providers.Num(); ++Index)
@@ -227,7 +231,7 @@ bool FVoxelLandOperatorRegistry::Unregister(const FGuid& Id, int32 Version, FStr
 TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegistry::Resolve(
 	const FGuid& Id, int32 Version)
 {
-	FRegistryState& State = Registry();
+	FVoxelLandOperatorInternals::FRegistryState& State = FVoxelLandOperatorInternals::Registry();
 	FScopeLock Lock(&State.Lock);
 	for (const auto& Provider : State.Providers)
 	{
@@ -241,7 +245,7 @@ TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe> FVoxelLandOperatorRegi
 
 FVoxelLandOperatorRegistrySnapshot FVoxelLandOperatorRegistry::Snapshot()
 {
-	FRegistryState& State = Registry();
+	FVoxelLandOperatorInternals::FRegistryState& State = FVoxelLandOperatorInternals::Registry();
 	FScopeLock Lock(&State.Lock);
 	FVoxelLandOperatorRegistrySnapshot Result;
 	Result.Providers = State.Providers;

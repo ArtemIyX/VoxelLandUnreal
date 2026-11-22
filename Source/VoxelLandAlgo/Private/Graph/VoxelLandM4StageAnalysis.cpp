@@ -2,14 +2,19 @@
 
 namespace VoxelLandM4StageAnalysis
 {
-namespace
+class FVoxelLandM4StageAnalysisInternals final
 {
-constexpr int32 M4StageMaxNodes = 4096;
-constexpr int32 M4StageMaxEdges = 65536;
-constexpr int32 M4StageMaxOutputs = 256;
-constexpr int32 M4StageMaxOutputNameLength = 128;
+public:
+	static constexpr int32 M4StageMaxNodes = 4096;
+	static constexpr int32 M4StageMaxEdges = 65536;
+	static constexpr int32 M4StageMaxOutputs = 256;
+	static constexpr int32 M4StageMaxOutputNameLength = 128;
+	static FVoxelLandError StageFailure(const TCHAR* Message);
+	static bool StageGuidLess(const FGuid& Left, const FGuid& Right);
+	static int32 StageRank(EVoxelLandM4StageKind Stage);
+};
 
-FVoxelLandError StageFailure(const TCHAR* Message)
+FVoxelLandError FVoxelLandM4StageAnalysisInternals::StageFailure(const TCHAR* Message)
 {
 	FVoxelLandError Error;
 	Error.Code = EVoxelLandErrorCode::InvalidProgram;
@@ -17,7 +22,7 @@ FVoxelLandError StageFailure(const TCHAR* Message)
 	return Error;
 }
 
-bool StageGuidLess(const FGuid& Left, const FGuid& Right)
+bool FVoxelLandM4StageAnalysisInternals::StageGuidLess(const FGuid& Left, const FGuid& Right)
 {
 	if (Left.A != Right.A)
 	{
@@ -34,7 +39,7 @@ bool StageGuidLess(const FGuid& Left, const FGuid& Right)
 	return Left.D < Right.D;
 }
 
-int32 StageRank(EVoxelLandM4StageKind Stage)
+int32 FVoxelLandM4StageAnalysisInternals::StageRank(EVoxelLandM4StageKind Stage)
 {
 	switch (Stage)
 	{
@@ -48,14 +53,14 @@ int32 StageRank(EVoxelLandM4StageKind Stage)
 			return INDEX_NONE;
 	}
 }
-}
 
 FVoxelLandError CollectGlobalDependencies(TConstArrayView<FVoxelLandM4StageNode> Nodes,
 	TConstArrayView<FVoxelLandM4StageOutput> Outputs, const FString& OutputName, TArray<FGuid>& OutDependencies)
 {
-	if (Nodes.IsEmpty() || Nodes.Num() > M4StageMaxNodes || Outputs.IsEmpty() || Outputs.Num() > M4StageMaxOutputs)
+	if (Nodes.IsEmpty() || Nodes.Num() > FVoxelLandM4StageAnalysisInternals::M4StageMaxNodes || Outputs.IsEmpty()
+		|| Outputs.Num() > FVoxelLandM4StageAnalysisInternals::M4StageMaxOutputs)
 	{
-		return StageFailure(TEXT("Invalid M4 stage graph size"));
+		return FVoxelLandM4StageAnalysisInternals::StageFailure(TEXT("Invalid M4 stage graph size"));
 	}
 
 	TMap<FGuid, int32> IndexById;
@@ -64,23 +69,27 @@ FVoxelLandError CollectGlobalDependencies(TConstArrayView<FVoxelLandM4StageNode>
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 	{
 		const FVoxelLandM4StageNode& Node = Nodes[Index];
-		if (!Node.Id.IsValid() || IndexById.Contains(Node.Id) || StageRank(Node.Stage) == INDEX_NONE)
+		if (!Node.Id.IsValid() || IndexById.Contains(Node.Id)
+			|| FVoxelLandM4StageAnalysisInternals::StageRank(Node.Stage) == INDEX_NONE)
 		{
-			return StageFailure(TEXT("Invalid or duplicate M4 stage node ID or stage"));
+			return FVoxelLandM4StageAnalysisInternals::StageFailure(
+				TEXT("Invalid or duplicate M4 stage node ID or stage"));
 		}
 		if (Node.Stage == EVoxelLandM4StageKind::Global && Node.bUsesZ)
 		{
-			return StageFailure(TEXT("Global M4 stage cannot use Z"));
+			return FVoxelLandM4StageAnalysisInternals::StageFailure(TEXT("Global M4 stage cannot use Z"));
 		}
 		EdgeCount += Node.Dependencies.Num();
-		if (EdgeCount > M4StageMaxEdges)
+		if (EdgeCount > FVoxelLandM4StageAnalysisInternals::M4StageMaxEdges)
 		{
-			return StageFailure(TEXT("M4 stage graph exceeds edge limit"));
+			return FVoxelLandM4StageAnalysisInternals::StageFailure(TEXT("M4 stage graph exceeds edge limit"));
 		}
 		IndexById.Add(Node.Id, Index);
 		SortedIndices.Add(Index);
 	}
-	SortedIndices.Sort([&Nodes](int32 A, int32 B) { return StageGuidLess(Nodes[A].Id, Nodes[B].Id); });
+	SortedIndices.Sort([&Nodes](int32 A, int32 B) {
+		return FVoxelLandM4StageAnalysisInternals::StageGuidLess(Nodes[A].Id, Nodes[B].Id);
+	});
 
 	TArray<int32> InDegree;
 	InDegree.Init(0, Nodes.Num());
@@ -95,12 +104,14 @@ FVoxelLandError CollectGlobalDependencies(TConstArrayView<FVoxelLandM4StageNode>
 			const int32* Producer = IndexById.Find(Dependency);
 			if (!Producer || Seen.Contains(Dependency))
 			{
-				return StageFailure(TEXT("Missing or duplicate M4 stage dependency"));
+				return FVoxelLandM4StageAnalysisInternals::StageFailure(
+					TEXT("Missing or duplicate M4 stage dependency"));
 			}
 			Seen.Add(Dependency);
-			if (StageRank(Nodes[*Producer].Stage) > StageRank(Node.Stage))
+			if (FVoxelLandM4StageAnalysisInternals::StageRank(Nodes[*Producer].Stage)
+				> FVoxelLandM4StageAnalysisInternals::StageRank(Node.Stage))
 			{
-				return StageFailure(TEXT("M4 stage dependency points backwards"));
+				return FVoxelLandM4StageAnalysisInternals::StageFailure(TEXT("M4 stage dependency points backwards"));
 			}
 			++InDegree[Index];
 			Consumers[*Producer].Add(Index);
@@ -114,11 +125,11 @@ FVoxelLandError CollectGlobalDependencies(TConstArrayView<FVoxelLandM4StageNode>
 		const int32* Producer = IndexById.Find(Output.Producer);
 		const bool bDuplicate = Names.ContainsByPredicate(
 			[&Output](const FString& Name) { return Name.Equals(Output.Name, ESearchCase::CaseSensitive); });
-		if (Output.Name.IsEmpty() || Output.Name.Len() > M4StageMaxOutputNameLength || bDuplicate
-		    || !Output.Name.TrimStartAndEnd().Equals(Output.Name, ESearchCase::CaseSensitive) || !Producer
-		    || Nodes[*Producer].Stage != EVoxelLandM4StageKind::Global)
+		if (Output.Name.IsEmpty() || Output.Name.Len() > FVoxelLandM4StageAnalysisInternals::M4StageMaxOutputNameLength
+			|| bDuplicate || !Output.Name.TrimStartAndEnd().Equals(Output.Name, ESearchCase::CaseSensitive) || !Producer
+			|| Nodes[*Producer].Stage != EVoxelLandM4StageKind::Global)
 		{
-			return StageFailure(TEXT("Invalid or duplicate M4 global output"));
+			return FVoxelLandM4StageAnalysisInternals::StageFailure(TEXT("Invalid or duplicate M4 global output"));
 		}
 		Names.Add(Output.Name);
 		if (Output.Name.Equals(OutputName, ESearchCase::CaseSensitive))
@@ -128,7 +139,7 @@ FVoxelLandError CollectGlobalDependencies(TConstArrayView<FVoxelLandM4StageNode>
 	}
 	if (SelectedIndex == INDEX_NONE)
 	{
-		return StageFailure(TEXT("Requested M4 global output does not exist"));
+		return FVoxelLandM4StageAnalysisInternals::StageFailure(TEXT("Requested M4 global output does not exist"));
 	}
 
 	// Kahn traversal, choosing the smallest ready GUID. Process the full graph so
@@ -150,7 +161,7 @@ FVoxelLandError CollectGlobalDependencies(TConstArrayView<FVoxelLandM4StageNode>
 		}
 		if (Next == INDEX_NONE)
 		{
-			return StageFailure(TEXT("M4 stage graph contains a cycle"));
+			return FVoxelLandM4StageAnalysisInternals::StageFailure(TEXT("M4 stage graph contains a cycle"));
 		}
 		Emitted[Next] = true;
 		Order.Add(Next);

@@ -7,16 +7,17 @@
 
 namespace VoxelLandM4HeightPrepass
 {
-namespace
+class FVoxelLandM4HeightPrepassInternals final
 {
-FVoxelLandError M4HeightPrepassError(EVoxelLandErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandError Error;
-	Error.Code = Code;
-	Error.Message = Message;
-	return Error;
-}
-}
+public:
+	static FVoxelLandError M4HeightPrepassError(EVoxelLandErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandError Error;
+		Error.Code = Code;
+		Error.Message = Message;
+		return Error;
+	}
+};
 
 FVoxelLandError BuildBaseHeights(const FVoxelLandM4DomainSettings& Domain, TConstArrayView<uint16> Continental,
 	const FVoxelLandM4CurveLut& ContinentalCurve, TConstArrayView<uint16> Mountain,
@@ -29,19 +30,20 @@ FVoxelLandError BuildBaseHeights(const FVoxelLandM4DomainSettings& Domain, TCons
 	}
 	if (Domain.Mode != EVoxelLandM4DomainMode::Finite)
 	{
-		return M4HeightPrepassError(
+		return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height prepass requires a finite domain"));
 	}
 	const int64 Width = int64(Domain.CellsX) + 1;
 	const int64 Count = Width * (int64(Domain.CellsY) + 1);
 	if (Continental.Num() != Count || Mountain.Num() != Count || Peaks.Num() != Count)
 	{
-		return M4HeightPrepassError(
+		return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M4 control map sizes must match the domain"));
 	}
 	if (IsCancelled())
 	{
-		return M4HeightPrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 height prepass cancelled"));
+		return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M4 height prepass cancelled"));
 	}
 	TArray<int32> Heights;
 	Heights.Reserve(int32(Count));
@@ -49,7 +51,8 @@ FVoxelLandError BuildBaseHeights(const FVoxelLandM4DomainSettings& Domain, TCons
 	{
 		if (IsCancelled())
 		{
-			return M4HeightPrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 height prepass cancelled"));
+			return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
+				EVoxelLandErrorCode::Cancelled, TEXT("M4 height prepass cancelled"));
 		}
 		for (int32 X = 0; X <= Domain.CellsX; ++X)
 		{
@@ -60,7 +63,7 @@ FVoxelLandError BuildBaseHeights(const FVoxelLandM4DomainSettings& Domain, TCons
 			Height += int64(PeaksCurve.Evaluate(Peaks[Index]));
 			if (Height < -512000000 || Height > 512000000)
 			{
-				return M4HeightPrepassError(
+				return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
 					EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 base height exceeds Q8 range"));
 			}
 			Heights.Add(int32(Height));
@@ -68,7 +71,8 @@ FVoxelLandError BuildBaseHeights(const FVoxelLandM4DomainSettings& Domain, TCons
 	}
 	if (IsCancelled())
 	{
-		return M4HeightPrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 height prepass cancelled"));
+		return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M4 height prepass cancelled"));
 	}
 	OutHeights = MoveTemp(Heights);
 	return {};
@@ -109,7 +113,8 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 	{
 		if (IsCancelled())
 		{
-			return M4HeightPrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 height statistics cancelled"));
+			return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
+				EVoxelLandErrorCode::Cancelled, TEXT("M4 height statistics cancelled"));
 		}
 		for (int32 X = 0; X < Width; ++X)
 		{
@@ -142,7 +147,8 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 	{
 		if (IsCancelled())
 		{
-			return M4HeightPrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 control map inspection cancelled"));
+			return FVoxelLandM4HeightPrepassInternals::M4HeightPrepassError(
+				EVoxelLandErrorCode::Cancelled, TEXT("M4 control map inspection cancelled"));
 		}
 		const int32 SourceY = Domain.CellsY - (Domain.CellsY * Y / (R - 1));
 		for (int32 X = 0; X < R; ++X)

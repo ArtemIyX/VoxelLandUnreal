@@ -4,6 +4,8 @@
 #include "Data/Structs/VoxelLandM4StageStats.h"
 #include "Generation/VoxelLandM4GridLease.h"
 
+struct FVoxelLandM4LatticeGeometry;
+
 /** Immutable bounded Q8 height snapshot for the M4 prepass foundation.
  * This record does not configure or enable a production world domain.
  */
@@ -39,6 +41,10 @@ public:
 		TConstArrayView<int32> HeightsQ8, TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid,
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease,
 		const FVoxelLandM4StageStats* StageStats);
+	static bool Create(const FVoxelLandM4LatticeGeometry& Geometry, TConstArrayView<int32> HeightsQ8,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease = nullptr,
+		const FVoxelLandM4StageStats* StageStats = nullptr);
 
 	/** Samples integer world centimeters inside the inclusive grid bounds.
 	 * The four-corner bilinear expression is rounded once, ties away from zero.

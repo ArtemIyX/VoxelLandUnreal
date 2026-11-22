@@ -1,5 +1,6 @@
 #include "Generation/VoxelLandM4HeightGrid.h"
 
+#include "Data/Structs/VoxelLandM4LatticeGeometry.h"
 #include "Generation/VoxelLandM4Control.h"
 #include <limits>
 
@@ -29,12 +30,26 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease,
 	const FVoxelLandM4StageStats* ObservedStats)
 {
-	if (IsCancelled() || InCellsX < 1 || InCellsY < 1 || InCellsX > 1024 || InCellsY > 1024 || InSpacingCm <= 0)
+	return Create({InOriginX, InOriginY, InSpacingCm, InCellsX, InCellsY}, HeightsQ8, OutGrid, IsCancelled,
+		MoveTemp(Lease), ObservedStats);
+}
+
+bool FVoxelLandM4HeightGrid::Create(const FVoxelLandM4LatticeGeometry& Geometry, TConstArrayView<int32> HeightsQ8,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe>& OutGrid, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease, const FVoxelLandM4StageStats* ObservedStats)
+{
+	const int64 InOriginX = Geometry.OriginX;
+	const int64 InOriginY = Geometry.OriginY;
+	const int64 InSpacingCm = Geometry.SpacingCm;
+	const int32 InCellsX = Geometry.CellsX;
+	const int32 InCellsY = Geometry.CellsY;
+	if (IsCancelled() || InCellsX < 1 || InCellsY < 1 || InCellsX > FVoxelLandM4LatticeGeometry::MaxCellsPerAxis
+		|| InCellsY > FVoxelLandM4LatticeGeometry::MaxCellsPerAxis || InSpacingCm <= 0)
 	{
 		return false;
 	}
 	const int64 Count = (int64(InCellsX) + 1) * (int64(InCellsY) + 1);
-	if (Count > 1050625 || HeightsQ8.Num() != Count)
+	if (Count > FVoxelLandM4LatticeGeometry::MaxSamples || HeightsQ8.Num() != Count)
 	{
 		return false;
 	}
@@ -54,6 +69,7 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	{
 		return false;
 	}
+	constexpr int32 MaxHeightQ8 = 512000000;
 	const int32 Width = InCellsX + 1;
 	int32 MinimumHeight = MAX_int32;
 	int32 MaximumHeight = MIN_int32;
@@ -66,7 +82,7 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 		for (int32 X = 0; X < Width; ++X)
 		{
 			const int32 Height = HeightsQ8[Y * Width + X];
-			if (Height < -512000000 || Height > 512000000)
+			if (Height < -MaxHeightQ8 || Height > MaxHeightQ8)
 			{
 				return false;
 			}

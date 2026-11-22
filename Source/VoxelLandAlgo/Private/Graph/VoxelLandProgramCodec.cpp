@@ -7,9 +7,18 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Hash/xxhash.h"
 
-namespace
+class FVoxelLandProgramCodecFormat final
 {
-bool LessGuid(const FGuid& A, const FGuid& B)
+public:
+	static bool LessGuid(const FGuid& A, const FGuid& B);
+	static void WriteGuid(FCanonicalWriter& W, const FGuid& G);
+	static int64 SignedBits(uint64 Value);
+	static uint64 UnsignedBits(int64 Value);
+	static FVoxelLandSerializedValueSource PackSource(const FVoxelLandValueSource& Source);
+	static FVoxelLandValueSource LoadSource(const FVoxelLandSerializedValueSource& Source);
+};
+
+bool FVoxelLandProgramCodecFormat::LessGuid(const FGuid& A, const FGuid& B)
 {
 	if (A.A != B.A)
 	{
@@ -26,7 +35,7 @@ bool LessGuid(const FGuid& A, const FGuid& B)
 	return A.D < B.D;
 }
 
-void WriteGuid(FCanonicalWriter& W, const FGuid& G)
+void FVoxelLandProgramCodecFormat::WriteGuid(FCanonicalWriter& W, const FGuid& G)
 {
 	W.U32(G.A);
 	W.U32(G.B);
@@ -34,21 +43,21 @@ void WriteGuid(FCanonicalWriter& W, const FGuid& G)
 	W.U32(G.D);
 }
 
-int64 SignedBits(uint64 Value)
+int64 FVoxelLandProgramCodecFormat::SignedBits(uint64 Value)
 {
 	int64 Result;
 	FMemory::Memcpy(&Result, &Value, sizeof(Result));
 	return Result;
 }
 
-uint64 UnsignedBits(int64 Value)
+uint64 FVoxelLandProgramCodecFormat::UnsignedBits(int64 Value)
 {
 	uint64 Result;
 	FMemory::Memcpy(&Result, &Value, sizeof(Result));
 	return Result;
 }
 
-FVoxelLandSerializedValueSource PackSource(const FVoxelLandValueSource& Source)
+FVoxelLandSerializedValueSource FVoxelLandProgramCodecFormat::PackSource(const FVoxelLandValueSource& Source)
 {
 	FVoxelLandSerializedValueSource Result;
 	Result.bParameter = Source.bParameter;
@@ -56,13 +65,12 @@ FVoxelLandSerializedValueSource PackSource(const FVoxelLandValueSource& Source)
 	return Result;
 }
 
-FVoxelLandValueSource LoadSource(const FVoxelLandSerializedValueSource& Source)
+FVoxelLandValueSource FVoxelLandProgramCodecFormat::LoadSource(const FVoxelLandSerializedValueSource& Source)
 {
 	FVoxelLandValueSource Result;
 	Result.bParameter = Source.bParameter;
 	Result.Index = uint32(Source.Index);
 	return Result;
-}
 }
 
 uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& Snapshot)
@@ -71,12 +79,13 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 	W.U32(1);
 	W.U32(uint32(Snapshot.SourceVersion));
 	TArray<FVoxelLandGraphParameter> Parameters = Snapshot.Parameters;
-	Parameters.Sort(
-		[](const FVoxelLandGraphParameter& A, const FVoxelLandGraphParameter& B) { return LessGuid(A.Id, B.Id); });
+	Parameters.Sort([](const FVoxelLandGraphParameter& A, const FVoxelLandGraphParameter& B) {
+		return FVoxelLandProgramCodecFormat::LessGuid(A.Id, B.Id);
+	});
 	W.U32(Parameters.Num());
 	for (const FVoxelLandGraphParameter& P : Parameters)
 	{
-		WriteGuid(W, P.Id);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, P.Id);
 		W.String(P.Name.ToLower());
 		W.U8(uint8(P.Type));
 		W.Float(P.FloatDefault);
@@ -89,22 +98,23 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 		W.U32(uint32(P.IntMax));
 	}
 	TArray<FVoxelLandGraphNodeRecord> Nodes = Snapshot.Nodes;
-	Nodes.Sort(
-		[](const FVoxelLandGraphNodeRecord& A, const FVoxelLandGraphNodeRecord& B) { return LessGuid(A.Id, B.Id); });
+	Nodes.Sort([](const FVoxelLandGraphNodeRecord& A, const FVoxelLandGraphNodeRecord& B) {
+		return FVoxelLandProgramCodecFormat::LessGuid(A.Id, B.Id);
+	});
 	W.U32(Nodes.Num());
 	for (const FVoxelLandGraphNodeRecord& N : Nodes)
 	{
-		WriteGuid(W, N.Id);
-		WriteGuid(W, N.OperatorId);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, N.Id);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, N.OperatorId);
 		W.U32(uint32(N.OperatorVersion));
 		W.U32(uint32(N.SeedSalt));
-		WriteGuid(W, N.ParameterId);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, N.ParameterId);
 		W.U32(N.Configuration.Num());
 		W.Bytes.Append(N.Configuration);
 		W.U32(N.Pins.Num());
 		for (const FVoxelLandGraphPinRecord& Pin : N.Pins)
 		{
-			WriteGuid(W, Pin.Id);
+			FVoxelLandProgramCodecFormat::WriteGuid(W, Pin.Id);
 			W.U8(uint8(Pin.Type));
 			W.U8(Pin.bOutput ? 1 : 0);
 			W.Float(Pin.FloatDefault);
@@ -117,25 +127,25 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 	Links.Sort([](const FVoxelLandGraphLinkRecord& A, const FVoxelLandGraphLinkRecord& B) {
 		if (A.TargetNode != B.TargetNode)
 		{
-			return LessGuid(A.TargetNode, B.TargetNode);
+			return FVoxelLandProgramCodecFormat::LessGuid(A.TargetNode, B.TargetNode);
 		}
 		if (A.TargetPin != B.TargetPin)
 		{
-			return LessGuid(A.TargetPin, B.TargetPin);
+			return FVoxelLandProgramCodecFormat::LessGuid(A.TargetPin, B.TargetPin);
 		}
 		if (A.SourceNode != B.SourceNode)
 		{
-			return LessGuid(A.SourceNode, B.SourceNode);
+			return FVoxelLandProgramCodecFormat::LessGuid(A.SourceNode, B.SourceNode);
 		}
-		return LessGuid(A.SourcePin, B.SourcePin);
+		return FVoxelLandProgramCodecFormat::LessGuid(A.SourcePin, B.SourcePin);
 	});
 	W.U32(Links.Num());
 	for (const FVoxelLandGraphLinkRecord& Link : Links)
 	{
-		WriteGuid(W, Link.SourceNode);
-		WriteGuid(W, Link.SourcePin);
-		WriteGuid(W, Link.TargetNode);
-		WriteGuid(W, Link.TargetPin);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, Link.SourceNode);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, Link.SourcePin);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, Link.TargetNode);
+		FVoxelLandProgramCodecFormat::WriteGuid(W, Link.TargetPin);
 	}
 	// Preserve the v1 byte stream exactly for graphs without function calls.
 	const bool bHasFunctionCalls = Snapshot.Nodes.ContainsByPredicate(
@@ -146,12 +156,12 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 		W.U32(Nodes.Num());
 		for (const FVoxelLandGraphNodeRecord& Node : Nodes)
 		{
-			WriteGuid(W, Node.Id);
+			FVoxelLandProgramCodecFormat::WriteGuid(W, Node.Id);
 			W.String(Node.FunctionPath.ToString());
 			W.U32(Node.Pins.Num());
 			for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
 			{
-				WriteGuid(W, Pin.InterfaceId);
+				FVoxelLandProgramCodecFormat::WriteGuid(W, Pin.InterfaceId);
 			}
 		}
 		TArray<FVoxelLandGraphFunctionSnapshot> Functions = Snapshot.Functions;
@@ -164,8 +174,8 @@ uint64 FVoxelLandProgramCodec::SourceFingerprint(const FVoxelLandGraphSnapshot& 
 			W.String(Function.AssetPath);
 			W.U32(uint32(Function.SourceVersion));
 			W.U8(uint8(Function.OutputType));
-			WriteGuid(W, Function.OutputNode);
-			WriteGuid(W, Function.OutputPin);
+			FVoxelLandProgramCodecFormat::WriteGuid(W, Function.OutputNode);
+			FVoxelLandProgramCodecFormat::WriteGuid(W, Function.OutputPin);
 			FVoxelLandGraphSnapshot FunctionSource;
 			FunctionSource.SourceVersion = Function.SourceVersion;
 			FunctionSource.Parameters = Function.Inputs;
@@ -207,8 +217,8 @@ bool FVoxelLandProgramCodec::Pack(const FVoxelLandGraphSnapshot& Source, const F
 	Payload.ExternalFilterIndex = Draft.ExternalFilterIndex;
 	Payload.CompilerSemanticVersion = int32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	Payload.RegisterCount = Draft.RegisterCount;
-	Payload.SourceFingerprint = SignedBits(SourceFingerprint(Source));
-	Payload.ProgramFingerprint = SignedBits(Program.GetFingerprint());
+	Payload.SourceFingerprint = FVoxelLandProgramCodecFormat::SignedBits(SourceFingerprint(Source));
+	Payload.ProgramFingerprint = FVoxelLandProgramCodecFormat::SignedBits(Program.GetFingerprint());
 	for (const FVoxelLandInstruction& I : Draft.Instructions)
 	{
 		FVoxelLandSerializedInstruction Record;
@@ -263,23 +273,31 @@ bool FVoxelLandProgramCodec::Pack(const FVoxelLandGraphSnapshot& Source, const F
 	{
 		FVoxelLandSerializedNoise Record;
 		Record.SeedSlot = int32(Noise.SeedSlot);
-		Record.Frequency = PackSource(Noise.Frequency);
-		Record.Octaves = PackSource(Noise.Octaves);
-		Record.Gain = PackSource(Noise.Gain);
-		Record.Lacunarity = PackSource(Noise.Lacunarity);
+		Record.Frequency = FVoxelLandProgramCodecFormat::PackSource(Noise.Frequency);
+		Record.Octaves = FVoxelLandProgramCodecFormat::PackSource(Noise.Octaves);
+		Record.Gain = FVoxelLandProgramCodecFormat::PackSource(Noise.Gain);
+		Record.Lacunarity = FVoxelLandProgramCodecFormat::PackSource(Noise.Lacunarity);
 		Payload.Noise.Add(Record);
 	}
 	Payload.ExternalOperators = Draft.ExternalOperators;
 	Payload.SmoothFilter.bPresent = Draft.SmoothFilter.bPresent;
-	Payload.SmoothFilter.Enabled = PackSource(Draft.SmoothFilter.Enabled);
-	Payload.SmoothFilter.Strength = PackSource(Draft.SmoothFilter.Strength);
+	Payload.SmoothFilter.Enabled = FVoxelLandProgramCodecFormat::PackSource(Draft.SmoothFilter.Enabled);
+	Payload.SmoothFilter.Strength = FVoxelLandProgramCodecFormat::PackSource(Draft.SmoothFilter.Strength);
 	OutPayload = MoveTemp(Payload);
 	return true;
 }
 
-namespace
+class FVoxelLandProgramCodecFingerprint final
 {
-bool DecodeInstructions(const FVoxelLandSerializedProgram& Payload, FVoxelLandProgramDraft& Draft, FString& OutError)
+public:
+	static bool DecodeInstructions(
+		const FVoxelLandSerializedProgram& Payload, FVoxelLandProgramDraft& Draft, FString& OutError);
+	static bool DecodeParameters(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSerializedProgram& Payload,
+		FVoxelLandProgramDraft& Draft, FString& OutError);
+};
+
+bool FVoxelLandProgramCodecFingerprint::DecodeInstructions(
+	const FVoxelLandSerializedProgram& Payload, FVoxelLandProgramDraft& Draft, FString& OutError)
 {
 	for (const FVoxelLandSerializedInstruction& Record : Payload.Instructions)
 	{
@@ -306,8 +324,8 @@ bool DecodeInstructions(const FVoxelLandSerializedProgram& Payload, FVoxelLandPr
 	return true;
 }
 
-bool DecodeParameters(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSerializedProgram& Payload,
-	FVoxelLandProgramDraft& Draft, FString& OutError)
+bool FVoxelLandProgramCodecFingerprint::DecodeParameters(const FVoxelLandGraphSnapshot& Source,
+	const FVoxelLandSerializedProgram& Payload, FVoxelLandProgramDraft& Draft, FString& OutError)
 {
 	Draft.Constants = Payload.Constants;
 	TSet<FGuid> ParameterIds;
@@ -331,7 +349,6 @@ bool DecodeParameters(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSer
 		Draft.Parameters.Add(P);
 	}
 	return true;
-}
 }
 
 bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const FVoxelLandSerializedProgram& Payload,
@@ -369,7 +386,7 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
 		|| Payload.RegisterCount < 1 || Payload.RegisterCount > 1024 || Payload.Instructions.Num() > 8192
 		|| Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096
 		|| Payload.Noise.Num() > 4096 || Payload.ExternalOperators.Num() > 4096
-		|| UnsignedBits(Payload.SourceFingerprint) != SourceFingerprint(Source))
+		|| FVoxelLandProgramCodecFormat::UnsignedBits(Payload.SourceFingerprint) != SourceFingerprint(Source))
 	{
 		OutError = TEXT("Compiled payload is stale, unsupported or exceeds limits");
 		return false;
@@ -380,9 +397,10 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
 	Draft.ExternalFilterIndex = Payload.ExternalFilterIndex;
 	Draft.ExternalOperators = Payload.ExternalOperators;
 	Draft.SmoothFilter.bPresent = Payload.SmoothFilter.bPresent;
-	Draft.SmoothFilter.Enabled = LoadSource(Payload.SmoothFilter.Enabled);
-	Draft.SmoothFilter.Strength = LoadSource(Payload.SmoothFilter.Strength);
-	if (!DecodeInstructions(Payload, Draft, OutError) || !DecodeParameters(Source, Payload, Draft, OutError))
+	Draft.SmoothFilter.Enabled = FVoxelLandProgramCodecFormat::LoadSource(Payload.SmoothFilter.Enabled);
+	Draft.SmoothFilter.Strength = FVoxelLandProgramCodecFormat::LoadSource(Payload.SmoothFilter.Strength);
+	if (!FVoxelLandProgramCodecFingerprint::DecodeInstructions(Payload, Draft, OutError)
+		|| !FVoxelLandProgramCodecFingerprint::DecodeParameters(Source, Payload, Draft, OutError))
 	{
 		return false;
 	}
@@ -397,10 +415,10 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
 	{
 		FVoxelLandNoiseConfig Noise;
 		Noise.SeedSlot = uint32(Record.SeedSlot);
-		Noise.Frequency = LoadSource(Record.Frequency);
-		Noise.Octaves = LoadSource(Record.Octaves);
-		Noise.Gain = LoadSource(Record.Gain);
-		Noise.Lacunarity = LoadSource(Record.Lacunarity);
+		Noise.Frequency = FVoxelLandProgramCodecFormat::LoadSource(Record.Frequency);
+		Noise.Octaves = FVoxelLandProgramCodecFormat::LoadSource(Record.Octaves);
+		Noise.Gain = FVoxelLandProgramCodecFormat::LoadSource(Record.Gain);
+		Noise.Lacunarity = FVoxelLandProgramCodecFormat::LoadSource(Record.Lacunarity);
 		Draft.Noise.Add(Noise);
 	}
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
@@ -409,7 +427,7 @@ bool FVoxelLandProgramCodec::Load(const FVoxelLandGraphSnapshot& Source, const F
 		OutError = Error.Message;
 		return false;
 	}
-	if (Program->GetFingerprint() != UnsignedBits(Payload.ProgramFingerprint))
+	if (Program->GetFingerprint() != FVoxelLandProgramCodecFormat::UnsignedBits(Payload.ProgramFingerprint))
 	{
 		OutError = TEXT("Compiled program fingerprint mismatch");
 		return false;

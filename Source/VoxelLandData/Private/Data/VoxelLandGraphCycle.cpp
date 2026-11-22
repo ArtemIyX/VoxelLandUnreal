@@ -1,15 +1,25 @@
 #include "Data/VoxelLandGraphCycle.h"
 
-namespace
+class FVoxelLandGraphCycleInternals final
 {
-bool GuidLess(const FGuid& A, const FGuid& B)
-{
-	if (A.A != B.A) { return A.A < B.A; }
-	if (A.B != B.B) { return A.B < B.B; }
-	if (A.C != B.C) { return A.C < B.C; }
-	return A.D < B.D;
-}
-}
+public:
+	static bool GuidLess(const FGuid& A, const FGuid& B)
+	{
+		if (A.A != B.A)
+		{
+			return A.A < B.A;
+		}
+		if (A.B != B.B)
+		{
+			return A.B < B.B;
+		}
+		if (A.C != B.C)
+		{
+			return A.C < B.C;
+		}
+		return A.D < B.D;
+	}
+};
 
 bool FVoxelLandGraphCycle::Find(TConstArrayView<FVoxelLandGraphNodeRecord> Nodes,
 	TConstArrayView<FVoxelLandGraphLinkRecord> Links, FGuid& OutNode, FGuid& OutPin)
@@ -18,7 +28,7 @@ bool FVoxelLandGraphCycle::Find(TConstArrayView<FVoxelLandGraphNodeRecord> Nodes
 	OutPin.Invalidate();
 	TArray<FGuid> Ordered;
 	for (const FVoxelLandGraphNodeRecord& Node : Nodes) { Ordered.Add(Node.Id); }
-	Ordered.Sort(GuidLess);
+	Ordered.Sort(FVoxelLandGraphCycleInternals::GuidLess);
 	TMap<FGuid, int32> Indices;
 	for (int32 Index = 0; Index < Ordered.Num(); ++Index) { Indices.Add(Ordered[Index], Index); }
 	TArray<int32> SortedLinks;
@@ -26,9 +36,15 @@ bool FVoxelLandGraphCycle::Find(TConstArrayView<FVoxelLandGraphNodeRecord> Nodes
 	SortedLinks.Sort([&Links](int32 Left, int32 Right) {
 		const FVoxelLandGraphLinkRecord& A = Links[Left];
 		const FVoxelLandGraphLinkRecord& B = Links[Right];
-		if (A.SourceNode != B.SourceNode) { return GuidLess(A.SourceNode, B.SourceNode); }
-		if (A.TargetNode != B.TargetNode) { return GuidLess(A.TargetNode, B.TargetNode); }
-		return GuidLess(A.TargetPin, B.TargetPin);
+		if (A.SourceNode != B.SourceNode)
+		{
+			return FVoxelLandGraphCycleInternals::GuidLess(A.SourceNode, B.SourceNode);
+		}
+		if (A.TargetNode != B.TargetNode)
+		{
+			return FVoxelLandGraphCycleInternals::GuidLess(A.TargetNode, B.TargetNode);
+		}
+		return FVoxelLandGraphCycleInternals::GuidLess(A.TargetPin, B.TargetPin);
 	});
 	TArray<TArray<int32>> Edges;
 	Edges.SetNum(Ordered.Num());

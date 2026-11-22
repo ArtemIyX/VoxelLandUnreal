@@ -4,9 +4,18 @@
 #include <cmath>
 #include <limits>
 
-namespace
+class FVoxelLandIntervalsInternals final
 {
-FVoxelLandDensityInterval Known(float Minimum, float Maximum)
+public:
+	static FVoxelLandDensityInterval Known(float Minimum, float Maximum);
+	static FVoxelLandDensityInterval Rounded(double Minimum, double Maximum);
+	static FVoxelLandDensityInterval Coordinates(int32 Coordinate, float VoxelSize, int32 Halo);
+	static FVoxelLandDensityInterval Unary(EVoxelLandOpcode Op, const FVoxelLandDensityInterval& A);
+	static FVoxelLandDensityInterval Binary(
+		EVoxelLandOpcode Op, const FVoxelLandDensityInterval& A, const FVoxelLandDensityInterval& B);
+};
+
+FVoxelLandDensityInterval FVoxelLandIntervalsInternals::Known(float Minimum, float Maximum)
 {
 	FVoxelLandDensityInterval Result;
 	if (FMath::IsFinite(Minimum) && FMath::IsFinite(Maximum) && Minimum <= Maximum &&
@@ -19,7 +28,7 @@ FVoxelLandDensityInterval Known(float Minimum, float Maximum)
 	return Result;
 }
 
-FVoxelLandDensityInterval Rounded(double Minimum, double Maximum)
+FVoxelLandDensityInterval FVoxelLandIntervalsInternals::Rounded(double Minimum, double Maximum)
 {
 	if (!FMath::IsFinite(Minimum) || !FMath::IsFinite(Maximum) || Minimum < -FLT_MAX || Maximum > FLT_MAX)
 	{
@@ -30,14 +39,14 @@ FVoxelLandDensityInterval Rounded(double Minimum, double Maximum)
 	return Known(Down, Up);
 }
 
-FVoxelLandDensityInterval Coordinates(int32 Coordinate, float VoxelSize, int32 Halo)
+FVoxelLandDensityInterval FVoxelLandIntervalsInternals::Coordinates(int32 Coordinate, float VoxelSize, int32 Halo)
 {
 	const double Minimum = double(int64(Coordinate) * 32 - 1 - Halo) * double(VoxelSize);
 	const double Maximum = double(int64(Coordinate) * 32 + 33 + Halo) * double(VoxelSize);
 	return Rounded(Minimum, Maximum);
 }
 
-FVoxelLandDensityInterval Unary(EVoxelLandOpcode Op, const FVoxelLandDensityInterval& A)
+FVoxelLandDensityInterval FVoxelLandIntervalsInternals::Unary(EVoxelLandOpcode Op, const FVoxelLandDensityInterval& A)
 {
 	if (!A.bKnown) { return {}; }
 	if (Op == EVoxelLandOpcode::Negate) { return Known(-A.Maximum, -A.Minimum); }
@@ -51,8 +60,8 @@ FVoxelLandDensityInterval Unary(EVoxelLandOpcode Op, const FVoxelLandDensityInte
 	return {};
 }
 
-FVoxelLandDensityInterval Binary(EVoxelLandOpcode Op, const FVoxelLandDensityInterval& A,
-	const FVoxelLandDensityInterval& B)
+FVoxelLandDensityInterval FVoxelLandIntervalsInternals::Binary(
+	EVoxelLandOpcode Op, const FVoxelLandDensityInterval& A, const FVoxelLandDensityInterval& B)
 {
 	if (!A.bKnown || !B.bKnown) { return {}; }
 	switch (Op)
@@ -78,7 +87,6 @@ FVoxelLandDensityInterval Binary(EVoxelLandOpcode Op, const FVoxelLandDensityInt
 			return {};
 	}
 }
-}
 
 EVoxelLandChunkClassification FVoxelLandGenerator::ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const
 {
@@ -92,9 +100,12 @@ EVoxelLandChunkClassification FVoxelLandGenerator::ClassifyChunkBeforeSampling(c
 		return EVoxelLandChunkClassification::NeedsSamples;
 	}
 	const int32 Halo = bSmoothEnabled && SmoothStrength > 0.f ? 1 : 0;
-	const FVoxelLandDensityInterval X = Coordinates(Key.Coordinate.X, Profile.VoxelSizeCm, Halo);
-	const FVoxelLandDensityInterval Y = Coordinates(Key.Coordinate.Y, Profile.VoxelSizeCm, Halo);
-	const FVoxelLandDensityInterval Z = Coordinates(Key.Coordinate.Z, Profile.VoxelSizeCm, Halo);
+	const FVoxelLandDensityInterval X =
+		FVoxelLandIntervalsInternals::Coordinates(Key.Coordinate.X, Profile.VoxelSizeCm, Halo);
+	const FVoxelLandDensityInterval Y =
+		FVoxelLandIntervalsInternals::Coordinates(Key.Coordinate.Y, Profile.VoxelSizeCm, Halo);
+	const FVoxelLandDensityInterval Z =
+		FVoxelLandIntervalsInternals::Coordinates(Key.Coordinate.Z, Profile.VoxelSizeCm, Halo);
 	TArray<FVoxelLandDensityInterval> Registers;
 	Registers.SetNum(Draft.RegisterCount);
 	for (const FVoxelLandInstruction& I : Draft.Instructions)
@@ -119,14 +130,14 @@ EVoxelLandChunkClassification FVoxelLandGenerator::ClassifyChunkBeforeSampling(c
 				Value = Z;
 				break;
 			case EVoxelLandOpcode::LoadConstant:
-				Value = Known(Draft.Constants[I.Imm], Draft.Constants[I.Imm]);
+				Value = FVoxelLandIntervalsInternals::Known(Draft.Constants[I.Imm], Draft.Constants[I.Imm]);
 				break;
 			case EVoxelLandOpcode::LoadFloatParameter:
-				Value = Known(FloatParameters[I.Imm], FloatParameters[I.Imm]);
+				Value = FVoxelLandIntervalsInternals::Known(FloatParameters[I.Imm], FloatParameters[I.Imm]);
 				break;
 			case EVoxelLandOpcode::Negate:
 			case EVoxelLandOpcode::Abs:
-				Value = Unary(I.Op, Registers[I.A]);
+				Value = FVoxelLandIntervalsInternals::Unary(I.Op, Registers[I.A]);
 				break;
 			case EVoxelLandOpcode::Add:
 			case EVoxelLandOpcode::Subtract:
@@ -135,7 +146,7 @@ EVoxelLandChunkClassification FVoxelLandGenerator::ClassifyChunkBeforeSampling(c
 			case EVoxelLandOpcode::Max:
 			case EVoxelLandOpcode::Union:
 			case EVoxelLandOpcode::Intersect:
-				Value = Binary(I.Op, Registers[I.A], Registers[I.B]);
+				Value = FVoxelLandIntervalsInternals::Binary(I.Op, Registers[I.A], Registers[I.B]);
 				break;
 			default:
 				break;

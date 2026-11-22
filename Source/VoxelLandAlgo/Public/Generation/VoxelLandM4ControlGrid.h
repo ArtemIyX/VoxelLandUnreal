@@ -4,6 +4,7 @@
 #include "Data/Structs/VoxelLandError.h"
 
 class FVoxelLandGenerator;
+struct FVoxelLandM4LatticeGeometry;
 class FVoxelLandProgram;
 class FVoxelLandWorkerContext;
 
@@ -29,4 +30,6 @@ VOXELLANDALGO_API FVoxelLandError ValidateProgram(const FVoxelLandProgram& Progr
 VOXELLANDALGO_API FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, FVoxelLandWorkerContext& Worker,
 	int64 OriginX, int64 OriginY, int64 SpacingCm, int32 CellsX, int32 CellsY, TArray<uint16>& OutSamples,
 	TFunctionRef<bool()> IsCancelled);
+VOXELLANDALGO_API FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, FVoxelLandWorkerContext& Worker,
+	const FVoxelLandM4LatticeGeometry& Geometry, TArray<uint16>& OutSamples, TFunctionRef<bool()> IsCancelled);
 }

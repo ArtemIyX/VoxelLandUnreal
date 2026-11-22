@@ -12,17 +12,18 @@
 #include "Generation/VoxelLandM5SweptTriangle.h"
 #include "Generation/VoxelLandMeshing.h"
 
-namespace
+class FVoxelLandM5SingleChunkRouteInternals final
 {
-FVoxelLandM5Diagnostic SingleChunkRouteError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = TEXT("M5.SingleChunkRoute");
-	Result.Message = Message;
-	return Result;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic SingleChunkRouteError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = TEXT("M5.SingleChunkRoute");
+		Result.Message = Message;
+		return Result;
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLandChunkData& Chunk, int32 VoxelSizeCm,
 	bool bUnlimitedM4, const FVoxelLandM5PointCm& StartFeet, const FVoxelLandM5PointCm& EndFeet, int64 RadiusCm,
@@ -33,7 +34,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
 	{
-		return SingleChunkRouteError(E::Cancelled, TEXT("Route certification cancelled"));
+		return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+			E::Cancelled, TEXT("Route certification cancelled"));
 	}
 	constexpr int64 Limit = 1048576;
 	if (Chunk.Key.LOD != 0 || Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || VoxelSizeCm < 1
@@ -42,7 +44,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 		|| SupportIndices.Num() > 256 || MaxSlopeNumerator < 0 || MaxSlopeDenominator <= 0
 		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, float(VoxelSizeCm), bUnlimitedM4))
 	{
-		return SingleChunkRouteError(E::InvalidInput, TEXT("Invalid single-chunk route inputs"));
+		return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+			E::InvalidInput, TEXT("Invalid single-chunk route inputs"));
 	}
 	const int64 Radius = RadiusCm + MarginCm; // Inputs are bounded by 2^20.
 	const int64 Scale = VoxelSizeCm;
@@ -52,7 +55,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 		if (Point.X < -Limit || Point.X > Limit || Point.Y < -Limit || Point.Y > Limit || Point.Z < -Limit
 			|| Point.Z > Limit)
 		{
-			return SingleChunkRouteError(E::OutOfDomain, TEXT("Route point outside logical domain"));
+			return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+				E::OutOfDomain, TEXT("Route point outside logical domain"));
 		}
 		const int64 Values[] = {Point.X, Point.Y, Point.Z};
 		for (int32 Axis = 0; Axis < 3; ++Axis)
@@ -63,7 +67,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 			const int64 Upper = Values[Axis] + (Axis == 2 ? HeightCm + MarginCm : Radius);
 			if (Lower <= Origin + 2 * Scale || Upper >= Origin + 30 * Scale)
 			{
-				return SingleChunkRouteError(E::Unproven, TEXT("Sweep requires neighboring chunk ownership"));
+				return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+					E::Unproven, TEXT("Sweep requires neighboring chunk ownership"));
 			}
 		}
 	}
@@ -78,7 +83,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(4000000))
 	{
-		return SingleChunkRouteError(E::BudgetExceeded, TEXT("Mesh certification admission exhausted"));
+		return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+			E::BudgetExceeded, TEXT("Mesh certification admission exhausted"));
 	}
 	FVoxelLandMeshingScratch MeshScratch;
 	FVoxelLandMeshData Mesh;
@@ -86,7 +92,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 		VoxelLandMeshing::BuildSurfaceNets(Chunk, float(VoxelSizeCm), MeshScratch, Mesh, IsCancelled, bUnlimitedM4);
 	if (MeshResult != EVoxelLandMeshResult::Success)
 	{
-		return SingleChunkRouteError(MeshResult == EVoxelLandMeshResult::Cancelled ? E::Cancelled : E::Unproven,
+		return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+			MeshResult == EVoxelLandMeshResult::Cancelled ? E::Cancelled : E::Unproven,
 			TEXT("Actual CPU meshing did not succeed"));
 	}
 	TArray<FVoxelLandM5ValidationTriangle> Triangles;
@@ -104,11 +111,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 	{
 		if (IsCancelled())
 		{
-			return SingleChunkRouteError(E::Cancelled, TEXT("Route certification cancelled"));
+			return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+				E::Cancelled, TEXT("Route certification cancelled"));
 		}
 		if (!Triangles.IsValidIndex(Index) || Selected[Index])
 		{
-			return SingleChunkRouteError(E::InvalidInput, TEXT("Invalid or duplicate support triangle"));
+			return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+				E::InvalidInput, TEXT("Invalid or duplicate support triangle"));
 		}
 		Selected[Index] = 1;
 		FVoxelLandM5FixedTriangleQ18 Fixed;
@@ -140,7 +149,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 	{
 		if ((Index & 63) == 0 && IsCancelled())
 		{
-			return SingleChunkRouteError(E::Cancelled, TEXT("Route certification cancelled"));
+			return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+				E::Cancelled, TEXT("Route certification cancelled"));
 		}
 		if (!Selected[Index])
 		{

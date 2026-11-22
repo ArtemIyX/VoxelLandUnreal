@@ -2,17 +2,18 @@
 
 #include "Generation/VoxelLandM5CheckedMath.h"
 
-namespace
+class FVoxelLandM5FieldSafetyInternals final
 {
-FVoxelLandM5Diagnostic M5FieldSafetyError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = FName(TEXT("FieldSafety"));
-	Result.Message = Message;
-	return Result;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic M5FieldSafetyError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = FName(TEXT("FieldSafety"));
+		Result.Message = Message;
+		return Result;
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::FieldSafety::CheckUnchangedProtectedCells(FIntVector CellCounts,
 	TConstArrayView<int16> Baseline, TConstArrayView<int16> Final, TConstArrayView<uint8> ProtectedCells,
@@ -22,7 +23,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FieldSafety::CheckUnchangedProtectedCells(
 	using namespace VoxelLand::M5::CheckedMath;
 	if (CellCounts.X <= 0 || CellCounts.Y <= 0 || CellCounts.Z <= 0 || MaxComparisons < 0)
 	{
-		return M5FieldSafetyError(
+		return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid field safety dimensions or budget"));
 	}
 	const int64 X = CellCounts.X;
@@ -40,27 +41,31 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FieldSafety::CheckUnchangedProtectedCells(
 		|| !TryMultiplyNonNegative(SX, SY, SampleXY) || !TryMultiplyNonNegative(SampleXY, SZ, Samples)
 		|| !TryMultiplyNonNegative(Cells, 64, RequiredWork))
 	{
-		return M5FieldSafetyError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Field safety grid size overflow"));
+		return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Field safety grid size overflow"));
 	}
 	if (Cells > MAX_int32 || Samples > MAX_int32 || Baseline.Num() != Samples || Final.Num() != Samples
 		|| ProtectedCells.Num() != Cells || RoofCells.Num() != Cells || EntranceCells.Num() != Cells)
 	{
-		return M5FieldSafetyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Field safety grid or halo size mismatch"));
+		return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Field safety grid or halo size mismatch"));
 	}
 	if (RequiredWork > MaxComparisons)
 	{
-		return M5FieldSafetyError(
+		return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Field safety comparison budget exceeded"));
 	}
 	for (int64 Cell = 0; Cell < Cells; ++Cell)
 	{
 		if ((Cell & 63) == 0 && IsCancelled())
 		{
-			return M5FieldSafetyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Field safety check cancelled"));
+			return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Field safety check cancelled"));
 		}
 		if (ProtectedCells[Cell] > 1 || RoofCells[Cell] > 1 || EntranceCells[Cell] > 1)
 		{
-			return M5FieldSafetyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Field safety mask is not binary"));
+			return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Field safety mask is not binary"));
 		}
 		if (!ProtectedCells[Cell] && (!RoofCells[Cell] || EntranceCells[Cell]))
 		{
@@ -78,7 +83,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FieldSafety::CheckUnchangedProtectedCells(
 					const int64 Sample = (CX + DX) + SX * ((CY + DY) + SY * (CZ + DZ));
 					if (Baseline[Sample] != Final[Sample])
 					{
-						return M5FieldSafetyError(EVoxelLandM5ErrorCode::Blocked,
+						return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(EVoxelLandM5ErrorCode::Blocked,
 							TEXT("A protected or roof cell has a changed contributing sample"));
 					}
 				}
@@ -87,7 +92,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FieldSafety::CheckUnchangedProtectedCells(
 	}
 	if (IsCancelled())
 	{
-		return M5FieldSafetyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Field safety check cancelled"));
+		return FVoxelLandM5FieldSafetyInternals::M5FieldSafetyError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Field safety check cancelled"));
 	}
 	return {};
 }

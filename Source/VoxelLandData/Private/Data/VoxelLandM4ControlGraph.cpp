@@ -6,9 +6,15 @@
 #include "UObject/ObjectSaveContext.h"
 #endif
 
-namespace
+class FVoxelLandM4ControlGraphInternals final
 {
-bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& Error)
+public:
+	static bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& Error);
+	static bool M4ProjectionTerminalValid(const FVoxelLandGraphNodeRecord& Node, int32 Inputs);
+};
+
+bool FVoxelLandM4ControlGraphInternals::M4ProjectionValidateSource(
+	const FVoxelLandGraphSnapshot& Source, FString& Error)
 {
 	if (Source.SourceVersion != 1 || Source.Nodes.Num() > 128 || Source.Links.Num() > 2048
 	    || Source.Parameters.Num() > 128 || Source.Functions.Num() > 128)
@@ -95,7 +101,7 @@ bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& 
 	return true;
 }
 
-bool M4ProjectionTerminalValid(const FVoxelLandGraphNodeRecord& Node, int32 Inputs)
+bool FVoxelLandM4ControlGraphInternals::M4ProjectionTerminalValid(const FVoxelLandGraphNodeRecord& Node, int32 Inputs)
 {
 	if (Node.OperatorVersion != 1 || !Node.Configuration.IsEmpty() || !Node.FunctionPath.IsNull()
 	    || Node.Pins.Num() != Inputs)
@@ -110,7 +116,6 @@ bool M4ProjectionTerminalValid(const FVoxelLandGraphNodeRecord& Node, int32 Inpu
 		}
 	}
 	return true;
-}
 }
 
 void UVoxelLandM4ControlGraph::Serialize(FArchive& Ar)
@@ -177,7 +182,7 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 	EVoxelLandM4ControlChannel Channel, FVoxelLandGraphSnapshot& OutProjection, FString& OutError) const
 {
 	OutError.Reset();
-	if (!M4ProjectionValidateSource(Source, OutError))
+	if (!FVoxelLandM4ControlGraphInternals::M4ProjectionValidateSource(Source, OutError))
 	{
 		return false;
 	}
@@ -208,7 +213,8 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 				Height = &Node;
 			}
 		}
-		if (!Height || PinIndex == INDEX_NONE || !M4ProjectionTerminalValid(*Height, 3))
+		if (!Height || PinIndex == INDEX_NONE
+			|| !FVoxelLandM4ControlGraphInternals::M4ProjectionTerminalValid(*Height, 3))
 		{
 			OutError = TEXT("Missing or unsupported M4 height output.");
 			return false;
@@ -249,7 +255,7 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 		}
 		if (Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput))
 		{
-			if (!M4ProjectionTerminalValid(Node, 1))
+			if (!FVoxelLandM4ControlGraphInternals::M4ProjectionTerminalValid(Node, 1))
 			{
 				OutError = TEXT("Invalid M4 named output terminal.");
 				return false;

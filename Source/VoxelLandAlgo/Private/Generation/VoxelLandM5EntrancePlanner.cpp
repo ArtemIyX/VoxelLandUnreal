@@ -7,122 +7,124 @@
 #include "Generation/VoxelLandM5RegionalSeed.h"
 #include "Generation/VoxelLandM5Seed.h"
 
-namespace
+class FVoxelLandM5EntrancePlannerInternals final
 {
-constexpr int64 M5EntranceCoordinateLimit = 1048576;
-constexpr int32 M5EntranceHardCount = 256;
-constexpr uint32 M5EntranceMaxDraws = 64;
+public:
+	static constexpr int64 M5EntranceCoordinateLimit = 1048576;
+	static constexpr int32 M5EntranceHardCount = 256;
+	static constexpr uint32 M5EntranceMaxDraws = 64;
 
-FVoxelLandM5Diagnostic M5EntranceError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = TEXT("M5.EntrancePlanner");
-	Result.Message = Message;
-	return Result;
-}
-
-bool M5EntranceBoundsValid(const FVoxelLandM5Bounds& B)
-{
-	const auto Valid = [](int64 Min, int64 Max) {
-		return Min >= -M5EntranceCoordinateLimit && Min <= M5EntranceCoordinateLimit && Max > Min
-			&& Max <= M5EntranceCoordinateLimit + 1;
-	};
-	return Valid(B.MinInclusive.X, B.MaxExclusive.X) && Valid(B.MinInclusive.Y, B.MaxExclusive.Y)
-		&& Valid(B.MinInclusive.Z, B.MaxExclusive.Z);
-}
-
-bool M5EntranceContains(const FVoxelLandM5Bounds& B, const FVoxelLandM5PointCm& P)
-{
-	return P.X >= B.MinInclusive.X && P.X < B.MaxExclusive.X && P.Y >= B.MinInclusive.Y && P.Y < B.MaxExclusive.Y
-		&& P.Z >= B.MinInclusive.Z && P.Z < B.MaxExclusive.Z;
-}
-
-// For 0 <= degrees < 90, degrees/90 is no larger than tan(degrees).
-// max(|dx|,|dy|) is no larger than horizontal Euclidean distance. Thus
-// satisfying this integer bound conservatively limits the true angle.
-bool M5EntranceSlopeAllowed(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B, int32 Degrees)
-{
-	const int64 DX = FMath::Abs(B.X - A.X);
-	const int64 DY = FMath::Abs(B.Y - A.Y);
-	const int64 DZ = FMath::Abs(B.Z - A.Z);
-	return DZ * 90 <= FMath::Max(DX, DY) * int64(Degrees);
-}
-
-bool M5EntranceRandom(const FVoxelLandM5CaveSettings& S, int64 Seed, const FVoxelLandM5RegionCoord& Region,
-	uint64 EntranceId, uint32 Attempt, uint32 FirstDraw, int64 Min, int64 Max, TFunctionRef<bool()> IsCancelled,
-	int64& Out)
-{
-	uint32 Draws = 0;
-	return VoxelLand::M5::Seed::TryUniformSigned(
-		Min, Max, FirstDraw, M5EntranceMaxDraws,
-		[&S, Seed, &Region, EntranceId, Attempt](uint32 Draw, uint64& Word) {
-			TArray<uint8> Digest;
-			const bool bOk = S.PlanningMode == EVoxelLandM5PlanningMode::Regional
-							   ? VoxelLand::M5::RegionalSeed::TryStreamDigest(3, Seed, S.StageId, uint64(S.Salt),
-									 Region.X, Region.Y, EntranceId, Attempt, Draw, Digest)
-							   : VoxelLand::M5::Seed::TryStreamDigest(
-									 3, Seed, S.StageId, uint64(S.Salt), EntranceId, Attempt, Draw, Digest);
-			return bOk && VoxelLand::M5::Seed::TryDigestWord(Digest, Word);
-		},
-		IsCancelled, Out, Draws);
-}
-
-template <typename T> bool M5EntranceIdsValid(const TArray<T>& Items, TFunctionRef<bool()> IsCancelled)
-{
-	for (int32 I = 0; I < Items.Num(); ++I)
+	static FVoxelLandM5Diagnostic M5EntranceError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 	{
-		if (IsCancelled() || !Items[I].bHasId)
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = TEXT("M5.EntrancePlanner");
+		Result.Message = Message;
+		return Result;
+	}
+
+	static bool M5EntranceBoundsValid(const FVoxelLandM5Bounds& B)
+	{
+		const auto Valid = [](int64 Min, int64 Max) {
+			return Min >= -M5EntranceCoordinateLimit && Min <= M5EntranceCoordinateLimit && Max > Min
+				&& Max <= M5EntranceCoordinateLimit + 1;
+		};
+		return Valid(B.MinInclusive.X, B.MaxExclusive.X) && Valid(B.MinInclusive.Y, B.MaxExclusive.Y)
+			&& Valid(B.MinInclusive.Z, B.MaxExclusive.Z);
+	}
+
+	static bool M5EntranceContains(const FVoxelLandM5Bounds& B, const FVoxelLandM5PointCm& P)
+	{
+		return P.X >= B.MinInclusive.X && P.X < B.MaxExclusive.X && P.Y >= B.MinInclusive.Y && P.Y < B.MaxExclusive.Y
+			&& P.Z >= B.MinInclusive.Z && P.Z < B.MaxExclusive.Z;
+	}
+
+	// For 0 <= degrees < 90, degrees/90 is no larger than tan(degrees).
+	// max(|dx|,|dy|) is no larger than horizontal Euclidean distance. Thus
+	// satisfying this integer bound conservatively limits the true angle.
+	static bool M5EntranceSlopeAllowed(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B, int32 Degrees)
+	{
+		const int64 DX = FMath::Abs(B.X - A.X);
+		const int64 DY = FMath::Abs(B.Y - A.Y);
+		const int64 DZ = FMath::Abs(B.Z - A.Z);
+		return DZ * 90 <= FMath::Max(DX, DY) * int64(Degrees);
+	}
+
+	static bool M5EntranceRandom(const FVoxelLandM5CaveSettings& S, int64 Seed, const FVoxelLandM5RegionCoord& Region,
+		uint64 EntranceId, uint32 Attempt, uint32 FirstDraw, int64 Min, int64 Max, TFunctionRef<bool()> IsCancelled,
+		int64& Out)
+	{
+		uint32 Draws = 0;
+		return VoxelLand::M5::Seed::TryUniformSigned(
+			Min, Max, FirstDraw, M5EntranceMaxDraws,
+			[&S, Seed, &Region, EntranceId, Attempt](uint32 Draw, uint64& Word) {
+				TArray<uint8> Digest;
+				const bool bOk = S.PlanningMode == EVoxelLandM5PlanningMode::Regional
+								   ? VoxelLand::M5::RegionalSeed::TryStreamDigest(3, Seed, S.StageId, uint64(S.Salt),
+										 Region.X, Region.Y, EntranceId, Attempt, Draw, Digest)
+								   : VoxelLand::M5::Seed::TryStreamDigest(
+										 3, Seed, S.StageId, uint64(S.Salt), EntranceId, Attempt, Draw, Digest);
+				return bOk && VoxelLand::M5::Seed::TryDigestWord(Digest, Word);
+			},
+			IsCancelled, Out, Draws);
+	}
+
+	template <typename T> static bool M5EntranceIdsValid(const TArray<T>& Items, TFunctionRef<bool()> IsCancelled)
+	{
+		for (int32 I = 0; I < Items.Num(); ++I)
 		{
-			return false;
-		}
-		for (int32 J = 0; J < I; ++J)
-		{
-			if ((J % 256 == 0 && IsCancelled()) || Items[I].Id == Items[J].Id)
+			if (IsCancelled() || !Items[I].bHasId)
 			{
 				return false;
 			}
+			for (int32 J = 0; J < I; ++J)
+			{
+				if ((J % 256 == 0 && IsCancelled()) || Items[I].Id == Items[J].Id)
+				{
+					return false;
+				}
+			}
 		}
+		return true;
 	}
-	return true;
-}
 
-template <typename T> bool M5EntranceNextId(const TArray<T>& Items, TFunctionRef<bool()> IsCancelled, uint64& OutId)
-{
-	// At most Items.Num() IDs can occupy this bounded prefix.
-	for (uint64 Id = 0; Id < uint64(Items.Num()); ++Id)
+	template <typename T>
+	static bool M5EntranceNextId(const TArray<T>& Items, TFunctionRef<bool()> IsCancelled, uint64& OutId)
 	{
+		// At most Items.Num() IDs can occupy this bounded prefix.
+		for (uint64 Id = 0; Id < uint64(Items.Num()); ++Id)
+		{
+			if (IsCancelled())
+			{
+				return false;
+			}
+			bool bFound = false;
+			for (int32 Index = 0; Index < Items.Num(); ++Index)
+			{
+				if (Index % 256 == 0 && IsCancelled())
+				{
+					return false;
+				}
+				if (Items[Index].Id == Id)
+				{
+					bFound = true;
+					break;
+				}
+			}
+			if (!bFound)
+			{
+				OutId = Id;
+				return true;
+			}
+		}
 		if (IsCancelled())
 		{
 			return false;
 		}
-		bool bFound = false;
-		for (int32 Index = 0; Index < Items.Num(); ++Index)
-		{
-			if (Index % 256 == 0 && IsCancelled())
-			{
-				return false;
-			}
-			if (Items[Index].Id == Id)
-			{
-				bFound = true;
-				break;
-			}
-		}
-		if (!bFound)
-		{
-			OutId = Id;
-			return true;
-		}
+		OutId = uint64(Items.Num());
+		return true;
 	}
-	if (IsCancelled())
-	{
-		return false;
-	}
-	OutId = uint64(Items.Num());
-	return true;
-}
-}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5CaveSettings& S, int64 Seed,
 	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> CandidateResult,
@@ -134,12 +136,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 {
 	if (IsCancelled())
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
 	}
 	if (!CandidateResult->UsesBudget(*Budget)
 		|| !CandidateResult->MatchesSource(S, Seed, CandidateResult->GetPlan().Region))
 	{
-		return M5EntranceError(
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate budget or source descriptor mismatch"));
 	}
 	const FVoxelLandM5CavePlan& Candidate = CandidateResult->GetPlan();
@@ -147,7 +150,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 	// not yet account for either, so reject before making an uncharged copy.
 	if (!Candidate.Routes.IsEmpty() || !Candidate.Junctions.IsEmpty())
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::Unproven,
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(EVoxelLandM5ErrorCode::Unproven,
 			TEXT("Entrance planning cannot yet copy route or junction records under the shared budget"));
 	}
 	const auto& T = S.Topology;
@@ -158,23 +161,24 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 	Budget->GetLimits(BudgetMaxBytes, BudgetMaxWork);
 	if (BudgetMaxBytes > L.MaxBytes || BudgetMaxWork > L.MaxValidationWork)
 	{
-		return M5EntranceError(
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Shared budget limits exceed authored per-plan limits"));
 	}
-	if (!S.bEnabled || !S.StageId.IsValid() || !M5EntranceBoundsValid(B)
+	if (!S.bEnabled || !S.StageId.IsValid() || !FVoxelLandM5EntrancePlannerInternals::M5EntranceBoundsValid(B)
 		|| (S.PlanningMode != EVoxelLandM5PlanningMode::Finite && S.PlanningMode != EVoxelLandM5PlanningMode::Regional)
 		|| Candidate.Chambers.IsEmpty() || !Candidate.Entrances.IsEmpty() || T.EntranceCount < 0
-		|| T.EntranceCount > M5EntranceHardCount || L.MaxAttempts < 1 || L.MaxAttempts > 64 || L.MaxEdges < 1
-		|| L.MaxSegments < 1 || L.MaxBytes < 1 || L.MaxValidationWork < 1 || Capsule.RadiusCm < 1
-		|| Capsule.StandingHeightCm < 2 * int64(Capsule.RadiusCm) || Capsule.ClearanceMarginCm < 0
-		|| Capsule.MaxSlopeDegrees < 0 || Capsule.MaxSlopeDegrees > 90 || T.MaxTunnelRadiusCm < 1
-		|| T.MaxTunnelRadiusCm > M5EntranceCoordinateLimit
+		|| T.EntranceCount > FVoxelLandM5EntrancePlannerInternals::M5EntranceHardCount || L.MaxAttempts < 1
+		|| L.MaxAttempts > 64 || L.MaxEdges < 1 || L.MaxSegments < 1 || L.MaxBytes < 1 || L.MaxValidationWork < 1
+		|| Capsule.RadiusCm < 1 || Capsule.StandingHeightCm < 2 * int64(Capsule.RadiusCm)
+		|| Capsule.ClearanceMarginCm < 0 || Capsule.MaxSlopeDegrees < 0 || Capsule.MaxSlopeDegrees > 90
+		|| T.MaxTunnelRadiusCm < 1
+		|| T.MaxTunnelRadiusCm > FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit
 		|| 2 * int64(T.MaxTunnelRadiusCm) < int64(Capsule.StandingHeightCm) + 2 * int64(Capsule.ClearanceMarginCm)
 		|| (S.Water.Policy != EVoxelLandM5WaterPolicy::Ignore
 			&& S.Water.Policy != EVoxelLandM5WaterPolicy::RejectFlooded
 			&& S.Water.Policy != EVoxelLandM5WaterPolicy::AllowAndMark))
 	{
-		return M5EntranceError(
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance settings or candidate plan"));
 	}
 	const int64 ExistingNodes = int64(Candidate.Chambers.Num()) + Candidate.Portals.Num();
@@ -183,15 +187,17 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 		|| Candidate.Segments.Num() > L.MaxSegments || ExistingEdges + T.EntranceCount > L.MaxEdges
 		|| int64(Candidate.Segments.Num()) + 2 * int64(T.EntranceCount) > L.MaxSegments)
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance count exceeds plan budget"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance count exceeds plan budget"));
 	}
 	using namespace VoxelLand::M5::CheckedMath;
-	if (!M5EntranceBoundsValid(S.Bounds) || B.MinInclusive.X < S.Bounds.MinInclusive.X
-		|| B.MinInclusive.Y < S.Bounds.MinInclusive.Y || B.MinInclusive.Z < S.Bounds.MinInclusive.Z
-		|| B.MaxExclusive.X > S.Bounds.MaxExclusive.X || B.MaxExclusive.Y > S.Bounds.MaxExclusive.Y
-		|| B.MaxExclusive.Z > S.Bounds.MaxExclusive.Z)
+	if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceBoundsValid(S.Bounds)
+		|| B.MinInclusive.X < S.Bounds.MinInclusive.X || B.MinInclusive.Y < S.Bounds.MinInclusive.Y
+		|| B.MinInclusive.Z < S.Bounds.MinInclusive.Z || B.MaxExclusive.X > S.Bounds.MaxExclusive.X
+		|| B.MaxExclusive.Y > S.Bounds.MaxExclusive.Y || B.MaxExclusive.Z > S.Bounds.MaxExclusive.Z)
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Candidate lies outside configured domain"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Candidate lies outside configured domain"));
 	}
 	if (S.PlanningMode == EVoxelLandM5PlanningMode::Finite)
 	{
@@ -199,7 +205,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			|| B.MinInclusive.Z != S.Bounds.MinInclusive.Z || B.MaxExclusive.X != S.Bounds.MaxExclusive.X
 			|| B.MaxExclusive.Y != S.Bounds.MaxExclusive.Y || B.MaxExclusive.Z != S.Bounds.MaxExclusive.Z)
 		{
-			return M5EntranceError(
+			return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Finite candidate bounds differ from settings"));
 		}
 	}
@@ -212,7 +218,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			|| X != B.MinInclusive.X || Y != B.MinInclusive.Y || EndX != B.MaxExclusive.X || EndY != B.MaxExclusive.Y
 			|| B.MinInclusive.Z != S.Bounds.MinInclusive.Z || B.MaxExclusive.Z != S.Bounds.MaxExclusive.Z)
 		{
-			return M5EntranceError(
+			return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Candidate region does not match its bounds"));
 		}
 	}
@@ -227,10 +233,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 		+ int64(T.EntranceCount)
 			  * (8 * (ExistingEdges + T.EntranceCount) * (ExistingEdges + T.EntranceCount)
 				  + 16 * (SegmentCount + 2 * int64(T.EntranceCount)) * (SegmentCount + 2 * int64(T.EntranceCount))
-				  + int64(L.MaxAttempts) * (2 * (2 * int64(M5EntranceMaxDraws) + 1) + 16 * ChamberCount + 32));
+				  + int64(L.MaxAttempts)
+						* (2 * (2 * int64(FVoxelLandM5EntrancePlannerInternals::M5EntranceMaxDraws) + 1)
+							+ 16 * ChamberCount + 32));
 	if (Work > L.MaxValidationWork)
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance work exceeds budget"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance work exceeds budget"));
 	}
 	int64 Bytes = 0;
 	int64 Part = 0;
@@ -244,39 +253,46 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 		|| !Charge(T.EntranceCount, sizeof(FVoxelLandM5Entrance)) || !TryMultiplyNonNegative(Bytes, 4, Bytes)
 		|| !TryAdd(Bytes, 16384, Bytes))
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Entrance admission overflow"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Entrance admission overflow"));
 	}
 	if (Bytes > L.MaxBytes)
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance scratch exceeds memory budget"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance scratch exceeds memory budget"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(Bytes, Lease))
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance memory admission failed"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance memory admission failed"));
 	}
 	if (!Budget->TryChargeWork(Work))
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance work admission failed"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Entrance work admission failed"));
 	}
-	if (!M5EntranceIdsValid(Candidate.Chambers, IsCancelled) || !M5EntranceIdsValid(Candidate.Connections, IsCancelled)
-		|| !M5EntranceIdsValid(Candidate.Segments, IsCancelled))
+	if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceIdsValid(Candidate.Chambers, IsCancelled)
+		|| !FVoxelLandM5EntrancePlannerInternals::M5EntranceIdsValid(Candidate.Connections, IsCancelled)
+		|| !FVoxelLandM5EntrancePlannerInternals::M5EntranceIdsValid(Candidate.Segments, IsCancelled))
 	{
-		return M5EntranceError(
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 			IsCancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::InconsistentTopology,
 			TEXT("Candidate validation cancelled or has missing or duplicate IDs"));
 	}
 	for (const FVoxelLandM5Chamber& Chamber : Candidate.Chambers)
 	{
-		if (!M5EntranceContains(B, Chamber.CenterCm) || Chamber.RadiusCm < T.MaxTunnelRadiusCm)
+		if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceContains(B, Chamber.CenterCm)
+			|| Chamber.RadiusCm < T.MaxTunnelRadiusCm)
 		{
-			return M5EntranceError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid chamber geometry"));
+			return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid chamber geometry"));
 		}
 	}
 	const int64 Radius = T.MaxTunnelRadiusCm;
 	if (T.EntranceCount > 0 && Capsule.MaxSlopeDegrees == 0)
 	{
-		return M5EntranceError(
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 			EVoxelLandM5ErrorCode::Unproven, TEXT("A horizontal-only profile cannot ascend to the surface"));
 	}
 	// Chosen conservative ratio Degrees/90 avoids platform trigonometry. The
@@ -284,16 +300,17 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 	const int64 Rise = Radius + int64(Capsule.StandingHeightCm) + Capsule.ClearanceMarginCm;
 	const int64 Offset = T.EntranceCount > 0 ? (Rise * 90 + Capsule.MaxSlopeDegrees - 1) / Capsule.MaxSlopeDegrees : 0;
 	const int64 QueryRadius = Radius + Offset;
-	if (QueryRadius > M5EntranceCoordinateLimit)
+	if (QueryRadius > FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit)
 	{
-		return M5EntranceError(
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 			EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Entrance ramp footprint exceeds coordinate limits"));
 	}
 	const int64 MinX = B.MinInclusive.X + QueryRadius, MaxX = B.MaxExclusive.X - 1 - QueryRadius;
 	const int64 MinY = B.MinInclusive.Y + QueryRadius, MaxY = B.MaxExclusive.Y - 1 - QueryRadius;
 	if (MinX > MaxX || MinY > MaxY)
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("No opening footprint fits in the domain"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::OutOfDomain, TEXT("No opening footprint fits in the domain"));
 	}
 	FVoxelLandM5CavePlan Scratch = Candidate;
 	for (int32 Index = 0; Index < T.EntranceCount; ++Index)
@@ -304,15 +321,16 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 		{
 			if (IsCancelled())
 			{
-				return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
 			}
 			FVoxelLandM5PointCm Surface;
-			if (!M5EntranceRandom(
+			if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceRandom(
 					S, Seed, Candidate.Region, uint64(Index), uint32(Attempt), 0, MinX, MaxX, IsCancelled, Surface.X)
-				|| !M5EntranceRandom(
+				|| !FVoxelLandM5EntrancePlannerInternals::M5EntranceRandom(
 					S, Seed, Candidate.Region, uint64(Index), uint32(Attempt), 64, MinY, MaxY, IsCancelled, Surface.Y))
 			{
-				return M5EntranceError(
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 					IsCancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
 					TEXT("Entrance random stream exhausted"));
 			}
@@ -325,16 +343,18 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			{
 				return SurfaceError;
 			}
-			if (Slope < 0 || Slope > 90 || Surface.Z < -M5EntranceCoordinateLimit
-				|| Surface.Z > M5EntranceCoordinateLimit || MinSurfaceZ < -M5EntranceCoordinateLimit
-				|| MaxSurfaceZ > M5EntranceCoordinateLimit || MinSurfaceZ > Surface.Z || Surface.Z > MaxSurfaceZ)
+			if (Slope < 0 || Slope > 90 || Surface.Z < -FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit
+				|| Surface.Z > FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit
+				|| MinSurfaceZ < -FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit
+				|| MaxSurfaceZ > FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit
+				|| MinSurfaceZ > Surface.Z || Surface.Z > MaxSurfaceZ)
 			{
-				return M5EntranceError(
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Final-surface query returned invalid data"));
 			}
 			if (MinSurfaceZ != MaxSurfaceZ)
 			{
-				return M5EntranceError(
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Varying surface footprint is not supported"));
 			}
 			if (bProtected || Slope > Capsule.MaxSlopeDegrees
@@ -358,7 +378,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 				// Keep the whole oblique approach centerline at or below this
 				// plane; only the vertical segment crosses the queried footprint.
 				if (Chamber.CenterCm.Z > Approach.Z
-					|| !M5EntranceSlopeAllowed(Chamber.CenterCm, Approach, Capsule.MaxSlopeDegrees))
+					|| !FVoxelLandM5EntrancePlannerInternals::M5EntranceSlopeAllowed(
+						Chamber.CenterCm, Approach, Capsule.MaxSlopeDegrees))
 				{
 					continue;
 				}
@@ -376,16 +397,20 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 				bSlopeUnproven = true;
 				continue;
 			}
-			if (!M5EntranceSlopeAllowed(Approach, Outside, Capsule.MaxSlopeDegrees))
+			if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceSlopeAllowed(
+					Approach, Outside, Capsule.MaxSlopeDegrees))
 			{
-				return M5EntranceError(EVoxelLandM5ErrorCode::Unproven, TEXT("Cannot prove entrance centerline slope"));
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+					EVoxelLandM5ErrorCode::Unproven, TEXT("Cannot prove entrance centerline slope"));
 			}
 			FVoxelLandM5Entrance Entrance;
 			Entrance.bHasId = Entrance.bHasConnectionId = true;
 			Entrance.Id = uint64(Index);
-			if (!M5EntranceNextId(Scratch.Connections, IsCancelled, Entrance.ConnectionId))
+			if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceNextId(
+					Scratch.Connections, IsCancelled, Entrance.ConnectionId))
 			{
-				return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance ID search cancelled"));
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance ID search cancelled"));
 			}
 			Entrance.bFlooded = bFlooded && S.Water.Policy == EVoxelLandM5WaterPolicy::AllowAndMark;
 			Entrance.OpeningBoundsCm.MinInclusive.X = Surface.X - QueryRadius;
@@ -405,9 +430,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			Connection.End.Id = Entrance.Id;
 			FVoxelLandM5Segment Segment;
 			Segment.bHasId = Segment.bHasConnectionId = true;
-			if (!M5EntranceNextId(Scratch.Segments, IsCancelled, Segment.Id))
+			if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceNextId(Scratch.Segments, IsCancelled, Segment.Id))
 			{
-				return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance ID search cancelled"));
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance ID search cancelled"));
 			}
 			Segment.ConnectionId = Connection.Id;
 			Segment.StartCm = Nearest->CenterCm;
@@ -415,9 +441,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			Segment.RadiusCm = int32(Radius);
 			Scratch.Segments.Add(Segment);
 			FVoxelLandM5Segment Vertical = Segment;
-			if (!M5EntranceNextId(Scratch.Segments, IsCancelled, Vertical.Id))
+			if (!FVoxelLandM5EntrancePlannerInternals::M5EntranceNextId(Scratch.Segments, IsCancelled, Vertical.Id))
 			{
-				return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance ID search cancelled"));
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance ID search cancelled"));
 			}
 			Vertical.StartCm = Approach;
 			Vertical.EndCm = Outside;
@@ -429,13 +456,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 		}
 		if (!bPlaced)
 		{
-			return M5EntranceError(bSlopeUnproven ? EVoxelLandM5ErrorCode::Unproven : EVoxelLandM5ErrorCode::Blocked,
+			return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+				bSlopeUnproven ? EVoxelLandM5ErrorCode::Unproven : EVoxelLandM5ErrorCode::Blocked,
 				TEXT("No provable eligible entrance within the attempt budget"));
 		}
 	}
 	if (IsCancelled())
 	{
-		return M5EntranceError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
 	}
 	TSharedPtr<FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result = MakeShareable(
 		new FVoxelLandM5CandidateResult(Budget, S, Seed, Candidate.Region, MoveTemp(Scratch), MoveTemp(Lease)));

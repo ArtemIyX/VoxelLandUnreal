@@ -2,166 +2,184 @@
 #include "Data/VoxelLandGraphCycle.h"
 #include "Data/VoxelLandGraphFunctionCapture.h"
 
-namespace
-{
-constexpr int32 MaxNodes = 4096;
-constexpr int32 MaxPinsPerNode = 64;
-constexpr int32 MaxLinks = 16384;
-constexpr int32 MaxNodeConfigBytes = 65536;
-constexpr int64 MaxGraphConfigBytes = 1048576;
-}
-
-namespace
-{
-class FGraphStructureValidator
+class FVoxelLandTerrainGraphChanges final
 {
 public:
-	FGraphStructureValidator(const UVoxelLandTerrainGraph& InGraph, FVoxelLandGraphDiagnostic& InDiagnostic)
-		: Graph(InGraph), Diagnostic(InDiagnostic) {}
+	static constexpr int32 MaxNodes = 4096;
+	static constexpr int32 MaxPinsPerNode = 64;
+	static constexpr int32 MaxLinks = 16384;
+	static constexpr int32 MaxNodeConfigBytes = 65536;
+	static constexpr int64 MaxGraphConfigBytes = 1048576;
+};
 
-	bool Validate()
+class FVoxelLandTerrainGraphValidation final
+{
+public:
+	class FGraphStructureValidator
 	{
-		if (Graph.SourceVersion != 1 || Graph.Nodes.Num() > MaxNodes || Graph.Links.Num() > MaxLinks)
+	public:
+		FGraphStructureValidator(const UVoxelLandTerrainGraph& InGraph, FVoxelLandGraphDiagnostic& InDiagnostic)
+			: Graph(InGraph)
+			, Diagnostic(InDiagnostic)
 		{
-			Diagnostic.Message = TEXT("Unsupported graph version or graph exceeds record limits.");
-			return false;
 		}
-		return BuildIndex() && ValidateLinks() && ValidateAcyclic();
-	}
 
-private:
-	bool BuildIndex()
-	{
-		int64 TotalConfigBytes = 0;
-		for (int32 Index = 0; Index < Graph.Nodes.Num(); ++Index)
+		bool Validate()
 		{
-			const FVoxelLandGraphNodeRecord& Node = Graph.Nodes[Index];
-			if (!Node.Id.IsValid() || !Node.OperatorId.IsValid() || Node.OperatorVersion < 1 ||
-			    NodeIndices.Contains(Node.Id) || Node.Pins.Num() > MaxPinsPerNode)
+			if (Graph.SourceVersion != 1 || Graph.Nodes.Num() > FVoxelLandTerrainGraphChanges::MaxNodes
+				|| Graph.Links.Num() > FVoxelLandTerrainGraphChanges::MaxLinks)
 			{
-				if (Node.Id.IsValid() && !NodeIndices.Contains(Node.Id)) { Diagnostic.NodeId = Node.Id; }
-				Diagnostic.Message = TEXT("Invalid or duplicate node ID, operator, version or pin count.");
+				Diagnostic.Message = TEXT("Unsupported graph version or graph exceeds record limits.");
 				return false;
 			}
-			TotalConfigBytes += Node.Configuration.Num();
-			if (Node.Configuration.Num() > MaxNodeConfigBytes || TotalConfigBytes > MaxGraphConfigBytes)
+			return BuildIndex() && ValidateLinks() && ValidateAcyclic();
+		}
+
+	private:
+		bool BuildIndex()
+		{
+			int64 TotalConfigBytes = 0;
+			for (int32 Index = 0; Index < Graph.Nodes.Num(); ++Index)
 			{
-				Diagnostic.NodeId = Node.Id;
-				Diagnostic.Message = TEXT("Graph operator configuration exceeds its size limit.");
-				return false;
-			}
-			NodeIndices.Add(Node.Id, Index);
-			for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
-			{
-				if (!Pin.Id.IsValid() || Pins.Contains(Pin.Id) ||
-				    (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32 &&
-				     Pin.Type != EVoxelLandGraphValueType::Bool) || Pin.bInvalidDefault || !FMath::IsFinite(
-					    Pin.FloatDefault))
+				const FVoxelLandGraphNodeRecord& Node = Graph.Nodes[Index];
+				if (!Node.Id.IsValid() || !Node.OperatorId.IsValid() || Node.OperatorVersion < 1
+					|| NodeIndices.Contains(Node.Id) || Node.Pins.Num() > FVoxelLandTerrainGraphChanges::MaxPinsPerNode)
 				{
-					Diagnostic.NodeId = Node.Id;
-					if (Pin.Id.IsValid() && !Pins.Contains(Pin.Id)) { Diagnostic.PinId = Pin.Id; }
-					Diagnostic.Message = TEXT("Invalid or duplicate pin ID, type or default.");
+					if (Node.Id.IsValid() && !NodeIndices.Contains(Node.Id))
+					{
+						Diagnostic.NodeId = Node.Id;
+					}
+					Diagnostic.Message = TEXT("Invalid or duplicate node ID, operator, version or pin count.");
 					return false;
 				}
-				Pins.Add(Pin.Id, &Pin);
-				PinOwners.Add(Pin.Id, Node.Id);
-			}
-		}
-		return true;
-	}
-
-	bool ValidateLinks()
-	{
-		TSet<FGuid> ConnectedInputs;
-		Edges.SetNum(Graph.Nodes.Num());
-		Incoming.Init(0, Graph.Nodes.Num());
-		for (const FVoxelLandGraphLinkRecord& Link : Graph.Links)
-		{
-			const FVoxelLandGraphPinRecord* const* Source = Pins.Find(Link.SourcePin);
-			const FVoxelLandGraphPinRecord* const* Target = Pins.Find(Link.TargetPin);
-			const FGuid* SourceOwner = PinOwners.Find(Link.SourcePin);
-			const FGuid* TargetOwner = PinOwners.Find(Link.TargetPin);
-			const int32* SourceIndex = NodeIndices.Find(Link.SourceNode);
-			const int32* TargetIndex = NodeIndices.Find(Link.TargetNode);
-			if (!Source || !Target || !SourceOwner || !TargetOwner || !SourceIndex || !TargetIndex ||
-			    *SourceOwner != Link.SourceNode || *TargetOwner != Link.TargetNode || !(*Source)->bOutput ||
-			    (*Target)->bOutput || (*Source)->Type != (*Target)->Type || ConnectedInputs.Contains(Link.TargetPin))
-			{
-				if (!Source || !SourceOwner || *SourceOwner != Link.SourceNode || !(*Source)->bOutput)
+				TotalConfigBytes += Node.Configuration.Num();
+				if (Node.Configuration.Num() > FVoxelLandTerrainGraphChanges::MaxNodeConfigBytes
+					|| TotalConfigBytes > FVoxelLandTerrainGraphChanges::MaxGraphConfigBytes)
 				{
-					if (Source && SourceOwner)
+					Diagnostic.NodeId = Node.Id;
+					Diagnostic.Message = TEXT("Graph operator configuration exceeds its size limit.");
+					return false;
+				}
+				NodeIndices.Add(Node.Id, Index);
+				for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+				{
+					if (!Pin.Id.IsValid() || Pins.Contains(Pin.Id)
+						|| (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
+							&& Pin.Type != EVoxelLandGraphValueType::Bool)
+						|| Pin.bInvalidDefault || !FMath::IsFinite(Pin.FloatDefault))
 					{
-						Diagnostic.NodeId = *SourceOwner;
-						Diagnostic.PinId = Link.SourcePin;
+						Diagnostic.NodeId = Node.Id;
+						if (Pin.Id.IsValid() && !Pins.Contains(Pin.Id))
+						{
+							Diagnostic.PinId = Pin.Id;
+						}
+						Diagnostic.Message = TEXT("Invalid or duplicate pin ID, type or default.");
+						return false;
+					}
+					Pins.Add(Pin.Id, &Pin);
+					PinOwners.Add(Pin.Id, Node.Id);
+				}
+			}
+			return true;
+		}
+
+		bool ValidateLinks()
+		{
+			TSet<FGuid> ConnectedInputs;
+			Edges.SetNum(Graph.Nodes.Num());
+			Incoming.Init(0, Graph.Nodes.Num());
+			for (const FVoxelLandGraphLinkRecord& Link : Graph.Links)
+			{
+				const FVoxelLandGraphPinRecord* const* Source = Pins.Find(Link.SourcePin);
+				const FVoxelLandGraphPinRecord* const* Target = Pins.Find(Link.TargetPin);
+				const FGuid* SourceOwner = PinOwners.Find(Link.SourcePin);
+				const FGuid* TargetOwner = PinOwners.Find(Link.TargetPin);
+				const int32* SourceIndex = NodeIndices.Find(Link.SourceNode);
+				const int32* TargetIndex = NodeIndices.Find(Link.TargetNode);
+				if (!Source || !Target || !SourceOwner || !TargetOwner || !SourceIndex || !TargetIndex
+					|| *SourceOwner != Link.SourceNode || *TargetOwner != Link.TargetNode || !(*Source)->bOutput
+					|| (*Target)->bOutput || (*Source)->Type != (*Target)->Type
+					|| ConnectedInputs.Contains(Link.TargetPin))
+				{
+					if (!Source || !SourceOwner || *SourceOwner != Link.SourceNode || !(*Source)->bOutput)
+					{
+						if (Source && SourceOwner)
+						{
+							Diagnostic.NodeId = *SourceOwner;
+							Diagnostic.PinId = Link.SourcePin;
+						}
+						else if (SourceIndex)
+						{
+							Diagnostic.NodeId = Link.SourceNode;
+						}
+					}
+					else if (!Target || !TargetOwner || *TargetOwner != Link.TargetNode || (*Target)->bOutput)
+					{
+						if (Target && TargetOwner)
+						{
+							Diagnostic.NodeId = *TargetOwner;
+							Diagnostic.PinId = Link.TargetPin;
+						}
+						else if (TargetIndex)
+						{
+							Diagnostic.NodeId = Link.TargetNode;
+						}
 					}
 					else
-						if (SourceIndex) { Diagnostic.NodeId = Link.SourceNode; }
-				}
-				else if (!Target || !TargetOwner || *TargetOwner != Link.TargetNode || (*Target)->bOutput)
-				{
-					if (Target && TargetOwner)
 					{
-						Diagnostic.NodeId = *TargetOwner;
+						Diagnostic.NodeId = Link.TargetNode;
 						Diagnostic.PinId = Link.TargetPin;
 					}
-					else
-						if (TargetIndex) { Diagnostic.NodeId = Link.TargetNode; }
+					Diagnostic.Message =
+						TEXT("Invalid link: check pin ownership, direction, type and single input source.");
+					return false;
 				}
-				else
+				ConnectedInputs.Add(Link.TargetPin);
+				Edges[*SourceIndex].Add(*TargetIndex);
+				++Incoming[*TargetIndex];
+			}
+			return true;
+		}
+
+		bool ValidateAcyclic()
+		{
+			TArray<int32> Ready;
+			for (int32 Index = 0; Index < Incoming.Num(); ++Index)
+			{
+				if (Incoming[Index] == 0)
 				{
-					Diagnostic.NodeId = Link.TargetNode;
-					Diagnostic.PinId = Link.TargetPin;
+					Ready.Add(Index);
 				}
-				Diagnostic.Message =
-					TEXT("Invalid link: check pin ownership, direction, type and single input source.");
+			}
+			for (int32 Cursor = 0; Cursor < Ready.Num(); ++Cursor)
+			{
+				for (int32 Target : Edges[Ready[Cursor]])
+				{
+					--Incoming[Target];
+					if (Incoming[Target] == 0)
+					{
+						Ready.Add(Target);
+					}
+				}
+			}
+			if (Ready.Num() != Graph.Nodes.Num())
+			{
+				FVoxelLandGraphCycle::Find(Graph.Nodes, Graph.Links, Diagnostic.NodeId, Diagnostic.PinId);
+				Diagnostic.Message = TEXT("Graph contains a cycle.");
 				return false;
 			}
-			ConnectedInputs.Add(Link.TargetPin);
-			Edges[*SourceIndex].Add(*TargetIndex);
-			++Incoming[*TargetIndex];
+			return true;
 		}
-		return true;
-	}
 
-	bool ValidateAcyclic()
-	{
-		TArray<int32> Ready;
-		for (int32 Index = 0; Index < Incoming.Num(); ++Index)
-		{
-			if (Incoming[Index] == 0)
-			{
-				Ready.Add(Index);
-			}
-		}
-		for (int32 Cursor = 0; Cursor < Ready.Num(); ++Cursor)
-		{
-			for (int32 Target : Edges[Ready[Cursor]])
-			{
-				--Incoming[Target];
-				if (Incoming[Target] == 0)
-				{
-					Ready.Add(Target);
-				}
-			}
-		}
-		if (Ready.Num() != Graph.Nodes.Num())
-		{
-			FVoxelLandGraphCycle::Find(Graph.Nodes, Graph.Links, Diagnostic.NodeId, Diagnostic.PinId);
-			Diagnostic.Message = TEXT("Graph contains a cycle.");
-			return false;
-		}
-		return true;
-	}
-
-	const UVoxelLandTerrainGraph& Graph;
-	FVoxelLandGraphDiagnostic& Diagnostic;
-	TMap<FGuid, int32> NodeIndices;
-	TMap<FGuid, const FVoxelLandGraphPinRecord*> Pins;
-	TMap<FGuid, FGuid> PinOwners;
-	TArray<TArray<int32>> Edges;
-	TArray<int32> Incoming;
+		const UVoxelLandTerrainGraph& Graph;
+		FVoxelLandGraphDiagnostic& Diagnostic;
+		TMap<FGuid, int32> NodeIndices;
+		TMap<FGuid, const FVoxelLandGraphPinRecord*> Pins;
+		TMap<FGuid, FGuid> PinOwners;
+		TArray<TArray<int32>> Edges;
+		TArray<int32> Incoming;
+	};
 };
-}
 
 bool UVoxelLandTerrainGraph::ValidateStructure(FString& OutError) const
 {
@@ -174,7 +192,7 @@ bool UVoxelLandTerrainGraph::ValidateStructure(FString& OutError) const
 bool UVoxelLandTerrainGraph::ValidateStructure(FVoxelLandGraphDiagnostic& OutDiagnostic) const
 {
 	OutDiagnostic = FVoxelLandGraphDiagnostic();
-	return FGraphStructureValidator(*this, OutDiagnostic).Validate();
+	return FVoxelLandTerrainGraphValidation::FGraphStructureValidator(*this, OutDiagnostic).Validate();
 }
 
 bool UVoxelLandTerrainGraph::CaptureSnapshot(FVoxelLandGraphSnapshot& OutSnapshot, FString& OutError) const

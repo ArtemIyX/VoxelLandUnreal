@@ -6,20 +6,21 @@
 #include "Generation/VoxelLandM5RouteTopology.h"
 #include "Generation/VoxelLandM5SegmentCoverage.h"
 
-namespace
+class FVoxelLandM5IdealRouteValidationInternals final
 {
-FVoxelLandM5Diagnostic IdealRouteFailure(
-	EVoxelLandM5ErrorCode Code, const TCHAR* Message, bool bHasFeatureId = false, uint64 FeatureId = 0)
-{
-	FVoxelLandM5Diagnostic Error;
-	Error.Code = Code;
-	Error.Stage = TEXT("M5.IdealRouteValidation");
-	Error.Message = Message;
-	Error.bHasFeatureId = bHasFeatureId;
-	Error.FeatureId = FeatureId;
-	return Error;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic IdealRouteFailure(
+		EVoxelLandM5ErrorCode Code, const TCHAR* Message, bool bHasFeatureId = false, uint64 FeatureId = 0)
+	{
+		FVoxelLandM5Diagnostic Error;
+		Error.Code = Code;
+		Error.Stage = TEXT("M5.IdealRouteValidation");
+		Error.Message = Message;
+		Error.bHasFeatureId = bHasFeatureId;
+		Error.FeatureId = FeatureId;
+		return Error;
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::IdealRouteValidation::Validate(const FVoxelLandM5CaveSettings& Settings,
 	int64 WorldSeed, const FVoxelLandM5RegionCoord& Region,
@@ -35,18 +36,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdealRouteValidation::Validate(const FVoxe
 	const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
 	if (!Budget->TryChargeWork(int64(Plan.Routes.Num()) + 1))
 	{
-		return IdealRouteFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Ideal route count work limit exceeded"));
+		return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Ideal route count work limit exceeded"));
 	}
 	int64 Legs = 0;
 	for (const FVoxelLandM5Route& Route : Plan.Routes)
 	{
 		if (IsCancelled())
 		{
-			return IdealRouteFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Ideal route validation cancelled"));
+			return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Ideal route validation cancelled"));
 		}
 		if (!CheckedMath::TryAdd(Legs, Route.Legs.Num(), Legs))
 		{
-			return IdealRouteFailure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Route leg count overflow"));
+			return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+				EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Route leg count overflow"));
 		}
 	}
 	// Each pair is inspected twice, with a cancellation poll per inspection.
@@ -67,11 +71,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdealRouteValidation::Validate(const FVoxe
 		|| !CheckedMath::TryAdd(Work, 2 * int64(Plan.Routes.Num()), Work) || !CheckedMath::TryAdd(Work, LegWork, Work)
 		|| !CheckedMath::TryAdd(Work, SegmentWork, Work) || !CheckedMath::TryAdd(Work, 8, Work))
 	{
-		return IdealRouteFailure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Coverage work overflow"));
+		return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Coverage work overflow"));
 	}
 	if (!Budget->TryChargeWork(Work))
 	{
-		return IdealRouteFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Ideal route work limit exceeded"));
+		return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Ideal route work limit exceeded"));
 	}
 	for (const FVoxelLandM5Route& Route : Plan.Routes)
 	{
@@ -82,14 +88,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdealRouteValidation::Validate(const FVoxe
 			{
 				if (IsCancelled())
 				{
-					return IdealRouteFailure(
+					return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
 						EVoxelLandM5ErrorCode::Cancelled, TEXT("Ideal route validation cancelled"));
 				}
 				if (Segment.bHasId && Segment.Id == Leg.Feature.Id)
 				{
 					if (Match)
 					{
-						return IdealRouteFailure(
+						return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
 							EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate segment ID"), true, Segment.Id);
 					}
 					Match = &Segment;
@@ -97,8 +103,9 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdealRouteValidation::Validate(const FVoxe
 			}
 			if (!Match)
 			{
-				return IdealRouteFailure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Leg segment is missing"),
-					Leg.Feature.bValid, Leg.Feature.Id);
+				return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+					EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Leg segment is missing"), Leg.Feature.bValid,
+					Leg.Feature.Id);
 			}
 			const FVoxelLandM5Diagnostic Covered =
 				SegmentCoverage::Check(*Match, Leg, Region, Settings.Capsule, Budget, IsCancelled);
@@ -117,7 +124,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdealRouteValidation::Validate(const FVoxe
 			{
 				if (IsCancelled())
 				{
-					return IdealRouteFailure(
+					return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
 						EVoxelLandM5ErrorCode::Cancelled, TEXT("Ideal route validation cancelled"));
 				}
 				if (Leg.Feature.bValid && Leg.Feature.Kind == EVoxelLandM5RouteFeatureKind::Segment
@@ -130,13 +137,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::IdealRouteValidation::Validate(const FVoxe
 		}
 		if (Owners != 1)
 		{
-			return IdealRouteFailure(EVoxelLandM5ErrorCode::InconsistentTopology,
-				TEXT("Segment does not have exactly one traversing leg"), Segment.bHasId, Segment.Id);
+			return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+				EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Segment does not have exactly one traversing leg"),
+				Segment.bHasId, Segment.Id);
 		}
 	}
 	if (IsCancelled())
 	{
-		return IdealRouteFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Ideal route validation cancelled"));
+		return FVoxelLandM5IdealRouteValidationInternals::IdealRouteFailure(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Ideal route validation cancelled"));
 	}
 	return FVoxelLandM5Diagnostic();
 }

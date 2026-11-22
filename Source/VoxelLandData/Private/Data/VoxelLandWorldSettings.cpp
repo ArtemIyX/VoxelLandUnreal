@@ -3,9 +3,16 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
 
-namespace
+class FVoxelLandWorldSettingsInternals final
 {
-bool IsIdentifier(const FString& Name)
+public:
+	static bool IsIdentifier(const FString& Name);
+	static bool ValidateParameter(const FVoxelLandGraphParameter& Parameter, FString& OutError);
+	static bool ValidateOverride(
+		const FVoxelLandParameterOverride& Override, const FVoxelLandGraphParameter& Parameter, FString& OutError);
+};
+
+bool FVoxelLandWorldSettingsInternals::IsIdentifier(const FString& Name)
 {
 	if (Name.IsEmpty())
 	{
@@ -24,7 +31,7 @@ bool IsIdentifier(const FString& Name)
 	return true;
 }
 
-bool ValidateParameter(const FVoxelLandGraphParameter& Parameter, FString& OutError)
+bool FVoxelLandWorldSettingsInternals::ValidateParameter(const FVoxelLandGraphParameter& Parameter, FString& OutError)
 {
 	if (!Parameter.Id.IsValid() || !IsIdentifier(Parameter.Name))
 	{
@@ -65,8 +72,8 @@ bool ValidateParameter(const FVoxelLandGraphParameter& Parameter, FString& OutEr
 	return true;
 }
 
-bool ValidateOverride(const FVoxelLandParameterOverride& Override, const FVoxelLandGraphParameter& Parameter,
-	FString& OutError)
+bool FVoxelLandWorldSettingsInternals::ValidateOverride(
+	const FVoxelLandParameterOverride& Override, const FVoxelLandGraphParameter& Parameter, FString& OutError)
 {
 	if (Override.Type != Parameter.Type)
 	{
@@ -87,7 +94,6 @@ bool ValidateOverride(const FVoxelLandParameterOverride& Override, const FVoxelL
 	}
 	return true;
 }
-}
 
 bool UVoxelLandWorldSettings::ValidateSettings(FString& OutError) const
 {
@@ -107,7 +113,7 @@ bool UVoxelLandWorldSettings::ValidateSettings(FString& OutError) const
 	TSet<FString> Names;
 	for (const FVoxelLandGraphParameter& Parameter : Graph->Parameters)
 	{
-		if (!ValidateParameter(Parameter, OutError))
+		if (!FVoxelLandWorldSettingsInternals::ValidateParameter(Parameter, OutError))
 		{
 			return false;
 		}
@@ -129,7 +135,7 @@ bool UVoxelLandWorldSettings::ValidateSettings(FString& OutError) const
 			OutError = TEXT("An override has a missing or duplicate parameter ID.");
 			return false;
 		}
-		if (!ValidateOverride(Override, **Parameter, OutError))
+		if (!FVoxelLandWorldSettingsInternals::ValidateOverride(Override, **Parameter, OutError))
 		{
 			return false;
 		}

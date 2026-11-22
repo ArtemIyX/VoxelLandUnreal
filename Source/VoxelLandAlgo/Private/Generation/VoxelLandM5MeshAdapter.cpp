@@ -5,9 +5,20 @@
 #include <cmath>
 #include <limits>
 
-namespace
+class FVoxelLandM5MeshAdapterInternals final
 {
-FVoxelLandM5Diagnostic M5MeshAdapterError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+public:
+	static FVoxelLandM5Diagnostic M5MeshAdapterError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
+	static int32 M5MeshSampleIndex(int32 X, int32 Y, int32 Z);
+	static bool M5MeshEnclose(double Origin, float Local, double& Value, int64& Min, int64& Max);
+	static void M5MeshExpand(double& Low, double& High);
+	static void M5MeshSubtract(double A0, double A1, double B0, double B1, double& Low, double& High);
+	static void M5MeshMultiply(double A0, double A1, double B0, double B1, double& Low, double& High);
+	static bool M5MeshProveNondegenerate(const FVector3f& A, const FVector3f& B, const FVector3f& C);
+};
+
+FVoxelLandM5Diagnostic FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Error;
 	Error.Code = Code;
@@ -16,14 +27,14 @@ FVoxelLandM5Diagnostic M5MeshAdapterError(EVoxelLandM5ErrorCode Code, const TCHA
 	return Error;
 }
 
-int32 M5MeshSampleIndex(int32 X, int32 Y, int32 Z)
+int32 FVoxelLandM5MeshAdapterInternals::M5MeshSampleIndex(int32 X, int32 Y, int32 Z)
 {
 	return (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
 }
 
 // The exact sum lies between the adjacent binary64 values on either side of
 // the rounded sum. Outward floor/ceil therefore enclose even a rounded sum.
-bool M5MeshEnclose(double Origin, float Local, double& Value, int64& Min, int64& Max)
+bool FVoxelLandM5MeshAdapterInternals::M5MeshEnclose(double Origin, float Local, double& Value, int64& Min, int64& Max)
 {
 	constexpr double Limit = 1048576.0;
 	uint32 Bits = 0;
@@ -50,7 +61,7 @@ bool M5MeshEnclose(double Origin, float Local, double& Value, int64& Min, int64&
 // differences and products are far from binary64 overflow. The relative pad
 // exceeds several ulps per operation; the absolute pad covers zero and very
 // small results even on hardware that flushes binary64 subnormals to zero.
-void M5MeshExpand(double& Low, double& High)
+void FVoxelLandM5MeshAdapterInternals::M5MeshExpand(double& Low, double& High)
 {
 	const double Magnitude = FMath::Max(FMath::Abs(Low), FMath::Abs(High));
 	const double Pad = Magnitude * 1.e-14 + 1.e-200;
@@ -58,14 +69,16 @@ void M5MeshExpand(double& Low, double& High)
 	High += Pad;
 }
 
-void M5MeshSubtract(double A0, double A1, double B0, double B1, double& Low, double& High)
+void FVoxelLandM5MeshAdapterInternals::M5MeshSubtract(
+	double A0, double A1, double B0, double B1, double& Low, double& High)
 {
 	Low = A0 - B1;
 	High = A1 - B0;
 	M5MeshExpand(Low, High);
 }
 
-void M5MeshMultiply(double A0, double A1, double B0, double B1, double& Low, double& High)
+void FVoxelLandM5MeshAdapterInternals::M5MeshMultiply(
+	double A0, double A1, double B0, double B1, double& Low, double& High)
 {
 	const double P[4] = {A0 * B0, A0 * B1, A1 * B0, A1 * B1};
 	Low = FMath::Min(FMath::Min(P[0], P[1]), FMath::Min(P[2], P[3]));
@@ -73,7 +86,8 @@ void M5MeshMultiply(double A0, double A1, double B0, double B1, double& Low, dou
 	M5MeshExpand(Low, High);
 }
 
-bool M5MeshProveNondegenerate(const FVector3f& A, const FVector3f& B, const FVector3f& C)
+bool FVoxelLandM5MeshAdapterInternals::M5MeshProveNondegenerate(
+	const FVector3f& A, const FVector3f& B, const FVector3f& C)
 {
 	double ULow[3], UHigh[3], VLow[3], VHigh[3];
 	for (int32 Axis = 0; Axis < 3; ++Axis)
@@ -95,7 +109,6 @@ bool M5MeshProveNondegenerate(const FVector3f& A, const FVector3f& B, const FVec
 	}
 	return false;
 }
-}
 
 FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
 	bool bUnlimitedM4, const FVoxelLandMeshData& Mesh, int32 MaxTriangles, int64 MaxWork,
@@ -107,7 +120,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, VoxelSizeCm, bUnlimitedM4)
 		|| MaxTriangles < 0 || MaxWork < 0 || Mesh.Indices.Num() % 3 != 0)
 	{
-		return M5MeshAdapterError(E::InvalidInput, TEXT("Invalid chunk, voxel size, mesh, or budget"));
+		return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+			E::InvalidInput, TEXT("Invalid chunk, voxel size, mesh, or budget"));
 	}
 	// All 35 stored samples, including the meshing halo, must fit even if the
 	// chunk has no emitted triangles. Key and size bounds above make these
@@ -121,7 +135,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 		const int64 Last = (CellOrigin + 33) * ScaleCm;
 		if (First < -CoordinateLimit || Last > CoordinateLimit)
 		{
-			return M5MeshAdapterError(E::OutOfDomain, TEXT("Chunk sample halo outside logical envelope"));
+			return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+				E::OutOfDomain, TEXT("Chunk sample halo outside logical envelope"));
 		}
 	}
 	int64 Work = 0;
@@ -130,7 +145,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 	{
 		if (IsCancelled())
 		{
-			return M5MeshAdapterError(E::Cancelled, TEXT("Cancelled while counting owned edges"));
+			return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+				E::Cancelled, TEXT("Cancelled while counting owned edges"));
 		}
 		for (int32 Y = 0; Y < 32; ++Y)
 		{
@@ -140,12 +156,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 				{
 					if (Work >= MaxWork)
 					{
-						return M5MeshAdapterError(E::BudgetExceeded, TEXT("Mesh validation work exhausted"));
+						return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+							E::BudgetExceeded, TEXT("Mesh validation work exhausted"));
 					}
 					++Work;
 					const int32 EndX = X + (Axis == 0), EndY = Y + (Axis == 1), EndZ = Z + (Axis == 2);
-					const bool bA = Chunk.Density[M5MeshSampleIndex(X, Y, Z)] < 0;
-					const bool bB = Chunk.Density[M5MeshSampleIndex(EndX, EndY, EndZ)] < 0;
+					const bool bA = Chunk.Density[FVoxelLandM5MeshAdapterInternals::M5MeshSampleIndex(X, Y, Z)] < 0;
+					const bool bB =
+						Chunk.Density[FVoxelLandM5MeshAdapterInternals::M5MeshSampleIndex(EndX, EndY, EndZ)] < 0;
 					EdgeCount += bA != bB;
 				}
 			}
@@ -154,11 +172,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 	const int32 ExpectedTriangles = EdgeCount * 2; // at most 32^3 * 3 * 2
 	if (ExpectedTriangles > MaxTriangles)
 	{
-		return M5MeshAdapterError(E::BudgetExceeded, TEXT("Triangle admission limit exceeded"));
+		return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+			E::BudgetExceeded, TEXT("Triangle admission limit exceeded"));
 	}
 	if (Mesh.Indices.Num() / 3 != ExpectedTriangles)
 	{
-		return M5MeshAdapterError(E::Unproven, TEXT("A sign-changing edge did not emit two triangles"));
+		return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+			E::Unproven, TEXT("A sign-changing edge did not emit two triangles"));
 	}
 	const FVector Origin = VoxelLandMeshCoordinates::RenderOrigin(Chunk.Key.Coordinate, VoxelSizeCm);
 	TArray<FVoxelLandM5ValidationTriangle> Scratch;
@@ -167,18 +187,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 	{
 		if ((I & 63) == 0 && IsCancelled())
 		{
-			return M5MeshAdapterError(E::Cancelled, TEXT("Cancelled while adapting triangles"));
+			return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+				E::Cancelled, TEXT("Cancelled while adapting triangles"));
 		}
 		if (Work >= MaxWork)
 		{
-			return M5MeshAdapterError(E::BudgetExceeded, TEXT("Mesh validation work exhausted"));
+			return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+				E::BudgetExceeded, TEXT("Mesh validation work exhausted"));
 		}
 		++Work;
 		const uint32 IA = Mesh.Indices[3 * I], IB = Mesh.Indices[3 * I + 1], IC = Mesh.Indices[3 * I + 2];
 		if (IA >= uint32(Mesh.Vertices.Num()) || IB >= uint32(Mesh.Vertices.Num()) || IC >= uint32(Mesh.Vertices.Num())
 			|| IA == IB || IB == IC || IC == IA)
 		{
-			return M5MeshAdapterError(E::InvalidInput, TEXT("Invalid triangle indices"));
+			return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+				E::InvalidInput, TEXT("Invalid triangle indices"));
 		}
 		const FVector3f A = Mesh.Vertices[IA].Position, B = Mesh.Vertices[IB].Position, C = Mesh.Vertices[IC].Position;
 		FVoxelLandM5ValidationTriangle Triangle;
@@ -193,18 +216,20 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 			{
 				double Value = 0;
 				int64 Min = 0, Max = 0;
-				if (!M5MeshEnclose(Origin[Axis], Vertices[V][Axis], Value, Min, Max))
+				if (!FVoxelLandM5MeshAdapterInternals::M5MeshEnclose(Origin[Axis], Vertices[V][Axis], Value, Min, Max))
 				{
-					return M5MeshAdapterError(E::OutOfDomain, TEXT("Mesh position outside logical envelope"));
+					return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+						E::OutOfDomain, TEXT("Mesh position outside logical envelope"));
 				}
 				(*Results[V])[Axis] = Value;
 				Low[Axis] = FMath::Min(Low[Axis], Min);
 				High[Axis] = FMath::Max(High[Axis], Max);
 			}
 		}
-		if (!M5MeshProveNondegenerate(A, B, C))
+		if (!FVoxelLandM5MeshAdapterInternals::M5MeshProveNondegenerate(A, B, C))
 		{
-			return M5MeshAdapterError(E::Unproven, TEXT("Triangle nondegeneracy cannot be proven"));
+			return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+				E::Unproven, TEXT("Triangle nondegeneracy cannot be proven"));
 		}
 		Triangle.Bounds.Min.X = Low[0];
 		Triangle.Bounds.Min.Y = Low[1];
@@ -216,7 +241,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MeshAdapter::Adapt(const FVoxelLandChunkDa
 	}
 	if (IsCancelled())
 	{
-		return M5MeshAdapterError(E::Cancelled, TEXT("Cancelled before publishing adapted mesh"));
+		return FVoxelLandM5MeshAdapterInternals::M5MeshAdapterError(
+			E::Cancelled, TEXT("Cancelled before publishing adapted mesh"));
 	}
 	OutTriangles = MoveTemp(Scratch);
 	return FVoxelLandM5Diagnostic();

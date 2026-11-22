@@ -9,20 +9,21 @@
 #include "Generation/VoxelLandM5SpatialIndex.h"
 #include "Generation/VoxelLandM5Topology.h"
 
-namespace
+class FVoxelLandM5PlanPreparationInternals final
 {
-constexpr int64 M5PreparationCoordinateLimit = 1048576;
-constexpr int32 M5PreparationIdentityLimit = 4 * 1024 * 1024;
+public:
+	static constexpr int64 M5PreparationCoordinateLimit = 1048576;
+	static constexpr int32 M5PreparationIdentityLimit = 4 * 1024 * 1024;
 
-FVoxelLandM5Diagnostic M5PreparationFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Error;
-	Error.Code = Code;
-	Error.Stage = TEXT("M5.PlanPreparation");
-	Error.Message = Message;
-	return Error;
-}
-}
+	static FVoxelLandM5Diagnostic M5PreparationFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Error;
+		Error.Code = Code;
+		Error.Stage = TEXT("M5.PlanPreparation");
+		Error.Message = Message;
+		return Error;
+	}
+};
 
 FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	const FVoxelLandM5RegionCoord& Region, TConstArrayView<uint8> ExpectedIdentity,
@@ -41,15 +42,18 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 {
 	if (IsCancelled())
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Plan preparation cancelled"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Plan preparation cancelled"));
 	}
 	int64 ByteLimit = 0, WorkLimit = 0;
 	Budget->GetLimits(ByteLimit, WorkLimit);
-	if (!Settings.bEnabled || ExpectedIdentity.IsEmpty() || ExpectedIdentity.Num() > M5PreparationIdentityLimit
+	if (!Settings.bEnabled || ExpectedIdentity.IsEmpty()
+		|| ExpectedIdentity.Num() > FVoxelLandM5PlanPreparationInternals::M5PreparationIdentityLimit
 		|| Settings.Limits.MaxBytes <= 0 || Settings.Limits.MaxValidationWork <= 0
 		|| ByteLimit > Settings.Limits.MaxBytes || WorkLimit > Settings.Limits.MaxValidationWork)
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid descriptor or shared budget"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid descriptor or shared budget"));
 	}
 	// Identity bytes are copied only after admission; the reservation outlives
 	// the copy and all consumers. The verifier owns its own metered scratch.
@@ -57,12 +61,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 	int64 IdentityBytes = 0;
 	if (!TryMultiplyNonNegative(ExpectedIdentity.Num(), 2, IdentityBytes) || !TryAdd(IdentityBytes, 64, IdentityBytes))
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Descriptor allocation overflow"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Descriptor allocation overflow"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> IdentityLease;
 	if (!Budget->TryReserveBytes(IdentityBytes, IdentityLease) || !Budget->TryChargeWork(ExpectedIdentity.Num()))
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Descriptor admission failed"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Descriptor admission failed"));
 	}
 	TArray<uint8> Identity;
 	Identity.Append(ExpectedIdentity.GetData(), ExpectedIdentity.Num());
@@ -73,7 +79,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 	}
 	if (IsCancelled())
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Plan preparation cancelled"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Plan preparation cancelled"));
 	}
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate;
 	Error = CandidatePlanner::Build(Settings, WorldSeed, Region, Budget, IsCancelled, Candidate);
@@ -83,7 +90,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 	}
 	if (!Candidate.IsValid())
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::Unproven, TEXT("Candidate result is unavailable"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Candidate result is unavailable"));
 	}
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Complete;
 	Error = EntrancePlanner::Build(
@@ -95,7 +103,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 	Candidate.Reset();
 	if (!Complete.IsValid())
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::Unproven, TEXT("Entrance result is unavailable"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Entrance result is unavailable"));
 	}
 	Error = Topology::Validate(Settings, WorldSeed, Region, Complete.ToSharedRef(), Budget, IsCancelled);
 	if (Error.Code != EVoxelLandM5ErrorCode::None)
@@ -106,20 +115,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 	const int64 EntryCount = int64(Plan.Chambers.Num()) + Plan.Segments.Num();
 	if (EntryCount < 1 || EntryCount > FVoxelLandM5SpatialIndex::MaximumEntries)
 	{
-		return M5PreparationFailure(
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Influence index entry limit exceeded"));
 	}
 	int64 EntryBytes = 0;
 	if (!TryMultiplyNonNegative(EntryCount, int64(sizeof(FVoxelLandM5InfluenceBounds)), EntryBytes)
 		|| !TryMultiplyNonNegative(EntryBytes, 2, EntryBytes))
 	{
-		return M5PreparationFailure(
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
 			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Influence entry allocation overflow"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> EntryLease;
 	if (!Budget->TryReserveBytes(EntryBytes, EntryLease) || !Budget->TryChargeWork(EntryCount))
 	{
-		return M5PreparationFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Influence entry admission failed"));
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Influence entry admission failed"));
 	}
 	// Hard subtraction may affect samples beyond the physical primitive. Until
 	// a smaller bound is proven, each entry covers the complete numeric domain.
@@ -127,12 +137,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 	// name segment array indices. Handles are plan-scoped, not primitive IDs.
 	TArray<FVoxelLandM5InfluenceBounds> Entries;
 	Entries.Reserve(int32(EntryCount));
-	const FBox3d FullDomain(FVector3d(-M5PreparationCoordinateLimit), FVector3d(M5PreparationCoordinateLimit));
+	const FBox3d FullDomain(FVector3d(-FVoxelLandM5PlanPreparationInternals::M5PreparationCoordinateLimit),
+		FVector3d(FVoxelLandM5PlanPreparationInternals::M5PreparationCoordinateLimit));
 	for (int64 I = 0; I < EntryCount; ++I)
 	{
 		if (IsCancelled())
 		{
-			return M5PreparationFailure(
+			return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
 				EVoxelLandM5ErrorCode::Cancelled, TEXT("Influence index preparation cancelled"));
 		}
 		FVoxelLandM5InfluenceBounds Entry;
@@ -145,18 +156,19 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PlanPreparation::Build(const FVoxelLandM5C
 		FVoxelLandM5SpatialIndex::Build(Entries, int32(EntryCount), Budget, IsCancelled, Index);
 	if (IndexError.Code != EVoxelLandErrorCode::None)
 	{
-		return M5PreparationFailure(IndexError.Code == EVoxelLandErrorCode::Cancelled
-										? EVoxelLandM5ErrorCode::Cancelled
-										: EVoxelLandM5ErrorCode::BudgetExceeded,
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			IndexError.Code == EVoxelLandErrorCode::Cancelled ? EVoxelLandM5ErrorCode::Cancelled
+															  : EVoxelLandM5ErrorCode::BudgetExceeded,
 			TEXT("Influence index build failed"));
 	}
 	if (!Index.IsValid() || IsCancelled())
 	{
-		return M5PreparationFailure(IsCancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Unproven,
+		return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(
+			IsCancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Unproven,
 			TEXT("Influence index could not be finalized"));
 	}
 	// The real certifier, immutable plan+index publication object and their
 	// retained leases are not yet integrated. No callback can certify by fiat.
-	return M5PreparationFailure(EVoxelLandM5ErrorCode::Unproven,
+	return FVoxelLandM5PlanPreparationInternals::M5PreparationFailure(EVoxelLandM5ErrorCode::Unproven,
 		TEXT("Final field, complete capsule routes and regional agreement are not yet certified"));
 }

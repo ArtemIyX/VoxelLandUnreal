@@ -15,4 +15,10 @@ public:
 	// Returns false when the graph node's standard pin label should be used.
 	static bool TryPinLabel(EVoxelLandBuiltinNode Kind, FName PinName, FText& OutLabel);
 	static FText PinTooltip(EVoxelLandBuiltinNode Kind, FName PinName, FName PinType, bool bOutput);
+
+private:
+	static FText ExplicitTitle(EVoxelLandBuiltinNode Kind);
+	static FText ExplicitDescription(EVoxelLandBuiltinNode Kind);
+	static FText ExplicitCategory(EVoxelLandBuiltinNode Kind);
+	static FLinearColor ExplicitTitleColor(EVoxelLandBuiltinNode Kind);
 };

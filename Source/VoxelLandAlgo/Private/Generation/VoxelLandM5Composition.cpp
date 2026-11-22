@@ -6,31 +6,32 @@
 
 namespace VoxelLand::M5::Composition
 {
-namespace
+class FVoxelLandM5CompositionInternals final
 {
-bool TryContribution(int64 DistanceQ8, int32 VoxelSizeCm, int16& Out)
-{
-	int64 Negated = 0;
-	int64 Numerator = 0;
-	if (!CheckedMath::TrySubtract(0, DistanceQ8, Negated) || !CheckedMath::TryMultiply(Negated, 4, Numerator))
+public:
+	static bool TryContribution(int64 DistanceQ8, int32 VoxelSizeCm, int16& Out)
 	{
-		return false;
-	}
-	int64 Quotient = Numerator / VoxelSizeCm;
-	const int64 Remainder = Numerator % VoxelSizeCm;
-	const int64 AbsoluteRemainder = Remainder < 0 ? -Remainder : Remainder;
-	const int64 HalfRoundedUp = (static_cast<int64>(VoxelSizeCm) + 1) / 2;
-	if (AbsoluteRemainder >= HalfRoundedUp && Remainder != 0)
-	{
-		if (!CheckedMath::TryAdd(Quotient, Numerator < 0 ? -1 : 1, Quotient))
+		int64 Negated = 0;
+		int64 Numerator = 0;
+		if (!CheckedMath::TrySubtract(0, DistanceQ8, Negated) || !CheckedMath::TryMultiply(Negated, 4, Numerator))
 		{
 			return false;
 		}
+		int64 Quotient = Numerator / VoxelSizeCm;
+		const int64 Remainder = Numerator % VoxelSizeCm;
+		const int64 AbsoluteRemainder = Remainder < 0 ? -Remainder : Remainder;
+		const int64 HalfRoundedUp = (static_cast<int64>(VoxelSizeCm) + 1) / 2;
+		if (AbsoluteRemainder >= HalfRoundedUp && Remainder != 0)
+		{
+			if (!CheckedMath::TryAdd(Quotient, Numerator < 0 ? -1 : 1, Quotient))
+			{
+				return false;
+			}
+		}
+		Out = static_cast<int16>(FMath::Clamp(Quotient, static_cast<int64>(MIN_int16), static_cast<int64>(MAX_int16)));
+		return true;
 	}
-	Out = static_cast<int16>(FMath::Clamp(Quotient, static_cast<int64>(MIN_int16), static_cast<int64>(MAX_int16)));
-	return true;
-}
-}
+};
 
 bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelLandM5PointCm& PositionCm,
 	int32 VoxelSizeCm, bool bEnabled, bool bCarveAllowed, bool bProtected, bool bHasPocket, int64 PocketDistanceQ8,
@@ -54,7 +55,7 @@ bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelL
 	int16 Result = M4Density;
 	auto AddDistance = [&Result, VoxelSizeCm](int64 DistanceQ8) {
 		int16 Contribution = 0;
-		if (!TryContribution(DistanceQ8, VoxelSizeCm, Contribution))
+		if (!FVoxelLandM5CompositionInternals::TryContribution(DistanceQ8, VoxelSizeCm, Contribution))
 		{
 			return false;
 		}

@@ -1,4 +1,5 @@
 #include "World/VoxelLandM4PrepassIdentity.h"
+#include "World/VoxelLandM4PrepassKeyInputs.h"
 #include "World/VoxelLandM4OverrideValidation.h"
 
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
@@ -18,9 +19,30 @@
 
 namespace VoxelLandM4PrepassIdentity
 {
-namespace
+class FVoxelLandM4PrepassKeyWriter final
 {
-FVoxelLandError M4IdentityFailure(const TCHAR* Message)
+public:
+	static constexpr int32 MaxHeightQ8 = 512000000;
+	static constexpr int32 MaxDropletCount = 65536;
+	static constexpr int32 MaxErosionSteps = 128;
+	static constexpr int32 MaxThermalIterations = 32;
+	static constexpr uint32 LegacyEncodingVersion = 0;
+	static constexpr uint32 CurrentEncodingVersion = 1;
+	static constexpr uint32 HeightPrepassAlgorithmVersion = 1;
+
+	static FVoxelLandError Build(const FVoxelLandM4WorldSnapshot& Snapshot, const FVoxelLandM4PrepassKeyInputs& Inputs,
+		TArray<uint8>& OutBytes, TFunctionRef<bool()> IsCancelled);
+	static FVoxelLandError M4IdentityFailure(const TCHAR* Message);
+	static void M4IdentityU64(FCanonicalWriter& W, uint64 Value);
+	static void M4IdentityGuid(FCanonicalWriter& W, const FGuid& Id);
+	static void M4IdentityFloat(FCanonicalWriter& W, float Value);
+	static bool M4IdentityProgram(
+		FCanonicalWriter& W, const FVoxelLandProgramDraft& D, TFunctionRef<bool()> IsCancelled);
+	static bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel,
+		const FVoxelLandProgram& Program, bool bPrevalidated, TFunctionRef<bool()> IsCancelled);
+};
+
+FVoxelLandError FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(const TCHAR* Message)
 {
 	FVoxelLandError Error;
 	Error.Code = EVoxelLandErrorCode::InvalidParameter;
@@ -28,13 +50,13 @@ FVoxelLandError M4IdentityFailure(const TCHAR* Message)
 	return Error;
 }
 
-void M4IdentityU64(FCanonicalWriter& W, uint64 Value)
+void FVoxelLandM4PrepassKeyWriter::M4IdentityU64(FCanonicalWriter& W, uint64 Value)
 {
 	W.U32(uint32(Value));
 	W.U32(uint32(Value >> 32));
 }
 
-void M4IdentityGuid(FCanonicalWriter& W, const FGuid& Id)
+void FVoxelLandM4PrepassKeyWriter::M4IdentityGuid(FCanonicalWriter& W, const FGuid& Id)
 {
 	W.U32(Id.A);
 	W.U32(Id.B);
@@ -42,14 +64,15 @@ void M4IdentityGuid(FCanonicalWriter& W, const FGuid& Id)
 	W.U32(Id.D);
 }
 
-void M4IdentityFloat(FCanonicalWriter& W, float Value)
+void FVoxelLandM4PrepassKeyWriter::M4IdentityFloat(FCanonicalWriter& W, float Value)
 {
 	uint32 Bits = 0;
 	FMemory::Memcpy(&Bits, &Value, sizeof(Bits));
 	W.U32(Bits);
 }
 
-bool M4IdentityProgram(FCanonicalWriter& W, const FVoxelLandProgramDraft& D, TFunctionRef<bool()> IsCancelled)
+bool FVoxelLandM4PrepassKeyWriter::M4IdentityProgram(
+	FCanonicalWriter& W, const FVoxelLandProgramDraft& D, TFunctionRef<bool()> IsCancelled)
 {
 	W.U32(D.FormatVersion);
 	W.U32(FVoxelLandProgramDraft::CompilerSemanticVersion);
@@ -118,7 +141,7 @@ bool M4IdentityProgram(FCanonicalWriter& W, const FVoxelLandProgramDraft& D, TFu
 	return !IsCancelled();
 }
 
-bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel,
+bool FVoxelLandM4PrepassKeyWriter::M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel,
 	const FVoxelLandProgram& Program, bool bPrevalidated, TFunctionRef<bool()> IsCancelled)
 {
 	FString OverrideError;
@@ -224,7 +247,7 @@ bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& C
 		{
 			return false;
 		}
-		if (Sample < -512000000 || Sample > 512000000)
+		if (Sample < -MaxHeightQ8 || Sample > MaxHeightQ8)
 		{
 			return false;
 		}
@@ -232,85 +255,85 @@ bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& C
 	}
 	return true;
 }
-}
 
-static FVoxelLandError M4IdentityBuildCore(const FVoxelLandM4WorldSnapshot& Snapshot,
-	const FVoxelLandM4DomainSettings& Domain, const FVoxelLandProgram& Continental, const FVoxelLandProgram& Mountain,
-	const FVoxelLandProgram& Peaks, TArray<uint8>& OutBytes, uint32 EncodingVersion, bool bAllowUnlimited,
-	bool bPrevalidated, int32 ReserveBytes, TFunctionRef<bool()> IsCancelled)
+FVoxelLandError FVoxelLandM4PrepassKeyWriter::Build(const FVoxelLandM4WorldSnapshot& Snapshot,
+	const FVoxelLandM4PrepassKeyInputs& Inputs, TArray<uint8>& OutBytes, TFunctionRef<bool()> IsCancelled)
 {
+	const FVoxelLandM4DomainSettings& Domain = Snapshot.Domain;
 	if (IsCancelled())
 	{
-		return M4IdentityFailure(TEXT("M4 prepass identity cancelled"));
+		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(TEXT("M4 prepass identity cancelled"));
 	}
 	FString StageError;
 	if (!VoxelLandM4HeightStageValidation::Validate(Snapshot, StageError))
 	{
-		return M4IdentityFailure(*StageError);
+		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(*StageError);
 	}
-	if ((EncodingVersion != 0 && EncodingVersion != 1)
+	if ((Inputs.EncodingVersion != LegacyEncodingVersion && Inputs.EncodingVersion != CurrentEncodingVersion)
 		|| (Domain.Mode != EVoxelLandM4DomainMode::Finite
-			&& !(bAllowUnlimited && Domain.Mode == EVoxelLandM4DomainMode::Unlimited))
-		|| VoxelLandM4Domain::Validate(Domain) || Snapshot.FormatVersion != 1 || Snapshot.BaseHeightQ8 < -512000000
-		|| Snapshot.BaseHeightQ8 > 512000000)
+			&& !(Inputs.bAllowsUnlimited && Domain.Mode == EVoxelLandM4DomainMode::Unlimited))
+		|| VoxelLandM4Domain::Validate(Domain) || Snapshot.FormatVersion != 1 || Snapshot.BaseHeightQ8 < -MaxHeightQ8
+		|| Snapshot.BaseHeightQ8 > MaxHeightQ8)
 	{
-		return M4IdentityFailure(TEXT("Invalid finite M4 prepass identity inputs"));
+		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(TEXT("Invalid finite M4 prepass identity inputs"));
 	}
 	if (Domain.bGlobalErosion
 		&& (!Snapshot.ErosionStageId.IsValid() || Snapshot.ErosionSalt < 0 || Snapshot.DropletCount < 0
-			|| Snapshot.DropletCount > 65536 || Snapshot.Erosion.MaxSteps < 0 || Snapshot.Erosion.MaxSteps > 128
-			|| Snapshot.Erosion.ThermalIterations < 0 || Snapshot.Erosion.ThermalIterations > 32
-			|| Snapshot.Erosion.CapacityMaxQ8 < 0 || Snapshot.Erosion.CapacityMaxQ8 > 512000000
-			|| Snapshot.Erosion.TalusQ8 < 0 || Snapshot.Erosion.TalusQ8 > 512000000
-			|| Snapshot.Erosion.MaxTransferQ8 < 0 || Snapshot.Erosion.MaxTransferQ8 > 512000000))
+			|| Snapshot.DropletCount > MaxDropletCount || Snapshot.Erosion.MaxSteps < 0
+			|| Snapshot.Erosion.MaxSteps > MaxErosionSteps || Snapshot.Erosion.ThermalIterations < 0
+			|| Snapshot.Erosion.ThermalIterations > MaxThermalIterations || Snapshot.Erosion.CapacityMaxQ8 < 0
+			|| Snapshot.Erosion.CapacityMaxQ8 > MaxHeightQ8 || Snapshot.Erosion.TalusQ8 < 0
+			|| Snapshot.Erosion.TalusQ8 > MaxHeightQ8 || Snapshot.Erosion.MaxTransferQ8 < 0
+			|| Snapshot.Erosion.MaxTransferQ8 > MaxHeightQ8))
 	{
-		return M4IdentityFailure(TEXT("Invalid M4 erosion identity inputs"));
+		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(TEXT("Invalid M4 erosion identity inputs"));
 	}
 	FCanonicalWriter W;
-	if (ReserveBytes > 0)
+	if (Inputs.ReserveBytes > 0)
 	{
-		W.Bytes.Reserve(ReserveBytes);
+		W.Bytes.Reserve(Inputs.ReserveBytes);
 	}
 	W.U8('V');
 	W.U8('L');
 	W.U8('P');
 	W.U8('C');
-	W.U32(1); // current candidate encoding
-	W.U32(1); // three-channel height-combination and CPU prepass algorithm
+	W.U32(CurrentEncodingVersion);
+	W.U32(HeightPrepassAlgorithmVersion);
 	W.U32(uint32(Snapshot.HeightStage.Version));
 	W.U8(uint8(Domain.Mode));
-	M4IdentityU64(W, uint64(Snapshot.Seed));
+	FVoxelLandM4PrepassKeyWriter::M4IdentityU64(W, uint64(Snapshot.Seed));
 	if (Domain.Mode == EVoxelLandM4DomainMode::Finite)
 	{
-		M4IdentityU64(W, uint64(Domain.OriginXCm));
-		M4IdentityU64(W, uint64(Domain.OriginYCm));
+		FVoxelLandM4PrepassKeyWriter::M4IdentityU64(W, uint64(Domain.OriginXCm));
+		FVoxelLandM4PrepassKeyWriter::M4IdentityU64(W, uint64(Domain.OriginYCm));
 		W.U32(uint32(Domain.CellsX));
 		W.U32(uint32(Domain.CellsY));
-		M4IdentityU64(W, uint64(Domain.GridSpacingCm));
+		FVoxelLandM4PrepassKeyWriter::M4IdentityU64(W, uint64(Domain.GridSpacingCm));
 	}
 	W.U32(uint32(Snapshot.BaseHeightQ8));
 	W.U8(Domain.bGlobalErosion ? 1 : 0);
 	if (Domain.bGlobalErosion)
 	{
 		W.U32(VoxelLandM4ErosionRandom::AlgorithmVersion);
-		M4IdentityGuid(W, Snapshot.ErosionStageId);
+		FVoxelLandM4PrepassKeyWriter::M4IdentityGuid(W, Snapshot.ErosionStageId);
 		W.U32(uint32(Snapshot.ErosionSalt));
 		W.U32(uint32(Snapshot.DropletCount));
 		W.U32(uint32(Snapshot.Erosion.MaxSteps));
 		W.U32(uint32(Snapshot.Erosion.ThermalIterations));
-		M4IdentityU64(W, uint64(Snapshot.Erosion.CapacityMaxQ8));
-		M4IdentityU64(W, uint64(Snapshot.Erosion.TalusQ8));
-		M4IdentityU64(W, uint64(Snapshot.Erosion.MaxTransferQ8));
+		FVoxelLandM4PrepassKeyWriter::M4IdentityU64(W, uint64(Snapshot.Erosion.CapacityMaxQ8));
+		FVoxelLandM4PrepassKeyWriter::M4IdentityU64(W, uint64(Snapshot.Erosion.TalusQ8));
+		FVoxelLandM4PrepassKeyWriter::M4IdentityU64(W, uint64(Snapshot.Erosion.MaxTransferQ8));
 	}
-	if (!M4IdentityChannel(W, Snapshot.Continental, Continental, bPrevalidated, IsCancelled)
-		|| !M4IdentityChannel(W, Snapshot.Mountain, Mountain, bPrevalidated, IsCancelled)
-		|| !M4IdentityChannel(W, Snapshot.Peaks, Peaks, bPrevalidated, IsCancelled))
+	if (!M4IdentityChannel(W, Snapshot.Continental, Inputs.Continental, Inputs.bIsPrevalidated, IsCancelled)
+		|| !M4IdentityChannel(W, Snapshot.Mountain, Inputs.Mountain, Inputs.bIsPrevalidated, IsCancelled)
+		|| !M4IdentityChannel(W, Snapshot.Peaks, Inputs.Peaks, Inputs.bIsPrevalidated, IsCancelled))
 	{
-		return M4IdentityFailure(TEXT("Unsupported or invalid M4 control identity inputs"));
+		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(
+			TEXT("Unsupported or invalid M4 control identity inputs"));
 	}
 	if (IsCancelled())
 	{
-		return M4IdentityFailure(TEXT("M4 prepass identity cancelled"));
+		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(TEXT("M4 prepass identity cancelled"));
 	}
 	OutBytes = MoveTemp(W.Bytes);
 	return {};
@@ -322,8 +345,8 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 	auto NeverCancel = [] {
 		return false;
 	};
-	return M4IdentityBuildCore(Snapshot, Snapshot.Domain, Continental, Mountain, Peaks, OutBytes, EncodingVersion,
-		false, false, 0, NeverCancel);
+	return FVoxelLandM4PrepassKeyWriter::Build(
+		Snapshot, {Continental, Mountain, Peaks, EncodingVersion}, OutBytes, NeverCancel);
 }
 
 FVoxelLandError BuildWorldInputs(const FVoxelLandM4WorldSnapshot& Snapshot, const FVoxelLandProgram& Continental,
@@ -332,22 +355,24 @@ FVoxelLandError BuildWorldInputs(const FVoxelLandM4WorldSnapshot& Snapshot, cons
 	auto NeverCancel = [] {
 		return false;
 	};
-	return M4IdentityBuildCore(
-		Snapshot, Snapshot.Domain, Continental, Mountain, Peaks, OutBytes, 1, true, false, 0, NeverCancel);
+	return FVoxelLandM4PrepassKeyWriter::Build(Snapshot,
+		{Continental, Mountain, Peaks, FVoxelLandM4PrepassKeyWriter::CurrentEncodingVersion, true}, OutBytes,
+		NeverCancel);
 }
 }
 
-namespace
+class FVoxelLandM4PrepassOverrideChecks final
 {
-FVoxelLandM5Diagnostic M5PrepassFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic Result;
-	Result.Code = Code;
-	Result.Stage = TEXT("M5.PrepassIdentity");
-	Result.Message = Message;
-	return Result;
-}
-}
+public:
+	static FVoxelLandM5Diagnostic M5PrepassFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandM5Diagnostic Result;
+		Result.Code = Code;
+		Result.Stage = TEXT("M5.PrepassIdentity");
+		Result.Message = Message;
+		return Result;
+	}
+};
 
 FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4WorldSnapshot& Snapshot,
 	uint32 EncodingVersion, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
@@ -356,31 +381,34 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4World
 	using namespace VoxelLand::M5::CheckedMath;
 	if (IsCancelled())
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
 	if (IsInGameThread())
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Prepass identity requires a worker thread"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Prepass identity requires a worker thread"));
 	}
 	// Version 1 projection validation traverses reflected FText and nested graph
 	// state. Do not pretend that work is metered until its bounded replacement exists.
 	if (Snapshot.HeightStage.Version != 0)
 	{
-		return M5PrepassFailure(
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
 			EVoxelLandM5ErrorCode::Unproven, TEXT("Metered height-stage projection is unavailable"));
 	}
 	if (EncodingVersion != 0 && EncodingVersion != 1)
 	{
-		return M5PrepassFailure(
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
 			EVoxelLandM5ErrorCode::UnsupportedVersion, TEXT("Unsupported prepass identity version"));
 	}
 	if (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite)
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::Unproven, TEXT("Infinite worlds have no finite global prepass"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Infinite worlds have no finite global prepass"));
 	}
 	if (VoxelLandM4Domain::Validate(Snapshot.Domain))
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid M4 domain"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid M4 domain"));
 	}
 	const FVoxelLandM4ControlSnapshot* Channels[] = {&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Programs[3];
@@ -388,7 +416,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4World
 	{
 		if (IsCancelled())
 		{
-			return M5PrepassFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		if (FVoxelLandM5Diagnostic D =
 				VoxelLandM4OverrideValidation::ValidateMetered(*Channels[Index], Budget, IsCancelled);
@@ -434,7 +463,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4World
 				Records)
 			|| !AddProduct(C.Overrides.Num(), C.Overrides.Num(), OverridePairs))
 		{
-			return M5PrepassFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass byte bounds exceeded"));
+			return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass byte bounds exceeded"));
 		}
 	}
 	int64 Work = 0, Part = 0, ScratchBytes = 0;
@@ -443,12 +473,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4World
 		|| !TryMultiplyNonNegative(OverridePairs, 8, Part) || !TryAdd(Work, Part, Work) || !TryAdd(Work, 4096, Work)
 		|| !TryAdd(ByteUpper, 16384, ScratchBytes) || !Budget->TryChargeWork(Work))
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass work exceeds budget"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass work exceeds budget"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(ScratchBytes, Lease))
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass memory exceeds budget"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass memory exceeds budget"));
 	}
 	TSharedPtr<FVoxelLandM5PrepassBytes, ESPMode::ThreadSafe> Result =
 		MakeShareable(new FVoxelLandM5PrepassBytes(Budget, Lease));
@@ -457,20 +489,22 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4World
 		bCancelled |= IsCancelled();
 		return bCancelled;
 	};
-	if (const FVoxelLandError Error =
-			VoxelLandM4PrepassIdentity::M4IdentityBuildCore(Snapshot, Snapshot.Domain, *Programs[0], *Programs[1],
-				*Programs[2], Result->Bytes, EncodingVersion, false, true, int32(ByteUpper), Poll))
+	if (const FVoxelLandError Error = VoxelLandM4PrepassIdentity::FVoxelLandM4PrepassKeyWriter::Build(Snapshot,
+			{*Programs[0], *Programs[1], *Programs[2], EncodingVersion, false, true, int32(ByteUpper)}, Result->Bytes,
+			Poll))
 	{
-		return M5PrepassFailure(bCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::InvalidInput,
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+			bCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::InvalidInput,
 			TEXT("Prepass serialization failed or was cancelled"));
 	}
 	if (Result->Bytes.Num() > ByteUpper)
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass output exceeded reserved bytes"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Prepass output exceeded reserved bytes"));
 	}
 	if (IsCancelled())
 	{
-		return M5PrepassFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
 	OutBytes = MoveTemp(Result);
 	return {};

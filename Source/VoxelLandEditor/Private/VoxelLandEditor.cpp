@@ -219,60 +219,61 @@ bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 }
 }
 
-namespace
-{
-class FVoxelLandGraphAssetActions : public FAssetTypeActions_Base
+class FVoxelLandEditorInternals final
 {
 public:
-	virtual FText GetName() const override { return LOCTEXT("GraphAsset", "VoxelLand Terrain Graph"); }
-	virtual FColor GetTypeColor() const override { return FColor(67, 158, 92); }
-	virtual UClass* GetSupportedClass() const override { return UVoxelLandTerrainGraph::StaticClass(); }
-	virtual uint32 GetCategories() override { return EAssetTypeCategories::Misc; }
-
-	virtual void OpenAssetEditor(const TArray<UObject*>& Objects, TSharedPtr<IToolkitHost> Host) override
+	class FVoxelLandGraphAssetActions : public FAssetTypeActions_Base
 	{
-		for (UObject* Object : Objects)
+	public:
+		virtual FText GetName() const override { return LOCTEXT("GraphAsset", "VoxelLand Terrain Graph"); }
+		virtual FColor GetTypeColor() const override { return FColor(67, 158, 92); }
+		virtual UClass* GetSupportedClass() const override { return UVoxelLandTerrainGraph::StaticClass(); }
+		virtual uint32 GetCategories() override { return EAssetTypeCategories::Misc; }
+
+		virtual void OpenAssetEditor(const TArray<UObject*>& Objects, TSharedPtr<IToolkitHost> Host) override
 		{
-			if (UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Object))
+			for (UObject* Object : Objects)
 			{
-				TSharedRef<FVoxelLandGraphToolkit> Editor = MakeShared<FVoxelLandGraphToolkit>();
-				Editor->Open(Graph, Host.IsValid() ? EToolkitMode::WorldCentric : EToolkitMode::Standalone, Host);
-				Editors.Add(Editor);
+				if (UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Object))
+				{
+					TSharedRef<FVoxelLandGraphToolkit> Editor = MakeShared<FVoxelLandGraphToolkit>();
+					Editor->Open(Graph, Host.IsValid() ? EToolkitMode::WorldCentric : EToolkitMode::Standalone, Host);
+					Editors.Add(Editor);
+				}
 			}
 		}
-	}
 
-	void QuiesceEditors()
-	{
-		for (const TWeakPtr<FVoxelLandGraphToolkit>& Weak : Editors)
+		void QuiesceEditors()
 		{
-			if (TSharedPtr<FVoxelLandGraphToolkit> Editor = Weak.Pin())
+			for (const TWeakPtr<FVoxelLandGraphToolkit>& Weak : Editors)
 			{
-				Editor->QuiesceForModuleShutdown();
+				if (TSharedPtr<FVoxelLandGraphToolkit> Editor = Weak.Pin())
+				{
+					Editor->QuiesceForModuleShutdown();
+				}
 			}
+			Editors.Reset();
 		}
-		Editors.Reset();
-	}
 
-private:
-	TArray<TWeakPtr<FVoxelLandGraphToolkit>> Editors;
-};
+	private:
+		TArray<TWeakPtr<FVoxelLandGraphToolkit>> Editors;
+	};
 
-class FVoxelLandM4ControlGraphAssetActions : public FVoxelLandGraphAssetActions
-{
-public:
-	virtual FText GetName() const override { return LOCTEXT("M4ControlGraphAsset", "VoxelLand M4 Control Graph"); }
-	virtual UClass* GetSupportedClass() const override { return UVoxelLandM4ControlGraph::StaticClass(); }
-};
+	class FVoxelLandM4ControlGraphAssetActions : public FVoxelLandGraphAssetActions
+	{
+	public:
+		virtual FText GetName() const override { return LOCTEXT("M4ControlGraphAsset", "VoxelLand M4 Control Graph"); }
+		virtual UClass* GetSupportedClass() const override { return UVoxelLandM4ControlGraph::StaticClass(); }
+	};
 
-class FVoxelLandFunctionAssetActions : public FVoxelLandGraphAssetActions
-{
-public:
-	virtual FText GetName() const override { return LOCTEXT("FunctionAsset", "VoxelLand Graph Function"); }
-	virtual UClass* GetSupportedClass() const override { return UVoxelLandGraphFunction::StaticClass(); }
-	virtual FColor GetTypeColor() const override { return FColor(130, 85, 173); }
+	class FVoxelLandFunctionAssetActions : public FVoxelLandGraphAssetActions
+	{
+	public:
+		virtual FText GetName() const override { return LOCTEXT("FunctionAsset", "VoxelLand Graph Function"); }
+		virtual UClass* GetSupportedClass() const override { return UVoxelLandGraphFunction::StaticClass(); }
+		virtual FColor GetTypeColor() const override { return FColor(130, 85, 173); }
+	};
 };
-}
 
 void FVoxelLandEditorModule::StartupModule()
 {
@@ -336,11 +337,11 @@ void FVoxelLandEditorModule::StartupModule()
 		UE_LOG(LogTemp, Warning, TEXT("VoxelLand filter presentation unavailable: %s"), *Error);
 	}
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
-	GraphAssetActions = MakeShared<FVoxelLandGraphAssetActions>();
+	GraphAssetActions = MakeShared<FVoxelLandEditorInternals::FVoxelLandGraphAssetActions>();
 	AssetTools.RegisterAssetTypeActions(GraphAssetActions.ToSharedRef());
-	FunctionAssetActions = MakeShared<FVoxelLandFunctionAssetActions>();
+	FunctionAssetActions = MakeShared<FVoxelLandEditorInternals::FVoxelLandFunctionAssetActions>();
 	AssetTools.RegisterAssetTypeActions(FunctionAssetActions.ToSharedRef());
-	M4ControlGraphAssetActions = MakeShared<FVoxelLandM4ControlGraphAssetActions>();
+	M4ControlGraphAssetActions = MakeShared<FVoxelLandEditorInternals::FVoxelLandM4ControlGraphAssetActions>();
 	AssetTools.RegisterAssetTypeActions(M4ControlGraphAssetActions.ToSharedRef());
 	FiniteWorldAssetActions = MakeShared<FVoxelLandFiniteWorldAssetActions>();
 	AssetTools.RegisterAssetTypeActions(FiniteWorldAssetActions.ToSharedRef());
@@ -377,15 +378,18 @@ void FVoxelLandEditorModule::ShutdownModule()
 	InfiniteWorldAssetActions.Reset();
 	if (GraphAssetActions.IsValid())
 	{
-		StaticCastSharedPtr<FVoxelLandGraphAssetActions>(GraphAssetActions)->QuiesceEditors();
+		StaticCastSharedPtr<FVoxelLandEditorInternals::FVoxelLandGraphAssetActions>(GraphAssetActions)
+			->QuiesceEditors();
 	}
 	if (FunctionAssetActions.IsValid())
 	{
-		StaticCastSharedPtr<FVoxelLandFunctionAssetActions>(FunctionAssetActions)->QuiesceEditors();
+		StaticCastSharedPtr<FVoxelLandEditorInternals::FVoxelLandFunctionAssetActions>(FunctionAssetActions)
+			->QuiesceEditors();
 	}
 	if (M4ControlGraphAssetActions.IsValid())
 	{
-		StaticCastSharedPtr<FVoxelLandM4ControlGraphAssetActions>(M4ControlGraphAssetActions)->QuiesceEditors();
+		StaticCastSharedPtr<FVoxelLandEditorInternals::FVoxelLandM4ControlGraphAssetActions>(M4ControlGraphAssetActions)
+			->QuiesceEditors();
 	}
 	if (GraphAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
 	{

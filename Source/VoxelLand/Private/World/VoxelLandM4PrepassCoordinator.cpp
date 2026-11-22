@@ -33,9 +33,15 @@ public:
 	bool bStopped = false;
 };
 
-namespace
+class FVoxelLandM4PrepassCoordinatorInternals final
 {
-void M4CoordinatorReap(FM4PrepassCoordinatorState& State)
+public:
+	static void M4CoordinatorReap(FM4PrepassCoordinatorState& State);
+	static void M4CoordinatorPrune(FM4PrepassCoordinatorState& State);
+	static void M4CoordinatorEvictIdle(FM4PrepassCoordinatorState& State);
+};
+
+void FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorReap(FM4PrepassCoordinatorState& State)
 {
 	// Caller holds State.Mutex. Keep each admission lease until the producer
 	// thread has returned and destroyed its callable and scratch captures.
@@ -51,7 +57,7 @@ void M4CoordinatorReap(FM4PrepassCoordinatorState& State)
 
 // Caller holds State.Mutex. Removing a cache reference never invalidates a
 // subscription or reader; the immutable grid itself retains its lease.
-void M4CoordinatorPrune(FM4PrepassCoordinatorState& State)
+void FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorPrune(FM4PrepassCoordinatorState& State)
 {
 	int32 Retained = 0;
 	for (const auto& Entry : State.Entries)
@@ -76,7 +82,7 @@ void M4CoordinatorPrune(FM4PrepassCoordinatorState& State)
 	}
 }
 
-void M4CoordinatorEvictIdle(FM4PrepassCoordinatorState& State)
+void FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorEvictIdle(FM4PrepassCoordinatorState& State)
 {
 	for (int32 Index = State.Entries.Num() - 1; Index >= 0; --Index)
 	{
@@ -86,7 +92,6 @@ void M4CoordinatorEvictIdle(FM4PrepassCoordinatorState& State)
 			State.Entries.RemoveAt(Index);
 		}
 	}
-}
 }
 
 FM4PrepassSubscription::FM4PrepassSubscription(TSharedRef<FM4PrepassCoordinatorState, ESPMode::ThreadSafe> InState,
@@ -114,7 +119,7 @@ void FM4PrepassSubscription::Cancel()
 		Entry->bAbandoned = true;
 		Entry->Cancelled.Store(true);
 	}
-	M4CoordinatorPrune(*State);
+	FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorPrune(*State);
 	// A detached handle must not keep an evicted result and its reservation
 	// alive merely because its owner retains the subscription object.
 	Entry.Reset();
@@ -182,7 +187,7 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 		OutError = TEXT("M4 prepass coordinator is shut down");
 		return nullptr;
 	}
-	M4CoordinatorReap(*State);
+	FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorReap(*State);
 	for (const auto& Existing : State->Entries)
 	{
 		if (!Existing->bAbandoned && (!Existing->bFinished || Existing->Grid.IsValid())
@@ -203,8 +208,8 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 	{
 		// Release only idle cache entries; external grid readers keep their
 		// own lease. Retry admission after releasing coordinator references.
-		M4CoordinatorEvictIdle(*State);
-		M4CoordinatorReap(*State);
+		FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorEvictIdle(*State);
+		FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorReap(*State);
 		Lease = Reserve();
 	}
 	if (!Lease)
@@ -257,7 +262,7 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 					// bytes before signalling task completion and releasing admission.
 					Entry->Key.Empty();
 				}
-				M4CoordinatorPrune(*SharedState);
+				FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorPrune(*SharedState);
 			}
 			Grid.Reset();
 			Entry.Reset();
@@ -268,8 +273,8 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 void FM4PrepassCoordinator::ReleaseIdleResults()
 {
 	FScopeLock Lock(&State->Mutex);
-	M4CoordinatorReap(*State);
-	M4CoordinatorEvictIdle(*State);
+	FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorReap(*State);
+	FVoxelLandM4PrepassCoordinatorInternals::M4CoordinatorEvictIdle(*State);
 }
 
 void FM4PrepassCoordinator::Shutdown()

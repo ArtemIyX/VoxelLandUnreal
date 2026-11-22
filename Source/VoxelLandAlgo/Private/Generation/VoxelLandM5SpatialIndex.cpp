@@ -7,29 +7,30 @@
 
 #include <cmath>
 
-namespace
+class FVoxelLandM5SpatialIndexInternals final
 {
-FVoxelLandError M5SpatialIndexError(EVoxelLandErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandError Error;
-	Error.Code = Code;
-	Error.Message = Message;
-	return Error;
-}
+public:
+	static FVoxelLandError M5SpatialIndexError(EVoxelLandErrorCode Code, const TCHAR* Message)
+	{
+		FVoxelLandError Error;
+		Error.Code = Code;
+		Error.Message = Message;
+		return Error;
+	}
 
-bool M5ValidBounds(const FBox3d& Box)
-{
-	return Box.IsValid && std::isfinite(Box.Min.X) && std::isfinite(Box.Min.Y) && std::isfinite(Box.Min.Z)
-		&& std::isfinite(Box.Max.X) && std::isfinite(Box.Max.Y) && std::isfinite(Box.Max.Z) && Box.Min.X <= Box.Max.X
-		&& Box.Min.Y <= Box.Max.Y && Box.Min.Z <= Box.Max.Z;
-}
+	static bool M5ValidBounds(const FBox3d& Box)
+	{
+		return Box.IsValid && std::isfinite(Box.Min.X) && std::isfinite(Box.Min.Y) && std::isfinite(Box.Min.Z)
+			&& std::isfinite(Box.Max.X) && std::isfinite(Box.Max.Y) && std::isfinite(Box.Max.Z)
+			&& Box.Min.X <= Box.Max.X && Box.Min.Y <= Box.Max.Y && Box.Min.Z <= Box.Max.Z;
+	}
 
-bool M5IntersectsInclusive(const FBox3d& A, const FBox3d& B)
-{
-	return A.Min.X <= B.Max.X && A.Max.X >= B.Min.X && A.Min.Y <= B.Max.Y && A.Max.Y >= B.Min.Y && A.Min.Z <= B.Max.Z
-		&& A.Max.Z >= B.Min.Z;
-}
-}
+	static bool M5IntersectsInclusive(const FBox3d& A, const FBox3d& B)
+	{
+		return A.Min.X <= B.Max.X && A.Max.X >= B.Min.X && A.Min.Y <= B.Max.Y && A.Max.Y >= B.Min.Y
+			&& A.Min.Z <= B.Max.Z && A.Max.Z >= B.Min.Z;
+	}
+};
 
 FVoxelLandM5SpatialIndex::FVoxelLandM5SpatialIndex(TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
@@ -44,12 +45,13 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5Infl
 {
 	if (MaxEntries < 0 || MaxEntries > MaximumEntries || Entries.Num() > MaxEntries)
 	{
-		return M5SpatialIndexError(
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index entry budget exceeded"));
 	}
 	if (IsCancelled())
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
 	}
 	using namespace VoxelLand::M5::CheckedMath;
 	const int64 Count = Entries.Num();
@@ -63,17 +65,18 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5Infl
 		|| !TryMultiplyNonNegative(Count, Count, Square) || !TryMultiplyNonNegative(Square, 2, Work)
 		|| !TryMultiplyNonNegative(Count, 8, Linear) || !TryAdd(Work, Linear, Work) || !TryAdd(Work, 16, Work))
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index admission overflow"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index admission overflow"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Admission;
 	if (!Budget->TryReserveBytes(Bytes, Admission))
 	{
-		return M5SpatialIndexError(
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index memory budget exhausted"));
 	}
 	if (!Budget->TryChargeWork(Work))
 	{
-		return M5SpatialIndexError(
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index work budget exhausted"));
 	}
 	// Validate before allocating the index. The hard cap bounds this exhaustive
@@ -82,29 +85,32 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5Infl
 	{
 		if (IsCancelled())
 		{
-			return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
+			return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+				EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
 		}
-		if (!M5ValidBounds(Entries[I].Bounds))
+		if (!FVoxelLandM5SpatialIndexInternals::M5ValidBounds(Entries[I].Bounds))
 		{
-			return M5SpatialIndexError(
+			return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
 				EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index contains invalid bounds"));
 		}
 		for (int32 J = 0; J < I; ++J)
 		{
 			if ((J & 63) == 0 && IsCancelled())
 			{
-				return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
+				return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+					EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
 			}
 			if (Entries[I].PrimitiveId == Entries[J].PrimitiveId)
 			{
-				return M5SpatialIndexError(
+				return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
 					EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial index contains duplicate IDs"));
 			}
 		}
 	}
 	if (IsCancelled())
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
 	}
 	TSharedPtr<FVoxelLandM5SpatialIndex, ESPMode::ThreadSafe> Candidate =
 		MakeShareable(new FVoxelLandM5SpatialIndex(Budget, MoveTemp(Admission)));
@@ -117,7 +123,8 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5Infl
 	});
 	if (IsCancelled())
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial index build cancelled"));
 	}
 	OutIndex = MoveTemp(Candidate);
 	return {};
@@ -126,13 +133,15 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Build(TConstArrayView<FVoxelLandM5Infl
 FVoxelLandError FVoxelLandM5SpatialIndex::Query(const FBox3d& Bounds, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5SpatialQueryResult, ESPMode::ThreadSafe>& OutResult) const
 {
-	if (!M5ValidBounds(Bounds))
+	if (!FVoxelLandM5SpatialIndexInternals::M5ValidBounds(Bounds))
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query has invalid bounds"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query has invalid bounds"));
 	}
 	if (IsCancelled())
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
 	}
 	using namespace VoxelLand::M5::CheckedMath;
 	int64 Bytes = 0, Work = 0;
@@ -140,17 +149,18 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Query(const FBox3d& Bounds, TFunctionR
 		|| !TryMultiplyNonNegative(Bytes, 4, Bytes) || !TryAdd(Bytes, 4096, Bytes)
 		|| !TryMultiplyNonNegative(EntriesById.Num(), 4, Work) || !TryAdd(Work, 16, Work))
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query admission overflow"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query admission overflow"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Admission;
 	if (!Budget->TryReserveBytes(Bytes, Admission))
 	{
-		return M5SpatialIndexError(
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query memory budget exhausted"));
 	}
 	if (!Budget->TryChargeWork(Work))
 	{
-		return M5SpatialIndexError(
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("M5 spatial query work budget exhausted"));
 	}
 	TArray<uint64> Candidate;
@@ -158,22 +168,25 @@ FVoxelLandError FVoxelLandM5SpatialIndex::Query(const FBox3d& Bounds, TFunctionR
 	{
 		if ((I & 63) == 0 && IsCancelled())
 		{
-			return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
+			return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+				EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
 		}
-		if (M5IntersectsInclusive(EntriesById[I].Bounds, Bounds))
+		if (FVoxelLandM5SpatialIndexInternals::M5IntersectsInclusive(EntriesById[I].Bounds, Bounds))
 		{
 			Candidate.Add(EntriesById[I].PrimitiveId);
 		}
 	}
 	if (IsCancelled())
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
 	}
 	TSharedPtr<FVoxelLandM5SpatialQueryResult, ESPMode::ThreadSafe> Result =
 		MakeShareable(new FVoxelLandM5SpatialQueryResult(MoveTemp(Admission), MoveTemp(Candidate)));
 	if (IsCancelled())
 	{
-		return M5SpatialIndexError(EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
+		return FVoxelLandM5SpatialIndexInternals::M5SpatialIndexError(
+			EVoxelLandErrorCode::Cancelled, TEXT("M5 spatial query cancelled"));
 	}
 	OutResult = MoveTemp(Result);
 	return {};

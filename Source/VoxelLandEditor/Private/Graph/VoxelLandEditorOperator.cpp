@@ -1,45 +1,46 @@
 #include "Graph/VoxelLandEditorOperator.h"
 #include "Operators/VoxelLandOperator.h"
 
-namespace
+class FVoxelLandEditorOperatorInternals final
 {
-TMap<FGuid, TMap<int32, FVoxelLandEditorOperatorPresentation>> RegistryPresentations;
-constexpr int32 MaxRegistryPresentations = 4096;
-uint64 PresentationRevision = 0;
+public:
+	inline static TMap<FGuid, TMap<int32, FVoxelLandEditorOperatorPresentation>> RegistryPresentations;
+	static constexpr int32 MaxRegistryPresentations = 4096;
+	inline static uint64 PresentationRevision = 0;
 
-bool IsValidType(EVoxelLandGraphValueType Type)
-{
-	return Type == EVoxelLandGraphValueType::Float || Type == EVoxelLandGraphValueType::Int32 || Type ==
-	       EVoxelLandGraphValueType::Bool;
-}
-
-bool ValidateInputs(const FVoxelLandEditorOperatorPresentation& Presentation,
-	const IVoxelLandOperator& Provider, FString& Error)
-{
-	const TArray<EVoxelLandGraphValueType> Types = Provider.InputTypes();
-	if (Types.IsEmpty() || Types.Num() > 3 || Presentation.Inputs.Num() != Types.Num() ||
-	    (!Presentation.InputTooltips.IsEmpty() && Presentation.InputTooltips.Num() != Types.Num()))
+	static bool IsValidType(EVoxelLandGraphValueType Type)
 	{
-		Error = TEXT("Presentation input count must match the supported provider signature.");
-		return false;
+		return Type == EVoxelLandGraphValueType::Float || Type == EVoxelLandGraphValueType::Int32
+			|| Type == EVoxelLandGraphValueType::Bool;
 	}
-	TSet<FString> Names;
-	for (int32 Index = 0; Index < Types.Num(); ++Index)
+
+	static bool ValidateInputs(
+		const FVoxelLandEditorOperatorPresentation& Presentation, const IVoxelLandOperator& Provider, FString& Error)
 	{
-		const FVoxelLandGraphPinRecord& Pin = Presentation.Inputs[Index];
-		const FString Key = Pin.Name.ToLower();
-		if (Pin.bOutput || Pin.bInvalidDefault || !IsValidType(Pin.Type) || Pin.Type != Types[Index] || Pin.Name.
-		    IsEmpty() || Pin.Name.Len() > 128 ||
-		    Names.Contains(Key) || !FMath::IsFinite(Pin.FloatDefault))
+		const TArray<EVoxelLandGraphValueType> Types = Provider.InputTypes();
+		if (Types.IsEmpty() || Types.Num() > 3 || Presentation.Inputs.Num() != Types.Num()
+			|| (!Presentation.InputTooltips.IsEmpty() && Presentation.InputTooltips.Num() != Types.Num()))
 		{
-			Error = TEXT("Presentation has an invalid, duplicate or mismatched input pin.");
+			Error = TEXT("Presentation input count must match the supported provider signature.");
 			return false;
 		}
-		Names.Add(Key);
+		TSet<FString> Names;
+		for (int32 Index = 0; Index < Types.Num(); ++Index)
+		{
+			const FVoxelLandGraphPinRecord& Pin = Presentation.Inputs[Index];
+			const FString Key = Pin.Name.ToLower();
+			if (Pin.bOutput || Pin.bInvalidDefault || !IsValidType(Pin.Type) || Pin.Type != Types[Index]
+				|| Pin.Name.IsEmpty() || Pin.Name.Len() > 128 || Names.Contains(Key)
+				|| !FMath::IsFinite(Pin.FloatDefault))
+			{
+				Error = TEXT("Presentation has an invalid, duplicate or mismatched input pin.");
+				return false;
+			}
+			Names.Add(Key);
+		}
+		return true;
 	}
-	return true;
-}
-}
+};
 
 bool FVoxelLandEditorOperatorRegistry::Register(const FVoxelLandEditorOperatorPresentation& Presentation,
 	FString& OutError)
@@ -54,22 +55,22 @@ bool FVoxelLandEditorOperatorRegistry::Register(const FVoxelLandEditorOperatorPr
 		FVoxelLandOperatorRegistry::Resolve(Presentation.OperatorId, Presentation.Version);
 	const bool bReservedId = Presentation.OperatorId.A == 0x564c4d33 && Presentation.OperatorId.B == 1 && Presentation.
 	                         OperatorId.C == 0;
-	if (!Provider || !Presentation.OperatorId.IsValid() || bReservedId || Presentation.Version < 1 || Presentation.
-	    DisplayName.IsEmpty() ||
-	    Presentation.Category.IsEmpty() || Presentation.OutputName.IsEmpty() || Presentation.OutputName.Len() > 128 ||
-	    Presentation.DefaultConfiguration.Num() > 65536 || !IsValidType(Provider->OutputType()) ||
-	    Presentation.OutputType != Provider->OutputType())
+	if (!Provider || !Presentation.OperatorId.IsValid() || bReservedId || Presentation.Version < 1
+		|| Presentation.DisplayName.IsEmpty() || Presentation.Category.IsEmpty() || Presentation.OutputName.IsEmpty()
+		|| Presentation.OutputName.Len() > 128 || Presentation.DefaultConfiguration.Num() > 65536
+		|| !FVoxelLandEditorOperatorInternals::IsValidType(Provider->OutputType())
+		|| Presentation.OutputType != Provider->OutputType())
 	{
 		OutError = TEXT("Presentation has an invalid ID, version, label, output or missing runtime provider.");
 		return false;
 	}
-	if (!ValidateInputs(Presentation, *Provider, OutError) ||
-	    !Provider->ValidateConfiguration(Presentation.DefaultConfiguration, OutError))
+	if (!FVoxelLandEditorOperatorInternals::ValidateInputs(Presentation, *Provider, OutError)
+		|| !Provider->ValidateConfiguration(Presentation.DefaultConfiguration, OutError))
 	{
 		return false;
 	}
-	if (const TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = RegistryPresentations.Find(
-		Presentation.OperatorId))
+	if (const TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions =
+			FVoxelLandEditorOperatorInternals::RegistryPresentations.Find(Presentation.OperatorId))
 	{
 		if (Versions->Contains(Presentation.Version))
 		{
@@ -78,17 +79,18 @@ bool FVoxelLandEditorOperatorRegistry::Register(const FVoxelLandEditorOperatorPr
 		}
 	}
 	int32 Count = 0;
-	for (const auto& Entry : RegistryPresentations)
+	for (const auto& Entry : FVoxelLandEditorOperatorInternals::RegistryPresentations)
 	{
 		Count += Entry.Value.Num();
 	}
-	if (Count >= MaxRegistryPresentations)
+	if (Count >= FVoxelLandEditorOperatorInternals::MaxRegistryPresentations)
 	{
 		OutError = TEXT("Editor presentation limit exceeded.");
 		return false;
 	}
-	RegistryPresentations.FindOrAdd(Presentation.OperatorId).Add(Presentation.Version, Presentation);
-	++PresentationRevision;
+	FVoxelLandEditorOperatorInternals::RegistryPresentations.FindOrAdd(Presentation.OperatorId)
+		.Add(Presentation.Version, Presentation);
+	++FVoxelLandEditorOperatorInternals::PresentationRevision;
 	return true;
 }
 
@@ -98,30 +100,32 @@ bool FVoxelLandEditorOperatorRegistry::Unregister(const FGuid& OperatorId, int32
 	{
 		return false;
 	}
-	TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = RegistryPresentations.Find(OperatorId);
+	TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions =
+		FVoxelLandEditorOperatorInternals::RegistryPresentations.Find(OperatorId);
 	if (!Versions || Versions->Remove(Version) == 0)
 	{
 		return false;
 	}
 	if (Versions->IsEmpty())
 	{
-		RegistryPresentations.Remove(OperatorId);
+		FVoxelLandEditorOperatorInternals::RegistryPresentations.Remove(OperatorId);
 	}
-	++PresentationRevision;
+	++FVoxelLandEditorOperatorInternals::PresentationRevision;
 	return true;
 }
 
 uint64 FVoxelLandEditorOperatorRegistry::GetRevision()
 {
 	check(IsInGameThread());
-	return PresentationRevision;
+	return FVoxelLandEditorOperatorInternals::PresentationRevision;
 }
 
 bool FVoxelLandEditorOperatorRegistry::FindPresentation(const FGuid& OperatorId, int32 Version,
 	FVoxelLandEditorOperatorPresentation& OutPresentation)
 {
 	check(IsInGameThread());
-	const TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions = RegistryPresentations.Find(OperatorId);
+	const TMap<int32, FVoxelLandEditorOperatorPresentation>* Versions =
+		FVoxelLandEditorOperatorInternals::RegistryPresentations.Find(OperatorId);
 	const FVoxelLandEditorOperatorPresentation* Found = Versions ? Versions->Find(Version) : nullptr;
 	if (!Found || !FVoxelLandOperatorRegistry::Resolve(OperatorId, Version))
 	{
@@ -134,7 +138,7 @@ bool FVoxelLandEditorOperatorRegistry::FindPresentation(const FGuid& OperatorId,
 void FVoxelLandEditorOperatorRegistry::NotifyFunctionChanged()
 {
 	check(IsInGameThread());
-	++PresentationRevision;
+	++FVoxelLandEditorOperatorInternals::PresentationRevision;
 }
 
 void FVoxelLandEditorOperatorRegistry::GetPresentations(
@@ -145,7 +149,7 @@ void FVoxelLandEditorOperatorRegistry::GetPresentations(
 	{
 		return;
 	}
-	for (const auto& Entry : RegistryPresentations)
+	for (const auto& Entry : FVoxelLandEditorOperatorInternals::RegistryPresentations)
 	{
 		for (const auto& Version : Entry.Value)
 		{
@@ -168,6 +172,6 @@ void FVoxelLandEditorOperatorRegistry::GetPresentations(
 void FVoxelLandEditorOperatorRegistry::Clear()
 {
 	check(IsInGameThread());
-	RegistryPresentations.Reset();
-	++PresentationRevision;
+	FVoxelLandEditorOperatorInternals::RegistryPresentations.Reset();
+	++FVoxelLandEditorOperatorInternals::PresentationRevision;
 }

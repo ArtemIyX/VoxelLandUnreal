@@ -3,348 +3,364 @@
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/Structs/VoxelLandGraphSnapshot.h"
 #include "Data/VoxelLandGraphFunctionId.h"
+#include "Graph/VoxelLandM5FingerprintGraphView.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Hash/xxhash.h"
 
-namespace
+class FVoxelLandM5SourceFingerprintInternals final
 {
-constexpr int32 M5FingerprintMaxRecords = 4096;
-constexpr int64 M5FingerprintMaxBytes = 4 * 1024 * 1024;
+public:
+	static constexpr int32 M5FingerprintMaxRecords = 4096;
+	static constexpr int64 M5FingerprintMaxBytes = 4 * 1024 * 1024;
 
-FVoxelLandM5Diagnostic M5FingerprintError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
-{
-	FVoxelLandM5Diagnostic D;
-	D.Code = Code;
-	D.Stage = TEXT("M5.SourceFingerprint");
-	D.Message = Message;
-	return D;
-}
+	static FVoxelLandM5Diagnostic M5FingerprintGraph(const FVoxelLandM5FingerprintGraphView& Graph,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		uint64& OutFingerprint);
 
-bool M5FingerprintLessGuid(const FGuid& A, const FGuid& B)
-{
-	if (A.A != B.A)
+	static FVoxelLandM5Diagnostic M5FingerprintError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 	{
-		return A.A < B.A;
+		FVoxelLandM5Diagnostic D;
+		D.Code = Code;
+		D.Stage = TEXT("M5.SourceFingerprint");
+		D.Message = Message;
+		return D;
 	}
-	if (A.B != B.B)
-	{
-		return A.B < B.B;
-	}
-	if (A.C != B.C)
-	{
-		return A.C < B.C;
-	}
-	return A.D < B.D;
-}
 
-void M5FingerprintWriteGuid(FCanonicalWriter& W, const FGuid& G)
-{
-	W.U32(G.A);
-	W.U32(G.B);
-	W.U32(G.C);
-	W.U32(G.D);
-}
+	static bool M5FingerprintLessGuid(const FGuid& A, const FGuid& B)
+	{
+		if (A.A != B.A)
+		{
+			return A.A < B.A;
+		}
+		if (A.B != B.B)
+		{
+			return A.B < B.B;
+		}
+		if (A.C != B.C)
+		{
+			return A.C < B.C;
+		}
+		return A.D < B.D;
+	}
 
-bool M5FingerprintLessLink(const FVoxelLandGraphLinkRecord& A, const FVoxelLandGraphLinkRecord& B)
-{
-	if (A.TargetNode != B.TargetNode)
+	static void M5FingerprintWriteGuid(FCanonicalWriter& W, const FGuid& G)
 	{
-		return M5FingerprintLessGuid(A.TargetNode, B.TargetNode);
+		W.U32(G.A);
+		W.U32(G.B);
+		W.U32(G.C);
+		W.U32(G.D);
 	}
-	if (A.TargetPin != B.TargetPin)
-	{
-		return M5FingerprintLessGuid(A.TargetPin, B.TargetPin);
-	}
-	if (A.SourceNode != B.SourceNode)
-	{
-		return M5FingerprintLessGuid(A.SourceNode, B.SourceNode);
-	}
-	return M5FingerprintLessGuid(A.SourcePin, B.SourcePin);
-}
 
-bool M5FingerprintAscii(const FString& Value)
-{
-	for (TCHAR C : Value)
+	static bool M5FingerprintLessLink(const FVoxelLandGraphLinkRecord& A, const FVoxelLandGraphLinkRecord& B)
 	{
-		if (C <= 0 || C > 127)
+		if (A.TargetNode != B.TargetNode)
+		{
+			return M5FingerprintLessGuid(A.TargetNode, B.TargetNode);
+		}
+		if (A.TargetPin != B.TargetPin)
+		{
+			return M5FingerprintLessGuid(A.TargetPin, B.TargetPin);
+		}
+		if (A.SourceNode != B.SourceNode)
+		{
+			return M5FingerprintLessGuid(A.SourceNode, B.SourceNode);
+		}
+		return M5FingerprintLessGuid(A.SourcePin, B.SourcePin);
+	}
+
+	static bool M5FingerprintAscii(const FString& Value)
+	{
+		for (TCHAR C : Value)
+		{
+			if (C <= 0 || C > 127)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Bound the path before materializing it. UE 5.7 stores the subpath as UTF-8
+	// and the package/asset components as FNames; no UObject is loaded here.
+	static bool M5FingerprintPath(const FSoftObjectPath& Path, FString& Out)
+	{
+		if (Path.IsNull())
+		{
+			Out.Reset();
+			return true;
+		}
+		const FTopLevelAssetPath Asset = Path.GetAssetPath();
+		const uint64 Upper = uint64(Asset.GetPackageName().GetStringLength())
+						   + uint64(Asset.GetAssetName().GetStringLength()) + uint64(Path.GetSubPathUtf8String().Len())
+						   + 2;
+		if (Upper > 2048)
 		{
 			return false;
 		}
+		Out = Path.ToString();
+		return !Out.IsEmpty() && Out.Len() <= 2048 && M5FingerprintAscii(Out);
 	}
-	return true;
-}
 
-// Bound the path before materializing it. UE 5.7 stores the subpath as UTF-8
-// and the package/asset components as FNames; no UObject is loaded here.
-bool M5FingerprintPath(const FSoftObjectPath& Path, FString& Out)
-{
-	if (Path.IsNull())
+	static void M5FingerprintWriteAscii(FCanonicalWriter& W, const FString& Value)
 	{
-		Out.Reset();
-		return true;
-	}
-	const FTopLevelAssetPath Asset = Path.GetAssetPath();
-	const uint64 Upper = uint64(Asset.GetPackageName().GetStringLength())
-					   + uint64(Asset.GetAssetName().GetStringLength()) + uint64(Path.GetSubPathUtf8String().Len()) + 2;
-	if (Upper > 2048)
-	{
-		return false;
-	}
-	Out = Path.ToString();
-	return !Out.IsEmpty() && Out.Len() <= 2048 && M5FingerprintAscii(Out);
-}
-
-void M5FingerprintWriteAscii(FCanonicalWriter& W, const FString& Value)
-{
-	W.U32(uint32(Value.Len()));
-	for (TCHAR C : Value)
-	{
-		W.U8(uint8(C));
-	}
-}
-
-// A flat captured dependency table contains the transitive function closure.
-// Validate reachability and cycles without copying any graph or loading assets.
-FVoxelLandM5Diagnostic M5FingerprintValidateFunctions(const FVoxelLandGraphSnapshot& Source,
-	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
-{
-	using namespace VoxelLand::M5::CheckedMath;
-	const int32 Count = Source.Functions.Num();
-	if (Count > 128)
-	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function count exceeds limit"));
-	}
-	if (!Budget->TryChargeWork(int64(Count) * 4096 + 1))
-	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function preflight work exceeds limit"));
-	}
-	int64 TotalNodes = Source.Nodes.Num();
-	int64 TotalRecords = int64(Source.Parameters.Num()) + Source.Nodes.Num() + Source.Links.Num();
-	for (const FVoxelLandGraphFunctionSnapshot& F : Source.Functions)
-	{
-		if (IsCancelled())
+		W.U32(uint32(Value.Len()));
+		for (TCHAR C : Value)
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			W.U8(uint8(C));
 		}
-		if (F.AssetPath.IsEmpty() || F.AssetPath.Len() > 2048 || !M5FingerprintAscii(F.AssetPath)
-			|| F.Inputs.Num() > M5FingerprintMaxRecords || F.Nodes.Num() > M5FingerprintMaxRecords
-			|| F.Links.Num() > M5FingerprintMaxRecords || !TryAdd(TotalNodes, F.Nodes.Num(), TotalNodes)
-			|| !TryAdd(TotalRecords, int64(F.Inputs.Num()) + F.Nodes.Num() + F.Links.Num(), TotalRecords)
-			|| TotalNodes > M5FingerprintMaxRecords || TotalRecords > 3 * M5FingerprintMaxRecords)
+	}
+
+	// A flat captured dependency table contains the transitive function closure.
+	// Validate reachability and cycles without copying any graph or loading assets.
+	static FVoxelLandM5Diagnostic M5FingerprintValidateFunctions(const FVoxelLandGraphSnapshot& Source,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+	{
+		using namespace VoxelLand::M5::CheckedMath;
+		const int32 Count = Source.Functions.Num();
+		if (Count > 128)
+		{
+			return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function count exceeds limit"));
+		}
+		if (!Budget->TryChargeWork(int64(Count) * 4096 + 1))
 		{
 			return M5FingerprintError(
-				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid or oversized function dependency"));
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function preflight work exceeds limit"));
 		}
-	}
-	int64 Work = 0;
-	int64 MatrixCells = 0;
-	int64 MatrixWork = 0;
-	// Each pair of paths may share all 2048 characters. Reserve two full
-	// comparisons per pair in addition to transitive closure and polling.
-	if (!TryMultiplyNonNegative(Count, Count, MatrixCells)
-		|| !TryMultiplyNonNegative(MatrixCells, int64(Count) * 4 + 4100, MatrixWork)
-		|| !TryMultiplyNonNegative(TotalNodes, int64(Count) + 1, Work) || !TryMultiplyNonNegative(Work, 4096, Work)
-		|| !TryAdd(Work, MatrixWork, Work) || !TryAdd(Work, 128, Work) || !Budget->TryChargeWork(Work))
-	{
-		return M5FingerprintError(
-			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function dependency work exceeds limit"));
-	}
-	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
-	if (!Budget->TryReserveBytes(2 * MatrixCells + 2 * Count + 32768, Lease))
-	{
-		return M5FingerprintError(
-			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function dependency memory exceeds limit"));
-	}
-	TArray<uint8> FunctionEdges;
-	FunctionEdges.Init(0, int32(MatrixCells));
-	TArray<uint8> Roots;
-	Roots.Init(0, Count);
-	for (int32 I = 0; I < Count; ++I)
-	{
-		for (int32 J = 0; J < I; ++J)
+		int64 TotalNodes = Source.Nodes.Num();
+		int64 TotalRecords = int64(Source.Parameters.Num()) + Source.Nodes.Num() + Source.Links.Num();
+		for (const FVoxelLandGraphFunctionSnapshot& F : Source.Functions)
 		{
 			if (IsCancelled())
 			{
 				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
-			if (Source.Functions[I].AssetPath == Source.Functions[J].AssetPath)
-			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate function path"));
-			}
-		}
-	}
-	FString Path;
-	auto VisitNodes = [&](const TArray<FVoxelLandGraphNodeRecord>& Nodes, int32 Parent) -> FVoxelLandM5Diagnostic {
-		for (const FVoxelLandGraphNodeRecord& Node : Nodes)
-		{
-			if (IsCancelled())
-			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
-			}
-			const bool bCall = Node.OperatorId == VoxelLandGraphFunctionCallId();
-			if (bCall != !Node.FunctionPath.IsNull() || !M5FingerprintPath(Node.FunctionPath, Path))
+			if (F.AssetPath.IsEmpty() || F.AssetPath.Len() > 2048 || !M5FingerprintAscii(F.AssetPath)
+				|| F.Inputs.Num() > M5FingerprintMaxRecords || F.Nodes.Num() > M5FingerprintMaxRecords
+				|| F.Links.Num() > M5FingerprintMaxRecords || !TryAdd(TotalNodes, F.Nodes.Num(), TotalNodes)
+				|| !TryAdd(TotalRecords, int64(F.Inputs.Num()) + F.Nodes.Num() + F.Links.Num(), TotalRecords)
+				|| TotalNodes > M5FingerprintMaxRecords || TotalRecords > 3 * M5FingerprintMaxRecords)
 			{
 				return M5FingerprintError(
-					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid or unsupported function call path"));
+					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid or oversized function dependency"));
 			}
-			if (!bCall)
-			{
-				continue;
-			}
-			int32 Target = INDEX_NONE;
-			for (int32 I = 0; I < Count; ++I)
+		}
+		int64 Work = 0;
+		int64 MatrixCells = 0;
+		int64 MatrixWork = 0;
+		// Each pair of paths may share all 2048 characters. Reserve two full
+		// comparisons per pair in addition to transitive closure and polling.
+		if (!TryMultiplyNonNegative(Count, Count, MatrixCells)
+			|| !TryMultiplyNonNegative(MatrixCells, int64(Count) * 4 + 4100, MatrixWork)
+			|| !TryMultiplyNonNegative(TotalNodes, int64(Count) + 1, Work) || !TryMultiplyNonNegative(Work, 4096, Work)
+			|| !TryAdd(Work, MatrixWork, Work) || !TryAdd(Work, 128, Work) || !Budget->TryChargeWork(Work))
+		{
+			return M5FingerprintError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function dependency work exceeds limit"));
+		}
+		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+		if (!Budget->TryReserveBytes(2 * MatrixCells + 2 * Count + 32768, Lease))
+		{
+			return M5FingerprintError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function dependency memory exceeds limit"));
+		}
+		TArray<uint8> FunctionEdges;
+		FunctionEdges.Init(0, int32(MatrixCells));
+		TArray<uint8> Roots;
+		Roots.Init(0, Count);
+		for (int32 I = 0; I < Count; ++I)
+		{
+			for (int32 J = 0; J < I; ++J)
 			{
 				if (IsCancelled())
 				{
 					return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 				}
-				if (Source.Functions[I].AssetPath == Path)
+				if (Source.Functions[I].AssetPath == Source.Functions[J].AssetPath)
 				{
-					Target = I;
-					break;
+					return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate function path"));
 				}
 			}
-			if (Target == INDEX_NONE)
-			{
-				return M5FingerprintError(
-					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing captured function dependency"));
-			}
-			if (Parent == INDEX_NONE)
-			{
-				Roots[Target] = 1;
-			}
-			else
-			{
-				FunctionEdges[Parent * Count + Target] = 1;
-			}
 		}
-		return {};
-	};
-	FVoxelLandM5Diagnostic D = VisitNodes(Source.Nodes, INDEX_NONE);
-	if (D.Code != EVoxelLandM5ErrorCode::None)
-	{
-		return D;
-	}
-	for (int32 I = 0; I < Count; ++I)
-	{
-		D = VisitNodes(Source.Functions[I].Nodes, I);
+		FString Path;
+		auto VisitNodes = [&](const TArray<FVoxelLandGraphNodeRecord>& Nodes, int32 Parent) -> FVoxelLandM5Diagnostic {
+			for (const FVoxelLandGraphNodeRecord& Node : Nodes)
+			{
+				if (IsCancelled())
+				{
+					return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				}
+				const bool bCall = Node.OperatorId == VoxelLandGraphFunctionCallId();
+				if (bCall != !Node.FunctionPath.IsNull() || !M5FingerprintPath(Node.FunctionPath, Path))
+				{
+					return M5FingerprintError(
+						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid or unsupported function call path"));
+				}
+				if (!bCall)
+				{
+					continue;
+				}
+				int32 Target = INDEX_NONE;
+				for (int32 I = 0; I < Count; ++I)
+				{
+					if (IsCancelled())
+					{
+						return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+					}
+					if (Source.Functions[I].AssetPath == Path)
+					{
+						Target = I;
+						break;
+					}
+				}
+				if (Target == INDEX_NONE)
+				{
+					return M5FingerprintError(
+						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing captured function dependency"));
+				}
+				if (Parent == INDEX_NONE)
+				{
+					Roots[Target] = 1;
+				}
+				else
+				{
+					FunctionEdges[Parent * Count + Target] = 1;
+				}
+			}
+			return {};
+		};
+		FVoxelLandM5Diagnostic D = VisitNodes(Source.Nodes, INDEX_NONE);
 		if (D.Code != EVoxelLandM5ErrorCode::None)
 		{
 			return D;
 		}
-	}
-	TArray<uint8> Direct = FunctionEdges;
-	TArray<uint8> Depth = Roots;
-	for (int32 Pass = 0; Pass < Count; ++Pass)
-	{
-		bool bChanged = false;
 		for (int32 I = 0; I < Count; ++I)
 		{
-			for (int32 J = 0; J < Count; ++J)
+			D = VisitNodes(Source.Functions[I].Nodes, I);
+			if (D.Code != EVoxelLandM5ErrorCode::None)
 			{
-				if (IsCancelled())
+				return D;
+			}
+		}
+		TArray<uint8> Direct = FunctionEdges;
+		TArray<uint8> Depth = Roots;
+		for (int32 Pass = 0; Pass < Count; ++Pass)
+		{
+			bool bChanged = false;
+			for (int32 I = 0; I < Count; ++I)
+			{
+				for (int32 J = 0; J < Count; ++J)
 				{
-					return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
-				}
-				if (Depth[I] && Direct[I * Count + J] && Depth[J] < Depth[I] + 1)
-				{
-					if (Depth[I] >= 16)
+					if (IsCancelled())
 					{
-						return M5FingerprintError(
-							EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function depth exceeds limit or cycle"));
+						return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 					}
-					Depth[J] = Depth[I] + 1;
-					bChanged = true;
+					if (Depth[I] && Direct[I * Count + J] && Depth[J] < Depth[I] + 1)
+					{
+						if (Depth[I] >= 16)
+						{
+							return M5FingerprintError(
+								EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function depth exceeds limit or cycle"));
+						}
+						Depth[J] = Depth[I] + 1;
+						bChanged = true;
+					}
+				}
+			}
+			if (!bChanged)
+			{
+				break;
+			}
+		}
+		for (int32 K = 0; K < Count; ++K)
+		{
+			for (int32 I = 0; I < Count; ++I)
+			{
+				for (int32 J = 0; J < Count; ++J)
+				{
+					if (IsCancelled())
+					{
+						return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+					}
+					FunctionEdges[I * Count + J] |= FunctionEdges[I * Count + K] & FunctionEdges[K * Count + J];
 				}
 			}
 		}
-		if (!bChanged)
-		{
-			break;
-		}
-	}
-	for (int32 K = 0; K < Count; ++K)
-	{
 		for (int32 I = 0; I < Count; ++I)
 		{
-			for (int32 J = 0; J < Count; ++J)
+			if (FunctionEdges[I * Count + I])
 			{
-				if (IsCancelled())
-				{
-					return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
-				}
-				FunctionEdges[I * Count + J] |= FunctionEdges[I * Count + K] & FunctionEdges[K * Count + J];
+				return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function dependency cycle"));
+			}
+			bool bReachable = Roots[I] != 0;
+			for (int32 J = 0; J < Count && !bReachable; ++J)
+			{
+				bReachable = Roots[J] && FunctionEdges[J * Count + I];
+			}
+			if (!bReachable)
+			{
+				return M5FingerprintError(
+					EVoxelLandM5ErrorCode::InvalidInput, TEXT("Unreferenced function dependency"));
 			}
 		}
+		return {};
 	}
-	for (int32 I = 0; I < Count; ++I)
-	{
-		if (FunctionEdges[I * Count + I])
-		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Function dependency cycle"));
-		}
-		bool bReachable = Roots[I] != 0;
-		for (int32 J = 0; J < Count && !bReachable; ++J)
-		{
-			bReachable = Roots[J] && FunctionEdges[J * Count + I];
-		}
-		if (!bReachable)
-		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Unreferenced function dependency"));
-		}
-	}
-	return {};
-}
 
-template <typename T, typename TLess>
-bool M5FingerprintSortIndices(
-	const TArray<T>& Items, TLess Less, TFunctionRef<bool()> IsCancelled, TArray<int32>& Indices)
-{
-	Indices.Reserve(Items.Num());
-	for (int32 I = 0; I < Items.Num(); ++I)
+	template <typename T, typename TLess>
+	static bool M5FingerprintSortIndices(
+		const TArray<T>& Items, TLess Less, TFunctionRef<bool()> IsCancelled, TArray<int32>& Indices)
 	{
-		if (IsCancelled())
-		{
-			return false;
-		}
-		Indices.Add(I);
-		int32 J = I;
-		while (J > 0 && Less(Items[Indices[J]], Items[Indices[J - 1]]))
+		Indices.Reserve(Items.Num());
+		for (int32 I = 0; I < Items.Num(); ++I)
 		{
 			if (IsCancelled())
 			{
 				return false;
 			}
-			Swap(Indices[J], Indices[J - 1]);
-			--J;
+			Indices.Add(I);
+			int32 J = I;
+			while (J > 0 && Less(Items[Indices[J]], Items[Indices[J - 1]]))
+			{
+				if (IsCancelled())
+				{
+					return false;
+				}
+				Swap(Indices[J], Indices[J - 1]);
+				--J;
+			}
 		}
+		return true;
 	}
-	return true;
-}
-}
+};
 
-static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
-	const TArray<FVoxelLandGraphParameter>& Parameters, const TArray<FVoxelLandGraphNodeRecord>& Nodes,
-	const TArray<FVoxelLandGraphLinkRecord>& Links, const TArray<FVoxelLandGraphFunctionSnapshot>* Functions,
-	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
-	uint64& OutFingerprint)
+FVoxelLandM5Diagnostic FVoxelLandM5SourceFingerprintInternals::M5FingerprintGraph(
+	const FVoxelLandM5FingerprintGraphView& Graph, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, uint64& OutFingerprint)
 {
 	using namespace VoxelLand::M5::CheckedMath;
+	const int32 SourceVersion = Graph.SourceVersion;
+	const TArray<FVoxelLandGraphParameter>& Parameters = Graph.Parameters;
+	const TArray<FVoxelLandGraphNodeRecord>& Nodes = Graph.Nodes;
+	const TArray<FVoxelLandGraphLinkRecord>& Links = Graph.Links;
+	const TArray<FVoxelLandGraphFunctionSnapshot>* const Functions = Graph.Functions;
 	if (IsCancelled())
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
-	if (Parameters.Num() > M5FingerprintMaxRecords || Nodes.Num() > M5FingerprintMaxRecords
-		|| Links.Num() > M5FingerprintMaxRecords)
+	if (Parameters.Num() > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxRecords
+		|| Nodes.Num() > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxRecords
+		|| Links.Num() > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxRecords)
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source record limit exceeded"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source record limit exceeded"));
 	}
 	const int64 Records = int64(Parameters.Num()) + Nodes.Num() + Links.Num();
 	if (!Budget->TryChargeWork(Records * 2 + 1))
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source preflight work exhausted"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source preflight work exhausted"));
 	}
 	bool bHasFunctionExtension = Functions && !Functions->IsEmpty();
 	for (const FVoxelLandGraphNodeRecord& Node : Nodes)
@@ -353,9 +369,9 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> PathLease;
 	if (bHasFunctionExtension
-		&& (!Budget->TryChargeWork(int64(Nodes.Num()) * 4096 + 128) || !Budget->TryReserveBytes(32768, PathLease)))
+	    && (!Budget->TryChargeWork(int64(Nodes.Num()) * 4096 + 128) || !Budget->TryReserveBytes(32768, PathLease)))
 	{
-		return M5FingerprintError(
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function path preflight exceeds budget"));
 	}
 	int64 Bytes = 20; // version, source version, and three array lengths
@@ -364,49 +380,58 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		if (!TryAdd(VariableItems, P.Name.Len(), VariableItems) || !TryAdd(Bytes, 47 + int64(P.Name.Len()), Bytes)
-			|| Bytes > M5FingerprintMaxBytes || VariableItems > M5FingerprintMaxBytes)
+			|| Bytes > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxBytes
+			|| VariableItems > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxBytes)
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Parameter bytes exceed limit"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Parameter bytes exceed limit"));
 		}
 	}
 	for (const FVoxelLandGraphNodeRecord& N : Nodes)
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		int64 PinBytes = 0;
 		if (!TryMultiplyNonNegative(N.Pins.Num(), 28, PinBytes) || !TryAdd(Bytes, 64, Bytes)
 			|| !TryAdd(Bytes, N.Configuration.Num(), Bytes) || !TryAdd(Bytes, PinBytes, Bytes)
 			|| !TryAdd(VariableItems, N.Configuration.Num(), VariableItems)
-			|| !TryAdd(VariableItems, N.Pins.Num(), VariableItems) || Bytes > M5FingerprintMaxBytes
-			|| VariableItems > M5FingerprintMaxBytes)
+			|| !TryAdd(VariableItems, N.Pins.Num(), VariableItems)
+			|| Bytes > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxBytes
+			|| VariableItems > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxBytes)
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Node bytes exceed limit"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Node bytes exceed limit"));
 		}
 	}
 	if (bHasFunctionExtension)
 	{
 		if (!TryAdd(Bytes, 12, Bytes))
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function extension exceeds limit"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function extension exceeds limit"));
 		}
 		FString Path;
 		for (const FVoxelLandGraphNodeRecord& Node : Nodes)
 		{
 			if (IsCancelled())
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			int64 PinBytes = 0;
-			if (!M5FingerprintPath(Node.FunctionPath, Path) || !TryMultiplyNonNegative(Node.Pins.Num(), 16, PinBytes)
+			if (!FVoxelLandM5SourceFingerprintInternals::M5FingerprintPath(Node.FunctionPath, Path)
+				|| !TryMultiplyNonNegative(Node.Pins.Num(), 16, PinBytes)
 				|| !TryAdd(Bytes, 24 + int64(Path.Len()), Bytes) || !TryAdd(Bytes, PinBytes, Bytes)
-				|| Bytes > M5FingerprintMaxBytes)
+				|| Bytes > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxBytes)
 			{
-				return M5FingerprintError(
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Unsupported function path or extension size"));
 			}
 		}
@@ -416,11 +441,13 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 			{
 				if (IsCancelled())
 				{
-					return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+					return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 				}
-				if (!TryAdd(Bytes, 49 + int64(F.AssetPath.Len()), Bytes) || Bytes > M5FingerprintMaxBytes)
+				if (!TryAdd(Bytes, 49 + int64(F.AssetPath.Len()), Bytes)
+					|| Bytes > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxBytes)
 				{
-					return M5FingerprintError(
+					return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
 						EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function metadata exceeds limit"));
 				}
 			}
@@ -428,9 +455,11 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	}
 	int64 LinkBytes = 0;
 	if (!TryMultiplyNonNegative(Links.Num(), 64, LinkBytes) || !TryAdd(Bytes, LinkBytes, Bytes)
-		|| Bytes > M5FingerprintMaxBytes || !Budget->TryChargeWork(VariableItems))
+		|| Bytes > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxBytes
+		|| !Budget->TryChargeWork(VariableItems))
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source bytes or work exceed limit"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source bytes or work exceed limit"));
 	}
 	// The legacy writer lowercases names and converts them to UTF-8. Restricting
 	// this first metered path to ASCII makes its byte length and allocation bound
@@ -441,11 +470,12 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 		{
 			if ((I & 255) == 0 && IsCancelled())
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			if (P.Name[I] <= 0 || P.Name[I] > 127)
 			{
-				return M5FingerprintError(
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Only ASCII parameter names are metered"));
 			}
 		}
@@ -455,58 +485,66 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	int64 IndexBytes = 0;
 	int64 ScratchBytes = 0;
 	if (!TryMultiplyNonNegative(Records, Records, SortWork) || !TryMultiplyNonNegative(SortWork, 3, SortWork)
-		|| !TryAdd(SortWork, Bytes, Work) || !TryAdd(Work, Records * 8 + 64, Work)
-		|| !TryMultiplyNonNegative(Records, sizeof(int32), IndexBytes) || !TryAdd(Bytes, IndexBytes, ScratchBytes)
-		|| !TryAdd(ScratchBytes, 4096, ScratchBytes)
-		|| (Functions
-			&& (!TryAdd(Work, int64(Functions->Num()) * Functions->Num() * 4096, Work)
-				|| !TryAdd(ScratchBytes, int64(Functions->Num()) * sizeof(int32), ScratchBytes)))
-		|| !Budget->TryChargeWork(Work))
+	    || !TryAdd(SortWork, Bytes, Work) || !TryAdd(Work, Records * 8 + 64, Work)
+	    || !TryMultiplyNonNegative(Records, sizeof(int32), IndexBytes) || !TryAdd(Bytes, IndexBytes, ScratchBytes)
+	    || !TryAdd(ScratchBytes, 4096, ScratchBytes)
+	    || (Functions
+	        && (!TryAdd(Work, int64(Functions->Num()) * Functions->Num() * 4096, Work)
+	            || !TryAdd(ScratchBytes, int64(Functions->Num()) * sizeof(int32), ScratchBytes)))
+	    || !Budget->TryChargeWork(Work))
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fingerprint work exceeds limit"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fingerprint work exceeds limit"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(ScratchBytes, Lease))
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fingerprint memory exceeds limit"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Fingerprint memory exceeds limit"));
 	}
 	TArray<int32> ParameterOrder, NodeOrder, LinkOrder;
-	if (!M5FingerprintSortIndices(
+	if (!FVoxelLandM5SourceFingerprintInternals::M5FingerprintSortIndices(
 			Parameters,
 			[](const FVoxelLandGraphParameter& A, const FVoxelLandGraphParameter& B) {
-				return M5FingerprintLessGuid(A.Id, B.Id);
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintLessGuid(A.Id, B.Id);
 			},
 			IsCancelled, ParameterOrder)
-		|| !M5FingerprintSortIndices(
+		|| !FVoxelLandM5SourceFingerprintInternals::M5FingerprintSortIndices(
 			Nodes,
 			[](const FVoxelLandGraphNodeRecord& A, const FVoxelLandGraphNodeRecord& B) {
-				return M5FingerprintLessGuid(A.Id, B.Id);
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintLessGuid(A.Id, B.Id);
 			},
 			IsCancelled, NodeOrder)
-		|| !M5FingerprintSortIndices(Links, M5FingerprintLessLink, IsCancelled, LinkOrder))
+		|| !FVoxelLandM5SourceFingerprintInternals::M5FingerprintSortIndices(
+			Links, FVoxelLandM5SourceFingerprintInternals::M5FingerprintLessLink, IsCancelled, LinkOrder))
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
 	for (int32 I = 1; I < ParameterOrder.Num(); ++I)
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		if (Parameters[ParameterOrder[I - 1]].Id == Parameters[ParameterOrder[I]].Id)
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate parameter ID"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate parameter ID"));
 		}
 	}
 	for (int32 I = 1; I < NodeOrder.Num(); ++I)
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		if (Nodes[NodeOrder[I - 1]].Id == Nodes[NodeOrder[I]].Id)
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate node ID"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Duplicate node ID"));
 		}
 	}
 	FCanonicalWriter W;
@@ -518,16 +556,18 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		const FVoxelLandGraphParameter& P = Parameters[Index];
-		M5FingerprintWriteGuid(W, P.Id);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, P.Id);
 		W.U32(uint32(P.Name.Len()));
 		for (int32 I = 0; I < P.Name.Len(); ++I)
 		{
 			if ((I & 255) == 0 && IsCancelled())
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			const TCHAR C = P.Name[I];
 			W.U8(uint8(C >= 'A' && C <= 'Z' ? C + ('a' - 'A') : C));
@@ -547,20 +587,22 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		const FVoxelLandGraphNodeRecord& N = Nodes[Index];
-		M5FingerprintWriteGuid(W, N.Id);
-		M5FingerprintWriteGuid(W, N.OperatorId);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, N.Id);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, N.OperatorId);
 		W.U32(uint32(N.OperatorVersion));
 		W.U32(uint32(N.SeedSalt));
-		M5FingerprintWriteGuid(W, N.ParameterId);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, N.ParameterId);
 		W.U32(uint32(N.Configuration.Num()));
 		for (int32 Offset = 0; Offset < N.Configuration.Num(); Offset += 4096)
 		{
 			if (IsCancelled())
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			const int32 Count = FMath::Min(4096, N.Configuration.Num() - Offset);
 			W.Bytes.Append(N.Configuration.GetData() + Offset, Count);
@@ -570,10 +612,11 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 		{
 			if ((I & 255) == 0 && IsCancelled())
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			const FVoxelLandGraphPinRecord& Pin = N.Pins[I];
-			M5FingerprintWriteGuid(W, Pin.Id);
+			FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, Pin.Id);
 			W.U8(uint8(Pin.Type));
 			W.U8(Pin.bOutput ? 1 : 0);
 			W.Float(Pin.FloatDefault);
@@ -587,13 +630,14 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		const FVoxelLandGraphLinkRecord& Link = Links[Index];
-		M5FingerprintWriteGuid(W, Link.SourceNode);
-		M5FingerprintWriteGuid(W, Link.SourcePin);
-		M5FingerprintWriteGuid(W, Link.TargetNode);
-		M5FingerprintWriteGuid(W, Link.TargetPin);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, Link.SourceNode);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, Link.SourcePin);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, Link.TargetNode);
+		FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, Link.TargetPin);
 	}
 	if (bHasFunctionExtension)
 	{
@@ -604,52 +648,57 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 		{
 			if (IsCancelled())
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			const FVoxelLandGraphNodeRecord& Node = Nodes[Index];
-			if (!M5FingerprintPath(Node.FunctionPath, Path))
+			if (!FVoxelLandM5SourceFingerprintInternals::M5FingerprintPath(Node.FunctionPath, Path))
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Unproven, TEXT("Unsupported function path"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Unproven, TEXT("Unsupported function path"));
 			}
-			M5FingerprintWriteGuid(W, Node.Id);
-			M5FingerprintWriteAscii(W, Path);
+			FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, Node.Id);
+			FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteAscii(W, Path);
 			W.U32(uint32(Node.Pins.Num()));
 			for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
 			{
 				if (IsCancelled())
 				{
-					return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+					return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 				}
-				M5FingerprintWriteGuid(W, Pin.InterfaceId);
+				FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, Pin.InterfaceId);
 			}
 		}
 		TArray<int32> FunctionOrder;
 		if (Functions
-			&& !M5FingerprintSortIndices(
+			&& !FVoxelLandM5SourceFingerprintInternals::M5FingerprintSortIndices(
 				*Functions,
 				[](const FVoxelLandGraphFunctionSnapshot& A, const FVoxelLandGraphFunctionSnapshot& B) {
-					return A.AssetPath < B.AssetPath;
+				    return A.AssetPath < B.AssetPath;
 				},
 				IsCancelled, FunctionOrder))
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		W.U32(uint32(FunctionOrder.Num()));
 		for (int32 Index : FunctionOrder)
 		{
 			if (IsCancelled())
 			{
-				return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+				return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 			}
 			const FVoxelLandGraphFunctionSnapshot& F = (*Functions)[Index];
-			M5FingerprintWriteAscii(W, F.AssetPath);
+			FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteAscii(W, F.AssetPath);
 			W.U32(uint32(F.SourceVersion));
 			W.U8(uint8(F.OutputType));
-			M5FingerprintWriteGuid(W, F.OutputNode);
-			M5FingerprintWriteGuid(W, F.OutputPin);
+			FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, F.OutputNode);
+			FVoxelLandM5SourceFingerprintInternals::M5FingerprintWriteGuid(W, F.OutputPin);
 			uint64 Hash = 0;
 			const FVoxelLandM5Diagnostic D =
-				M5FingerprintGraph(F.SourceVersion, F.Inputs, F.Nodes, F.Links, nullptr, Budget, IsCancelled, Hash);
+				M5FingerprintGraph({F.SourceVersion, F.Inputs, F.Nodes, F.Links}, Budget, IsCancelled, Hash);
 			if (D.Code != EVoxelLandM5ErrorCode::None)
 			{
 				return D;
@@ -660,16 +709,19 @@ static FVoxelLandM5Diagnostic M5FingerprintGraph(int32 SourceVersion,
 	}
 	if (IsCancelled())
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
 	if (W.Bytes.Num() != Bytes)
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::Unproven, TEXT("Canonical byte count mismatch"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Canonical byte count mismatch"));
 	}
 	const uint64 Result = FXxHash64::HashBuffer(W.Bytes.GetData(), W.Bytes.Num()).Hash;
 	if (IsCancelled())
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 	}
 	OutFingerprint = Result;
 	return {};
@@ -679,33 +731,38 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SourceFingerprint::Compute(const FVoxelLan
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	uint64& OutFingerprint)
 {
-	if (Source.Nodes.Num() > M5FingerprintMaxRecords)
+	if (Source.Nodes.Num() > FVoxelLandM5SourceFingerprintInternals::M5FingerprintMaxRecords)
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source node count exceeds limit"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source node count exceeds limit"));
 	}
 	// Charge the complete bounded function-detection scan before examining any
 	// records. An empty source retains the existing empty-graph accounting.
 	if (!Source.Nodes.IsEmpty() && !Budget->TryChargeWork(Source.Nodes.Num()))
 	{
-		return M5FingerprintError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function detection work exceeds limit"));
+		return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Function detection work exceeds limit"));
 	}
 	bool bValidateFunctions = !Source.Functions.IsEmpty();
 	for (const FVoxelLandGraphNodeRecord& Node : Source.Nodes)
 	{
 		if (IsCancelled())
 		{
-			return M5FingerprintError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
+			return FVoxelLandM5SourceFingerprintInternals::M5FingerprintError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Cancelled"));
 		}
 		bValidateFunctions |= !Node.FunctionPath.IsNull() || Node.OperatorId == VoxelLandGraphFunctionCallId();
 	}
 	if (bValidateFunctions)
 	{
-		const FVoxelLandM5Diagnostic D = M5FingerprintValidateFunctions(Source, Budget, IsCancelled);
+		const FVoxelLandM5Diagnostic D =
+			FVoxelLandM5SourceFingerprintInternals::M5FingerprintValidateFunctions(Source, Budget, IsCancelled);
 		if (D.Code != EVoxelLandM5ErrorCode::None)
 		{
 			return D;
 		}
 	}
-	return M5FingerprintGraph(Source.SourceVersion, Source.Parameters, Source.Nodes, Source.Links, &Source.Functions,
-		Budget, IsCancelled, OutFingerprint);
+	return FVoxelLandM5SourceFingerprintInternals::M5FingerprintGraph(
+		{Source.SourceVersion, Source.Parameters, Source.Nodes, Source.Links, &Source.Functions}, Budget, IsCancelled,
+		OutFingerprint);
 }

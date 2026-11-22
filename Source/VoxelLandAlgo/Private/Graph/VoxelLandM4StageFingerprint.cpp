@@ -5,13 +5,18 @@
 
 namespace VoxelLandM4StageFingerprint
 {
-namespace
+class FVoxelLandM4StageFingerprintInternals final
 {
-constexpr int32 MaxSemanticRecords = 4096;
-constexpr int32 MaxSemanticBytes = 65536;
-constexpr int64 MaxTotalBytes = 8 * 1024 * 1024;
+public:
+	static constexpr int32 MaxSemanticRecords = 4096;
+	static constexpr int32 MaxSemanticBytes = 65536;
+	static constexpr int64 MaxTotalBytes = 8 * 1024 * 1024;
+	static FVoxelLandError FingerprintFailure(const TCHAR* Message);
+	static bool FingerprintGuidLess(const FGuid& A, const FGuid& B);
+	static void FingerprintGuid(FCanonicalWriter& Writer, const FGuid& Guid);
+};
 
-FVoxelLandError FingerprintFailure(const TCHAR* Message)
+FVoxelLandError FVoxelLandM4StageFingerprintInternals::FingerprintFailure(const TCHAR* Message)
 {
 	FVoxelLandError Error;
 	Error.Code = EVoxelLandErrorCode::InvalidProgram;
@@ -19,7 +24,7 @@ FVoxelLandError FingerprintFailure(const TCHAR* Message)
 	return Error;
 }
 
-bool FingerprintGuidLess(const FGuid& A, const FGuid& B)
+bool FVoxelLandM4StageFingerprintInternals::FingerprintGuidLess(const FGuid& A, const FGuid& B)
 {
 	if (A.A != B.A)
 	{
@@ -36,14 +41,13 @@ bool FingerprintGuidLess(const FGuid& A, const FGuid& B)
 	return A.D < B.D;
 }
 
-void FingerprintGuid(FCanonicalWriter& Writer, const FGuid& Guid)
+void FVoxelLandM4StageFingerprintInternals::FingerprintGuid(FCanonicalWriter& Writer, const FGuid& Guid)
 {
 	// Each uint32 word is little endian; order is A, B, C, D.
 	Writer.U32(Guid.A);
 	Writer.U32(Guid.B);
 	Writer.U32(Guid.C);
 	Writer.U32(Guid.D);
-}
 }
 
 FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayView<FVoxelLandM4StageOutput> Outputs,
@@ -56,9 +60,10 @@ FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayV
 	{
 		return Error;
 	}
-	if (Semantics.Num() > MaxSemanticRecords || Context.Num() > MaxSemanticBytes)
+	if (Semantics.Num() > FVoxelLandM4StageFingerprintInternals::MaxSemanticRecords
+		|| Context.Num() > FVoxelLandM4StageFingerprintInternals::MaxSemanticBytes)
 	{
-		return FingerprintFailure(TEXT("M4 fingerprint input exceeds limits"));
+		return FVoxelLandM4StageFingerprintInternals::FingerprintFailure(TEXT("M4 fingerprint input exceeds limits"));
 	}
 
 	TMap<FGuid, const FVoxelLandM4StageNode*> ById;
@@ -71,14 +76,16 @@ FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayV
 	for (const FVoxelLandM4StageFingerprintNode& Record : Semantics)
 	{
 		if (!ById.Contains(Record.Id) || SemanticById.Contains(Record.Id) || Record.SemanticsVersion == 0
-		    || Record.SemanticBytes.IsEmpty() || Record.SemanticBytes.Num() > MaxSemanticBytes)
+			|| Record.SemanticBytes.IsEmpty()
+			|| Record.SemanticBytes.Num() > FVoxelLandM4StageFingerprintInternals::MaxSemanticBytes)
 		{
-			return FingerprintFailure(TEXT("Invalid or duplicate M4 node semantics"));
+			return FVoxelLandM4StageFingerprintInternals::FingerprintFailure(
+				TEXT("Invalid or duplicate M4 node semantics"));
 		}
 		Total += Record.SemanticBytes.Num();
-		if (Total > MaxTotalBytes)
+		if (Total > FVoxelLandM4StageFingerprintInternals::MaxTotalBytes)
 		{
-			return FingerprintFailure(TEXT("M4 semantic bytes exceed limit"));
+			return FVoxelLandM4StageFingerprintInternals::FingerprintFailure(TEXT("M4 semantic bytes exceed limit"));
 		}
 		SemanticById.Add(Record.Id, &Record);
 	}
@@ -86,7 +93,8 @@ FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayV
 	{
 		if (!SemanticById.Contains(Id))
 		{
-			return FingerprintFailure(TEXT("Missing M4 upstream node semantics"));
+			return FVoxelLandM4StageFingerprintInternals::FingerprintFailure(
+				TEXT("Missing M4 upstream node semantics"));
 		}
 	}
 
@@ -96,7 +104,7 @@ FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayV
 	Writer.U8('S');
 	Writer.U8('F');
 	Writer.U32(1); // encoding format, not terrain algorithm or program version
-	FingerprintGuid(Writer, Closure.Last()); // requested output producer
+	FVoxelLandM4StageFingerprintInternals::FingerprintGuid(Writer, Closure.Last()); // requested output producer
 	Writer.U32(uint32(Context.Num()));
 	Writer.Bytes.Append(Context.GetData(), Context.Num());
 	Writer.U32(uint32(Closure.Num()));
@@ -104,18 +112,18 @@ FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayV
 	{
 		const FVoxelLandM4StageNode& Node = *ById.FindChecked(Id);
 		const FVoxelLandM4StageFingerprintNode& Record = *SemanticById.FindChecked(Id);
-		FingerprintGuid(Writer, Id);
+		FVoxelLandM4StageFingerprintInternals::FingerprintGuid(Writer, Id);
 		Writer.U8(uint8(Node.Stage));
 		Writer.U8(Node.bUsesZ ? 1 : 0);
 		Writer.U32(Record.SemanticsVersion);
 		Writer.U32(uint32(Record.SemanticBytes.Num()));
 		Writer.Bytes.Append(Record.SemanticBytes);
 		TArray<FGuid> Dependencies = Node.Dependencies;
-		Dependencies.Sort(FingerprintGuidLess);
+		Dependencies.Sort(FVoxelLandM4StageFingerprintInternals::FingerprintGuidLess);
 		Writer.U32(uint32(Dependencies.Num()));
 		for (const FGuid& Dependency : Dependencies)
 		{
-			FingerprintGuid(Writer, Dependency);
+			FVoxelLandM4StageFingerprintInternals::FingerprintGuid(Writer, Dependency);
 		}
 	}
 	const uint64 Hash = FXxHash64::HashBuffer(Writer.Bytes.GetData(), Writer.Bytes.Num()).Hash;

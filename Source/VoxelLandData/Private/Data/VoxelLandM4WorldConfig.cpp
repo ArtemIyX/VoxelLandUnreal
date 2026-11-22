@@ -547,10 +547,13 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 	if ((UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
 			&& UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
 		|| (UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
-			&& (!bUnlimited || bGlobalErosion || bOverhangEnabled || HeightDetail.bEnabled)))
+			&& (!bUnlimited || bGlobalErosion
+				|| (bOverhangEnabled && OverhangAmplitudeQ8 != 0 && double(OverhangFrequencyPerCm) * 16777216.0 < 0.5)
+				|| (HeightDetail.bEnabled && HeightDetail.AmplitudeQ8 != 0
+					&& double(HeightDetail.FrequencyPerCm) * 16777216.0 < 0.5))))
 	{
-		OutError =
-			TEXT("M4 fixed lattice requires unlimited mode, global erosion off, overhang off and height detail off.");
+		OutError = TEXT(
+			"M4 fixed lattice requires unlimited mode, no global erosion and representable Q24 shaping frequencies.");
 		return false;
 	}
 	if (bUnlimited && bGlobalErosion)

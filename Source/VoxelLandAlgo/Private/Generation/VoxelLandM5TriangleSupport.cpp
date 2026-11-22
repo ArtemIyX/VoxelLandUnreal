@@ -16,7 +16,7 @@ public:
 	static const FVoxelLandM5PointCm& Vertex(const FVoxelLandM5FloorTriangleCm& T, int32 Index);
 	static bool OnSegment(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B, const FVoxelLandM5PointCm& P);
 	static bool StrictlyInside(const FVoxelLandM5FloorTriangleCm& T, const FVoxelLandM5PointCm& P);
-	static bool StrictlyInsideQuarter(const FVoxelLandM5FloorTriangleCm& T, int64 X4, int64 Y4);
+	static bool ContainsMidpoint(const FVoxelLandM5FloorTriangleCm& T, int64 TwiceX, int64 TwiceY);
 	static bool InsideOrBoundary(const FVoxelLandM5FloorTriangleCm& T, const FVoxelLandM5PointCm& P);
 	static bool EdgePairCompatible(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B,
 		const FVoxelLandM5PointCm& C, const FVoxelLandM5PointCm& D);
@@ -73,16 +73,14 @@ bool FVoxelLandM5TriangleSupportInternals::StrictlyInside(
 	return Orient(T.A, T.B, P) > 0 && Orient(T.B, T.C, P) > 0 && Orient(T.C, T.A, P) > 0;
 }
 
-// X4 and Y4 encode a point in quarter-centimetre units. Scaling all
-// coordinates by four preserves orientation exactly; bounded inputs keep
-// each product below 2^47. No rounding or floating-point predicate is used.
-bool FVoxelLandM5TriangleSupportInternals::StrictlyInsideQuarter(
-	const FVoxelLandM5FloorTriangleCm& T, int64 X4, int64 Y4)
+bool FVoxelLandM5TriangleSupportInternals::ContainsMidpoint(
+	const FVoxelLandM5FloorTriangleCm& T, int64 TwiceX, int64 TwiceY)
 {
-	const auto Side = [X4, Y4](const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B) {
-		return 4 * (B.X - A.X) * (Y4 - 4 * A.Y) - 4 * (B.Y - A.Y) * (X4 - 4 * A.X);
+	// Double the point-to-edge displacement to preserve exact half-unit coordinates.
+	const auto Side = [TwiceX, TwiceY](const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B) {
+		return (B.X - A.X) * (TwiceY - 2 * A.Y) - (B.Y - A.Y) * (TwiceX - 2 * A.X);
 	};
-	return Side(T.A, T.B) > 0 && Side(T.B, T.C) > 0 && Side(T.C, T.A) > 0;
+	return Side(T.A, T.B) >= 0 && Side(T.B, T.C) >= 0 && Side(T.C, T.A) >= 0;
 }
 
 bool FVoxelLandM5TriangleSupportInternals::InsideOrBoundary(
@@ -319,28 +317,20 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 				EVoxelLandM5ErrorCode::Unproven, TEXT("Contact footprint is not covered"));
 		}
 	}
-	// Corners alone can touch four unrelated triangles outside the rectangle.
-	// A strictly interior witness proves its open connected interior starts in
-	// the triangle union. The boundary scan below then prevents leaving it.
-	bool bInteriorWitness = false;
-	const int64 CenterX4 = 2 * (MinX + MaxX);
-	const int64 CenterY4 = 2 * (MinY + MaxY);
-	// A triangulation edge may cross the center. Any one strictly interior
-	// rational witness is sufficient for the boundary proof below.
-	const int64 WitnessX4[] = {CenterX4, 3 * MinX + MaxX, MinX + 3 * MaxX, CenterX4, CenterX4};
-	const int64 WitnessY4[] = {CenterY4, CenterY4, CenterY4, 3 * MinY + MaxY, MinY + 3 * MaxY};
-	for (int32 Index = 0; Index < UE_ARRAY_COUNT(WitnessX4); ++Index)
+	// The center is strictly inside the footprint. If it touches any nondegenerate
+	// triangle, that triangle has interior points arbitrarily close to the center.
+	// The boundary scan below then proves coverage of the connected footprint interior.
+	bool bCenterCovered = false;
+	const int64 TwiceCenterX = MinX + MaxX;
+	const int64 TwiceCenterY = MinY + MaxY;
+	for (const FVoxelLandM5FloorTriangleCm& T : Triangles)
 	{
-		for (const auto& T : Triangles)
-		{
-			bInteriorWitness |=
-				FVoxelLandM5TriangleSupportInternals::StrictlyInsideQuarter(T, WitnessX4[Index], WitnessY4[Index]);
-		}
+		bCenterCovered |= FVoxelLandM5TriangleSupportInternals::ContainsMidpoint(T, TwiceCenterX, TwiceCenterY);
 	}
-	if (!bInteriorWitness)
+	if (!bCenterCovered)
 	{
 		return FVoxelLandM5TriangleSupportInternals::M5SupportError(
-			EVoxelLandM5ErrorCode::Unproven, TEXT("No strict interior support witness"));
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Contact footprint center is not covered"));
 	}
 	for (int32 I = 0; I < Triangles.Num(); ++I)
 	{

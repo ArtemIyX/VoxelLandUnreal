@@ -152,7 +152,8 @@ bool FVoxelLandM5TopologyGraphTest::RunTest(const FString& Parameters)
 	Plan.Connections.RemoveAt(1);
 	TestTrue(TEXT("isolated entrance rejected"), Validate(Plan) == EVoxelLandM5ErrorCode::InconsistentTopology);
 	Plan = M5TopologyFixture();
-	Plan.Chambers.Add(Plan.Chambers[0]);
+	const FVoxelLandM5Chamber DuplicateChamber = Plan.Chambers[0];
+	Plan.Chambers.Add(DuplicateChamber);
 	TestTrue(TEXT("duplicate typed node rejected"), Validate(Plan) == EVoxelLandM5ErrorCode::InconsistentTopology);
 	Plan = M5TopologyFixture();
 	Plan.Connections[0].End = Plan.Connections[0].Start;

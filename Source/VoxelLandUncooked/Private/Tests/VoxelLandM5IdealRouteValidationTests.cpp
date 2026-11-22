@@ -30,6 +30,15 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 {
 	FVoxelLandM5CaveSettings Settings;
 	Settings.StageId = FGuid(1, 2, 3, 4);
+	Settings.Topology.MinChambers = 2;
+	Settings.Topology.MaxChambers = 2;
+	Settings.Topology.EntranceCount = 0;
+	Settings.Topology.MinLoops = 0;
+	Settings.Topology.MaxLoops = 0;
+	Settings.Topology.MinChamberRadiusCm = 150;
+	Settings.Topology.MaxChamberRadiusCm = 150;
+	Settings.Topology.MinTunnelRadiusCm = 103;
+	Settings.Topology.MaxTunnelRadiusCm = 103;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, Settings.Limits.MaxValidationWork, Budget))
 	{
@@ -104,13 +113,14 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const auto Validate = [&](TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Value) {
+	const auto Validate = [&](const FVoxelLandM5CaveSettings& FixtureSettings,
+							  TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Value) {
 		return VoxelLand::M5::IdealRouteValidation::Validate(
-			Settings, 11, Plan.Region, Value, Budget.ToSharedRef(), Never)
+			FixtureSettings, 11, Plan.Region, Value, Budget.ToSharedRef(), Never)
 			.Code;
 	};
 	TestTrue(
-		TEXT("built segment routes have ideal coverage"), Validate(Built.ToSharedRef()) == EVoxelLandM5ErrorCode::None);
+		TEXT("built segment routes have ideal coverage"), Validate(Settings, Built.ToSharedRef()) == EVoxelLandM5ErrorCode::None);
 	FVoxelLandM5CavePlan Modified = Built->GetPlan();
 	if (!TestTrue(TEXT("two route legs"), Modified.Routes.Num() == 1 && Modified.Routes[0].Legs.Num() == 2))
 	{
@@ -126,7 +136,7 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestTrue(TEXT("moved but connected legs fail ideal proof"),
-		Validate(Moved.ToSharedRef()) == EVoxelLandM5ErrorCode::Unproven);
+		Validate(Settings, Moved.ToSharedRef()) == EVoxelLandM5ErrorCode::Unproven);
 	Modified = Built->GetPlan();
 	Modified.Routes[0].Legs[0].Feature.Id = 10;
 	auto Mislabeled = FVoxelLandM5IdealRouteFixtureFactory::Make(Settings, Budget.ToSharedRef(), Modified);
@@ -134,7 +144,7 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestTrue(TEXT("mislabeled segment fails"), Validate(Mislabeled.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
+	TestTrue(TEXT("mislabeled segment fails"), Validate(Settings, Mislabeled.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
 	Modified = Built->GetPlan();
 	Modified.Routes[0].Legs.RemoveAt(0);
 	auto Missing = FVoxelLandM5IdealRouteFixtureFactory::Make(Settings, Budget.ToSharedRef(), Modified);
@@ -142,7 +152,7 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestTrue(TEXT("partial route fails"), Validate(Missing.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
+	TestTrue(TEXT("partial route fails"), Validate(Settings, Missing.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
 	Modified = Built->GetPlan();
 	const FVoxelLandM5RouteLeg Forward = Modified.Routes[0].Legs[0];
 	FVoxelLandM5RouteLeg Reverse = Forward;
@@ -155,7 +165,7 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestTrue(TEXT("duplicate segment traversal fails"),
-		Validate(Duplicate.ToSharedRef()) == EVoxelLandM5ErrorCode::InconsistentTopology);
+		Validate(Settings, Duplicate.ToSharedRef()) == EVoxelLandM5ErrorCode::InconsistentTopology);
 
 	// Independent cumulative admission for the real two-segment route:
 	// structure = (1+1) + 64*(2+1+2+1+2+5+1)^2 + 4096 = 16642;
@@ -187,6 +197,10 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 	// on X=0 between regions (-1,0)/(0,0), 1000 cm inside the Y face span.
 	FVoxelLandM5CaveSettings RegionalSettings = Settings;
 	RegionalSettings.PlanningMode = EVoxelLandM5PlanningMode::Regional;
+	RegionalSettings.Topology.MinChambers = 1;
+	RegionalSettings.Topology.MaxChambers = 1;
+	RegionalSettings.Topology.MinTunnelRadiusCm = 250;
+	RegionalSettings.Topology.MaxTunnelRadiusCm = 250;
 	RegionalSettings.Bounds.MinInclusive.X = -204800;
 	RegionalSettings.Bounds.MinInclusive.Y = 0;
 	RegionalSettings.Bounds.MinInclusive.Z = -1000;
@@ -264,13 +278,9 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const auto ValidateRegional = [&](TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Value) {
-		return VoxelLand::M5::IdealRouteValidation::Validate(
-			RegionalSettings, 11, Plan.Region, Value, Budget.ToSharedRef(), Never)
-			.Code;
-	};
+
 	TestTrue(TEXT("region-A portal route verifies"),
-		ValidateRegional(PortalPlan.ToSharedRef()) == EVoxelLandM5ErrorCode::None);
+		Validate(RegionalSettings, PortalPlan.ToSharedRef()) == EVoxelLandM5ErrorCode::None);
 	Modified.Portals[0].RegionAFeetAnchorCm.Y += 1;
 	auto BadPortal = FVoxelLandM5IdealRouteFixtureFactory::Make(RegionalSettings, Budget.ToSharedRef(), Modified);
 	if (!TestTrue(TEXT("bad portal fixture admitted"), BadPortal.IsValid()))
@@ -278,10 +288,14 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestTrue(
-		TEXT("portal anchor mismatch fails"), ValidateRegional(BadPortal.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
+		TEXT("portal anchor mismatch fails"), Validate(RegionalSettings, BadPortal.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
 
 	// Replace the terminal chamber with an entrance whose inside anchor is at
 	// the connected leg junction, and outside anchor is the route endpoint.
+	FVoxelLandM5CaveSettings EntranceSettings = Settings;
+	EntranceSettings.Topology.MinChambers = 1;
+	EntranceSettings.Topology.MaxChambers = 1;
+	EntranceSettings.Topology.EntranceCount = 1;
 	Modified = Built->GetPlan();
 	Modified.Chambers.RemoveAt(1);
 	FVoxelLandM5Entrance Entrance;
@@ -313,21 +327,21 @@ bool FVoxelLandM5IdealRouteValidationTest::RunTest(const FString& Parameters)
 			Feature.Id = Entrance.Id;
 		}
 	}
-	auto EntrancePlan = FVoxelLandM5IdealRouteFixtureFactory::Make(Settings, Budget.ToSharedRef(), Modified);
+	auto EntrancePlan = FVoxelLandM5IdealRouteFixtureFactory::Make(EntranceSettings, Budget.ToSharedRef(), Modified);
 	if (!TestTrue(TEXT("routed entrance fixture admitted"), EntrancePlan.IsValid()))
 	{
 		return false;
 	}
 	TestTrue(TEXT("both entrance anchors lie on connected route"),
-		Validate(EntrancePlan.ToSharedRef()) == EVoxelLandM5ErrorCode::None);
+		Validate(EntranceSettings, EntrancePlan.ToSharedRef()) == EVoxelLandM5ErrorCode::None);
 	Modified.Entrances[0].InsideFeetAnchorCm.Y = 1;
-	auto BadEntrance = FVoxelLandM5IdealRouteFixtureFactory::Make(Settings, Budget.ToSharedRef(), Modified);
+	auto BadEntrance = FVoxelLandM5IdealRouteFixtureFactory::Make(EntranceSettings, Budget.ToSharedRef(), Modified);
 	if (!TestTrue(TEXT("bad entrance fixture admitted"), BadEntrance.IsValid()))
 	{
 		return false;
 	}
 	TestTrue(
-		TEXT("missing entrance traversal fails"), Validate(BadEntrance.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
+		TEXT("missing entrance traversal fails"), Validate(EntranceSettings, BadEntrance.ToSharedRef()) != EVoxelLandM5ErrorCode::None);
 	const auto Cancelled = [] {
 		return true;
 	};

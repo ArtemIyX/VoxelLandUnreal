@@ -256,7 +256,8 @@ bool FVoxelLandM5MeteredM4BoundaryTest::RunTest(const FString& Parameters)
 		VoxelLandM4OverrideValidation::ValidateMetered(Overrides, More.ToSharedRef(), Never).Code,
 		EVoxelLandM5ErrorCode::InvalidInput);
 	Overrides.Overrides[0].ParameterId = P.Id;
-	Overrides.Source.Parameters.Add(Overrides.Source.Parameters[0]);
+	const FVoxelLandGraphParameter DuplicateParameter = Overrides.Source.Parameters[0];
+	Overrides.Source.Parameters.Add(DuplicateParameter);
 	TestEqual(TEXT("duplicate ID rejected"),
 		VoxelLandM4OverrideValidation::ValidateMetered(Overrides, More.ToSharedRef(), Never).Code,
 		EVoxelLandM5ErrorCode::InvalidInput);

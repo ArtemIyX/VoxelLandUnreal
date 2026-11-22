@@ -1165,10 +1165,6 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidContext,
 				TEXT("M4 local worker belongs to a different generator or thread"));
 		}
-		if (FVoxelLandError Error = ValidateM4ChunkDemand(Key))
-		{
-			return Error;
-		}
 		return VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, *M4Unlimited, Key, OutChunk, IsCancelled);
 	}
 	if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
@@ -1186,27 +1182,7 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunk
 {
 	if (M4Unlimited)
 	{
-		if (Key.LOD != 0)
-		{
-			return FVoxelLandGeneratorValidation::Fail(
-				EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 local terrain supports only LOD 0"));
-		}
-		const int64 Size = int64(Profile.VoxelSizeCm);
-		const int64 X = int64(Key.Coordinate.X) * 32, Y = int64(Key.Coordinate.Y) * 32,
-					Z = int64(Key.Coordinate.Z) * 32;
-		int64 MinX = 0, MaxX = 0, MinY = 0, MaxY = 0, MinZ = 0, MaxZ = 0;
-		if (!VoxelLandM4Control::LatticePositionCm(X - 3, Size, MinX)
-			|| !VoxelLandM4Control::LatticePositionCm(X + 35, Size, MaxX)
-			|| !VoxelLandM4Control::LatticePositionCm(Y - 3, Size, MinY)
-			|| !VoxelLandM4Control::LatticePositionCm(Y + 35, Size, MaxY)
-			|| !VoxelLandM4Control::LatticePositionCm(Z - 2, Size, MinZ)
-			|| !VoxelLandM4Control::LatticePositionCm(Z + 34, Size, MaxZ)
-			|| MinZ < -2000000 || MaxZ > 2000000)
-		{
-			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::NonFiniteCoordinate,
-				TEXT("M4 local terrain demand exceeds supported exact coordinates"));
-		}
-		return {};
+		return VoxelLandM4Unlimited::ValidateChunkDemand(Key, Profile.VoxelSizeCm);
 	}
 	if (!M4HeightGrid)
 	{

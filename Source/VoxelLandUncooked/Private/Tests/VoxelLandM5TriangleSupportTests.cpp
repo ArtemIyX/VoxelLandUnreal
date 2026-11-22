@@ -85,7 +85,8 @@ bool FVoxelLandM5TriangleSupportAnalyticTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("missing triangle, possible hole"), int32(Check(A, 0, 3, 4)), int32(EVoxelLandM5ErrorCode::Unproven));
 	Triangles = TriangleSupportFan();
-	Triangles.Add(Triangles[0]);
+	const FVoxelLandM5FloorTriangleCm DuplicateTriangle = Triangles[0];
+	Triangles.Add(DuplicateTriangle);
 	TestEqual(TEXT("overlapping duplicate rejected"), int32(Check(A, 0, 3, 4)), int32(EVoxelLandM5ErrorCode::Unproven));
 	Triangles = TriangleSupportFan();
 	Swap(Triangles[0].B, Triangles[0].C);

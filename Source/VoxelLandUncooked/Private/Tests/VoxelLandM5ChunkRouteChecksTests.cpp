@@ -60,6 +60,15 @@ bool FVoxelLandM5ChunkRoutesTest::RunTest(const FString& Parameters)
 	};
 	FVoxelLandM5CaveSettings Settings;
 	Settings.StageId = FGuid(1, 2, 3, 4);
+	Settings.Topology.MinChambers = 2;
+	Settings.Topology.MaxChambers = 3;
+	Settings.Topology.EntranceCount = 0;
+	Settings.Topology.MinLoops = 0;
+	Settings.Topology.MaxLoops = 0;
+	Settings.Topology.MinChamberRadiusCm = 150;
+	Settings.Topology.MaxChamberRadiusCm = 150;
+	Settings.Topology.MinTunnelRadiusCm = 103;
+	Settings.Topology.MaxTunnelRadiusCm = 103;
 	Settings.Limits.MaxBytes = 1024ll * 1024 * 1024;
 	Settings.Limits.MaxValidationWork = 1000000000;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;

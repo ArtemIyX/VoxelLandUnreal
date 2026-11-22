@@ -83,7 +83,8 @@ bool FVoxelLandWorldCapabilitiesModesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("unknown provider requirement is invalid"), int32(Result.Code),
 		int32(EVoxelLandWorldCapabilityError::InvalidInput));
 	Providers[0].Requirement = EVoxelLandWorldRequirement::SampleLocal;
-	Providers.Add(Providers[0]);
+	const FVoxelLandWorldOperatorCapability DuplicateProvider = Providers[0];
+	Providers.Add(DuplicateProvider);
 	Result = FVoxelLandWorldCapabilities::Validate(
 		Graph, EVoxelLandWorldKind::Infinite, Providers, WorldCapabilitiesTestBudget().ToSharedRef(), NeverCancel);
 	TestEqual(TEXT("duplicate provider declarations are invalid"), int32(Result.Code),
@@ -182,7 +183,8 @@ bool FVoxelLandWorldCapabilitiesFailureTest::RunTest(const FString& Parameters)
 		WorldCapabilitiesTestBudget().ToSharedRef(), NeverCancel);
 	TestEqual(
 		TEXT("unknown world kind fails"), int32(Result.Code), int32(EVoxelLandWorldCapabilityError::InvalidInput));
-	Graph.Nodes.Add(Graph.Nodes[0]);
+	const FVoxelLandGraphNodeRecord DuplicateNode = Graph.Nodes[0];
+	Graph.Nodes.Add(DuplicateNode);
 	Result = FVoxelLandWorldCapabilities::Validate(
 		Graph, EVoxelLandWorldKind::Infinite, Providers, WorldCapabilitiesTestBudget().ToSharedRef(), NeverCancel);
 	TestEqual(TEXT("duplicate node id fails"), int32(Result.Code), int32(EVoxelLandWorldCapabilityError::InvalidInput));

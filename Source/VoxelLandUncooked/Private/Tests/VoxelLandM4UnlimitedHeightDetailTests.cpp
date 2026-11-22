@@ -12,23 +12,47 @@ namespace
 constexpr EAutomationTestFlags M4UnlimitedDetailFlags =
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
 
-FVoxelLandProgramDraft M4UnlimitedDetailControl(bool bX, float Constant)
+FVoxelLandProgramDraft M4UnlimitedDetailControl(bool bUseNoise, float Value)
 {
 	FVoxelLandProgramDraft Draft;
-	Draft.RegisterCount = bX ? 2 : 1;
-	Draft.Constants = {Constant};
-	FVoxelLandInstruction Input, Load, Multiply, Store;
-	Input.Op = EVoxelLandOpcode::LoadX;
-	Load.Op = EVoxelLandOpcode::LoadConstant;
-	Load.Dst = bX ? 1 : 0;
-	Multiply.Op = EVoxelLandOpcode::Multiply;
-	Multiply.A = 0;
-	Multiply.B = 1;
-	Multiply.Dst = 0;
+	FVoxelLandInstruction Store;
 	Store.Op = EVoxelLandOpcode::StoreDensity;
-	Draft.Instructions = bX
-		                     ? TArray<FVoxelLandInstruction>({Input, Load, Multiply, Store})
-		                     : TArray<FVoxelLandInstruction>({Load, Store});
+	if (!bUseNoise)
+	{
+		FVoxelLandInstruction Load;
+		Load.Op = EVoxelLandOpcode::LoadConstant;
+		Draft.RegisterCount = 1;
+		Draft.Constants = {Value};
+		Draft.Instructions = {Load, Store};
+		return Draft;
+	}
+
+	Draft.RegisterCount = 3;
+	Draft.Constants = {Value, 1.f, 0.5f, 2.f};
+
+	FVoxelLandSeedSlot Seed;
+	Seed.NodeId = FGuid(1, 2, 3, 4);
+	Draft.Seeds.Add(Seed);
+
+	FVoxelLandNoiseConfig Noise;
+	Noise.Frequency.Index = 0;
+	Noise.Octaves.Index = 1;
+	Noise.Gain.Index = 2;
+	Noise.Lacunarity.Index = 3;
+	Draft.Noise.Add(Noise);
+
+	FVoxelLandInstruction X;
+	X.Op = EVoxelLandOpcode::LoadX;
+	FVoxelLandInstruction Y;
+	Y.Op = EVoxelLandOpcode::LoadY;
+	Y.Dst = 1;
+	FVoxelLandInstruction Sample;
+	Sample.Op = EVoxelLandOpcode::Value2;
+	Sample.A = 0;
+	Sample.B = 1;
+	Sample.Dst = 2;
+	Store.A = 2;
+	Draft.Instructions = {X, Y, Sample, Store};
 	return Draft;
 }
 
@@ -259,7 +283,7 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 				const FVoxelLandError CancelError = Generate(Key, Prior, [&Checks] { return ++Checks >= 4; });
 				CancelledPreserved |= CancelError.Code == EVoxelLandErrorCode::Cancelled && Prior == Base;
 				FVoxelLandChunkKey Far = Key;
-				Far.Coordinate.X = 100000;
+				Far.Coordinate.X = MAX_int32;
 				IntegratedRangeRejected &=
 					LocalGenerator->ValidateM4ChunkDemand(Far).Code == EVoxelLandErrorCode::NonFiniteCoordinate;
 				Prior = Base;

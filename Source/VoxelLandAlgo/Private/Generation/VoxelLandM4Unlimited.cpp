@@ -1,6 +1,7 @@
 #include "Generation/VoxelLandM4Unlimited.h"
 
 #include "Data/Structs/VoxelLandM4LatticeGeometry.h"
+#include "Data/Structs/VoxelLandMeshData.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4Control.h"
 #include "Generation/VoxelLandM4FixedLattice.h"
@@ -21,9 +22,7 @@ public:
 	}
 };
 
-FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
-	const FVoxelLandM4UnlimitedConfig& Config, const FVoxelLandChunkKey& Key,
-	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled)
+FVoxelLandError ValidateChunkDemand(const FVoxelLandChunkKey& Key, float VoxelSizeCm)
 {
 	if (Key.LOD != 0)
 	{
@@ -31,12 +30,48 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 			EVoxelLandErrorCode::UnsupportedLod, TEXT("M4 local control terrain supports only LOD 0"));
 	}
 	constexpr double MaxVoxelSizeCm = 134217.0;
-	const double VoxelSize = static_cast<double>(FinalSettings.Profile.VoxelSizeCm);
+	const double VoxelSize = static_cast<double>(VoxelSizeCm);
 	if (!FMath::IsFinite(VoxelSize) || VoxelSize < 1.0 || VoxelSize > MaxVoxelSizeCm
-		|| FMath::FloorToDouble(VoxelSize) != VoxelSize || !FinalSettings.Program)
+		|| FMath::FloorToDouble(VoxelSize) != VoxelSize)
 	{
 		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(
-			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local voxel size or final program"));
+			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 local voxel size"));
+	}
+	if (!VoxelLandMeshCoordinates::IsUnlimitedM4KeyInPrecisionRange(Key.Coordinate, VoxelSizeCm))
+	{
+		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(EVoxelLandErrorCode::NonFiniteCoordinate,
+			TEXT("M4 local terrain exceeds the CPU meshing coordinate envelope"));
+	}
+
+	constexpr int32 FilterHalo = 1;
+	constexpr int32 StoredPadding = 1;
+	constexpr int64 MaxHeightCm = 2000000;
+	constexpr int32 Padding = StoredPadding + FilterHalo;
+	const int64 BaseZ = static_cast<int64>(Key.Coordinate.Z) * FVoxelLandChunkData::Cells;
+	const int64 SizeCm = static_cast<int64>(VoxelSize);
+	const int64 MinZ = (BaseZ - Padding) * SizeCm;
+	const int64 MaxZ = (BaseZ + FVoxelLandChunkData::Cells + Padding) * SizeCm;
+	if (MinZ < -MaxHeightCm || MaxZ > MaxHeightCm)
+	{
+		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(
+			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 local terrain Z exceeds the fixed-point range"));
+	}
+	return {};
+}
+
+FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
+	const FVoxelLandM4UnlimitedConfig& Config, const FVoxelLandChunkKey& Key,
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled)
+{
+	const float VoxelSize = FinalSettings.Profile.VoxelSizeCm;
+	if (const FVoxelLandError Error = ValidateChunkDemand(Key, VoxelSize))
+	{
+		return Error;
+	}
+	if (!FinalSettings.Program)
+	{
+		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(
+			EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local terrain requires a final program"));
 	}
 	if (IsCancelled())
 	{
@@ -135,5 +170,4 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	OutChunk = MoveTemp(Chunk);
 	return {};
 }
-
 }

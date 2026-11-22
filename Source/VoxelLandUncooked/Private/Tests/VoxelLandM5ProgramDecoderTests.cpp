@@ -17,7 +17,7 @@ FVoxelLandSerializedProgram M5DecoderEmptyGraphPayload()
 	Payload.ProgramVersion = int32(FVoxelLandProgramDraft::CurrentFormatVersion);
 	Payload.CompilerSemanticVersion = int32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	Payload.RegisterCount = 1;
-	const uint64 SourceHash = 0xfe4f399ebe726e73ULL; // Independent canonical empty-source vector.
+	const uint64 SourceHash = 0x0c64ed733e702cc9ULL; // Independent XXH3-64 empty-source vector.
 	FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
 	const uint64 ProgramHash = 0x123456789abcdef0ULL; // Retained, not verified by the decoder.
 	FMemory::Memcpy(&Payload.ProgramFingerprint, &ProgramHash, sizeof(ProgramHash));
@@ -146,7 +146,7 @@ bool FVoxelLandM5ProgramDecoderFailureTest::RunTest(const FString& Parameters)
 	SourceParameter.Name = TEXT("A");
 	ParameterSource.Parameters.Add(SourceParameter);
 	Payload = M5DecoderEmptyGraphPayload();
-	const uint64 ParameterSourceHash = 0xd368c79780f36f3aULL; // Independent canonical source vector.
+	const uint64 ParameterSourceHash = 0xb741e8ee1f400a38ULL; // Independent XXH3-64 source vector.
 	FMemory::Memcpy(&Payload.SourceFingerprint, &ParameterSourceHash, sizeof(ParameterSourceHash));
 	FVoxelLandSerializedParameter Parameter;
 	Parameter.Id = SourceParameter.Id;

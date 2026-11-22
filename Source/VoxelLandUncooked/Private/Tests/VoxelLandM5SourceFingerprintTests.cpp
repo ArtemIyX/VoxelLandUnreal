@@ -29,8 +29,8 @@ bool FVoxelLandM5SourceFingerprintVectorsTest::RunTest(const FString& Parameters
 	TestEqual(TEXT("empty graph succeeds"),
 		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Result).Code),
 		int32(EVoxelLandM5ErrorCode::None));
-	// Independent xxHash64 of the 20-byte version/source/count stream.
-	TestEqual(TEXT("empty source vector"), Result, uint64(0xfe4f399ebe726e73ULL));
+	// Independent XXH3-64 of the 20-byte version/source/count stream.
+	TestEqual(TEXT("empty source vector"), Result, uint64(0x0c64ed733e702cc9ULL));
 	TestEqual(TEXT("legacy source unchanged"), Result, FVoxelLandProgramCodec::SourceFingerprint(Graph));
 	FVoxelLandGraphParameter Parameter;
 	Parameter.Id = FGuid(1, 2, 3, 4);
@@ -41,13 +41,13 @@ bool FVoxelLandM5SourceFingerprintVectorsTest::RunTest(const FString& Parameters
 		int32(EVoxelLandM5ErrorCode::None));
 	// Independently encoded 68-byte little-endian fixture, including lowercase
 	// ASCII name and the default graph parameter limits.
-	TestEqual(TEXT("parameter source vector"), Result, uint64(0xd368c79780f36f3aULL));
+	TestEqual(TEXT("parameter source vector"), Result, uint64(0xb741e8ee1f400a38ULL));
 	TestEqual(TEXT("legacy parameter fingerprint"), Result, FVoxelLandProgramCodec::SourceFingerprint(Graph));
 	Graph.Parameters[0].FloatDefault = -0.0f;
 	TestEqual(TEXT("signed zero succeeds"),
 		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Result).Code),
 		int32(EVoxelLandM5ErrorCode::None));
-	TestEqual(TEXT("signed zero canonicalizes"), Result, uint64(0xd368c79780f36f3aULL));
+	TestEqual(TEXT("signed zero canonicalizes"), Result, uint64(0xb741e8ee1f400a38ULL));
 
 	// Use existing codec only as compatibility evidence; the fixed vectors above
 	// remain an independent oracle for the canonical byte order.
@@ -70,8 +70,8 @@ bool FVoxelLandM5SourceFingerprintVectorsTest::RunTest(const FString& Parameters
 		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Result).Code),
 		int32(EVoxelLandM5ErrorCode::None));
 	// Independently encoded 227-byte node/configuration/pin/link stream and
-	// calculated with a standalone xxHash64 reference.
-	TestEqual(TEXT("mixed source vector"), Result, uint64(0xc7f93c6f217d113cULL));
+	// calculated with a standalone XXH3-64 reference.
+	TestEqual(TEXT("mixed source vector"), Result, uint64(0xa4b991d3bc1450a4ULL));
 	TestEqual(TEXT("legacy mixed records fingerprint"), Result, FVoxelLandProgramCodec::SourceFingerprint(Graph));
 	FVoxelLandGraphNodeRecord OtherNode = Node;
 	OtherNode.Id = FGuid(2, 0, 0, 0);
@@ -258,7 +258,7 @@ bool FVoxelLandM5SourceFingerprintFunctionsTest::RunTest(const FString& Paramete
 		int32(EVoxelLandM5ErrorCode::None));
 	// Independently encoded little-endian 342-byte graph/function extension,
 	// with function A's own extension and function B's empty source hash.
-	TestEqual(TEXT("nested function fixed vector"), Hash, uint64(0x06b6c560852b27e2ULL));
+	TestEqual(TEXT("nested function fixed vector"), Hash, uint64(0xf768e5271f7fded7ULL));
 	TestEqual(TEXT("legacy nested compatibility"), Hash, FVoxelLandProgramCodec::SourceFingerprint(Graph));
 	const uint64 Initial = Hash;
 	Swap(Graph.Nodes[0], Graph.Nodes[1]);

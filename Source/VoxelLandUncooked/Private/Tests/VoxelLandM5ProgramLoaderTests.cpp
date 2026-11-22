@@ -21,9 +21,9 @@ FVoxelLandSerializedProgram M5ProgramLoaderPayload()
 	Payload.CompilerSemanticVersion = int32(FVoxelLandProgramDraft::CompilerSemanticVersion);
 	Payload.RegisterCount = 1;
 	// Independently encoded fixed-width LE streams, calculated with standalone
-	// xxHash64: empty source, then a current-format LoadZ/StoreDensity program.
-	const uint64 SourceHash = 0xfe4f399ebe726e73ULL;
-	const uint64 ProgramHash = 0x65dfaa0518ea24e0ULL;
+	// XXH3-64: empty source, then a current-format LoadZ/StoreDensity program.
+	const uint64 SourceHash = 0x0c64ed733e702cc9ULL;
+	const uint64 ProgramHash = 0xb934c14fd49b91c3ULL;
 	FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
 	FMemory::Memcpy(&Payload.ProgramFingerprint, &ProgramHash, sizeof(ProgramHash));
 	FVoxelLandSerializedInstruction Load;
@@ -64,7 +64,7 @@ bool FVoxelLandM5ProgramLoaderCompatibilityTest::RunTest(const FString& Paramete
 			{
 				return false;
 			}
-			const uint64 Expected = 0x65dfaa0518ea24e0ULL;
+			const uint64 Expected = 0xb934c14fd49b91c3ULL;
 			TestEqual(TEXT("independent fingerprint"), Program->GetFingerprint(), Expected);
 			TestEqual(TEXT("current codec fingerprint"), Program->GetFingerprint(), Baseline->GetFingerprint());
 			TestEqual(TEXT("format preserved"), Program->GetData().FormatVersion,
@@ -232,9 +232,9 @@ bool FVoxelLandM5ProgramLoaderV2CombinedTest::RunTest(const FString& Parameters)
 		Source.Parameters = {Frequency, Enabled, Strength};
 		FVoxelLandSerializedProgram Payload = M5ProgramLoaderPayload();
 		// Independently encoded canonical source (185 bytes) and program (210
-		// bytes), calculated using a standalone xxHash64 implementation.
-		const uint64 SourceHash = 0xf9ef65dcbe6e915dULL;
-		const uint64 ProgramHash = 0x0dbfcdc17c797c29ULL;
+		// bytes), calculated using a standalone XXH3-64 implementation.
+		const uint64 SourceHash = 0x26922d3c2bd5b6ebULL;
+		const uint64 ProgramHash = 0x59d92600632f8818ULL;
 		FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
 		FMemory::Memcpy(&Payload.ProgramFingerprint, &ProgramHash, sizeof(ProgramHash));
 		Payload.Constants = {3.0f, 0.5f, 2.0f};
@@ -350,7 +350,7 @@ bool FVoxelLandM5ProgramLoaderFunctionsTest::RunTest(const FString& Parameters)
 		Source.Functions = {A, B};
 		// Independently encoded 342-byte graph/function extension from the
 		// source-fingerprint contract, including A -> B and a shared root B.
-		const uint64 SourceHash = 0x06b6c560852b27e2ULL;
+		const uint64 SourceHash = 0xf768e5271f7fded7ULL;
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 		if (!FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 200000000, Budget))
 		{
@@ -379,7 +379,7 @@ bool FVoxelLandM5ProgramLoaderFunctionsTest::RunTest(const FString& Parameters)
 			{
 				return false;
 			}
-			const uint64 Expected = 0x65dfaa0518ea24e0ULL;
+			const uint64 Expected = 0xb934c14fd49b91c3ULL;
 			TestEqual(TEXT("fixed program identity"), Program->GetFingerprint(), Expected);
 			TestEqual(TEXT("current codec program identity"), Baseline->GetFingerprint(), Expected);
 		}

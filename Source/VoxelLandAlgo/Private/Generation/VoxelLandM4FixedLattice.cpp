@@ -324,10 +324,10 @@ FVoxelLandError Validate(const FVoxelLandGenerator& Generator)
 				}
 				break;
 			case EVoxelLandOpcode::StoreDensity:
-				if (Kinds[I.A] != FVoxelLandM4FixedLatticeInternals::EKind::Value)
+				if (Kinds[I.A] == FVoxelLandM4FixedLatticeInternals::EKind::Unknown)
 				{
 					return FVoxelLandM4FixedLatticeInternals::Fail(
-						TEXT("Fixed lattice output must be a scalar value"), Index);
+						TEXT("Fixed lattice output requires a defined value or direct X/Y coordinate"), Index);
 				}
 				continue;
 			default:
@@ -401,7 +401,13 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 				{
 					case EVoxelLandOpcode::LoadX:
 					case EVoxelLandOpcode::LoadY:
-						continue;
+					{
+						// Noise uses the exact world coordinates directly. A coordinate stored
+						// as control output can saturate before conversion to avoid overflow.
+						const int64 Coordinate = I.Op == EVoxelLandOpcode::LoadX ? WorldX : WorldY;
+						V = FMath::Clamp<int64>(Coordinate, -1, 1) * FVoxelLandM4FixedLatticeInternals::Q;
+						break;
+					}
 					case EVoxelLandOpcode::LoadConstant:
 						FVoxelLandM4FixedLatticeInternals::Quantize(D.Constants[I.Imm], V);
 						break;

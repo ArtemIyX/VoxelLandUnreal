@@ -20,6 +20,7 @@
 // OutChunk remains unchanged. No world streaming integration is provided here.
 namespace VoxelLandM4Unlimited
 {
+VOXELLANDALGO_API FVoxelLandError ValidateChunkDemand(const FVoxelLandChunkKey& Key, float VoxelSizeCm);
 VOXELLANDALGO_API FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 	const FVoxelLandM4UnlimitedConfig& Config, const FVoxelLandChunkKey& Key,
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled);

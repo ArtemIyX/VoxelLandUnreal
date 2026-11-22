@@ -439,7 +439,8 @@ bool FVoxelLandM5RouteTopologyTest::RunTest(const FString& Parameters)
 	P.Routes[0].CoveredFeatures.RemoveAt(2);
 	Expected(TEXT("missing segment coverage"), P, EVoxelLandM5ErrorCode::InconsistentTopology);
 	P = Good;
-	P.Routes[0].CoveredFeatures.Add(P.Routes[0].CoveredFeatures[0]);
+	const FVoxelLandM5RouteFeatureRef DuplicateFeature = P.Routes[0].CoveredFeatures[0];
+	P.Routes[0].CoveredFeatures.Add(DuplicateFeature);
 	Expected(TEXT("duplicate coverage owner"), P, EVoxelLandM5ErrorCode::InconsistentTopology);
 	P = Good;
 	P.Segments[0].ConnectionId = 99;

@@ -35,6 +35,7 @@ private:
 	friend class FVoxelLandM5EntranceFixtureFactory;
 	friend class FVoxelLandM5TopologyFixtureFactory;
 	friend class FVoxelLandM5HandshakeFixtureFactory;
+	friend class FVoxelLandM5RouteTopologyFixtureFactory;
 #endif
 	FVoxelLandM5CandidateResult(TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
 		const FVoxelLandM5CaveSettings& InSettings, int64 InSeed, const FVoxelLandM5RegionCoord& InRegion,

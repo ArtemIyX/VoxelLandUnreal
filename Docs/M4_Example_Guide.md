@@ -1,18 +1,18 @@
 # VoxelLand M4: reproducible control-map example
 
-This is an authoring recipe and a set of unrun automation fixtures, not a shipped set of `.uasset` files or evidence that M4 has passed visual, cook, dedicated-server, or cross-platform acceptance. The fixture `VoxelLand.M4.Example.Reproducibility` builds transient source graphs without writing packages. It exercises the control programs, curve bake, finite erosion prepass, overhang path, and repeated chunk generation. It does not create an editor graph or prove that the resulting landscape reads clearly at 2 km.
+This is an authoring recipe and example automation, not a shipped set of `.uasset` files. M4 was accepted by the owner after they reported a passing build and tests, working editor and game terrain, and a working 2 km inspection. Cook, dedicated-server, cross-platform and documented multi-seed visual checks remain future work. The fixture `VoxelLand.M4.Example.Reproducibility` builds transient source graphs without writing packages. It exercises the control programs, curve bake, finite erosion prepass, overhang path, and repeated chunk generation. It does not create an editor graph or prove that the resulting landscape reads clearly at 2 km.
 
 ## Generate the example assets
 
 After building an editor target, launch Unreal Editor with `-VoxelLandCreateM4Examples` and run `VoxelLand.M4.Example.CreateAssets` in Automation. It creates the four project-local packages at the paths below with stable node IDs, three editable control graphs, baked curves, finite erosion, overhang and bounded 100 cm height detail. It refuses to overwrite any of the four package paths. A write failure can leave a partial set: inspect any created files before choosing how to proceed. The reduced erosion counts are for a quick functional example, not a quality or performance claim. Assign a material setup if your project needs one.
 
-In a fresh editor process, pass `-VoxelLandVerifyM4Examples` and run `VoxelLand.M4.Example.VerifyAssets` to check that the saved assets, graph layouts, references, configuration, and baked curves reopen. `VoxelLand.M4.Example.Authoring` exercises transient creation and curve staleness without writing packages. These tests have not been run for this revision.
+In a fresh editor process, pass `-VoxelLandVerifyM4Examples` and run `VoxelLand.M4.Example.VerifyAssets` to check that the saved assets, graph layouts, references, configuration, and baked curves reopen. `VoxelLand.M4.Example.Authoring` exercises transient creation and curve staleness without writing packages. Separate opt-in save/reopen results were not supplied with the owner's general test report.
 
 ## Generate a shared height-output example
 
 To generate an editable shared height graph and config at `/Game/VoxelLandExamples/M4/DA_M4_HeightGraph` and `/Game/VoxelLandExamples/M4/DA_M4_HeightWorld`, launch the editor with `-VoxelLandCreateM4HeightExamples` and run `VoxelLand.M4.Example.CreateHeightAssets`. The graph has three independently seeded fBm branches connected to one M4 Height Output; the config adds curves, finite erosion, height detail and overhang. The generator checks both paths and refuses to overwrite existing packages. A write failure can leave a partial pair, so inspect any created files before retrying. The assets are generated only on explicit opt-in; they are not supplied as prebuilt files. A successful save or validation does not itself prove an actual cook.
 
-Run `VoxelLand.M4.Example.HeightAuthoring` to validate the transient example. To check saved assets, launch a fresh editor with `-VoxelLandVerifyM4HeightExamples` and run `VoxelLand.M4.Example.VerifyHeightAssets`. These tests have not been run for this revision.
+Run `VoxelLand.M4.Example.HeightAuthoring` to validate the transient example. To check saved assets, launch a fresh editor with `-VoxelLandVerifyM4HeightExamples` and run `VoxelLand.M4.Example.VerifyHeightAssets`. Separate opt-in save/reopen results were not supplied with the owner's general test report.
 
 ## Use one graph-authored height output
 

@@ -17,7 +17,8 @@ namespace VoxelLandM4WorldIdentity
 // explicitly pinned. Outputs are unchanged on failure.
 VOXELLAND_API bool Capture(const FVoxelLandM4WorldSnapshot& Snapshot, FVoxelLandM4IdentityRecord& Out, FString& Error);
 // Version 1 recreates legacy order-sensitive bytes; version 2 uses canonical
-// override ordering. Useful for explicit migration and legacy verification.
+// override ordering; version 3 also binds each validated graph source hash.
+// Useful for explicit migration and legacy verification.
 VOXELLAND_API bool CaptureVersion(
 	const FVoxelLandM4WorldSnapshot& Snapshot, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error);
 // Recompute from fresh inputs and compare all bytes (never just the hash).

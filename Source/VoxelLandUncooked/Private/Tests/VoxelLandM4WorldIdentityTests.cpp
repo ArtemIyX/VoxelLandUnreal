@@ -12,6 +12,7 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "World/VoxelLandM4WorldIdentity.h"
+#include "World/VoxelLandM4PrepassIdentity.h"
 #include "UObject/Class.h"
 
 namespace
@@ -28,6 +29,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	bool bInvalidOverride = false, bLegacyExact = false, bLegacyMatch = false;
 	bool bInvalidBake = false;
 	bool bCanonicalReordered = false, bLegacyOrderSensitive = false;
+	bool bSourceBound = false, bV2Compatible = false, bPrepassReused = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4WorldSnapshot S;
@@ -101,8 +103,10 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 		// In sorted order, the v1 and v2 payloads differ only in the two
 		// little-endian encoding fields. This reconstructs the legacy v1
 		// envelope independently of the compatibility capture function.
-		FVoxelLandM4IdentityRecord LegacyFixture = Record;
-		if (Record.FormatVersion == 2 && LegacyFixture.CanonicalBytes.Num() > 41 && LegacyFixture.CanonicalBytes[4] == 2
+		FVoxelLandM4IdentityRecord Version2;
+		const bool bVersion2Captured = VoxelLandM4WorldIdentity::CaptureVersion(S, 2, Version2, Error);
+		FVoxelLandM4IdentityRecord LegacyFixture = Version2;
+		if (bVersion2Captured && LegacyFixture.CanonicalBytes.Num() > 41 && LegacyFixture.CanonicalBytes[4] == 2
 			&& LegacyFixture.CanonicalBytes[37] == 2)
 		{
 			LegacyFixture.FormatVersion = 1;
@@ -119,6 +123,34 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 			bCanonicalReordered = VoxelLandM4WorldIdentity::Matches(Record, S, Error);
 			bLegacyOrderSensitive = !VoxelLandM4WorldIdentity::Matches(LegacyFixture, S, Error);
 			Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
+		}
+		// Repack a graph after adding an unreachable node. Its compiled program
+		// and prepass dependencies remain the same, but source identity differs.
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> OriginalProgram;
+		TArray<uint8> PrepassBefore, PrepassAfter;
+		if (bVersion2Captured
+			&& FVoxelLandProgramCodec::Load(S.Continental.Source, S.Continental.Payload, OriginalProgram, Error)
+			&& !VoxelLandM4PrepassIdentity::BuildCandidate(
+				S, *OriginalProgram, *OriginalProgram, *OriginalProgram, PrepassBefore))
+		{
+			const FVoxelLandSerializedProgram OriginalPayload = S.Continental.Payload;
+			FVoxelLandGraphNodeRecord Unused = Constant;
+			Unused.Id = FGuid(8, 1, 1, 1);
+			Unused.Pins[0].Id = FGuid(8, 2, 1, 1);
+			Unused.Pins[1].Id = FGuid(8, 2, 1, 2);
+			S.Continental.Source.Nodes.Add(Unused);
+			FVoxelLandSerializedProgram ChangedPayload;
+			if (FVoxelLandProgramCodec::Pack(S.Continental.Source, *OriginalProgram, ChangedPayload, Error))
+			{
+				S.Continental.Payload = ChangedPayload;
+				bSourceBound = !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+				bV2Compatible = VoxelLandM4WorldIdentity::Matches(Version2, S, Error);
+				bPrepassReused = !VoxelLandM4PrepassIdentity::BuildCandidate(
+									 S, *OriginalProgram, *OriginalProgram, *OriginalProgram, PrepassAfter)
+							  && PrepassBefore == PrepassAfter;
+			}
+			S.Continental.Source.Nodes.Pop();
+			S.Continental.Payload = OriginalPayload;
 		}
 		FVoxelLandParameterOverride Unknown;
 		Unknown.ParameterId = FGuid(9, 9, 9, 9);
@@ -181,6 +213,9 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("legacy identity still matches"), bLegacyMatch);
 	TestTrue(TEXT("v2 identity ignores override order"), bCanonicalReordered);
 	TestTrue(TEXT("v1 identity retains original override order"), bLegacyOrderSensitive);
+	TestTrue(TEXT("v3 full identity binds validated source changes"), bSourceBound);
+	TestTrue(TEXT("v2 identity retains legacy source-independent semantics"), bV2Compatible);
+	TestTrue(TEXT("unreachable source edit retains the upstream prepass key"), bPrepassReused);
 	TestTrue(TEXT("capture and matching reject unknown overrides"), bInvalidOverride);
 	TestTrue(TEXT("capture and matching reject a mismatched curve despite its updated hash"), bInvalidBake);
 	TestTrue(TEXT("serialized identity matches after round trip"), bRoundTrip);

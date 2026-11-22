@@ -39,7 +39,7 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 	const FVoxelLandM4WorldSnapshot& S, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if ((Version != 1 && Version != 2) || IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1
+	if ((Version != 1 && Version != 2 && Version != 3) || IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1
 		|| S.VoxelSizeCm > 2000000 || (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && S.VoxelSizeCm > 134217)
 		|| VoxelLandM4Domain::Validate(S.Domain) || S.Smooth.Version != 1 || !FMath::IsFinite(S.Smooth.Strength)
 		|| S.Smooth.Strength < 0.f || S.Smooth.Strength > 1.f || S.OverhangAmplitudeQ8 < 0
@@ -86,7 +86,7 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 	}
 	TArray<uint8> Candidate;
 	if (const FVoxelLandError Failure = VoxelLandM4PrepassIdentity::BuildCandidate(
-			KeySnapshot, *Programs[0], *Programs[1], *Programs[2], Candidate, uint32(Version)))
+			KeySnapshot, *Programs[0], *Programs[1], *Programs[2], Candidate, Version == 1 ? 1u : 2u))
 	{
 		Error = Failure.Message;
 		return false;
@@ -134,6 +134,16 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		M4WorldIdentityGuid(W, S.HeightDetail.NodeId);
 		W.U32(S.HeightDetail.Salt);
 	}
+	if (Version >= 3)
+	{
+		// Source fingerprints are validated by ProgramCodec::Load above.
+		// Keep these separate from the prepass key: an unreachable source edit
+		// changes the full descriptor but not its compiled upstream program.
+		for (const FVoxelLandM4ControlSnapshot* Channel : Channels)
+		{
+			M4WorldIdentityU64(W, uint64(Channel->Payload.SourceFingerprint));
+		}
+	}
 	if (W.Bytes.Num() > 8 * 1024 * 1024)
 	{
 		Error = TEXT("M4 world identity exceeds its supported size");
@@ -150,14 +160,14 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 bool VoxelLandM4WorldIdentity::Capture(
 	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
-	return CaptureVersion(S, 2, Out, Error);
+	return CaptureVersion(S, 3, Out, Error);
 }
 
 bool VoxelLandM4WorldIdentity::Matches(
 	const FVoxelLandM4IdentityRecord& Record, const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error)
 {
-	if ((Record.FormatVersion != 1 && Record.FormatVersion != 2) || Record.CanonicalBytes.Num() < 8
-		|| Record.CanonicalBytes.Num() > 8 * 1024 * 1024
+	if ((Record.FormatVersion != 1 && Record.FormatVersion != 2 && Record.FormatVersion != 3)
+		|| Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > 8 * 1024 * 1024
 		|| Record.FingerprintBits != M4WorldIdentityHash(Record.CanonicalBytes))
 	{
 		Error = TEXT("Unsupported or corrupt M4 identity record");

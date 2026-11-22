@@ -134,6 +134,12 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 	{
 		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 overhang configuration"));
 	}
+	if (Settings.bM4FixedLatticeShaping && Overhang.Displacement.bEnabled && Overhang.Displacement.AmplitudeQ8 != 0
+		&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Overhang.FrequencyPerCm))
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter,
+			TEXT("Fixed-lattice overhang frequency must be representable in Q24"));
+	}
 	if (!HeightGrid)
 	{
 		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height grid is required"));
@@ -188,10 +194,13 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	if ((Config.Backend != EVoxelLandM4UnlimitedBackend::LegacyFloat
 			&& Config.Backend != EVoxelLandM4UnlimitedBackend::FixedLattice)
 		|| (Config.Backend == EVoxelLandM4UnlimitedBackend::FixedLattice
-			&& (Config.Overhang.Displacement.bEnabled || Config.HeightDetail.bEnabled)))
+			&& ((Config.Overhang.Displacement.bEnabled && Config.Overhang.Displacement.AmplitudeQ8 != 0
+					&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Config.Overhang.FrequencyPerCm))
+				|| (Config.HeightDetail.bEnabled && Config.HeightDetail.AmplitudeQ8 != 0
+					&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Config.HeightDetail.FrequencyPerCm)))))
 	{
 		return Fail(EVoxelLandErrorCode::InvalidParameter,
-			TEXT("Fixed lattice requires overhang and height detail to be disabled"));
+			TEXT("Fixed-lattice shaping frequency must be representable in Q24"));
 	}
 	const auto& Detail = Config.HeightDetail;
 	if (Detail.AlgorithmVersion != 1 || Detail.AmplitudeQ8 < 0 || Detail.AmplitudeQ8 > 1280000
@@ -270,6 +279,12 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 	{
 		return Fail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height detail settings"));
 	}
+	if (Settings.bM4FixedLatticeShaping && Detail.bEnabled && Detail.AmplitudeQ8 != 0
+		&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Detail.FrequencyPerCm))
+	{
+		return Fail(EVoxelLandErrorCode::InvalidParameter,
+			TEXT("Fixed-lattice height detail frequency must be representable in Q24"));
+	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
 	if (FVoxelLandError Error = CreateM4HeightField(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Overhang, Result))
 	{
@@ -331,6 +346,7 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandGenerator);
 	Result->Program = Program;
 	Result->M4HeightGrid = MoveTemp(HeightGrid);
+	Result->bM4FixedLatticeShaping = Result->M4HeightGrid.IsValid() && Settings.bM4FixedLatticeShaping;
 	Result->bM4NormalizeSlope = bNormalizeSlope;
 	if (Overhang)
 	{
@@ -579,8 +595,9 @@ FVoxelLandError FVoxelLandGenerator::CreateWorker(TUniquePtr<FVoxelLandWorkerCon
 	if (M4HeightGrid)
 	{
 		// Native noise resources are created and destroyed on this worker's thread.
-		if ((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
-			|| (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0))
+		if (!bM4FixedLatticeShaping
+			&& ((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
+				|| (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0)))
 		{
 			VoxelLandNative::EBackend Backend = VoxelLandNative::EBackend::Auto;
 			if (Options.Noise == EVoxelLandNoiseBackend::Scalar)
@@ -1204,7 +1221,8 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 		return Fail(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field footprint overflows"));
 	}
 	// Native noise receives exact integer centimeter positions converted to float.
-	if (((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
+	if (!bM4FixedLatticeShaping
+		&& ((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
 			|| (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0))
 		&& (MinX < -16777216 || MaxX > 16777216 || MinY < -16777216 || MaxY > 16777216))
 	{
@@ -1276,7 +1294,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 	}
 	if (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0)
 	{
-		if (!Worker.Impl || !Worker.Impl->Noise)
+		if (!bM4FixedLatticeShaping && (!Worker.Impl || !Worker.Impl->Noise))
 		{
 			return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("M4 height detail worker missing"));
 		}
@@ -1292,23 +1310,29 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 			}
 			const int64 YCm = (BaseY + Offset + Y - Margin) * VoxelSize;
 			float XNoise[39], YNoise[39], Noise[39];
-			for (int32 X = 0; X < DetailAxis; ++X)
+			if (!bM4FixedLatticeShaping)
 			{
-				XNoise[X] = float((BaseX + Offset + X - Margin) * VoxelSize) * M4HeightDetail.FrequencyPerCm;
-				YNoise[X] = float(YCm) * M4HeightDetail.FrequencyPerCm;
-			}
-			FString Error;
-			if (!Worker.Impl->Noise->Sample(
-					0, false, M4HeightDetailSeed, DetailAxis, XNoise, YNoise, nullptr, Noise, Error))
-			{
-				return NativeError(Error);
+				for (int32 X = 0; X < DetailAxis; ++X)
+				{
+					XNoise[X] = float((BaseX + Offset + X - Margin) * VoxelSize) * M4HeightDetail.FrequencyPerCm;
+					YNoise[X] = float(YCm) * M4HeightDetail.FrequencyPerCm;
+				}
+				FString Error;
+				if (!Worker.Impl->Noise->Sample(
+						0, false, M4HeightDetailSeed, DetailAxis, XNoise, YNoise, nullptr, Noise, Error))
+				{
+					return NativeError(Error);
+				}
 			}
 			for (int32 X = 0; X < DetailAxis; ++X)
 			{
 				int32 BaseHeight = 0, NoiseQ = 0;
 				const int64 XCm = (BaseX + Offset + X - Margin) * VoxelSize;
-				if (!M4HeightGrid->Sample(XCm, YCm, BaseHeight)
-					|| !VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ))
+				const bool bNoiseValid = bM4FixedLatticeShaping ? VoxelLandM4FixedLattice::SampleShaping2D(XCm, YCm,
+																	  M4HeightDetail.FrequencyPerCm,
+																	  uint64(uint32(M4HeightDetailSeed)), NoiseQ)
+																: VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ);
+				if (!M4HeightGrid->Sample(XCm, YCm, BaseHeight) || !bNoiseValid)
 				{
 					return Fail(EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 height detail sample"));
 				}
@@ -1370,20 +1394,23 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 			const bool bOverhang = M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0;
 			if (bOverhang)
 			{
-				if (!Worker.Impl || !Worker.Impl->Noise)
+				if (!bM4FixedLatticeShaping && (!Worker.Impl || !Worker.Impl->Noise))
 				{
 					return Fail(EVoxelLandErrorCode::InvalidContext, TEXT("M4 overhang worker missing"));
 				}
-				for (int32 X = 0; X < Axis; ++X)
+				if (!bM4FixedLatticeShaping)
 				{
-					NX[X] = float((BaseX + Offset + X) * VoxelSize) * M4Overhang.FrequencyPerCm;
-					NY[X] = float((BaseY + Offset + Y) * VoxelSize) * M4Overhang.FrequencyPerCm;
-					NZ[X] = float(ZCm) * M4Overhang.FrequencyPerCm;
-				}
-				FString Error;
-				if (!Worker.Impl->Noise->Sample(0, true, M4OverhangSeed, Axis, NX, NY, NZ, Noise, Error))
-				{
-					return NativeError(Error);
+					for (int32 X = 0; X < Axis; ++X)
+					{
+						NX[X] = float((BaseX + Offset + X) * VoxelSize) * M4Overhang.FrequencyPerCm;
+						NY[X] = float((BaseY + Offset + Y) * VoxelSize) * M4Overhang.FrequencyPerCm;
+						NZ[X] = float(ZCm) * M4Overhang.FrequencyPerCm;
+					}
+					FString Error;
+					if (!Worker.Impl->Noise->Sample(0, true, M4OverhangSeed, Axis, NX, NY, NZ, Noise, Error))
+					{
+						return NativeError(Error);
+					}
 				}
 			}
 			for (int32 X = 0; X < Axis; ++X)
@@ -1403,7 +1430,13 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 				if (bOverhang)
 				{
 					int32 NoiseQ = 0, DeltaQ8 = 0;
-					if (!VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ)
+					const bool bNoiseValid =
+						bM4FixedLatticeShaping
+							? VoxelLandM4FixedLattice::SampleShaping3D((BaseX + Offset + X) * VoxelSize,
+								  (BaseY + Offset + Y) * VoxelSize, ZCm, M4Overhang.FrequencyPerCm,
+								  uint64(uint32(M4OverhangSeed)), NoiseQ)
+							: VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ);
+					if (!bNoiseValid
 						|| !VoxelLandM4Overhang::DisplacementQ8(
 							M4Overhang.Displacement, ZCm * 256 - Center, NoiseQ, DeltaQ8))
 					{

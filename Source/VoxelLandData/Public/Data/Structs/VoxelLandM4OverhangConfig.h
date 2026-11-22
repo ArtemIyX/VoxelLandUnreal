@@ -3,7 +3,8 @@
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM4OverhangSettings.h"
 
-// Immutable runtime settings for version-1 3D Perlin displacement.
+// Immutable runtime settings for version-1 3D displacement. Legacy uses Perlin;
+// fixed-lattice unlimited uses its versioned 3D value noise.
 // Frequency is cycles per centimeter in (0, 1]. Seed identity is stable per node.
 struct FVoxelLandM4OverhangConfig
 {

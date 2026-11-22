@@ -25,6 +25,22 @@ inline bool IsKeyInPrecisionRange(const FIntVector& Key)
 	return Key.X >= -MaxChunk && Key.X <= MaxChunk && Key.Y >= -MaxChunk && Key.Y <= MaxChunk && Key.Z >= -MaxChunk
 		&& Key.Z <= MaxChunk;
 }
+// The opt-in chunk-local M4 path uses integer-centimeter voxels. Its larger
+// envelope keeps global cell coordinates below 2^27, so double additions retain
+// at least 25 fractional bits. The binary snap grid is no finer than 2^-19
+// voxel; snapped coordinates and local float offsets remain exactly representable.
+// This is a CPU meshing envelope, not a guarantee about Unreal's world bounds.
+inline bool IsUnlimitedM4KeyInPrecisionRange(const FIntVector& Key, float Size)
+{
+	constexpr int32 MaxChunk = (1 << 22) - 2;
+	return FMath::IsFinite(Size) && Size >= 1.f && Size <= 134217.f
+		&& FMath::FloorToDouble(double(Size)) == double(Size) && Key.X >= -MaxChunk && Key.X <= MaxChunk
+		&& Key.Y >= -MaxChunk && Key.Y <= MaxChunk && Key.Z >= -MaxChunk && Key.Z <= MaxChunk;
+}
+inline bool IsKeyInPrecisionRange(const FIntVector& Key, float Size, bool bUnlimitedM4)
+{
+	return bUnlimitedM4 ? IsUnlimitedM4KeyInPrecisionRange(Key, Size) : IsKeyInPrecisionRange(Key);
+}
 inline double Grid(float Size)
 {
 	int Exponent = 0;

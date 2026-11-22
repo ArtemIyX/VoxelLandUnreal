@@ -132,6 +132,29 @@ bool Noise(int64 X, int64 Y, int64 Frequency, uint64 Seed, int64& Out)
 	return true;
 }
 
+int64 Corner3(int64 X, int64 Y, int64 Z, uint64 Seed)
+{
+	const uint64 YHash = Mix(uint64(Y)), ZHash = Mix(uint64(Z));
+	const uint64 Hash = Mix(Seed ^ Mix(uint64(X)) ^ ((YHash << 31) | (YHash >> 33)) ^ ((ZHash << 17) | (ZHash >> 47)));
+	return int64((Hash >> 39) & 0x1ffffffull) - Q;
+}
+
+bool Noise3(int64 X, int64 Y, int64 Z, int64 Frequency, uint64 Seed, int64& Out)
+{
+	int64 IX = 0, IY = 0, IZ = 0, FX = 0, FY = 0, FZ = 0;
+	if (!Position(X, Frequency, IX, FX) || !Position(Y, Frequency, IY, FY) || !Position(Z, Frequency, IZ, FZ))
+	{
+		return false;
+	}
+	const int64 TX = Fade(FX), TY = Fade(FY), TZ = Fade(FZ);
+	const int64 Lower = Lerp(Lerp(Corner3(IX, IY, IZ, Seed), Corner3(IX + 1, IY, IZ, Seed), TX),
+		Lerp(Corner3(IX, IY + 1, IZ, Seed), Corner3(IX + 1, IY + 1, IZ, Seed), TX), TY);
+	const int64 Upper = Lerp(Lerp(Corner3(IX, IY, IZ + 1, Seed), Corner3(IX + 1, IY, IZ + 1, Seed), TX),
+		Lerp(Corner3(IX, IY + 1, IZ + 1, Seed), Corner3(IX + 1, IY + 1, IZ + 1, Seed), TX), TY);
+	Out = Lerp(Lower, Upper, TZ);
+	return true;
+}
+
 float FloatSource(const FVoxelLandGenerator& G, const FVoxelLandValueSource& S)
 {
 	return S.bParameter ? G.GetResolvedFloatParameters()[S.Index] : G.GetProgram().GetData().Constants[S.Index];
@@ -184,6 +207,34 @@ bool RunNoise(const FVoxelLandGenerator& G, const FVoxelLandInstruction& I, int6
 	Out = WeightSum ? RoundRatio(Sum * Q, WeightSum) : 0;
 	return true;
 }
+}
+
+bool IsShapingFrequencySupported(float Frequency)
+{
+	int64 Quantized = 0;
+	return Quantize(Frequency, Quantized) && Quantized >= 1 && Quantized <= Q;
+}
+
+bool SampleShaping2D(int64 X, int64 Y, float Frequency, uint64 Seed, int32& OutNoiseQ15)
+{
+	int64 F = 0, Value = 0;
+	if (!Quantize(Frequency, F) || F < 1 || F > Q || !Noise(X, Y, F, Mix(Seed), Value))
+	{
+		return false;
+	}
+	OutNoiseQ15 = int32(FMath::Clamp<int64>(RoundRatio(Value * 32767, Q), -32767, 32767));
+	return true;
+}
+
+bool SampleShaping3D(int64 X, int64 Y, int64 Z, float Frequency, uint64 Seed, int32& OutNoiseQ15)
+{
+	int64 F = 0, Value = 0;
+	if (!Quantize(Frequency, F) || F < 1 || F > Q || !Noise3(X, Y, Z, F, Mix(Seed), Value))
+	{
+		return false;
+	}
+	OutNoiseQ15 = int32(FMath::Clamp<int64>(RoundRatio(Value * 32767, Q), -32767, 32767));
+	return true;
 }
 
 FVoxelLandError Validate(const FVoxelLandGenerator& Generator)

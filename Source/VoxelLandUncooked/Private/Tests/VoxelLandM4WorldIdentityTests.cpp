@@ -27,7 +27,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	bool bBuilt = false, bStable = false, bSeed = false, bShape = false, bDetail = false;
 	bool bMaterial = false, bUnlimited = false, bVersion = false, bCorrupt = false, bRoundTrip = false;
 	bool bInvalidOverride = false, bLegacyExact = false, bLegacyMatch = false;
-	bool bInvalidBake = false, bFixedIdentity = false;
+	bool bInvalidBake = false, bFixedIdentity = false, bFixedShapingIdentity = false, bZeroShapingIdentity = false;
 	bool bCanonicalReordered = false, bLegacyOrderSensitive = false;
 	bool bSourceBound = false, bV2Compatible = false, bPrepassReused = false;
 	FString Error;
@@ -207,6 +207,17 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 					  && VoxelLandM4WorldIdentity::Matches(Fixed, S, Error)
 					  && !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error)
 					  && !VoxelLandM4WorldIdentity::CaptureVersion(S, 4, WrongVersion, Error);
+		S.bOverhangEnabled = true;
+		S.OverhangAmplitudeQ8 = 0;
+		FVoxelLandM4IdentityRecord ZeroShape;
+		bZeroShapingIdentity = VoxelLandM4WorldIdentity::Capture(S, ZeroShape, Error) && ZeroShape.FormatVersion == 5;
+		S.OverhangAmplitudeQ8 = 128000;
+		FVoxelLandM4IdentityRecord Shaped, OldShaped;
+		bFixedShapingIdentity = VoxelLandM4WorldIdentity::Capture(S, Shaped, Error) && Shaped.FormatVersion == 6
+							 && VoxelLandM4WorldIdentity::Matches(Shaped, S, Error)
+							 && !VoxelLandM4WorldIdentity::CaptureVersion(S, 5, OldShaped, Error);
+		S.bOverhangEnabled = false;
+		S.OverhangAmplitudeQ8 = 0;
 		S.UnlimitedBackend = EVoxelLandM4UnlimitedBackend::LegacyFloat;
 		const int32 SupportedVersion = Unlimited.FormatVersion;
 		Unlimited.FormatVersion = 999;
@@ -232,6 +243,8 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("height detail changes reject reuse"), bDetail);
 	TestTrue(TEXT("material does not affect identity"), bMaterial);
 	TestTrue(TEXT("fixed lattice has distinct versioned identity"), bFixedIdentity);
+	TestTrue(TEXT("zero fixed shaping remains identity version 5"), bZeroShapingIdentity);
+	TestTrue(TEXT("nonzero fixed shaping requires identity version 6"), bFixedShapingIdentity);
 	TestTrue(TEXT("unlimited identity is distinct and matches itself"), bUnlimited);
 	TestTrue(TEXT("unknown record versions fail"), bVersion);
 	TestTrue(TEXT("corrupt bytes fail"), bCorrupt);

@@ -97,9 +97,9 @@ public:
 					&& VoxelLandMeshing::Classify(*Done.Data) == EVoxelLandChunkClassification::Surface)
 				{
 					auto Mesh = MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>();
-					const auto Result =
-						VoxelLandMeshing::BuildSurfaceNets(*Done.Data, Current->GetProfile().VoxelSizeCm, Scratch,
-							*Mesh, [&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); });
+					const auto Result = VoxelLandMeshing::BuildSurfaceNets(
+						*Done.Data, Current->GetProfile().VoxelSizeCm, Scratch, *Mesh,
+						[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); }, Current->IsM4Unlimited());
 					if (Result == EVoxelLandMeshResult::Cancelled)
 					{
 						Done.bCancelled = true;
@@ -359,7 +359,9 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 {
 	check(IsInGameThread());
-	if (!State || Key.LOD != 0 || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate)
+	if (!State || Key.LOD != 0
+		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
+			Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited())
 		|| (State->Records.Num() >= FMath::Clamp(MaxResidentChunks, 1, MaxRecords) && !State->Records.Contains(Key)))
 	{
 		return false;
@@ -623,7 +625,8 @@ void AVoxelLandWorld::UpdateDemand()
 			{
 				FVoxelLandChunkKey Key;
 				Key.Coordinate = NewChunk + FIntVector(X, Y, Z);
-				if (VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Key.Coordinate))
+				if (VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
+						Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited()))
 				{
 					if (const FVoxelLandError Error = State->Generator->ValidateM4ChunkDemand(Key))
 					{
@@ -637,6 +640,16 @@ void AVoxelLandWorld::UpdateDemand()
 					else
 					{
 						Candidates.Add(Key);
+					}
+				}
+				else if (State->Generator->IsM4Unlimited())
+				{
+					++RejectedM4Demand;
+					if (FirstM4Rejection.IsEmpty())
+					{
+						FirstM4Rejection =
+							FString::Printf(TEXT("Chunk (%d, %d, %d) exceeds the M4 CPU meshing coordinate envelope"),
+								Key.Coordinate.X, Key.Coordinate.Y, Key.Coordinate.Z);
 					}
 				}
 			}

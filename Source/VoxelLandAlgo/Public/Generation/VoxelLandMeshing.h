@@ -15,4 +15,8 @@ VOXELLANDALGO_API EVoxelLandChunkClassification Classify(const FVoxelLandChunkDa
 // Cancellation is checked between slices. Output is only assigned on success.
 VOXELLANDALGO_API EVoxelLandMeshResult BuildSurfaceNets(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
 	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled);
+// Expanded precision envelope is reserved for validated chunk-local M4.
+VOXELLANDALGO_API EVoxelLandMeshResult BuildSurfaceNets(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
+	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled,
+	bool bUnlimitedM4);
 }

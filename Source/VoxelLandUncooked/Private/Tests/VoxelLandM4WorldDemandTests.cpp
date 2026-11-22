@@ -5,6 +5,8 @@
 #include "Engine/World.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
+#include "Generation/VoxelLandM4CurveLut.h"
+#include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandWorld.h"
 
@@ -15,6 +17,7 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> M4Generator;
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> M3Generator;
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> WiderM4Generator;
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> UnlimitedGenerator;
 	const bool bGenerated = Async(EAsyncExecution::ThreadPool, [&]() {
 		FVoxelLandProgramDraft Draft;
 		Draft.FormatVersion = 2;
@@ -52,7 +55,44 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 		{
 			return false;
 		}
-		return !FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, false, WiderM4Generator);
+		if (FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, false, WiderM4Generator))
+		{
+			return false;
+		}
+		FVoxelLandProgramDraft ControlDraft;
+		ControlDraft.FormatVersion = 2;
+		ControlDraft.RegisterCount = 1;
+		ControlDraft.Constants = {0.f};
+		FVoxelLandInstruction Constant;
+		Constant.Op = EVoxelLandOpcode::LoadConstant;
+		FVoxelLandInstruction Output;
+		Output.Op = EVoxelLandOpcode::StoreDensity;
+		ControlDraft.Instructions = {Constant, Output};
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> ControlProgram;
+		if (FVoxelLandProgram::Validate(ControlDraft, ControlProgram))
+		{
+			return false;
+		}
+		Settings.Program = ControlProgram;
+		Settings.Profile.VoxelSizeCm = 1.f;
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Control;
+		if (FVoxelLandGenerator::Create(Settings, Control))
+		{
+			return false;
+		}
+		TArray<int32> Samples;
+		Samples.Init(0, FVoxelLandM4CurveLut::SampleCount);
+		TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> Curve;
+		FString Error;
+		if (!FVoxelLandM4CurveLut::Create(Samples, -100, 100, Curve, Error))
+		{
+			return false;
+		}
+		FVoxelLandM4UnlimitedConfig Local;
+		Local.Backend = EVoxelLandM4UnlimitedBackend::FixedLattice;
+		Local.ContinentalGenerator = Local.MountainGenerator = Local.PeaksGenerator = Control;
+		Local.ContinentalCurve = Local.MountainCurve = Local.PeaksCurve = Curve;
+		return !FVoxelLandGenerator::CreateM4Unlimited(Settings, Local, UnlimitedGenerator);
 	}).Get();
 	if (!TestTrue(TEXT("M3 and M4 generators created off thread"), bGenerated) || !GEngine)
 	{
@@ -106,6 +146,15 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("moving inward clears boundary reason"), Actor->M4FirstCameraDemandRejection.IsEmpty());
 	Actor->Initialize(M3Generator);
 	TestTrue(TEXT("M3 keeps its existing unrestricted demand"), Actor->RequestDataChunk(FIntVector(1, 0, 0)));
+	TestFalse(TEXT("M3 still rejects extended mesh envelope"), Actor->RequestDataChunk(FIntVector(1000000, 0, 0)));
+	Actor->Initialize(UnlimitedGenerator);
+	TestTrue(
+		TEXT("fixed unlimited world accepts far explicit chunk"), Actor->RequestDataChunk(FIntVector(1000000, 0, 0)));
+	TestFalse(
+		TEXT("world rejects beyond expanded mesh envelope"), Actor->RequestDataChunk(FIntVector((1 << 22) - 1, 0, 0)));
+	Actor->SetTestViewLocation(FVector(32000000.0, 0, 0));
+	Actor->Tick(0.016f);
+	TestTrue(TEXT("camera demands far fixed-lattice chunk"), Actor->IsChunkDemanded(FIntVector(1000000, 0, 0)));
 	Actor->Shutdown();
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);

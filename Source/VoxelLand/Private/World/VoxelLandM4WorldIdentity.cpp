@@ -41,14 +41,20 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 	const FVoxelLandM4WorldSnapshot& S, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if ((Version != 1 && Version != 2 && Version != 3 && Version != 4 && Version != 5)
+	if ((Version != 1 && Version != 2 && Version != 3 && Version != 4 && Version != 5 && Version != 6)
 		|| (Version < 4 && S.HeightStage.Version != 0)
 		|| (Version < 5 && S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat)
 		|| (S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::LegacyFloat
 			&& S.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
 		|| (S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
-			&& (S.Domain.Mode != EVoxelLandM4DomainMode::Unlimited || S.Domain.bGlobalErosion || S.bOverhangEnabled
-				|| S.HeightDetail.bEnabled))
+			&& (S.Domain.Mode != EVoxelLandM4DomainMode::Unlimited || S.Domain.bGlobalErosion
+				|| ((S.bOverhangEnabled && S.OverhangAmplitudeQ8 != 0)
+					   || (S.HeightDetail.bEnabled && S.HeightDetail.AmplitudeQ8 != 0))
+					   && Version < 6
+				|| (S.bOverhangEnabled && S.OverhangAmplitudeQ8 != 0
+					&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(S.OverhangFrequencyPerCm))
+				|| (S.HeightDetail.bEnabled && S.HeightDetail.AmplitudeQ8 != 0
+					&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(S.HeightDetail.FrequencyPerCm))))
 		|| IsInGameThread() || S.FormatVersion != 1 || S.VoxelSizeCm < 1 || S.VoxelSizeCm > 2000000
 		|| (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && S.VoxelSizeCm > 134217)
 		|| VoxelLandM4Domain::Validate(S.Domain) || S.Smooth.Version != 1 || !FMath::IsFinite(S.Smooth.Strength)
@@ -188,6 +194,10 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 		W.U8(uint8(S.UnlimitedBackend));
 		W.U32(1); // fixed-lattice numeric/noise contract
 	}
+	if (Version >= 6)
+	{
+		W.U32(1);
+	} // fixed-lattice 2D/3D shaping contract
 	if (W.Bytes.Num() > 8 * 1024 * 1024)
 	{
 		Error = TEXT("M4 world identity exceeds its supported size");
@@ -204,8 +214,13 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 bool VoxelLandM4WorldIdentity::Capture(
 	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
+	const bool bFixedShaping = S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
+							&& ((S.bOverhangEnabled && S.OverhangAmplitudeQ8 != 0)
+								|| (S.HeightDetail.bEnabled && S.HeightDetail.AmplitudeQ8 != 0));
 	return CaptureVersion(S,
-		S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice ? 5 : (S.HeightStage.Version == 1 ? 4 : 3),
+		bFixedShaping                                                      ? 6
+		: S.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice ? 5
+																		   : (S.HeightStage.Version == 1 ? 4 : 3),
 		Out, Error);
 }
 
@@ -213,7 +228,7 @@ bool VoxelLandM4WorldIdentity::Matches(
 	const FVoxelLandM4IdentityRecord& Record, const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error)
 {
 	if ((Record.FormatVersion != 1 && Record.FormatVersion != 2 && Record.FormatVersion != 3
-			&& Record.FormatVersion != 4 && Record.FormatVersion != 5)
+			&& Record.FormatVersion != 4 && Record.FormatVersion != 5 && Record.FormatVersion != 6)
 		|| Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > 8 * 1024 * 1024
 		|| Record.FingerprintBits != M4WorldIdentityHash(Record.CanonicalBytes))
 	{

@@ -3,7 +3,8 @@
 #include "CoreMinimal.h"
 #include "VoxelLandM4HeightDetailConfig.generated.h"
 
-// Version 1: independently seeded 2D Perlin, quantized to signed Q15.
+// Version 1 height displacement: independently seeded 2D noise quantized to signed Q15.
+// Legacy uses Perlin; fixed-lattice unlimited uses its versioned value-noise contract.
 // Amplitude is a nonnegative Q8 centimeter bound; disabled is an exact no-op.
 USTRUCT()
 struct VOXELLANDDATA_API FVoxelLandM4HeightDetailConfig

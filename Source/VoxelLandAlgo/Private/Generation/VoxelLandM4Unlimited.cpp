@@ -105,11 +105,13 @@ static FVoxelLandError GenerateChunkInternal(const FVoxelLandGeneratorSettings& 
 			bCancelled ? TEXT("M4 local terrain cancelled") : TEXT("Invalid M4 local height grid"));
 	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+	FVoxelLandGeneratorSettings ShapingSettings = FinalSettings;
+	ShapingSettings.bM4FixedLatticeShaping = bFixedLattice;
 	const FVoxelLandError CreateError =
-		SmoothOverride.IsSet() ? FVoxelLandGenerator::CreateM4HeightField(FinalSettings, Grid, bNormalizeSlope,
+		SmoothOverride.IsSet() ? FVoxelLandGenerator::CreateM4HeightField(ShapingSettings, Grid, bNormalizeSlope,
 									 Overhang, SmoothOverride.GetValue(), HeightDetail, Generator)
 							   : FVoxelLandGenerator::CreateM4HeightField(
-									 FinalSettings, Grid, bNormalizeSlope, Overhang, HeightDetail, Generator);
+									 ShapingSettings, Grid, bNormalizeSlope, Overhang, HeightDetail, Generator);
 	if (CreateError)
 	{
 		return CreateError;
@@ -155,11 +157,6 @@ FVoxelLandError GenerateFixedChunk(const FVoxelLandGeneratorSettings& FinalSetti
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled,
 	TOptional<FVoxelLandM4SmoothSettings> SmoothOverride, const FVoxelLandM4HeightDetailConfig& HeightDetail)
 {
-	if (Overhang.Displacement.bEnabled || HeightDetail.bEnabled)
-	{
-		return M4UnlimitedError(EVoxelLandErrorCode::InvalidParameter,
-			TEXT("Fixed lattice does not yet support overhang or height detail"));
-	}
 	return GenerateChunkInternal(FinalSettings, Overhang, bNormalizeSlope, BaseQ8, ContinentalGenerator, nullptr,
 		ContinentalCurve, MountainGenerator, nullptr, MountainCurve, PeaksGenerator, nullptr, PeaksCurve, Key, OutChunk,
 		IsCancelled, SmoothOverride, HeightDetail, true);

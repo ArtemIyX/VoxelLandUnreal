@@ -13,4 +13,6 @@ struct FVoxelLandGeneratorSettings
 	uint64 WorldSeed = 0;
 	FVoxelLandZoneProfile Profile;
 	FVoxelLandBackendOptions Backends;
+	// Used by fixed-lattice unlimited chunks when shaping an intermediate height grid.
+	bool bM4FixedLatticeShaping = false;
 };

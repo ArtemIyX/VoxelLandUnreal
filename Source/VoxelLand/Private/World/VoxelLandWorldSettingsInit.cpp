@@ -25,6 +25,7 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4ControlPipeline.h"
 #include "Generation/VoxelLandM4ControlGrid.h"
+#include "Generation/VoxelLandM4FixedLattice.h"
 #include "Generation/VoxelLandM4CurveLut.h"
 #include "Generation/VoxelLandM4GridLease.h"
 #include "HAL/IConsoleManager.h"
@@ -719,9 +720,13 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 			&& Snapshot.UnlimitedBackend != EVoxelLandM4UnlimitedBackend::FixedLattice)
 		|| (Snapshot.UnlimitedBackend == EVoxelLandM4UnlimitedBackend::FixedLattice
 			&& (Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Unlimited || Snapshot.Domain.bGlobalErosion
-				|| Snapshot.bOverhangEnabled || Snapshot.HeightDetail.bEnabled)))
+				|| (Snapshot.bOverhangEnabled && Snapshot.OverhangAmplitudeQ8 != 0
+					&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Snapshot.OverhangFrequencyPerCm))
+				|| (Snapshot.HeightDetail.bEnabled && Snapshot.HeightDetail.AmplitudeQ8 != 0
+					&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Snapshot.HeightDetail.FrequencyPerCm)))))
 	{
-		OutError = TEXT("M4 fixed lattice requires unlimited mode and disables erosion, overhang, and height detail");
+		OutError = TEXT(
+			"M4 fixed lattice requires unlimited mode, no global erosion and representable Q24 shaping frequencies");
 		return false;
 	}
 	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited && Snapshot.Domain.bGlobalErosion)

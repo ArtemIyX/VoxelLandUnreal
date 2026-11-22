@@ -83,7 +83,9 @@ bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 {
 	FString Failure;
 	bool bLegacyRejected = false, bPositiveSeam = false, bNegativeSeam = false, bRepeat = false, bUnsupported = false;
-	bool bCancelPreserved = false, bYSeam = false, bZSeam = false;
+	bool bCancelPreserved = false, bYSeam = false, bZSeam = false, bFarPositive = false, bFarNegative = false;
+	bool bShapedX = false, bShapedNegative = false, bShapedY = false, bShapedZ = false;
+	bool bZeroIdentity = false, bBadFrequency = false;
 	const bool bSuccess = Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandProgramDraft Draft;
 		Draft.FormatVersion = 2;
@@ -182,6 +184,15 @@ bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 		bPositiveSeam = M4FixedOverlapX(*A, *B);
 		bNegativeSeam = M4FixedOverlapX(*C, *D);
 		bRepeat = A->Hash == Repeat->Hash && A->Density == Repeat->Density;
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> FarA, FarB, FarC, FarD;
+		constexpr int32 FarLimit = (1 << 22) - 2;
+		if (!Generate(FarLimit - 1, FarA) || !Generate(FarLimit, FarB) || !Generate(-FarLimit, FarC)
+			|| !Generate(-FarLimit + 1, FarD))
+		{
+			return false;
+		}
+		bFarPositive = M4FixedOverlapX(*FarA, *FarB);
+		bFarNegative = M4FixedOverlapX(*FarC, *FarD);
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> YA, YB, ZA, ZB;
 		auto GenerateKey = [&](FIntVector Coordinate,
 							   TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& Chunk) {
@@ -202,6 +213,54 @@ bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 		}
 		bYSeam = M4FixedOverlapY(*YA, *YB);
 		bZSeam = M4FixedOverlapZ(*ZA, *ZB);
+		// Enabled zero-amplitude stages retain the original density exactly.
+		Config.Overhang.Displacement.bEnabled = true;
+		Config.HeightDetail.bEnabled = true;
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Zero;
+		if (const FVoxelLandError E = FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Zero))
+		{
+			Failure = E.Message;
+			return false;
+		}
+		TUniquePtr<FVoxelLandWorkerContext> ZeroWorker;
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> ZeroChunk;
+		FVoxelLandChunkKey ZeroKey;
+		ZeroKey.Coordinate.X = 5242;
+		if (Zero->CreateWorker(ZeroWorker) || Zero->GenerateChunk(ZeroKey, *ZeroWorker, ZeroChunk))
+		{
+			return false;
+		}
+		bZeroIdentity = ZeroChunk && ZeroChunk->Density == A->Density && ZeroChunk->Hash == A->Hash;
+		Config.Overhang.Displacement.AmplitudeQ8 = 128000;
+		Config.Overhang.Displacement.BandHalfWidthQ8 = 256000;
+		Config.HeightDetail.AmplitudeQ8 = 25600;
+		Config.HeightDetail.FrequencyPerCm = 1.e-12f;
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Invalid;
+		bBadFrequency = bool(FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Invalid));
+		Config.HeightDetail.FrequencyPerCm = 0.001f;
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Shaped;
+		if (const FVoxelLandError E = FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Shaped))
+		{
+			Failure = E.Message;
+			return false;
+		}
+		Worker.Reset();
+		Fixed = Shaped;
+		if (const FVoxelLandError E = Fixed->CreateWorker(Worker))
+		{
+			Failure = E.Message;
+			return false;
+		}
+		if (!Generate(5242, A) || !Generate(5243, B) || !Generate(-5244, C) || !Generate(-5243, D)
+			|| !GenerateKey(FIntVector(0, 5242, 0), YA) || !GenerateKey(FIntVector(0, 5243, 0), YB)
+			|| !GenerateKey(FIntVector(5243, 0, 0), ZA) || !GenerateKey(FIntVector(5243, 0, 1), ZB))
+		{
+			return false;
+		}
+		bShapedX = M4FixedOverlapX(*A, *B);
+		bShapedNegative = M4FixedOverlapX(*C, *D);
+		bShapedY = M4FixedOverlapY(*YA, *YB);
+		bShapedZ = M4FixedOverlapZ(*ZA, *ZB);
 		TArray<uint16> Sentinel = {7};
 		const FVoxelLandError Cancel =
 			VoxelLandM4FixedLattice::Evaluate(*Controls[0], 16777200, 0, 1, 2, 2, Sentinel, [] { return true; });
@@ -230,8 +289,16 @@ bool FVoxelLandM4FixedLatticeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("legacy boundary preserved; v2 accepts farther coordinates"), bLegacyRejected);
 	TestTrue(TEXT("positive boundary halo is seamless"), bPositiveSeam);
 	TestTrue(TEXT("negative boundary halo is seamless"), bNegativeSeam);
+	TestTrue(TEXT("far positive halo is seamless"), bFarPositive);
+	TestTrue(TEXT("far negative halo is seamless"), bFarNegative);
 	TestTrue(TEXT("Y boundary halo is seamless"), bYSeam);
 	TestTrue(TEXT("Z boundary halo is seamless"), bZSeam);
+	TestTrue(TEXT("zero shaping preserves v2 output"), bZeroIdentity);
+	TestTrue(TEXT("unrepresentable shaping frequency rejected"), bBadFrequency);
+	TestTrue(TEXT("shaped X halo is seamless"), bShapedX);
+	TestTrue(TEXT("shaped negative X halo is seamless"), bShapedNegative);
+	TestTrue(TEXT("shaped Y halo is seamless"), bShapedY);
+	TestTrue(TEXT("shaped Z halo is seamless"), bShapedZ);
 	TestTrue(TEXT("fixed-lattice result is repeatable"), bRepeat);
 	TestTrue(TEXT("unsupported graph fails validation"), bUnsupported);
 	TestTrue(TEXT("cancellation leaves output unchanged"), bCancelPreserved);

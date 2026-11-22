@@ -98,6 +98,7 @@ public:
 	FVoxelLandError EvaluateSamplesRaw(
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
+	bool IsM4Unlimited() const { return M4Unlimited.IsValid(); }
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 	// Immutable resolved values used by the versioned fixed-lattice control backend.
 	TConstArrayView<float> GetResolvedFloatParameters() const { return FloatParameters; }
@@ -131,6 +132,7 @@ private:
 	bool bM4NormalizeSlope = false;
 	FVoxelLandM4OverhangConfig M4Overhang;
 	int32 M4OverhangSeed = 0;
+	bool bM4FixedLatticeShaping = false;
 	FVoxelLandM4HeightDetailConfig M4HeightDetail;
 	int32 M4HeightDetailSeed = 0;
 	FVoxelLandZoneProfile Profile;

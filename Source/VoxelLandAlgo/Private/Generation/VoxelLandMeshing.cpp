@@ -85,8 +85,15 @@ EVoxelLandChunkClassification VoxelLandMeshing::Classify(const FVoxelLandChunkDa
 EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
 	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled)
 {
+	return BuildSurfaceNets(Chunk, VoxelSizeCm, Scratch, OutMesh, IsCancelled, false);
+}
+
+EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
+	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled, bool bUnlimitedM4)
+{
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SurfaceNets);
-	if (Chunk.Key.LOD != 0 || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate)
+	if (Chunk.Key.LOD != 0
+		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, VoxelSizeCm, bUnlimitedM4)
 		|| Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || VoxelSizeCm <= 0
 		|| !FMath::IsFinite(VoxelSizeCm * 34.f))
 	{

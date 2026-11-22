@@ -424,8 +424,8 @@ private:
 		}
 		TSharedPtr<FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh = MakeShared<FVoxelLandMeshData,
 			ESPMode::ThreadSafe>();
-		const EVoxelLandMeshResult Result = VoxelLandMeshing::BuildSurfaceNets(*Chunk, VoxelSize, Scratch, *Mesh,
-			[&Cancel] { return Cancel->Load(); });
+		const EVoxelLandMeshResult Result = VoxelLandMeshing::BuildSurfaceNets(
+			*Chunk, VoxelSize, Scratch, *Mesh, [&Cancel] { return Cancel->Load(); }, Generator.IsM4Unlimited());
 		if (Result != EVoxelLandMeshResult::Success)
 		{
 			Error = TEXT("Preview meshing failed or was cancelled.");

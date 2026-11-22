@@ -3,6 +3,7 @@
 #include "Generation/VoxelLandM4CurveLut.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
 #include "Generation/VoxelLandM4HeightPrepass.h"
+#include "Generation/VoxelLandM4Prepass.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -27,7 +28,7 @@ bool FVoxelLandM4StageInspectorTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const TArray<uint16> Continental = {100, 200, 300, 400};
+	const TArray<uint16> Continental = {0, 200, 300, 65535};
 	const TArray<uint16> Mountain = {500, 600, 700, 800};
 	const TArray<uint16> Peaks = {900, 1000, 1100, 1200};
 	FVoxelLandM4ErosionSettings Erosion;
@@ -45,14 +46,21 @@ bool FVoxelLandM4StageInspectorTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestEqual(TEXT("sample count"), Stats.SampleCount, 4);
-	TestEqual(TEXT("continental minimum"), int32(Stats.ContinentalMin), 100);
-	TestEqual(TEXT("continental maximum"), int32(Stats.ContinentalMax), 400);
+	TestEqual(TEXT("continental minimum"), int32(Stats.ContinentalMin), 0);
+	TestEqual(TEXT("continental maximum"), int32(Stats.ContinentalMax), 65535);
 	TestEqual(TEXT("mountain minimum"), int32(Stats.MountainMin), 500);
 	TestEqual(TEXT("mountain maximum"), int32(Stats.MountainMax), 800);
 	TestEqual(TEXT("peaks minimum"), int32(Stats.PeaksMin), 900);
 	TestEqual(TEXT("peaks maximum"), int32(Stats.PeaksMax), 1200);
 	TestEqual(TEXT("base minimum"), Stats.BaseHeightMinQ8, 136);
 	TestEqual(TEXT("base maximum"), Stats.BaseHeightMaxQ8, 136);
+	TestEqual(TEXT("continental sum"), Stats.ContinentalSum, uint64(66035));
+	TestEqual(TEXT("continental zero count"), Stats.ContinentalZeroCount, 1);
+	TestEqual(TEXT("continental upper endpoint count"), Stats.ContinentalMaxCount, 1);
+	TestEqual(TEXT("mountain sum"), Stats.MountainSum, uint64(2600));
+	TestEqual(TEXT("mountain endpoint count"), Stats.MountainMaxCount, 0);
+	TestEqual(TEXT("disabled erosion changes no samples"), Stats.ErosionChangedCount, 0);
+	TestEqual(TEXT("disabled erosion absolute difference"), Stats.ErosionAbsDeltaSumQ8, uint64(0));
 	auto SharedGrid = Grid;
 	Grid.Reset();
 	TestTrue(TEXT("shared grid retains statistics"), SharedGrid->GetStageStats(Stats));
@@ -64,6 +72,17 @@ bool FVoxelLandM4StageInspectorTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("cancelled prepass reports cancellation"), Cancelled.Code == EVoxelLandErrorCode::Cancelled);
 	TestTrue(TEXT("cancelled prepass preserves grid and statistics"), Grid == SharedGrid);
 	TestEqual(TEXT("cancelled prepass preserves hash"), Hash, OriginalHash);
+	// Disabled erosion checks cancellation before copying and once per copied
+	// row. The fourth check occurs in the first comparison row.
+	const TArray<int32> ComparisonHeights = {136, 136, 136, 136};
+	int32 ComparisonChecks = 0;
+	const FVoxelLandError ComparisonCancelled = VoxelLandM4Prepass::Generate(
+		Domain, ComparisonHeights, 42, FGuid(), 0, 0, Erosion, Grid, Hash,
+		[&ComparisonChecks] { return ++ComparisonChecks == 4; }, nullptr, &Stats);
+	TestTrue(TEXT("erosion statistics comparison cancellation reported"),
+		ComparisonCancelled.Code == EVoxelLandErrorCode::Cancelled);
+	TestTrue(TEXT("comparison cancellation preserves previous grid"), Grid == SharedGrid);
+	TestEqual(TEXT("comparison cancellation preserves previous hash"), Hash, OriginalHash);
 	const TArray<int32> Heights = {1, 2, 3, 4};
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Legacy;
 	if (TestTrue(TEXT("legacy grid created"), FVoxelLandM4HeightGrid::Create(0, 0, 1, 1, 100, Heights, Legacy)))

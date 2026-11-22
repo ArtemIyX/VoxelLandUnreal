@@ -120,6 +120,15 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 			Stats.MountainMax = FMath::Max(Stats.MountainMax, Mountain[Index]);
 			Stats.PeaksMin = FMath::Min(Stats.PeaksMin, Peaks[Index]);
 			Stats.PeaksMax = FMath::Max(Stats.PeaksMax, Peaks[Index]);
+			Stats.ContinentalSum += Continental[Index];
+			Stats.MountainSum += Mountain[Index];
+			Stats.PeaksSum += Peaks[Index];
+			Stats.ContinentalZeroCount += Continental[Index] == 0;
+			Stats.ContinentalMaxCount += Continental[Index] == MAX_uint16;
+			Stats.MountainZeroCount += Mountain[Index] == 0;
+			Stats.MountainMaxCount += Mountain[Index] == MAX_uint16;
+			Stats.PeaksZeroCount += Peaks[Index] == 0;
+			Stats.PeaksMaxCount += Peaks[Index] == MAX_uint16;
 			Stats.BaseHeightMinQ8 = FMath::Min(Stats.BaseHeightMinQ8, BaseHeights[Index]);
 			Stats.BaseHeightMaxQ8 = FMath::Max(Stats.BaseHeightMaxQ8, BaseHeights[Index]);
 		}

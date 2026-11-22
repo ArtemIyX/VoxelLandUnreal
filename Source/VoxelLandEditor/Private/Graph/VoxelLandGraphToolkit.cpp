@@ -3161,6 +3161,17 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 					S.SampleCount, uint32(S.ContinentalMin), uint32(S.ContinentalMax), uint32(S.MountainMin),
 					uint32(S.MountainMax), uint32(S.PeaksMin), uint32(S.PeaksMax), double(S.BaseHeightMinQ8) / 256.0,
 					double(S.BaseHeightMaxQ8) / 256.0);
+				M4StageDiagnostics += FString::Printf(
+					TEXT(
+						"\nControl mean (normalized uint16): continental %.1f, mountain %.1f, peaks %.1f; endpoint counts (0 / 65535): continental %d / %d, mountain %d / %d, peaks %d / %d."),
+					double(S.ContinentalSum) / S.SampleCount, double(S.MountainSum) / S.SampleCount,
+					double(S.PeaksSum) / S.SampleCount, S.ContinentalZeroCount, S.ContinentalMaxCount,
+					S.MountainZeroCount, S.MountainMaxCount, S.PeaksZeroCount, S.PeaksMaxCount);
+				M4StageDiagnostics += FString::Printf(
+					TEXT(
+						"\nErosion change: %d / %d grid samples changed; signed range %.2f to %.2f cm, total absolute change %.2f cm. This compares final global height with base height and includes unchanged samples in the range."),
+					S.ErosionChangedCount, S.SampleCount, double(S.ErosionDeltaMinQ8) / 256.0,
+					double(S.ErosionDeltaMaxQ8) / 256.0, double(S.ErosionAbsDeltaSumQ8) / 256.0);
 			}
 			else
 			{

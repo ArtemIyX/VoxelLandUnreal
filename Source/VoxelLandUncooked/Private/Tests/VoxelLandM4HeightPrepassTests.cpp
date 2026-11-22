@@ -163,6 +163,16 @@ bool FVoxelLandM4HeightPrepassErosionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("source loses 25 Q8 units"), Height, 75);
 	TestTrue(TEXT("eroded neighbor samples"), Grid->Sample(100, 0, Height));
 	TestEqual(TEXT("+X neighbor receives 25 Q8 units"), Height, 25);
+	FVoxelLandM4StageStats Stats;
+	if (TestTrue(TEXT("erosion observations available"), Grid->GetStageStats(Stats)))
+	{
+		TestEqual(TEXT("two samples changed"), Stats.ErosionChangedCount, 2);
+		TestEqual(TEXT("minimum signed difference"), Stats.ErosionDeltaMinQ8, int64(-25));
+		TestEqual(TEXT("maximum signed difference"), Stats.ErosionDeltaMaxQ8, int64(25));
+		TestEqual(TEXT("total absolute difference"), Stats.ErosionAbsDeltaSumQ8, uint64(50));
+		TestEqual(TEXT("zero input samples counted"), Stats.ContinentalZeroCount, 1);
+		TestEqual(TEXT("max input samples counted"), Stats.ContinentalMaxCount, 3);
+	}
 	return true;
 }
 #endif

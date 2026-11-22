@@ -14,6 +14,20 @@ struct FVoxelLandM4StageStats
 	uint16 MountainMax = 0;
 	uint16 PeaksMin = 0;
 	uint16 PeaksMax = 0;
+	uint64 ContinentalSum = 0;
+	uint64 MountainSum = 0;
+	uint64 PeaksSum = 0;
+	int32 ContinentalZeroCount = 0;
+	int32 ContinentalMaxCount = 0;
+	int32 MountainZeroCount = 0;
+	int32 MountainMaxCount = 0;
+	int32 PeaksZeroCount = 0;
+	int32 PeaksMaxCount = 0;
+	// Difference between final and base height, including unchanged samples.
+	int32 ErosionChangedCount = 0;
+	int64 ErosionDeltaMinQ8 = 0;
+	int64 ErosionDeltaMaxQ8 = 0;
+	uint64 ErosionAbsDeltaSumQ8 = 0;
 	int32 BaseHeightMinQ8 = 0;
 	int32 BaseHeightMaxQ8 = 0;
 };

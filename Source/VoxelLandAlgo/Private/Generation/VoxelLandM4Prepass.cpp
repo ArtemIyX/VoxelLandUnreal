@@ -109,6 +109,36 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 		}
 	}
 
+	// A bounded comparison of existing buffers; no image or per-cell diagnostics
+	// are retained. int32 differences fit int64 and at most 1,050,625 such
+	// differences fit uint64 even for arbitrary int32 inputs.
+	TOptional<FVoxelLandM4StageStats> Observed;
+	if (StageStats)
+	{
+		Observed = *StageStats;
+		Observed->ErosionChangedCount = 0;
+		Observed->ErosionDeltaMinQ8 = MAX_int64;
+		Observed->ErosionDeltaMaxQ8 = MIN_int64;
+		Observed->ErosionAbsDeltaSumQ8 = 0;
+		const int32 Width = Domain.CellsX + 1;
+		for (int32 Y = 0; Y <= Domain.CellsY; ++Y)
+		{
+			if (IsCancelled())
+			{
+				return M4PrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 erosion statistics cancelled"));
+			}
+			for (int32 X = 0; X < Width; ++X)
+			{
+				const int32 Index = Y * Width + X;
+				const int64 Delta = int64(FinalHeights[Index]) - BaseHeightsQ8[Index];
+				Observed->ErosionChangedCount += Delta != 0;
+				Observed->ErosionDeltaMinQ8 = FMath::Min(Observed->ErosionDeltaMinQ8, Delta);
+				Observed->ErosionDeltaMaxQ8 = FMath::Max(Observed->ErosionDeltaMaxQ8, Delta);
+				Observed->ErosionAbsDeltaSumQ8 += uint64(Delta < 0 ? -Delta : Delta);
+			}
+		}
+	}
+
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
 	bool bGridCancelled = false;
 	auto CheckGridCancellation = [&IsCancelled, &bGridCancelled]() {
@@ -116,7 +146,8 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 		return bGridCancelled;
 	};
 	if (!FVoxelLandM4HeightGrid::Create(Domain.OriginXCm, Domain.OriginYCm, Domain.CellsX, Domain.CellsY,
-			Domain.GridSpacingCm, FinalHeights, Grid, CheckGridCancellation, Lease, StageStats))
+			Domain.GridSpacingCm, FinalHeights, Grid, CheckGridCancellation, Lease,
+			Observed.IsSet() ? &Observed.GetValue() : nullptr))
 	{
 		return bGridCancelled ? M4PrepassError(EVoxelLandErrorCode::Cancelled, TEXT("M4 prepass cancelled"))
 							  : M4PrepassError(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 height grid"));

@@ -41,6 +41,7 @@ void AddHalfSlopeTile(TArray<FVoxelLandM5FloorTriangleCm>& Triangles, int64 X0, 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM5SlopedSupportTest, "VoxelLand.M5.SlopedFloorSupport.Analytic", M5SlopedSupportFlags)
+
 bool FVoxelLandM5SlopedSupportTest::RunTest(const FString& Parameters)
 {
 	using VoxelLand::M5::SlopedFloorSupport::CheckCoplanarRectangularSupport;
@@ -78,6 +79,7 @@ bool FVoxelLandM5SlopedSupportTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM5SlopedSupportBoundaryTest, "VoxelLand.M5.SlopedFloorSupport.Boundaries", M5SlopedSupportFlags)
+
 bool FVoxelLandM5SlopedSupportBoundaryTest::RunTest(const FString& Parameters)
 {
 	using VoxelLand::M5::SlopedFloorSupport::CheckCoplanarRectangularSupport;

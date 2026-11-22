@@ -26,8 +26,9 @@ FVoxelLandProgramDraft M4UnlimitedDetailControl(bool bX, float Constant)
 	Multiply.B = 1;
 	Multiply.Dst = 0;
 	Store.Op = EVoxelLandOpcode::StoreDensity;
-	Draft.Instructions = bX ? TArray<FVoxelLandInstruction>({Input, Load, Multiply, Store})
-							: TArray<FVoxelLandInstruction>({Load, Store});
+	Draft.Instructions = bX
+		                     ? TArray<FVoxelLandInstruction>({Input, Load, Multiply, Store})
+		                     : TArray<FVoxelLandInstruction>({Load, Store});
 	return Draft;
 }
 
@@ -87,6 +88,7 @@ bool M4UnlimitedDetailOverlap(const FVoxelLandChunkData& Left, const FVoxelLandC
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4UnlimitedDetailChunkTest, "VoxelLand.M4.HeightDetail.Unlimited", M4UnlimitedDetailFlags)
+
 bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 {
 	bool Overlap[2][2][3] = {};
@@ -102,7 +104,7 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 		{
 			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 			if (FVoxelLandProgram::Validate(
-					M4UnlimitedDetailControl(I == 0, I == 0 ? 0.0001f : float(I) * 0.2f), Program))
+				M4UnlimitedDetailControl(I == 0, I == 0 ? 0.0001f : float(I) * 0.2f), Program))
 			{
 				return false;
 			}
@@ -151,8 +153,8 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 				Config.bNormalizeSlope = Slope != 0;
 				Config.HeightDetail = Detail;
 				auto Generate = [&](const FVoxelLandChunkKey& K,
-									TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& Out,
-									TFunctionRef<bool()> Cancel) {
+					TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& Out,
+					TFunctionRef<bool()> Cancel) {
 					return VoxelLandM4Unlimited::GenerateChunk(Final, Config, K, Out, Cancel);
 				};
 				TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Base, Again;
@@ -200,13 +202,13 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 				InvalidDetail.HeightDetail.bEnabled = false;
 				InvalidDetail.HeightDetail.AlgorithmVersion = 2;
 				DisabledInvalidRejected &= bool(FVoxelLandGenerator::CreateM4Unlimited(Final, InvalidDetail, Rejected))
-										&& Rejected == LocalGenerator;
+					&& Rejected == LocalGenerator;
 				UnsafeControlRejected &=
 					bool(FVoxelLandGenerator::CreateM4Unlimited(Final, Nested, Rejected)) && Rejected == LocalGenerator;
 				TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> PriorIntegrated = IntegratedChunk;
 				WrongWorkerRejected &= LocalGenerator->GenerateChunk(Key, *Workers[0], PriorIntegrated).Code
-										== EVoxelLandErrorCode::InvalidContext
-									&& PriorIntegrated == IntegratedChunk;
+					== EVoxelLandErrorCode::InvalidContext
+					&& PriorIntegrated == IntegratedChunk;
 				if (!Smooth && !Slope)
 				{
 					// A dedicated thread cannot match the scheduler worker's owner.
@@ -214,16 +216,16 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 						Async(EAsyncExecution::Thread, [&LocalGenerator, &LocalWorker, &Key, &IntegratedChunk]() {
 							TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Prior = IntegratedChunk;
 							return LocalGenerator->GenerateChunk(Key, *LocalWorker, Prior).Code
-									== EVoxelLandErrorCode::InvalidContext
-								&& Prior == IntegratedChunk;
+							       == EVoxelLandErrorCode::InvalidContext
+							       && Prior == IntegratedChunk;
 						}).Get();
 				}
 				ExplicitFilterRejected &= LocalGenerator
-												  ->GenerateSmoothedChunkCancellable(Key, *LocalWorker, true, 0.5f,
-													  PriorIntegrated, [] { return false; })
-												  .Code
-										   == EVoxelLandErrorCode::InvalidContext
-									   && PriorIntegrated == IntegratedChunk;
+				                          ->GenerateSmoothedChunkCancellable(Key, *LocalWorker, true, 0.5f,
+					                          PriorIntegrated, [] { return false; })
+				                          .Code
+					== EVoxelLandErrorCode::InvalidContext
+					&& PriorIntegrated == IntegratedChunk;
 				for (int32 Axis = 0; Axis < 3; ++Axis)
 				{
 					FVoxelLandChunkKey Neighbor = Key;
@@ -282,7 +284,7 @@ bool FVoxelLandM4UnlimitedDetailChunkTest::RunTest(const FString& Parameters)
 			for (int32 Axis = 0; Axis < 3; ++Axis)
 			{
 				TestTrue(FString::Printf(
-							 TEXT("shared negative-coordinate plane, smooth %d slope %d axis %d"), Smooth, Slope, Axis),
+						TEXT("shared negative-coordinate plane, smooth %d slope %d axis %d"), Smooth, Slope, Axis),
 					Overlap[Smooth][Slope][Axis]);
 			}
 		}

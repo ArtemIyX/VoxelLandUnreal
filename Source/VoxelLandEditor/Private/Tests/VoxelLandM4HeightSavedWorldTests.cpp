@@ -92,10 +92,10 @@ bool FVoxelLandM4HeightSavedTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	bool bSaved = false, bRestored = false, bKeyEqual = false, bTamper = false, bAtomic = false;
-	bool bLegacy = false, bLegacyRejectNewStage = false;
+	bool bUnknownVersion = false;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4SavedWorld Saved;
-		bSaved = VoxelLandM4SavedWorld::Capture(Snapshot, Saved, Error) && Saved.Identity.FormatVersion == 4;
+		bSaved = VoxelLandM4SavedWorld::Capture(Snapshot, Saved, Error) && Saved.Identity.FormatVersion == 1;
 		if (!bSaved)
 		{
 			return;
@@ -124,25 +124,15 @@ bool FVoxelLandM4HeightSavedTest::RunTest(const FString& Parameters)
 		Restored.Seed = 4321;
 		bTamper = !VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error);
 		bAtomic = Restored.Seed == 4321;
-		FVoxelLandM4WorldSnapshot Legacy = Snapshot;
-		Legacy.HeightStage = FVoxelLandM4HeightStageManifest();
-		bLegacy = true;
-		for (int32 Version = 1; Version <= 3; ++Version)
-		{
-			FVoxelLandM4IdentityRecord Old;
-			bLegacy &= VoxelLandM4WorldIdentity::CaptureVersion(Legacy, Version, Old, Error)
-					&& VoxelLandM4WorldIdentity::Matches(Old, Legacy, Error);
-		}
-		FVoxelLandM4IdentityRecord Old;
-		bLegacyRejectNewStage = !VoxelLandM4WorldIdentity::CaptureVersion(Snapshot, 3, Old, Error);
+		FVoxelLandM4IdentityRecord Unsupported;
+		bUnknownVersion = !VoxelLandM4WorldIdentity::CaptureVersion(Snapshot, 2, Unsupported, Error);
 	}).Get();
-	TestTrue(FString::Printf(TEXT("graph-height identity saves as v4: %s"), *Error), bSaved);
+	TestTrue(FString::Printf(TEXT("graph-height identity saves in current format: %s"), *Error), bSaved);
 	TestTrue(TEXT("graph-height manifest survives serialized restore"), bRestored);
 	TestTrue(TEXT("restored height graph retains prepass key"), bKeyEqual);
 	TestTrue(TEXT("corrupt graph-height manifest rejected"), bTamper);
 	TestTrue(TEXT("failed manifest restore leaves output intact"), bAtomic);
-	TestTrue(TEXT("stage-zero identities retain v1-v3 matching"), bLegacy);
-	TestTrue(TEXT("old identity versions cannot omit a graph-height stage"), bLegacyRejectNewStage);
+	TestTrue(TEXT("unsupported identity version is rejected"), bUnknownVersion);
 	return true;
 }
 #endif

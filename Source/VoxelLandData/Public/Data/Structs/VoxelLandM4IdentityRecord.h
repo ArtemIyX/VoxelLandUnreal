@@ -10,8 +10,7 @@ struct VOXELLANDDATA_API FVoxelLandM4IdentityRecord
 {
 	GENERATED_BODY()
 	FVoxelLandM4IdentityRecord();
-	// Keep the default at 1 so older serialized records without this field do not
-	// silently acquire new semantics. New captures explicitly write version 3.
+	// Current descriptor encoding. Other versions are rejected.
 	UPROPERTY()
 	int32 FormatVersion = 1;
 	UPROPERTY()

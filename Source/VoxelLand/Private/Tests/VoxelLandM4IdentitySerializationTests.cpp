@@ -17,8 +17,8 @@
 
 namespace
 {
-// Independently encodes the historical outer envelope, without FCanonicalWriter
-// or either extracted serializer. The prepass encoder itself is unchanged.
+// Independently encodes the current world envelope, without FCanonicalWriter
+// or the production world serializer. This fixture has no overrides.
 TArray<uint8> M4SerializationReference(const FVoxelLandM4WorldSnapshot& S, int32 Version, const TArray<uint8>& Prepass,
 	const TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> (&Programs)[3])
 {
@@ -55,7 +55,7 @@ TArray<uint8> M4SerializationReference(const FVoxelLandM4WorldSnapshot& S, int32
 	U8('V');
 	U8('L');
 	U8('W');
-	U8('I');
+	U8('5');
 	U32(uint32(Version));
 	U32(1);
 	U32(1);
@@ -97,29 +97,22 @@ TArray<uint8> M4SerializationReference(const FVoxelLandM4WorldSnapshot& S, int32
 		Guid(S.HeightDetail.NodeId);
 		U32(S.HeightDetail.Salt);
 	}
-	if (Version >= 3)
+	const FVoxelLandM4ControlSnapshot* Channels[] = {&S.Continental, &S.Mountain, &S.Peaks};
+	for (const FVoxelLandM4ControlSnapshot* Channel : Channels)
 	{
-		U64(uint64(S.Continental.Payload.SourceFingerprint));
-		U64(uint64(S.Mountain.Payload.SourceFingerprint));
-		U64(uint64(S.Peaks.Payload.SourceFingerprint));
+		U64(uint64(Channel->Payload.SourceFingerprint));
+		// This fixture has no authored overrides in any channel.
+		U32(0);
 	}
-	if (Version >= 4)
-	{
-		U32(uint32(S.HeightStage.Version));
-		Guid(S.HeightStage.OutputNodeId);
-		Guid(S.HeightStage.ContinentalInputId);
-		Guid(S.HeightStage.MountainInputId);
-		Guid(S.HeightStage.PeaksInputId);
-	}
-	if (Version >= 5)
-	{
-		U8(uint8(S.UnlimitedBackend));
-		U32(1);
-	}
-	if (Version >= 6)
-	{
-		U32(1);
-	}
+	U32(uint32(S.HeightStage.Version));
+	Guid(S.HeightStage.OutputNodeId);
+	Guid(S.HeightStage.ContinentalInputId);
+	Guid(S.HeightStage.MountainInputId);
+	Guid(S.HeightStage.PeaksInputId);
+	U8(uint8(S.UnlimitedBackend));
+	U32(1);
+	U32(1);
+
 	return Bytes;
 }
 }
@@ -129,10 +122,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4IdentitySerializationTest, "VoxelLa
 
 bool FVoxelLandM4IdentitySerializationTest::RunTest(const FString& Parameters)
 {
-	bool Matches[6] = {};
-	bool ReferenceMatches[6] = {};
-	bool HeightStageMatches[3] = {};
+	bool Matches[2] = {};
+	bool ReferenceMatches[2] = {};
+	bool HeightStageMatches[2] = {};
 	bool bFailureAtomic = false;
+	bool bCurrentMagic[2] = {};
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4WorldSnapshot S;
@@ -182,51 +176,42 @@ bool FVoxelLandM4IdentitySerializationTest::RunTest(const FString& Parameters)
 			const uint64 Hash = FXxHash64::HashBuffer(CurveWriter.Bytes.GetData(), CurveWriter.Bytes.Num()).Hash;
 			FMemory::Memcpy(&Channel.CookedCurve.SamplesHash, &Hash, sizeof(Hash));
 		}
-		for (int32 Version = 1; Version <= 6; ++Version)
+		for (int32 Mode = 0; Mode < 2; ++Mode)
 		{
-			S.Domain.Mode = Version >= 5 ? EVoxelLandM4DomainMode::Unlimited : EVoxelLandM4DomainMode::Finite;
+			S.Domain.Mode = Mode == 0 ? EVoxelLandM4DomainMode::Finite : EVoxelLandM4DomainMode::Unlimited;
 			S.UnlimitedBackend =
-				Version >= 5 ? EVoxelLandM4UnlimitedBackend::FixedLattice : EVoxelLandM4UnlimitedBackend::LegacyFloat;
-			S.bOverhangEnabled = Version == 6;
-			S.OverhangAmplitudeQ8 = Version == 6 ? 256 : 0;
+				Mode == 0 ? EVoxelLandM4UnlimitedBackend::LegacyFloat : EVoxelLandM4UnlimitedBackend::FixedLattice;
+			S.bOverhangEnabled = Mode != 0;
+			S.OverhangAmplitudeQ8 = Mode != 0 ? 256 : 0;
 			FVoxelLandM4IdentityRecord Captured;
-			if (!VoxelLandM4WorldIdentity::CaptureVersion(S, Version, Captured, Error))
+			if (!VoxelLandM4WorldIdentity::Capture(S, Captured, Error))
 			{
 				return;
 			}
-			FVoxelLandM4WorldSnapshot Prepass = S;
-			if (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
-			{
-				Prepass.Domain.Mode = EVoxelLandM4DomainMode::Finite;
-				Prepass.Domain.bGlobalErosion = false;
-				Prepass.Domain.OriginXCm = 0;
-				Prepass.Domain.OriginYCm = 0;
-				Prepass.Domain.CellsX = 1;
-				Prepass.Domain.CellsY = 1;
-				Prepass.Domain.GridSpacingCm = 1;
-			}
 			TArray<uint8> Candidate;
-			if (VoxelLandM4PrepassIdentity::BuildCandidate(
-					Prepass, *Programs[0], *Programs[1], *Programs[2], Candidate, Version == 1 ? 1u : 2u))
+			if (VoxelLandM4PrepassIdentity::BuildWorldInputs(S, *Programs[0], *Programs[1], *Programs[2], Candidate))
 			{
 				return;
 			}
 			FVoxelLandM4IdentityRecord Direct;
 			if (!VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(
-					S, Version, *Programs[0], *Programs[1], *Programs[2], Candidate, Direct, Error))
+					S, 1, *Programs[0], *Programs[1], *Programs[2], Candidate, Direct, Error))
 			{
 				return;
 			}
-			Matches[Version - 1] = Captured.FormatVersion == Direct.FormatVersion
-								&& Captured.CanonicalBytes == Direct.CanonicalBytes
-								&& Captured.FingerprintBits == Direct.FingerprintBits;
-			const TArray<uint8> Reference = M4SerializationReference(S, Version, Candidate, Programs);
+			const uint8 CurrentPrefix[] = {'V', 'L', 'W', '5', 1, 0, 0, 0, 1, 0, 0, 0};
+			bCurrentMagic[Mode] =
+				Captured.CanonicalBytes.Num() >= UE_ARRAY_COUNT(CurrentPrefix)
+				&& FMemory::Memcmp(Captured.CanonicalBytes.GetData(), CurrentPrefix, sizeof(CurrentPrefix)) == 0;
+			Matches[Mode] = Captured.FormatVersion == 1 && Captured.CanonicalBytes == Direct.CanonicalBytes
+						 && Captured.FingerprintBits == Direct.FingerprintBits;
+			const TArray<uint8> Reference = M4SerializationReference(S, 1, Candidate, Programs);
 			const uint64 ExpectedHash = FXxHash64::HashBuffer(Reference.GetData(), Reference.Num()).Hash;
 			int64 ExpectedBits = 0;
 			FMemory::Memcpy(&ExpectedBits, &ExpectedHash, sizeof(ExpectedBits));
-			ReferenceMatches[Version - 1] =
-				Captured.CanonicalBytes == Reference && Captured.FingerprintBits == ExpectedBits;
+			ReferenceMatches[Mode] = Captured.CanonicalBytes == Reference && Captured.FingerprintBits == ExpectedBits;
 		}
+
 		FVoxelLandM4IdentityRecord Retained;
 		Retained.FormatVersion = 37;
 		Retained.CanonicalBytes = {3, 9, 5};
@@ -256,56 +241,40 @@ bool FVoxelLandM4IdentitySerializationTest::RunTest(const FString& Parameters)
 				return;
 			}
 		}
-		for (int32 Version = 4; Version <= 6; ++Version)
+		for (int32 Mode = 0; Mode < 2; ++Mode)
 		{
-			S.Domain.Mode = Version >= 5 ? EVoxelLandM4DomainMode::Unlimited : EVoxelLandM4DomainMode::Finite;
+			S.Domain.Mode = Mode == 0 ? EVoxelLandM4DomainMode::Finite : EVoxelLandM4DomainMode::Unlimited;
 			S.UnlimitedBackend =
-				Version >= 5 ? EVoxelLandM4UnlimitedBackend::FixedLattice : EVoxelLandM4UnlimitedBackend::LegacyFloat;
-			S.bOverhangEnabled = Version == 6;
-			S.OverhangAmplitudeQ8 = Version == 6 ? 256 : 0;
+				Mode == 0 ? EVoxelLandM4UnlimitedBackend::LegacyFloat : EVoxelLandM4UnlimitedBackend::FixedLattice;
+			S.bOverhangEnabled = Mode != 0;
+			S.OverhangAmplitudeQ8 = Mode != 0 ? 256 : 0;
 			FVoxelLandM4IdentityRecord Captured;
-			if (!VoxelLandM4WorldIdentity::CaptureVersion(S, Version, Captured, Error))
+			if (!VoxelLandM4WorldIdentity::Capture(S, Captured, Error))
 			{
 				return;
-			}
-			FVoxelLandM4WorldSnapshot Prepass = S;
-			if (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
-			{
-				Prepass.Domain.Mode = EVoxelLandM4DomainMode::Finite;
-				Prepass.Domain.bGlobalErosion = false;
-				Prepass.Domain.OriginXCm = 0;
-				Prepass.Domain.OriginYCm = 0;
-				Prepass.Domain.CellsX = 1;
-				Prepass.Domain.CellsY = 1;
-				Prepass.Domain.GridSpacingCm = 1;
 			}
 			TArray<uint8> Candidate;
-			if (VoxelLandM4PrepassIdentity::BuildCandidate(
-					Prepass, *Programs[0], *Programs[1], *Programs[2], Candidate, 3u)
-				|| Candidate.Num() < 16 || Candidate[4] != 3 || Candidate[12] != 1)
+			if (VoxelLandM4PrepassIdentity::BuildWorldInputs(S, *Programs[0], *Programs[1], *Programs[2], Candidate)
+				|| Candidate.Num() < 17 || Candidate[4] != 1 || Candidate[12] != 1)
 			{
 				return;
 			}
-			const TArray<uint8> Reference = M4SerializationReference(S, Version, Candidate, Programs);
+			const TArray<uint8> Reference = M4SerializationReference(S, 1, Candidate, Programs);
 			const uint64 Hash = FXxHash64::HashBuffer(Reference.GetData(), Reference.Num()).Hash;
 			int64 HashBits = 0;
 			FMemory::Memcpy(&HashBits, &Hash, sizeof(HashBits));
-			HeightStageMatches[Version - 4] =
-				Captured.CanonicalBytes == Reference && Captured.FingerprintBits == HashBits;
+			HeightStageMatches[Mode] = Captured.CanonicalBytes == Reference && Captured.FingerprintBits == HashBits;
 		}
 	}).Wait();
-	for (int32 Version = 1; Version <= 6; ++Version)
+	for (int32 Mode = 0; Mode < 2; ++Mode)
 	{
-		TestTrue(*FString::Printf(TEXT("version %d shared encoder matches capture: %s"), Version, *Error),
-			Matches[Version - 1]);
-		TestTrue(*FString::Printf(TEXT("version %d matches independent envelope: %s"), Version, *Error),
-			ReferenceMatches[Version - 1]);
+		TestTrue(*FString::Printf(TEXT("mode %d has the fixed current header"), Mode), bCurrentMagic[Mode]);
+		TestTrue(*FString::Printf(TEXT("mode %d shared encoder matches capture: %s"), Mode, *Error), Matches[Mode]);
+		TestTrue(
+			*FString::Printf(TEXT("mode %d matches independent envelope: %s"), Mode, *Error), ReferenceMatches[Mode]);
+		TestTrue(*FString::Printf(TEXT("mode %d height-stage identity: %s"), Mode, *Error), HeightStageMatches[Mode]);
 	}
-	for (int32 Version = 4; Version <= 6; ++Version)
-	{
-		TestTrue(*FString::Printf(TEXT("version %d height-stage prepass v3: %s"), Version, *Error),
-			HeightStageMatches[Version - 4]);
-	}
+
 	TestTrue(TEXT("invalid version leaves previous identity unchanged"), bFailureAtomic);
 	return true;
 }

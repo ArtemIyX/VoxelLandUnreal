@@ -247,12 +247,12 @@ bool FVoxelLandM4HeightOutputTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	FVoxelLandM4IdentityRecord Identity;
-	bool bLegacyRejected = false;
+	bool bUnknownVersionRejected = false;
 	int16 FiniteDensity = 0;
 	const bool bFinite = Async(EAsyncExecution::ThreadPool, [&] {
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 		FVoxelLandM4IdentityRecord Old;
-		bLegacyRejected = !VoxelLandM4WorldIdentity::CaptureVersion(Snapshot, 3, Old, Error);
+		bUnknownVersionRejected = !VoxelLandM4WorldIdentity::CaptureVersion(Snapshot, 2, Old, Error);
 		TUniquePtr<FVoxelLandWorkerContext> Worker;
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
 		FVoxelLandChunkKey Key;
@@ -269,8 +269,8 @@ bool FVoxelLandM4HeightOutputTest::RunTest(const FString& Parameters)
 	}).Get();
 	TestTrue(TEXT("height output runs in finite mode"), bFinite);
 	TestEqual(TEXT("height combines all three graph inputs through curves"), int32(FiniteDensity), -1536);
-	TestTrue(TEXT("old identity cannot silently ignore new stage"), bLegacyRejected);
-	TestEqual(TEXT("new stage uses world identity version 4"), Identity.FormatVersion, 4);
+	TestTrue(TEXT("unsupported identity version is rejected"), bUnknownVersionRejected);
+	TestEqual(TEXT("height stage uses current world identity"), Identity.FormatVersion, 1);
 	Lease.Reset();
 	Config->bUnlimited = true;
 	if (!TestTrue(TEXT("height output captures unlimited mode"), Config->CaptureSnapshot(Snapshot, Error)))

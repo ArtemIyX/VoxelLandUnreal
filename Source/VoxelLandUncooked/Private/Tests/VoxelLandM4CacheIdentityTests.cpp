@@ -20,8 +20,8 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 	bool bSuccess = false, bStable = false, bIgnoresDownstream = false;
 	bool bSeedChanged = false, bCurveChanged = false, bProgramChanged = false, bDomainChanged = false;
 	bool bInvalidPreserves = false, bErosionChanged = false;
-	bool bCanonicalOrder = false, bLegacyOrder = false, bUnknownVersion = false;
-	bool bAutomaticStageVersion = false, bExplicitWrongVersion = false;
+	bool bCanonicalOrder = false, bUnknownVersion = false;
+	bool bCurrentStageEncoding = false, bExplicitWrongVersion = false;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandProgramDraft Draft;
 		Draft.RegisterCount = 1;
@@ -62,17 +62,11 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 		};
 		bSuccess = !Build(Base) && !Base.IsEmpty();
 		bStable = !Build(Other) && Other == Base;
-		TArray<uint8> Legacy, ReorderedLegacy;
-		const bool bLegacyBuilt =
-			!VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Legacy, 1);
 		Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
 		bCanonicalOrder = !Build(Other) && Other == Base;
-		bLegacyOrder = bLegacyBuilt
-					&& !VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, ReorderedLegacy, 1)
-					&& Legacy != ReorderedLegacy;
 		TArray<uint8> UnknownSentinel = {42};
 		bUnknownVersion =
-			bool(VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, UnknownSentinel, 3))
+			bool(VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, UnknownSentinel, 2))
 			&& UnknownSentinel.Num() == 1 && UnknownSentinel[0] == 42;
 		Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
 		S.bOverhangEnabled = true;
@@ -117,9 +111,9 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 			Channels[Index]->Source.Nodes.Add(Output);
 		}
 		TArray<uint8> Automatic, Explicit;
-		bAutomaticStageVersion =
+		bCurrentStageEncoding =
 			!Build(Automatic)
-			&& !VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Explicit, 3)
+			&& !VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Explicit, 1)
 			&& Automatic == Explicit;
 		bExplicitWrongVersion =
 			bool(VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Explicit, 2));
@@ -129,10 +123,9 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 	}).Get();
 	TestTrue(TEXT("candidate can be built from validated programs"), bSuccess);
 	TestTrue(TEXT("same inputs yield exact same bytes"), bStable);
-	TestTrue(TEXT("v2 candidate ignores override order"), bCanonicalOrder);
-	TestTrue(TEXT("v1 candidate preserves order sensitivity"), bLegacyOrder);
+	TestTrue(TEXT("candidate ignores override order"), bCanonicalOrder);
 	TestTrue(TEXT("unknown version leaves output unchanged"), bUnknownVersion);
-	TestTrue(TEXT("default encoding supports graph height stages"), bAutomaticStageVersion);
+	TestTrue(TEXT("current encoding supports graph height stages"), bCurrentStageEncoding);
 	TestTrue(TEXT("explicit incompatible encoding is rejected"), bExplicitWrongVersion);
 	TestTrue(TEXT("downstream overhang and smoothing do not alter prepass identity"), bIgnoresDownstream);
 	TestTrue(TEXT("seed changes identity"), bSeedChanged);

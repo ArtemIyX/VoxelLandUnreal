@@ -26,10 +26,10 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 {
 	bool bBuilt = false, bStable = false, bSeed = false, bShape = false, bDetail = false;
 	bool bMaterial = false, bUnlimited = false, bVersion = false, bCorrupt = false, bRoundTrip = false;
-	bool bInvalidOverride = false, bLegacyExact = false, bLegacyMatch = false;
+	bool bInvalidOverride = false;
 	bool bInvalidBake = false, bFixedIdentity = false, bFixedShapingIdentity = false, bZeroShapingIdentity = false;
-	bool bCanonicalReordered = false, bLegacyOrderSensitive = false;
-	bool bSourceBound = false, bV2Compatible = false, bPrepassReused = false;
+	bool bCanonicalReordered = false;
+	bool bSourceBound = false, bPrepassReused = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4WorldSnapshot S;
@@ -100,36 +100,14 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 			return;
 		}
 		bStable = VoxelLandM4WorldIdentity::Matches(Record, S, Error);
-		// In sorted order, the v1 and v2 payloads differ only in the two
-		// little-endian encoding fields. This reconstructs the legacy v1
-		// envelope independently of the compatibility capture function.
-		FVoxelLandM4IdentityRecord Version2;
-		const bool bVersion2Captured = VoxelLandM4WorldIdentity::CaptureVersion(S, 2, Version2, Error);
-		FVoxelLandM4IdentityRecord LegacyFixture = Version2;
-		if (bVersion2Captured && LegacyFixture.CanonicalBytes.Num() > 41 && LegacyFixture.CanonicalBytes[4] == 2
-			&& LegacyFixture.CanonicalBytes[37] == 2)
-		{
-			LegacyFixture.FormatVersion = 1;
-			LegacyFixture.CanonicalBytes[4] = 1;
-			LegacyFixture.CanonicalBytes[37] = 1;
-			const uint64 Hash =
-				FXxHash64::HashBuffer(LegacyFixture.CanonicalBytes.GetData(), LegacyFixture.CanonicalBytes.Num()).Hash;
-			FMemory::Memcpy(&LegacyFixture.FingerprintBits, &Hash, sizeof(Hash));
-			FVoxelLandM4IdentityRecord ActualLegacy;
-			bLegacyExact = VoxelLandM4WorldIdentity::CaptureVersion(S, 1, ActualLegacy, Error)
-						&& ActualLegacy.CanonicalBytes == LegacyFixture.CanonicalBytes;
-			bLegacyMatch = VoxelLandM4WorldIdentity::Matches(LegacyFixture, S, Error);
-			Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
-			bCanonicalReordered = VoxelLandM4WorldIdentity::Matches(Record, S, Error);
-			bLegacyOrderSensitive = !VoxelLandM4WorldIdentity::Matches(LegacyFixture, S, Error);
-			Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
-		}
+		Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
+		bCanonicalReordered = VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+		Swap(S.Continental.Overrides[0], S.Continental.Overrides[1]);
 		// Repack a graph after adding an unreachable node. Its compiled program
 		// and prepass dependencies remain the same, but source identity differs.
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> OriginalProgram;
 		TArray<uint8> PrepassBefore, PrepassAfter;
-		if (bVersion2Captured
-			&& FVoxelLandProgramCodec::Load(S.Continental.Source, S.Continental.Payload, OriginalProgram, Error)
+		if (FVoxelLandProgramCodec::Load(S.Continental.Source, S.Continental.Payload, OriginalProgram, Error)
 			&& !VoxelLandM4PrepassIdentity::BuildCandidate(
 				S, *OriginalProgram, *OriginalProgram, *OriginalProgram, PrepassBefore))
 		{
@@ -144,7 +122,6 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 			{
 				S.Continental.Payload = ChangedPayload;
 				bSourceBound = !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
-				bV2Compatible = VoxelLandM4WorldIdentity::Matches(Version2, S, Error);
 				bPrepassReused = !VoxelLandM4PrepassIdentity::BuildCandidate(
 									 S, *OriginalProgram, *OriginalProgram, *OriginalProgram, PrepassAfter)
 							  && PrepassBefore == PrepassAfter;
@@ -203,19 +180,19 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 				  && !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
 		S.UnlimitedBackend = EVoxelLandM4UnlimitedBackend::FixedLattice;
 		FVoxelLandM4IdentityRecord Fixed, WrongVersion;
-		bFixedIdentity = VoxelLandM4WorldIdentity::Capture(S, Fixed, Error) && Fixed.FormatVersion == 5
+		bFixedIdentity = VoxelLandM4WorldIdentity::Capture(S, Fixed, Error) && Fixed.FormatVersion == 1
 					  && VoxelLandM4WorldIdentity::Matches(Fixed, S, Error)
 					  && !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error)
-					  && !VoxelLandM4WorldIdentity::CaptureVersion(S, 4, WrongVersion, Error);
+					  && !VoxelLandM4WorldIdentity::CaptureVersion(S, 2, WrongVersion, Error);
 		S.bOverhangEnabled = true;
 		S.OverhangAmplitudeQ8 = 0;
 		FVoxelLandM4IdentityRecord ZeroShape;
-		bZeroShapingIdentity = VoxelLandM4WorldIdentity::Capture(S, ZeroShape, Error) && ZeroShape.FormatVersion == 5;
+		bZeroShapingIdentity = VoxelLandM4WorldIdentity::Capture(S, ZeroShape, Error) && ZeroShape.FormatVersion == 1;
 		S.OverhangAmplitudeQ8 = 128000;
 		FVoxelLandM4IdentityRecord Shaped, OldShaped;
-		bFixedShapingIdentity = VoxelLandM4WorldIdentity::Capture(S, Shaped, Error) && Shaped.FormatVersion == 6
+		bFixedShapingIdentity = VoxelLandM4WorldIdentity::Capture(S, Shaped, Error) && Shaped.FormatVersion == 1
 							 && VoxelLandM4WorldIdentity::Matches(Shaped, S, Error)
-							 && !VoxelLandM4WorldIdentity::CaptureVersion(S, 5, OldShaped, Error);
+							 && !VoxelLandM4WorldIdentity::CaptureVersion(S, 2, OldShaped, Error);
 		S.bOverhangEnabled = false;
 		S.OverhangAmplitudeQ8 = 0;
 		S.UnlimitedBackend = EVoxelLandM4UnlimitedBackend::LegacyFloat;
@@ -223,17 +200,16 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 		Unlimited.FormatVersion = 999;
 		bVersion = !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error);
 		Unlimited.FormatVersion = SupportedVersion;
-		Unlimited.CanonicalBytes[0] ^= 1;
-		bCorrupt = !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error);
+		if (!Unlimited.CanonicalBytes.IsEmpty())
+		{
+			Unlimited.CanonicalBytes[0] ^= 1;
+			bCorrupt = !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error);
+		}
 	}).Get();
 	TestTrue(FString::Printf(TEXT("identity captures: %s"), *Error), bBuilt);
 	TestTrue(TEXT("identical inputs match"), bStable);
-	TestTrue(TEXT("v1 bytes preserve legacy encoding"), bLegacyExact);
-	TestTrue(TEXT("legacy identity still matches"), bLegacyMatch);
-	TestTrue(TEXT("v2 identity ignores override order"), bCanonicalReordered);
-	TestTrue(TEXT("v1 identity retains original override order"), bLegacyOrderSensitive);
-	TestTrue(TEXT("v3 full identity binds validated source changes"), bSourceBound);
-	TestTrue(TEXT("v2 identity retains legacy source-independent semantics"), bV2Compatible);
+	TestTrue(TEXT("current identity ignores override order"), bCanonicalReordered);
+	TestTrue(TEXT("full identity binds validated source changes"), bSourceBound);
 	TestTrue(TEXT("unreachable source edit retains the upstream prepass key"), bPrepassReused);
 	TestTrue(TEXT("capture and matching reject unknown overrides"), bInvalidOverride);
 	TestTrue(TEXT("capture and matching reject a mismatched curve despite its updated hash"), bInvalidBake);
@@ -242,9 +218,9 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("slope changes reject reuse"), bShape);
 	TestTrue(TEXT("height detail changes reject reuse"), bDetail);
 	TestTrue(TEXT("material does not affect identity"), bMaterial);
-	TestTrue(TEXT("fixed lattice has distinct versioned identity"), bFixedIdentity);
-	TestTrue(TEXT("zero fixed shaping remains identity version 5"), bZeroShapingIdentity);
-	TestTrue(TEXT("nonzero fixed shaping requires identity version 6"), bFixedShapingIdentity);
+	TestTrue(TEXT("fixed lattice has distinct identity"), bFixedIdentity);
+	TestTrue(TEXT("zero fixed shaping uses current identity"), bZeroShapingIdentity);
+	TestTrue(TEXT("nonzero fixed shaping uses current identity"), bFixedShapingIdentity);
 	TestTrue(TEXT("unlimited identity is distinct and matches itself"), bUnlimited);
 	TestTrue(TEXT("unknown record versions fail"), bVersion);
 	TestTrue(TEXT("corrupt bytes fail"), bCorrupt);

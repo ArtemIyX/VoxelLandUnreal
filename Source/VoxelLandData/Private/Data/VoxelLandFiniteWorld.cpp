@@ -1,0 +1,53 @@
+#include "Data/Assets/VoxelLandFiniteWorld.h"
+
+#include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
+
+bool UVoxelLandFiniteWorld::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSnapshot, FString& OutError) const
+{
+	OutError.Reset();
+	if (!IsInGameThread())
+	{
+		OutError = TEXT("Finite world settings must be captured on the game thread.");
+		return false;
+	}
+	const FVoxelLandFiniteWorldSettings Authored = Finite;
+	constexpr int64 ExactControlLimit = 16777216;
+	constexpr int64 HeightLimitQ8 = 512000000;
+	if (Authored.CellsX < 1 || Authored.CellsX > 1024 || Authored.CellsY < 1 || Authored.CellsY > 1024
+		|| Authored.GridSpacingCm < 1 || Authored.GridSpacingCm > 134217 || Authored.MinZCm >= Authored.MaxZCm
+		|| Authored.OriginXCm < -ExactControlLimit || Authored.OriginXCm > ExactControlLimit
+		|| Authored.OriginYCm < -ExactControlLimit || Authored.OriginYCm > ExactControlLimit
+		|| Authored.GridSpacingCm > (ExactControlLimit - Authored.OriginXCm) / Authored.CellsX
+		|| Authored.GridSpacingCm > (ExactControlLimit - Authored.OriginYCm) / Authored.CellsY
+		|| Authored.DropletCount < 0 || Authored.DropletCount > 65536 || Authored.MaxSteps < 0
+		|| Authored.MaxSteps > 128 || Authored.ThermalIterations < 0 || Authored.ThermalIterations > 32
+		|| Authored.CapacityMaxQ8 < 0 || Authored.CapacityMaxQ8 > HeightLimitQ8 || Authored.TalusQ8 < 0
+		|| Authored.TalusQ8 > HeightLimitQ8 || Authored.MaxTransferQ8 < 0 || Authored.MaxTransferQ8 > HeightLimitQ8
+		|| Authored.ErosionSalt < 0 || (Authored.bGlobalErosion && !Authored.ErosionStageId.IsValid()))
+	{
+		OutError =
+			TEXT("Finite world grid or erosion settings are invalid or exceed the supported control-grid domain.");
+		return false;
+	}
+	FVoxelLandFiniteWorldSnapshot Scratch;
+	if (!CaptureCommon(EVoxelLandWorldKind::Finite, Scratch.Common, OutError))
+	{
+		return false;
+	}
+	if (!FVoxelLandFiniteWorldSettings::StaticStruct()->CompareScriptStruct(&Finite, &Authored, 0))
+	{
+		OutError = TEXT("Finite world settings changed during capture.");
+		return false;
+	}
+	Scratch.Finite = Authored;
+	// The last height-grid sample is inclusive; use a half-open centimetre
+	// extent. Later demand checks still validate every required halo.
+	Scratch.Common.Caves.Bounds.MinInclusive.X = Authored.OriginXCm;
+	Scratch.Common.Caves.Bounds.MinInclusive.Y = Authored.OriginYCm;
+	Scratch.Common.Caves.Bounds.MinInclusive.Z = Authored.MinZCm;
+	Scratch.Common.Caves.Bounds.MaxExclusive.X = Authored.OriginXCm + Authored.GridSpacingCm * Authored.CellsX + 1;
+	Scratch.Common.Caves.Bounds.MaxExclusive.Y = Authored.OriginYCm + Authored.GridSpacingCm * Authored.CellsY + 1;
+	Scratch.Common.Caves.Bounds.MaxExclusive.Z = Authored.MaxZCm;
+	OutSnapshot = MoveTemp(Scratch);
+	return true;
+}

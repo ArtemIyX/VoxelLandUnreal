@@ -162,6 +162,9 @@ FVoxelLandM5CavePlan FullRouteFixture()
 	FVoxelLandM5Junction J;
 	J.bHasId = true;
 	J.Id = 4;
+	J.bHasCenter = true;
+	J.CenterCm.X = 100;
+	J.CenterCm.Z = 100;
 	J.bHasFeetAnchor = true;
 	J.FeetAnchorCm.X = 100;
 	P.Junctions.Add(J);
@@ -187,6 +190,9 @@ FVoxelLandM5CavePlan FullRouteFixture()
 	AddCoveredRoute(P, 3, 8, 12, TypedNode(EVoxelLandM5EndpointKind::Junction, 4, EVoxelLandM5AnchorRole::JunctionFeet),
 		TypedNode(EVoxelLandM5EndpointKind::Portal, Portal.Id, EVoxelLandM5AnchorRole::PortalRegionAFeet), 100, 130,
 		EVoxelLandM5RouteFeatureKind::Portal, Portal.Id);
+	// The cave centerline is vertically distinct from the player's feet anchor.
+	P.Segments[2].EndCm.Z = 100;
+	P.Segments[3].StartCm.Z = 100;
 	return P;
 }
 FVoxelLandM5Diagnostic ValidateFixture(
@@ -235,6 +241,13 @@ bool FVoxelLandM5RouteTopologyTest::RunTest(const FString& Parameters)
 	const auto Full = FullRouteFixture();
 	Expected(TEXT("all structural features covered; geometry unproven"), Full, EVoxelLandM5ErrorCode::Unproven);
 	auto Missing = Full;
+	Missing.Junctions[0].bHasCenter = false;
+	Expected(TEXT("junction needs a center for segment chains"), Missing, EVoxelLandM5ErrorCode::InconsistentTopology);
+	Missing = Full;
+	Missing.Junctions[0].CenterCm.Z = 0;
+	Expected(
+		TEXT("junction feet cannot replace centerline geometry"), Missing, EVoxelLandM5ErrorCode::InconsistentTopology);
+	Missing = Full;
 	Missing.Entrances[0].bHasOutsideFeetAnchor = false;
 	Expected(TEXT("entrance requires both feet anchors"), Missing, EVoxelLandM5ErrorCode::InconsistentTopology);
 	Missing = Full;

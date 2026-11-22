@@ -372,8 +372,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::Validate(const FVoxelLandM5
 		}
 	}
 	// A graph edge must own one non-branching, continuous chain. Its geometric
-	// terminal points bind to chamber/portal centers, the explicit junction
-	// anchor, or the entrance's opening volume. Feet anchors are checked below;
+	// terminal points bind to chamber/portal/junction centers or the entrance's
+	// opening volume. Feet anchors are checked below;
 	// they are intentionally not conflated with cave-volume centerlines.
 	bool bGeometryCancelled = false;
 	const auto MatchesGeometryNode = [&Plan, &IsCancelled, &bGeometryCancelled](
@@ -416,7 +416,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::Validate(const FVoxelLandM5
 						bGeometryCancelled = true;
 						return false;
 					}
-					if (V.bHasId && V.Id == E.Id && V.bHasFeetAnchor && SamePoint(V.FeetAnchorCm, P))
+					if (V.bHasId && V.Id == E.Id && V.bHasCenter && SamePoint(V.CenterCm, P))
 					{
 						return true;
 					}

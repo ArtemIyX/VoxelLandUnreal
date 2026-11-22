@@ -4,7 +4,7 @@
 #include "Data/Enums/VoxelLandM5RouteTransition.h"
 #include "Data/Structs/VoxelLandM5PointCm.h"
 #include "Data/Structs/VoxelLandM5RouteFeatureRef.h"
-#include "Data/Structs/VoxelLandM5SupportPlane.h"
+#include "Data/Structs/VoxelLandM5RouteSupportPlane.h"
 
 // Desired feet motion along a straight segment in logical-world centimetres.
 // Neighboring legs must meet exactly or have an independently validated connector.
@@ -17,5 +17,5 @@ struct VOXELLANDDATA_API FVoxelLandM5RouteLeg
 	EVoxelLandM5RouteTransition Transition = EVoxelLandM5RouteTransition::Walk;
 	FVoxelLandM5RouteFeatureRef Feature;
 	bool bHasSupportPlane = false;
-	FVoxelLandM5SupportPlane SupportPlane;
+	FVoxelLandM5RouteSupportPlane SupportPlane;
 };

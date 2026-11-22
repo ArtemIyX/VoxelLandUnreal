@@ -1,4 +1,6 @@
 #include "Graph/VoxelLandGraphToolkit.h"
+#include "Data/Assets/VoxelLandM4ControlGraph.h"
+#include "../VoxelLandM4EditorBake.h"
 #include "Operators/VoxelLandOperator.h"
 #include "Graph/VoxelLandEditorFloat.h"
 #include "Data/VoxelLandBuiltinCatalog.h"
@@ -1662,11 +1664,32 @@ void FVoxelLandGraphToolkit::CreateMirror()
 	}
 	if (Asset->Nodes.IsEmpty() && !Asset->IsA<UVoxelLandGraphFunction>())
 	{
-		UVoxelLandEditorNode* Output = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
-		Output->Kind = int32(EVoxelLandBuiltinNode::DensityOutput);
-		Output->CreateNewGuid();
-		Graph->AddNode(Output, false, false);
-		Output->AllocateDefaultPins();
+		UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset);
+		const int32 Count = Named ? 3 : 1;
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			UVoxelLandEditorNode* Output = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
+			Output->Kind = int32(EVoxelLandBuiltinNode::DensityOutput);
+			Output->CreateNewGuid();
+			Output->NodePosY = Index * 180;
+			Graph->AddNode(Output, false, false);
+			Output->AllocateDefaultPins();
+			if (Named)
+			{
+				if (Index == 0)
+				{
+					Named->ContinentalOutputId = Output->NodeGuid;
+				}
+				else if (Index == 1)
+				{
+					Named->MountainOutputId = Output->NodeGuid;
+				}
+				else
+				{
+					Named->PeaksOutputId = Output->NodeGuid;
+				}
+			}
+		}
 	}
 	Asset->MarkPackageDirty();
 	bLoading = false;
@@ -1917,6 +1940,23 @@ void FVoxelLandGraphToolkit::RequestCompile()
 		ErrorDiagnostic = MoveTemp(Diagnostic);
 		Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
 		return;
+	}
+	if (!PreviewNodeId.IsValid())
+	{
+		if (UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset))
+		{
+			if (!VoxelLandM4Editor::CompileNamedGraph(*Named, Error))
+			{
+				Status = FString::Printf(TEXT("Error; M4 preview stale: %s"), *Error);
+				return;
+			}
+			Status = TEXT("M4 control outputs compiled. Select an M4 config to preview terrain.");
+			if (bM4Preview)
+			{
+				StartM4Preview();
+			}
+			return;
+		}
 	}
 	FVoxelLandGraphSnapshot Snapshot;
 	bool bValidDefaults = true;

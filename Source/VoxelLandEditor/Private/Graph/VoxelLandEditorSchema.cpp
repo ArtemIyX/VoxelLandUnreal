@@ -1,4 +1,6 @@
 #include "Graph/VoxelLandEditorSchema.h"
+#include "Data/Assets/VoxelLandM4ControlGraph.h"
+#include "../VoxelLandM4EditorBake.h"
 #include "Graph/VoxelLandEditorFloat.h"
 #include "Operators/VoxelLandOperator.h"
 #include "Misc/DefaultValueHelper.h"
@@ -175,6 +177,62 @@ void UVoxelLandEditorSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeCo
 	Section.AddMenuEntry(FGenericCommands::Get().Copy);
 	Section.AddMenuEntry(FGenericCommands::Get().Duplicate);
 	Section.AddMenuEntry(FGenericCommands::Get().Delete);
+	const UVoxelLandEditorNode* OutputNode = Cast<UVoxelLandEditorNode>(Context->Node.Get());
+	UVoxelLandM4ControlGraph* Named = OutputNode && OutputNode->GetGraph()
+										? Cast<UVoxelLandM4ControlGraph>(OutputNode->GetGraph()->GetOuter())
+										: nullptr;
+	if (Named && OutputNode->Kind == int32(EVoxelLandBuiltinNode::DensityOutput))
+	{
+		TWeakObjectPtr<UVoxelLandM4ControlGraph> WeakGraph = Named;
+		TWeakObjectPtr<UEdGraph> WeakEditorGraph = OutputNode->GetGraph();
+		const FGuid NodeId = OutputNode->NodeGuid;
+		auto Assign = [WeakGraph, WeakEditorGraph, NodeId](int32 Slot) {
+			UVoxelLandM4ControlGraph* Graph = WeakGraph.Get();
+			UEdGraph* EditorGraph = WeakEditorGraph.Get();
+			if (!Graph || !EditorGraph)
+			{
+				return;
+			}
+			const FScopedTransaction Transaction(LOCTEXT("AssignM4Output", "Assign M4 control output"));
+			Graph->Modify();
+			// Assigning a node to another channel clears its old role.
+			if (Graph->ContinentalOutputId == NodeId)
+			{
+				Graph->ContinentalOutputId.Invalidate();
+			}
+			if (Graph->MountainOutputId == NodeId)
+			{
+				Graph->MountainOutputId.Invalidate();
+			}
+			if (Graph->PeaksOutputId == NodeId)
+			{
+				Graph->PeaksOutputId.Invalidate();
+			}
+			if (Slot == 0)
+			{
+				Graph->ContinentalOutputId = NodeId;
+			}
+			else if (Slot == 1)
+			{
+				Graph->MountainOutputId = NodeId;
+			}
+			else
+			{
+				Graph->PeaksOutputId = NodeId;
+			}
+			Graph->MarkPackageDirty();
+			EditorGraph->NotifyGraphChanged();
+			FString Error;
+			VoxelLandM4Editor::CompileNamedGraph(*Graph, Error);
+			Graph->PostEditChange();
+		};
+		Section.AddMenuEntry(TEXT("M4AssignContinental"), LOCTEXT("AssignContinental", "Use as Continental Output"),
+			FText(), FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([Assign] { Assign(0); })));
+		Section.AddMenuEntry(TEXT("M4AssignMountain"), LOCTEXT("AssignMountain", "Use as Mountain Output"), FText(),
+			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([Assign] { Assign(1); })));
+		Section.AddMenuEntry(TEXT("M4AssignPeaks"), LOCTEXT("AssignPeaks", "Use as Peaks Output"), FText(),
+			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([Assign] { Assign(2); })));
+	}
 	if (Context->Pin && !Context->Pin->LinkedTo.IsEmpty())
 	{
 		TWeakObjectPtr<UEdGraphNode> Node = const_cast<UEdGraphNode*>(Context->Node.Get());

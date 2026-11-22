@@ -7,6 +7,7 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/Assets/VoxelLandM4ControlGraph.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Graph/VoxelLandGraphToolkit.h"
 #include "Graph/VoxelLandGraphPinFactory.h"
@@ -32,12 +33,100 @@
 
 namespace VoxelLandM4Editor
 {
+bool CompileNamedGraph(UVoxelLandM4ControlGraph& Graph, FString& Error)
+{
+	if (!IsInGameThread())
+	{
+		Error = TEXT("M4 named graph compilation requires the game thread");
+		return false;
+	}
+	FVoxelLandGraphSnapshot Source;
+	FVoxelLandGraphSnapshot Projections[3];
+	const EVoxelLandM4ControlChannel Channels[] = {EVoxelLandM4ControlChannel::Continental,
+		EVoxelLandM4ControlChannel::Mountain, EVoxelLandM4ControlChannel::Peaks};
+	bool bCaptured = Graph.CaptureSnapshot(Source, Error);
+	for (int32 Index = 0; bCaptured && Index < 3; ++Index)
+	{
+		bCaptured = Graph.ProjectSnapshot(Source, Channels[Index], Projections[Index], Error);
+	}
+	FVoxelLandSerializedProgram Programs[3];
+	const bool bCompiled = bCaptured && Async(EAsyncExecution::ThreadPool, [&Projections, &Programs, &Error] {
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			FVoxelLandProgramDraft Draft;
+			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+			if (!FVoxelLandGraphCompiler::Compile(Projections[Index], Draft, Error))
+			{
+				return false;
+			}
+			if (const FVoxelLandError Failure = FVoxelLandProgram::Validate(Draft, Program))
+			{
+				Error = Failure.Message;
+				return false;
+			}
+			if (const FVoxelLandError Failure = VoxelLandM4ControlGrid::ValidateProgram(*Program))
+			{
+				Error = Failure.Message;
+				return false;
+			}
+			if (!FVoxelLandProgramCodec::Pack(Projections[Index], *Program, Programs[Index], Error))
+			{
+				return false;
+			}
+		}
+		return true;
+	}).Get();
+	if (!bCompiled)
+	{
+		const bool bHadPrograms = !Graph.ContinentalProgram.Instructions.IsEmpty()
+							   || !Graph.MountainProgram.Instructions.IsEmpty()
+							   || !Graph.PeaksProgram.Instructions.IsEmpty();
+		Graph.ContinentalProgram = {};
+		Graph.MountainProgram = {};
+		Graph.PeaksProgram = {};
+		if (bHadPrograms)
+		{
+			Graph.MarkPackageDirty();
+		}
+		return false;
+	}
+	const bool bChanged =
+		!FVoxelLandSerializedProgram::StaticStruct()->CompareScriptStruct(&Graph.ContinentalProgram, &Programs[0], 0)
+		|| !FVoxelLandSerializedProgram::StaticStruct()->CompareScriptStruct(&Graph.MountainProgram, &Programs[1], 0)
+		|| !FVoxelLandSerializedProgram::StaticStruct()->CompareScriptStruct(&Graph.PeaksProgram, &Programs[2], 0);
+	Graph.ContinentalProgram = MoveTemp(Programs[0]);
+	Graph.MountainProgram = MoveTemp(Programs[1]);
+	Graph.PeaksProgram = MoveTemp(Programs[2]);
+	if (bChanged)
+	{
+		Graph.MarkPackageDirty();
+	}
+	return true;
+}
+
 bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 {
 	if (!IsInGameThread())
 	{
 		Error = TEXT("M4 configuration baking requires the game thread");
 		return false;
+	}
+	TSet<UVoxelLandM4ControlGraph*> NamedGraphs;
+	const FVoxelLandM4ControlConfig* Controls[] = {&Config.Continental, &Config.Mountain, &Config.Peaks};
+	for (const FVoxelLandM4ControlConfig* Control : Controls)
+	{
+		if (UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Control->Graph))
+		{
+			NamedGraphs.Add(Named);
+		}
+	}
+	for (UVoxelLandM4ControlGraph* Named : NamedGraphs)
+	{
+		if (!CompileNamedGraph(*Named, Error))
+		{
+			Config.ClearBakedCurves();
+			return false;
+		}
 	}
 	FVoxelLandM4WorldSnapshot Snapshot;
 	if (!Config.CaptureSnapshot(Snapshot, Error))
@@ -132,6 +221,13 @@ private:
 	TArray<TWeakPtr<FVoxelLandGraphToolkit>> Editors;
 };
 
+class FVoxelLandM4ControlGraphAssetActions : public FVoxelLandGraphAssetActions
+{
+public:
+	virtual FText GetName() const override { return LOCTEXT("M4ControlGraphAsset", "VoxelLand M4 Control Graph"); }
+	virtual UClass* GetSupportedClass() const override { return UVoxelLandM4ControlGraph::StaticClass(); }
+};
+
 class FVoxelLandFunctionAssetActions : public FVoxelLandGraphAssetActions
 {
 public:
@@ -205,6 +301,8 @@ void FVoxelLandEditorModule::StartupModule()
 	AssetTools.RegisterAssetTypeActions(GraphAssetActions.ToSharedRef());
 	FunctionAssetActions = MakeShared<FVoxelLandFunctionAssetActions>();
 	AssetTools.RegisterAssetTypeActions(FunctionAssetActions.ToSharedRef());
+	M4ControlGraphAssetActions = MakeShared<FVoxelLandM4ControlGraphAssetActions>();
+	AssetTools.RegisterAssetTypeActions(M4ControlGraphAssetActions.ToSharedRef());
 	PreSaveHandle = FCoreUObjectDelegates::OnObjectPreSave.AddRaw(this, &FVoxelLandEditorModule::OnObjectPreSave);
 	FunctionPropertyHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this,
 		&FVoxelLandEditorModule::OnFunctionPropertyChanged);
@@ -228,6 +326,10 @@ void FVoxelLandEditorModule::ShutdownModule()
 	{
 		StaticCastSharedPtr<FVoxelLandFunctionAssetActions>(FunctionAssetActions)->StopEditors();
 	}
+	if (M4ControlGraphAssetActions.IsValid())
+	{
+		StaticCastSharedPtr<FVoxelLandM4ControlGraphAssetActions>(M4ControlGraphAssetActions)->StopEditors();
+	}
 	if (GraphAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
 	{
 		FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(
@@ -238,6 +340,13 @@ void FVoxelLandEditorModule::ShutdownModule()
 		FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get().UnregisterAssetTypeActions(
 			FunctionAssetActions.ToSharedRef());
 	}
+	if (M4ControlGraphAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
+	{
+		FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools"))
+			.Get()
+			.UnregisterAssetTypeActions(M4ControlGraphAssetActions.ToSharedRef());
+	}
+	M4ControlGraphAssetActions.Reset();
 	FunctionAssetActions.Reset();
 	GraphAssetActions.Reset();
 	if (FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
@@ -320,6 +429,37 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 			{
 				UE_LOG(LogTemp, Warning, TEXT("VoxelLand M4 configuration %s is not baked: %s"), *Config->GetPathName(),
 					*Error);
+			}
+		}
+		return;
+	}
+	if (UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Object))
+	{
+		if (!Context.IsFirstConcurrentSave())
+		{
+			return;
+		}
+		if (Context.IsCooking())
+		{
+			Named->SetCookPreparationResult(false);
+		}
+		FString Error;
+		const bool bCompiled = VoxelLandM4Editor::CompileNamedGraph(*Named, Error);
+		if (Context.IsCooking())
+		{
+			Named->SetCookPreparationResult(bCompiled);
+		}
+		if (!bCompiled)
+		{
+			if (Context.IsCooking())
+			{
+				UE_LOG(LogTemp, Error, TEXT("VoxelLand M4 control graph %s cannot cook: %s"), *Named->GetPathName(),
+					*Error);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("VoxelLand M4 control graph %s is not compiled: %s"),
+					*Named->GetPathName(), *Error);
 			}
 		}
 		return;

@@ -8,6 +8,12 @@ After building an editor target, launch Unreal Editor with `-VoxelLandCreateM4Ex
 
 In a fresh editor process, pass `-VoxelLandVerifyM4Examples` and run `VoxelLand.M4.Example.VerifyAssets` to check that the saved assets, graph layouts, references, configuration, and baked curves reopen. `VoxelLand.M4.Example.Authoring` exercises transient creation and curve staleness without writing packages. These tests have not been run for this revision.
 
+## Use one named control graph
+
+Create a **VoxelLand M4 Control Graph** asset to author all three controls in one graph. A new graph starts with Continental, Mountain and Peaks output nodes. Connect each output to a 2D control expression; expressions may share upstream nodes. Assign that same graph to the Continental, Mountain and Peaks controls of the M4 world config, and edit the three curves on the config as usual. The graph compiles and cooks each named output as a separate control program with the existing independent channel seed namespaces.
+
+To replace an output node, add a Density Output node, right-click it and choose **Use as Continental Output**, **Use as Mountain Output**, or **Use as Peaks Output**. Each channel must reference a different output and every Density Output in this graph must have a name; remove any unused output node. Invalid connections, cycles, 3D controls and filters prevent a successful compile. Save the graph and config after editing. Old single-output graphs and three-graph configs continue to work. This provides named control outputs; the height combination, erosion and density stages remain configured by the world config rather than authored as graph nodes.
+
 ## Create the assets manually
 
 In the Content Browser create three **VoxelLand Terrain Graph** assets and one **VoxelLand M4 World Config**. For a project-local example, suggested paths are `/Game/VoxelLandExamples/M4/DA_M4_Continental`, `/Game/VoxelLandExamples/M4/DA_M4_Mountain`, `/Game/VoxelLandExamples/M4/DA_M4_Peaks`, and `/Game/VoxelLandExamples/M4/DA_M4_World`. These paths are also used by the opt-in generator above; assets are not supplied as prebuilt files. Create new assets at unused paths; do not overwrite the existing M3 example.

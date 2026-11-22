@@ -23,4 +23,5 @@ private:
 	TSharedPtr<class FVoxelLandGraphPinFactory> PinFactory;
 	TSharedPtr<class IAssetTypeActions> GraphAssetActions;
 	TSharedPtr<class IAssetTypeActions> FunctionAssetActions;
+	TSharedPtr<class IAssetTypeActions> M4ControlGraphAssetActions;
 };

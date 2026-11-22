@@ -7,6 +7,7 @@
 #include "Data/VoxelLandGraphFunctionId.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/Assets/VoxelLandM4ControlGraph.h"
 #include "EdGraph/EdGraph.h"
 #include "ScopedTransaction.h"
 #include "ToolMenu.h"
@@ -33,6 +34,25 @@ FText UVoxelLandEditorNode::DisplayName(int32 InKind)
 
 FText UVoxelLandEditorNode::GetNodeTitle(ENodeTitleType::Type) const
 {
+	if (Kind == int32(EVoxelLandBuiltinNode::DensityOutput) && GetGraph())
+	{
+		if (const UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(GetGraph()->GetOuter()))
+		{
+			if (Named->ContinentalOutputId == NodeGuid)
+			{
+				return LOCTEXT("M4Continental", "Continental Output");
+			}
+			if (Named->MountainOutputId == NodeGuid)
+			{
+				return LOCTEXT("M4Mountain", "Mountain Output");
+			}
+			if (Named->PeaksOutputId == NodeGuid)
+			{
+				return LOCTEXT("M4Peaks", "Peaks Output");
+			}
+			return LOCTEXT("M4Unassigned", "Unassigned Control Output");
+		}
+	}
 	if (Kind == 0 || Kind == int32(VoxelLandGraphFunctionCallId().D))
 	{
 		return ExternalTitle.IsEmpty()

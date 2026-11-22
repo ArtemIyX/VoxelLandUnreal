@@ -1,6 +1,7 @@
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 
 #include "Data/Assets/VoxelLandGraphFunction.h"
+#include "Data/Assets/VoxelLandM4ControlGraph.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/VoxelLandGraphFunctionId.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
@@ -149,7 +150,8 @@ private:
 // These limits constrain copied records and strings; they are not a measurement
 // of allocator, engine, or native-noise overhead and do not by themselves prove
 // an exact process-memory bound.
-bool M4AssetWithinCaptureLimits(const FVoxelLandM4ControlConfig& Control, FString& Error)
+bool M4AssetWithinCaptureLimits(
+	const FVoxelLandM4ControlConfig& Control, EVoxelLandM4ControlChannel Channel, FString& Error)
 {
 	if (!Control.Graph || Control.Graph->IsA<UVoxelLandGraphFunction>())
 	{
@@ -157,7 +159,8 @@ bool M4AssetWithinCaptureLimits(const FVoxelLandM4ControlConfig& Control, FStrin
 		return false;
 	}
 	const UVoxelLandTerrainGraph& Graph = *Control.Graph;
-	const FVoxelLandSerializedProgram& Payload = Graph.CompiledProgram;
+	const UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(&Graph);
+	const FVoxelLandSerializedProgram& Payload = Named ? Named->GetProgram(Channel) : Graph.CompiledProgram;
 	if (Graph.Nodes.Num() > 128 || Graph.Links.Num() > 2048 || Graph.Parameters.Num() > 128
 		|| Control.Overrides.Num() > 128 || Control.CurveKeys.Num() > 4097 || Payload.Instructions.Num() > 2048
 		|| Control.CookedCurve.SourceKeys.Num() > 4097 || Control.CookedCurve.SamplesQ8.Num() > 4097
@@ -222,14 +225,16 @@ bool M4AssetParameterValid(const FVoxelLandGraphParameter& P)
 	}
 }
 
-bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, FVoxelLandM4ControlSnapshot& Out, FString& Error)
+bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, EVoxelLandM4ControlChannel Channel,
+	FVoxelLandM4ControlSnapshot& Out, FString& Error)
 {
 	if (!Control.Graph || Control.Graph->IsA<UVoxelLandGraphFunction>() || Control.Graph->SourceVersion != 1)
 	{
 		Error = TEXT("M4 control requires a supported terrain graph.");
 		return false;
 	}
-	const FVoxelLandSerializedProgram& Payload = Control.Graph->CompiledProgram;
+	const UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Control.Graph);
+	const FVoxelLandSerializedProgram& Payload = Named ? Named->GetProgram(Channel) : Control.Graph->CompiledProgram;
 	if (Control.Graph->Parameters.Num() > 4096 || Control.Overrides.Num() > 4096 || Payload.Instructions.Num() > 8192
 		|| Payload.Constants.Num() > 65536 || Payload.Parameters.Num() > 4096 || Payload.Seeds.Num() > 4096
 		|| Payload.Noise.Num() > 4096 || Payload.ExternalOperators.Num() > 4096)
@@ -267,6 +272,15 @@ bool M4AssetCaptureControl(const FVoxelLandM4ControlConfig& Control, FVoxelLandM
 	if (!Control.Graph->CaptureSnapshot(Temp.Source, Error))
 	{
 		return false;
+	}
+	if (Named)
+	{
+		FVoxelLandGraphSnapshot Projected;
+		if (!Named->ProjectSnapshot(Temp.Source, Channel, Projected, Error))
+		{
+			return false;
+		}
+		Temp.Source = MoveTemp(Projected);
 	}
 	// Tooltips are editor presentation, are not used by the compiler or source
 	// fingerprint, and must not retain arbitrary localized text in worker input.
@@ -545,14 +559,16 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 	}
 	// Check all three graphs before capturing any: a later oversized channel must
 	// not cause earlier snapshot copies or function loads as a side effect.
-	if (!M4AssetWithinCaptureLimits(Continental, OutError) || !M4AssetWithinCaptureLimits(Mountain, OutError)
-		|| !M4AssetWithinCaptureLimits(Peaks, OutError))
+	if (!M4AssetWithinCaptureLimits(Continental, EVoxelLandM4ControlChannel::Continental, OutError)
+		|| !M4AssetWithinCaptureLimits(Mountain, EVoxelLandM4ControlChannel::Mountain, OutError)
+		|| !M4AssetWithinCaptureLimits(Peaks, EVoxelLandM4ControlChannel::Peaks, OutError))
 	{
 		return false;
 	}
 	FVoxelLandM4WorldSnapshot S;
-	if (!M4AssetCaptureControl(Continental, S.Continental, OutError)
-		|| !M4AssetCaptureControl(Mountain, S.Mountain, OutError) || !M4AssetCaptureControl(Peaks, S.Peaks, OutError))
+	if (!M4AssetCaptureControl(Continental, EVoxelLandM4ControlChannel::Continental, S.Continental, OutError)
+		|| !M4AssetCaptureControl(Mountain, EVoxelLandM4ControlChannel::Mountain, S.Mountain, OutError)
+		|| !M4AssetCaptureControl(Peaks, EVoxelLandM4ControlChannel::Peaks, S.Peaks, OutError))
 	{
 		return false;
 	}

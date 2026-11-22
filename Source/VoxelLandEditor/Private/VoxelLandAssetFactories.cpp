@@ -1,5 +1,6 @@
 #include "VoxelLandAssetFactories.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
+#include "Data/Assets/VoxelLandM4ControlGraph.h"
 #include "Data/Assets/VoxelLandGraphFunction.h"
 #include "Data/Assets/VoxelLandWorldSettings.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
@@ -16,6 +17,19 @@ UObject* UVoxelLandTerrainGraphFactory::FactoryCreateNew(UClass* InClass, UObjec
 	EObjectFlags Flags, UObject*, FFeedbackContext*)
 {
 	return NewObject<UVoxelLandTerrainGraph>(Parent, InClass, Name, Flags | RF_Transactional);
+}
+
+UVoxelLandM4ControlGraphFactory::UVoxelLandM4ControlGraphFactory()
+{
+	SupportedClass = UVoxelLandM4ControlGraph::StaticClass();
+	bCreateNew = true;
+	bEditAfterNew = true;
+}
+
+UObject* UVoxelLandM4ControlGraphFactory::FactoryCreateNew(
+	UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject*, FFeedbackContext*)
+{
+	return NewObject<UVoxelLandM4ControlGraph>(Parent, InClass, Name, Flags | RF_Transactional);
 }
 
 UVoxelLandGraphFunctionFactory::UVoxelLandGraphFunctionFactory()

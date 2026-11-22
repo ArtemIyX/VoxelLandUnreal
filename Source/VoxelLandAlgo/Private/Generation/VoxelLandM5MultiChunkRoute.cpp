@@ -1,0 +1,189 @@
+#include "Generation/VoxelLandM5MultiChunkRoute.h"
+
+#include "Data/Enums/VoxelLandMeshResult.h"
+#include "Data/Structs/VoxelLandChunkData.h"
+#include "Data/Structs/VoxelLandMeshData.h"
+#include "Data/Structs/VoxelLandMeshingScratch.h"
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5ChunkSet.h"
+#include "Generation/VoxelLandM5FixedMesh.h"
+#include "Generation/VoxelLandM5FixedSupport.h"
+#include "Generation/VoxelLandM5MeshAdapter.h"
+#include "Generation/VoxelLandM5SweptTriangle.h"
+#include "Generation/VoxelLandMeshing.h"
+
+namespace
+{
+FVoxelLandM5Diagnostic M5MultiRouteError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+{
+	FVoxelLandM5Diagnostic Result;
+	Result.Code = Code;
+	Result.Stage = TEXT("M5.MultiChunkRoute");
+	Result.Message = Message;
+	return Result;
+}
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<FVoxelLandChunkData> Chunks,
+	const FIntVector& MinInclusive, const FIntVector& MaxExclusive, int32 VoxelSizeCm, bool bUnlimitedM4,
+	const FVoxelLandM5PointCm& StartFeet, const FVoxelLandM5PointCm& EndFeet, int64 RadiusCm, int64 HeightCm,
+	int64 MarginCm, int64 ContactSkinCm, int32 MaxSlopeNumerator, int32 MaxSlopeDenominator,
+	TConstArrayView<FVoxelLandM5ChunkFaceSelection> SupportFaces,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
+	using E = EVoxelLandM5ErrorCode;
+	constexpr int64 Limit = 1048576;
+	constexpr int32 MaxChunks = 16;
+	constexpr int32 MaxVertices = 34 * 34 * 34;
+	constexpr int32 MaxTriangles = 32 * 32 * 32 * 3 * 2;
+	if (IsCancelled())
+	{
+		return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+	}
+	if (VoxelSizeCm < 1 || VoxelSizeCm > 134217 || RadiusCm < 1 || RadiusCm > Limit || HeightCm < 2 * RadiusCm
+		|| HeightCm > Limit || MarginCm < 0 || MarginCm > Limit || ContactSkinCm < 0 || ContactSkinCm > Limit
+		|| MaxSlopeNumerator < 0 || MaxSlopeDenominator <= 0 || SupportFaces.IsEmpty() || SupportFaces.Num() > 256)
+	{
+		return M5MultiRouteError(E::InvalidInput, TEXT("Invalid multi-chunk route inputs"));
+	}
+	const auto Agreement =
+		ChunkSet::CheckSampleAgreement(Chunks, MinInclusive, MaxExclusive, MaxChunks, Budget, IsCancelled);
+	if (Agreement.Code != E::None)
+	{
+		return Agreement;
+	}
+	// All multiplications fit int64: int32 chunk coordinate * 32 * 134217.
+	const int64 Scale = VoxelSizeCm;
+	const int64 Radius = RadiusCm + MarginCm;
+	const FVoxelLandM5PointCm Points[] = {StartFeet, EndFeet};
+	for (const auto& Point : Points)
+	{
+		const int64 Values[] = {Point.X, Point.Y, Point.Z};
+		for (int32 Axis = 0; Axis < 3; ++Axis)
+		{
+			if (Values[Axis] < -Limit || Values[Axis] > Limit)
+			{
+				return M5MultiRouteError(E::OutOfDomain, TEXT("Route point outside logical domain"));
+			}
+			const int64 Lower = Values[Axis] - (Axis == 2 ? MarginCm : Radius);
+			const int64 Upper = Values[Axis] + (Axis == 2 ? HeightCm + MarginCm : Radius);
+			const int64 BoxMin = int64(MinInclusive[Axis]) * 32 * Scale;
+			const int64 BoxMax = int64(MaxExclusive[Axis]) * 32 * Scale;
+			if (Lower <= BoxMin + 2 * Scale || Upper >= BoxMax - 2 * Scale)
+			{
+				return M5MultiRouteError(E::Unproven, TEXT("Sweep requires omitted neighboring mesh owners"));
+			}
+		}
+	}
+	// Reserve for all retained obstacles plus mesher/adapter temporary arrays.
+	// Input chunks and selections are caller-owned. Constants bound a LOD-zero
+	// mesher's maximum arrays; the fourfold payload includes TArray growth slack.
+	const int64 PerChunkBytes =
+		4 * int64(MaxVertices) * (sizeof(FVoxelLandMeshVertex) + sizeof(int32))
+		+ 4 * int64(MaxTriangles) * (3 * sizeof(uint32) + 2 * sizeof(FVoxelLandM5ValidationTriangle) + sizeof(uint8));
+	const int64 Bytes =
+		int64(Chunks.Num()) * PerChunkBytes + 4 * int64(256) * sizeof(FVoxelLandM5FixedTriangleQ18) + 1048576;
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	const int64 Work = int64(Chunks.Num()) * 4000000
+					 + int64(Chunks.Num()) * MaxTriangles * (int64(SupportFaces.Num()) + 1)
+					 + int64(SupportFaces.Num()) * (SupportFaces.Num() + 2);
+	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(Work))
+	{
+		return M5MultiRouteError(E::BudgetExceeded, TEXT("Multi-chunk mesh admission exhausted"));
+	}
+	for (int32 I = 0; I < SupportFaces.Num(); ++I)
+	{
+		if (IsCancelled())
+		{
+			return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+		}
+		for (int32 J = 0; J < I; ++J)
+		{
+			if (SupportFaces[I].ChunkCoordinate == SupportFaces[J].ChunkCoordinate
+				&& SupportFaces[I].FaceIndex == SupportFaces[J].FaceIndex)
+			{
+				return M5MultiRouteError(E::InvalidInput, TEXT("Duplicate support face"));
+			}
+		}
+	}
+	TArray<FVoxelLandM5ValidationTriangle> Obstacles;
+	TArray<FVoxelLandM5FixedTriangleQ18> Support;
+	Support.Reserve(SupportFaces.Num());
+	int32 Matched = 0;
+	for (const FVoxelLandChunkData& Chunk : Chunks)
+	{
+		if (IsCancelled())
+		{
+			return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+		}
+		FVoxelLandMeshingScratch Scratch;
+		FVoxelLandMeshData Mesh;
+		const auto MeshResult =
+			VoxelLandMeshing::BuildSurfaceNets(Chunk, float(VoxelSizeCm), Scratch, Mesh, IsCancelled, bUnlimitedM4);
+		if (MeshResult != EVoxelLandMeshResult::Success)
+		{
+			return M5MultiRouteError(MeshResult == EVoxelLandMeshResult::Cancelled ? E::Cancelled : E::Unproven,
+				TEXT("Actual CPU meshing failed"));
+		}
+		TArray<FVoxelLandM5ValidationTriangle> Triangles;
+		const auto Adapted = MeshAdapter::Adapt(Chunk, float(VoxelSizeCm), bUnlimitedM4, Mesh, MaxTriangles,
+			32 * 32 * 32 * 3 + MaxTriangles, IsCancelled, Triangles);
+		if (Adapted.Code != E::None)
+		{
+			return Adapted;
+		}
+		for (int32 Index = 0; Index < Triangles.Num(); ++Index)
+		{
+			if ((Index & 63) == 0 && IsCancelled())
+			{
+				return M5MultiRouteError(E::Cancelled, TEXT("Multi-chunk route cancelled"));
+			}
+			bool bSupport = false;
+			for (const auto& Face : SupportFaces)
+			{
+				if (Face.ChunkCoordinate == Chunk.Key.Coordinate && Face.FaceIndex == Index)
+				{
+					bSupport = true;
+					break;
+				}
+			}
+			if (bSupport)
+			{
+				FVoxelLandM5FixedTriangleQ18 Fixed;
+				const auto Converted = FixedMesh::Convert(
+					Triangles[Index], VoxelSizeCm, true, FVector3d::ZeroVector, Budget, IsCancelled, Fixed);
+				if (Converted.Code != E::None)
+				{
+					return Converted;
+				}
+				Support.Add(Fixed);
+				++Matched;
+			}
+			else
+			{
+				Obstacles.Add(Triangles[Index]);
+			}
+		}
+	}
+	if (Matched != SupportFaces.Num())
+	{
+		return M5MultiRouteError(E::InvalidInput, TEXT("Support face references an absent chunk or face"));
+	}
+	constexpr int64 Q = int64(1) << 18;
+	FVoxelLandM5FixedPointQ18 A, B;
+	A.X = StartFeet.X * Q;
+	A.Y = StartFeet.Y * Q;
+	A.Z = StartFeet.Z * Q;
+	B.X = EndFeet.X * Q;
+	B.Y = EndFeet.Y * Q;
+	B.Z = EndFeet.Z * Q;
+	const auto Contact = FixedSupport::CertifyLinearContact(A, B, RadiusCm * Q, HeightCm * Q, ContactSkinCm * Q,
+		MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
+	if (Contact.Code != E::None)
+	{
+		return Contact;
+	}
+	return SweptTriangle::Check(
+		StartFeet, EndFeet, RadiusCm, HeightCm, MarginCm, FVector3d::ZeroVector, Obstacles, Budget, IsCancelled);
+}

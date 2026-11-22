@@ -34,6 +34,9 @@ public:
 	// release its old reservation after the new reservation has been admitted.
 	bool TryReserveBytes(int64 Bytes, TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>& OutLease);
 
+	// Returns the immutable configured maxima, not currently available capacity.
+	void GetLimits(int64& MaxBytes, int64& MaxWork) const;
+
 	// Returns one consistent snapshot. PeakBytes is the maximum admitted live
 	// reservation, not a measurement of allocator overhead or uncharged memory.
 	void GetUsage(int64& LiveBytes, int64& PeakBytes, int64& WorkUnits) const;

@@ -16,6 +16,11 @@ bool FVoxelLandM5BudgetReservationTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	int64 LimitBytes = -1;
+	int64 LimitWork = -1;
+	Budget->GetLimits(LimitBytes, LimitWork);
+	TestEqual(TEXT("Configured byte limit"), LimitBytes, int64(100));
+	TestEqual(TEXT("Configured work limit"), LimitWork, int64(20));
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> A;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> B;
 	TestTrue(TEXT("Reserve first allocation"), Budget->TryReserveBytes(40, A));
@@ -27,6 +32,9 @@ bool FVoxelLandM5BudgetReservationTest::RunTest(const FString& Parameters)
 	Budget->GetUsage(Live, Peak, Work);
 	TestEqual(TEXT("Both allocations count"), Live, int64(100));
 	TestEqual(TEXT("Peak includes overlapping allocations"), Peak, int64(100));
+	Budget->GetLimits(LimitBytes, LimitWork);
+	TestEqual(TEXT("Byte limit unchanged by admission"), LimitBytes, int64(100));
+	TestEqual(TEXT("Work limit unchanged by admission"), LimitWork, int64(20));
 
 	const FVoxelLandM5BudgetLease* OriginalB = B.Get();
 	TestFalse(TEXT("Over budget is rejected"), Budget->TryReserveBytes(1, B));

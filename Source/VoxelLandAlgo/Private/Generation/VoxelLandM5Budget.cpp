@@ -95,6 +95,12 @@ bool FVoxelLandM5Budget::TryReserveBytes(
 	return true;
 }
 
+void FVoxelLandM5Budget::GetLimits(int64& MaxBytes, int64& MaxWork) const
+{
+	MaxBytes = State->MaxBytes;
+	MaxWork = State->MaxWork;
+}
+
 void FVoxelLandM5Budget::GetUsage(int64& LiveBytes, int64& PeakBytes, int64& WorkUnits) const
 {
 	FScopeLock Lock(&State->Mutex);

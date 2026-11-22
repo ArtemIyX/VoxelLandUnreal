@@ -1,4 +1,5 @@
 #include "World/VoxelLandWorld.h"
+#include "World/VoxelLandWorldCoordinates.h"
 #if !UE_SERVER
 #include "Rendering/VoxelLandChunkComponent.h"
 #endif
@@ -161,6 +162,11 @@ bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material)
 {
 	check(IsInGameThread());
+	FVector LocalOrigin;
+	if (!GetWorld() || !VoxelLandWorldCoordinates::ToLocal(Origin, GetWorld()->OriginLocation, LocalOrigin))
+	{
+		return false;
+	}
 	TObjectPtr<UPrimitiveComponent>& Slot = Components.FindOrAdd(Key);
 	UVoxelLandChunkComponent* Component = Cast<UVoxelLandChunkComponent>(Slot.Get());
 	if (Slot && !Component)
@@ -175,7 +181,9 @@ bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 		Component->SetupAttachment(Root);
 		Component->RegisterComponent();
 	}
-	Component->SetWorldLocation(Origin);
+	// Unreal moves registered actors/components on an origin shift. New meshes
+	// use the current origin so their positions agree with the shifted ones.
+	Component->SetWorldLocation(LocalOrigin);
 	Component->SetMaterial(0, Material);
 	if (!Component->SetMesh(Mesh))
 	{
@@ -585,8 +593,13 @@ void AVoxelLandWorld::UpdateDemand()
 		Location = Controller->PlayerCameraManager->GetCameraLocation();
 		State->ViewVelocity = Controller->GetPawn() ? Controller->GetPawn()->GetVelocity() : FVector::ZeroVector;
 	}
+	FVector GlobalLocation;
+	if (!GetWorld() || !VoxelLandWorldCoordinates::ToGlobal(Location, GetWorld()->OriginLocation, GlobalLocation))
+	{
+		return;
+	}
 	const double Width = double(State->Generator->GetProfile().VoxelSizeCm) * 32.0;
-	const FVector Position = Location / Width;
+	const FVector Position = GlobalLocation / Width;
 	constexpr double CoordinateLimit = double(MAX_int32) - 32.0;
 	if (!FMath::IsFinite(Position.X) || !FMath::IsFinite(Position.Y) || !FMath::IsFinite(Position.Z)
 		|| FMath::Abs(Position.X) > CoordinateLimit || FMath::Abs(Position.Y) > CoordinateLimit

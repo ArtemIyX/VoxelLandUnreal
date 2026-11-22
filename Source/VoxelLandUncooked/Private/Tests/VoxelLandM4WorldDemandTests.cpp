@@ -155,6 +155,12 @@ bool FVoxelLandM4WorldDemandTest::RunTest(const FString& Parameters)
 	Actor->SetTestViewLocation(FVector(32000000.0, 0, 0));
 	Actor->Tick(0.016f);
 	TestTrue(TEXT("camera demands far fixed-lattice chunk"), Actor->IsChunkDemanded(FIntVector(1000000, 0, 0)));
+	TestTrue(TEXT("world origin shift succeeds"), World->SetNewWorldOrigin(FIntVector(32000000, -32000000, 0)));
+	Actor->SetTestViewLocation(FVector::ZeroVector);
+	Actor->Tick(0.016f);
+	TestTrue(
+		TEXT("rebased camera preserves global chunk demand"), Actor->IsChunkDemanded(FIntVector(1000000, -1000000, 0)));
+	TestFalse(TEXT("rebased camera does not jump to global zero"), Actor->IsChunkDemanded(FIntVector::ZeroValue));
 	Actor->Shutdown();
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);

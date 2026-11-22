@@ -115,8 +115,8 @@ FVoxelLandError CollectGlobalDependencies(TConstArrayView<FVoxelLandM4StageNode>
 		const bool bDuplicate = Names.ContainsByPredicate(
 			[&Output](const FString& Name) { return Name.Equals(Output.Name, ESearchCase::CaseSensitive); });
 		if (Output.Name.IsEmpty() || Output.Name.Len() > M4StageMaxOutputNameLength || bDuplicate
-			|| !Output.Name.TrimStartAndEnd().Equals(Output.Name, ESearchCase::CaseSensitive) || !Producer
-			|| Nodes[*Producer].Stage != EVoxelLandM4StageKind::Global)
+		    || !Output.Name.TrimStartAndEnd().Equals(Output.Name, ESearchCase::CaseSensitive) || !Producer
+		    || Nodes[*Producer].Stage != EVoxelLandM4StageKind::Global)
 		{
 			return StageFailure(TEXT("Invalid or duplicate M4 global output"));
 		}

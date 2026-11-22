@@ -48,15 +48,16 @@ FVoxelLandError Validate(const FVoxelLandM4DomainSettings& Settings)
 {
 	if (Settings.Mode == EVoxelLandM4DomainMode::Unlimited)
 	{
-		return Settings.bGlobalErosion ? M4DomainError(TEXT("Unlimited M4 worlds cannot use global erosion"))
-									   : FVoxelLandError{};
+		return Settings.bGlobalErosion
+			       ? M4DomainError(TEXT("Unlimited M4 worlds cannot use global erosion"))
+			       : FVoxelLandError{};
 	}
 	if (Settings.Mode != EVoxelLandM4DomainMode::Finite)
 	{
 		return M4DomainError(TEXT("Unknown M4 domain mode"));
 	}
 	if (Settings.CellsX < 1 || Settings.CellsX > M4DomainMaxCells || Settings.CellsY < 1
-		|| Settings.CellsY > M4DomainMaxCells || Settings.GridSpacingCm <= 0)
+	    || Settings.CellsY > M4DomainMaxCells || Settings.GridSpacingCm <= 0)
 	{
 		return M4DomainError(TEXT("Invalid M4 finite domain dimensions or spacing"));
 	}
@@ -68,7 +69,7 @@ FVoxelLandError Validate(const FVoxelLandM4DomainSettings& Settings)
 	int64 EndX = 0;
 	int64 EndY = 0;
 	if (!M4DomainEndpoint(Settings.OriginXCm, Settings.CellsX, Settings.GridSpacingCm, EndX)
-		|| !M4DomainEndpoint(Settings.OriginYCm, Settings.CellsY, Settings.GridSpacingCm, EndY))
+	    || !M4DomainEndpoint(Settings.OriginYCm, Settings.CellsY, Settings.GridSpacingCm, EndY))
 	{
 		return M4DomainError(TEXT("M4 finite domain endpoint overflows"));
 	}
@@ -83,18 +84,18 @@ FVoxelLandError ValidateFootprint(
 		return Error;
 	}
 	if (Footprint.MinX > Footprint.MaxX || Footprint.MinY > Footprint.MaxY || Footprint.VoxelSizeCm <= 0
-		|| Footprint.PaddingVoxels < 0 || Footprint.FilterHaloVoxels < 0 || Footprint.SourceMarginVoxels < 0)
+	    || Footprint.PaddingVoxels < 0 || Footprint.FilterHaloVoxels < 0 || Footprint.SourceMarginVoxels < 0)
 	{
 		return M4DomainError(TEXT("Invalid M4 sample footprint or margin"));
 	}
 	const int64 Margin = int64(Footprint.PaddingVoxels) + Footprint.FilterHaloVoxels + Footprint.SourceMarginVoxels;
 	int64 MinX = 0, MaxX = 0, MinY = 0, MaxY = 0;
 	if (!M4DomainAdd(Footprint.MinX, -Margin, MinX) || !M4DomainAdd(Footprint.MaxX, Margin, MaxX)
-		|| !M4DomainAdd(Footprint.MinY, -Margin, MinY) || !M4DomainAdd(Footprint.MaxY, Margin, MaxY)
-		|| !M4DomainMultiplyPositive(MinX, Footprint.VoxelSizeCm, MinX)
-		|| !M4DomainMultiplyPositive(MaxX, Footprint.VoxelSizeCm, MaxX)
-		|| !M4DomainMultiplyPositive(MinY, Footprint.VoxelSizeCm, MinY)
-		|| !M4DomainMultiplyPositive(MaxY, Footprint.VoxelSizeCm, MaxY))
+	    || !M4DomainAdd(Footprint.MinY, -Margin, MinY) || !M4DomainAdd(Footprint.MaxY, Margin, MaxY)
+	    || !M4DomainMultiplyPositive(MinX, Footprint.VoxelSizeCm, MinX)
+	    || !M4DomainMultiplyPositive(MaxX, Footprint.VoxelSizeCm, MaxX)
+	    || !M4DomainMultiplyPositive(MinY, Footprint.VoxelSizeCm, MinY)
+	    || !M4DomainMultiplyPositive(MaxY, Footprint.VoxelSizeCm, MaxY))
 	{
 		return M4DomainError(TEXT("M4 sample footprint arithmetic overflows"));
 	}
@@ -102,8 +103,8 @@ FVoxelLandError ValidateFootprint(
 	{
 		int64 EndX = 0, EndY = 0;
 		if (!M4DomainEndpoint(Settings.OriginXCm, Settings.CellsX, Settings.GridSpacingCm, EndX)
-			|| !M4DomainEndpoint(Settings.OriginYCm, Settings.CellsY, Settings.GridSpacingCm, EndY)
-			|| MinX < Settings.OriginXCm || MaxX > EndX || MinY < Settings.OriginYCm || MaxY > EndY)
+		    || !M4DomainEndpoint(Settings.OriginYCm, Settings.CellsY, Settings.GridSpacingCm, EndY)
+		    || MinX < Settings.OriginXCm || MaxX > EndX || MinY < Settings.OriginYCm || MaxY > EndY)
 		{
 			return M4DomainError(TEXT("M4 sample footprint extends outside finite domain"));
 		}

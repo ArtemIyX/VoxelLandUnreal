@@ -92,9 +92,7 @@ void M4CoordinatorEvictIdle(FM4PrepassCoordinatorState& State)
 FM4PrepassSubscription::FM4PrepassSubscription(TSharedRef<FM4PrepassCoordinatorState, ESPMode::ThreadSafe> InState,
 	TSharedRef<FM4PrepassCoordinatorEntry, ESPMode::ThreadSafe> InEntry)
 	: State(MoveTemp(InState))
-	, Entry(MoveTemp(InEntry))
-{
-}
+	  , Entry(MoveTemp(InEntry)) {}
 
 FM4PrepassSubscription::~FM4PrepassSubscription()
 {
@@ -188,8 +186,8 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 	for (const auto& Existing : State->Entries)
 	{
 		if (!Existing->bAbandoned && (!Existing->bFinished || Existing->Grid.IsValid())
-			&& Existing->Key.Num() == ExactKey.Num()
-			&& FMemory::Memcmp(Existing->Key.GetData(), ExactKey.GetData(), ExactKey.Num()) == 0)
+		    && Existing->Key.Num() == ExactKey.Num()
+		    && FMemory::Memcmp(Existing->Key.GetData(), ExactKey.GetData(), ExactKey.Num()) == 0)
 		{
 			++Existing->Subscribers;
 			return MakeShareable(new FM4PrepassSubscription(State, Existing.ToSharedRef()));
@@ -235,7 +233,7 @@ TSharedPtr<FM4PrepassSubscription, ESPMode::ThreadSafe> FM4PrepassCoordinator::S
 		Builder.Reset();
 		FScopeLock CompletionLock(&SharedState->Mutex);
 		if (bSuccess && Grid && Grid->RetainsLease(NewEntry->Lease) && !NewEntry->Cancelled.Load()
-			&& !SharedState->bStopped)
+		    && !SharedState->bStopped)
 		{
 			NewEntry->Grid = MoveTemp(Grid);
 		}

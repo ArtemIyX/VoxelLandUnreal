@@ -6,5 +6,5 @@ struct FVoxelLandProgramDraft;
 class FVoxelLandProgramOptimizer
 {
 public:
-    static bool Optimize(FVoxelLandProgramDraft& Draft, FString& Error);
+	static bool Optimize(FVoxelLandProgramDraft& Draft, FString& Error);
 };

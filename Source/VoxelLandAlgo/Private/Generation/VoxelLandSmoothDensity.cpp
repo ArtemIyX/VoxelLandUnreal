@@ -38,15 +38,17 @@ FVoxelLandError FillExpandedPositions(const FVoxelLandChunkKey& Key, float Voxel
 		const double PY = double(int64(Key.Coordinate.Y) * 32 + Y - 2) * double(VoxelSize);
 		const double PZ = double(int64(Key.Coordinate.Z) * 32 + Z - 2) * double(VoxelSize);
 		if (FMath::Abs(PX) > double(FLT_MAX) || FMath::Abs(PY) > double(FLT_MAX)
-			|| FMath::Abs(PZ) > double(FLT_MAX))
+		    || FMath::Abs(PZ) > double(FLT_MAX))
 		{
-			return SmoothError(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Expanded chunk coordinate cannot be represented"));
+			return SmoothError(EVoxelLandErrorCode::NonFiniteCoordinate,
+				TEXT("Expanded chunk coordinate cannot be represented"));
 		}
 		Positions[Sample] = FVector3f(float(PX), float(PY), float(PZ));
 		if (!FMath::IsFinite(Positions[Sample].X) || !FMath::IsFinite(Positions[Sample].Y)
-			|| !FMath::IsFinite(Positions[Sample].Z))
+		    || !FMath::IsFinite(Positions[Sample].Z))
 		{
-			return SmoothError(EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("Expanded chunk coordinate cannot be represented"));
+			return SmoothError(EVoxelLandErrorCode::NonFiniteCoordinate,
+				TEXT("Expanded chunk coordinate cannot be represented"));
 		}
 	}
 	return {};
@@ -96,21 +98,23 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 	}
 	if (IsInGameThread())
 	{
-		return SmoothError(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Chunk generation requires a worker thread"));
+		return SmoothError(EVoxelLandErrorCode::GameThreadNotAllowed,
+			TEXT("Chunk generation requires a worker thread"));
 	}
 	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
 	{
-		return SmoothError(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
+		return SmoothError(EVoxelLandErrorCode::InvalidContext,
+			TEXT("Worker belongs to a different generator or thread"));
 	}
 	if (Key.LOD != 0)
 	{
 		return SmoothError(EVoxelLandErrorCode::UnsupportedLod, TEXT("Smoothing supports only LOD 0"));
 	}
-    if (FVoxelLandError Error = GenerateExpandedDensity(Key, Worker, IsCancelled))
-    {
-        return Error;
-    }
-    const TArray<int16>& Expanded = Worker.SmoothScratch;
+	if (FVoxelLandError Error = GenerateExpandedDensity(Key, Worker, IsCancelled))
+	{
+		return Error;
+	}
+	const TArray<int16>& Expanded = Worker.SmoothScratch;
 	const int32 FixedStrength = int32(double(Strength) * 65535.0 + 0.5);
 	TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
 	Chunk->Key = Key;
@@ -143,70 +147,80 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key,
-    FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
-    TFunctionRef<bool()> IsCancelled) const
+	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
+	TFunctionRef<bool()> IsCancelled) const
 {
-    OutChunk.Reset();
-    if (IsInGameThread()) { return SmoothError(EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Filter generation requires a worker thread")); }
-    if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
-    {
-        return SmoothError(EVoxelLandErrorCode::InvalidContext, TEXT("Worker belongs to a different generator or thread"));
-    }
-    if (Key.LOD != 0) { return SmoothError(EVoxelLandErrorCode::UnsupportedLod, TEXT("Filter supports only LOD 0")); }
-    const int32 OperatorIndex = Program->GetData().ExternalFilterIndex;
-    if (!Worker.Impl->OperatorWorkers.IsValidIndex(OperatorIndex) || !Worker.Impl->OperatorWorkers[OperatorIndex])
-    {
-        return SmoothError(EVoxelLandErrorCode::InvalidProgram, TEXT("Filter worker unavailable"));
-    }
-    if (FVoxelLandError Error = GenerateExpandedDensity(Key, Worker, IsCancelled))
-    {
-        return Error;
-    }
-    const TArray<int16>& Expanded = Worker.SmoothScratch;
-    TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
-    Chunk->Key = Key;
-    Chunk->Density.SetNumUninitialized(FVoxelLandChunkData::SampleCount);
-    for (int32 Start = 0; Start < FVoxelLandChunkData::SampleCount; Start += SmoothBatchSize)
-    {
-        if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
-        const int32 Count = FMath::Min(SmoothBatchSize, FVoxelLandChunkData::SampleCount - Start);
-        FString ProviderError;
-        FVoxelLandOperatorOutput Writer(MakeArrayView(Chunk->Density.GetData() + Start, Count));
-        if (!Worker.Impl->OperatorWorkers[OperatorIndex]->EvaluateFilter(Expanded, Start, Writer, IsCancelled, ProviderError) ||
-            !Writer.IsComplete(ProviderError))
-        {
-            if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
-            FVoxelLandError Error = SmoothError(EVoxelLandErrorCode::InvalidProgram, TEXT("External filter failed"));
-            Error.Parameter = ProviderError;
-            return Error;
-        }
-    }
-    if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
-    Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);
-    if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
-    OutChunk = MoveTemp(Chunk);
-    return {};
+	OutChunk.Reset();
+	if (IsInGameThread())
+	{
+		return SmoothError(EVoxelLandErrorCode::GameThreadNotAllowed,
+			TEXT("Filter generation requires a worker thread"));
+	}
+	if (!Worker.Impl || Worker.Impl->Owner.Get() != this || Worker.Impl->Thread != FPlatformTLS::GetCurrentThreadId())
+	{
+		return SmoothError(EVoxelLandErrorCode::InvalidContext,
+			TEXT("Worker belongs to a different generator or thread"));
+	}
+	if (Key.LOD != 0) { return SmoothError(EVoxelLandErrorCode::UnsupportedLod, TEXT("Filter supports only LOD 0")); }
+	const int32 OperatorIndex = Program->GetData().ExternalFilterIndex;
+	if (!Worker.Impl->OperatorWorkers.IsValidIndex(OperatorIndex) || !Worker.Impl->OperatorWorkers[OperatorIndex])
+	{
+		return SmoothError(EVoxelLandErrorCode::InvalidProgram, TEXT("Filter worker unavailable"));
+	}
+	if (FVoxelLandError Error = GenerateExpandedDensity(Key, Worker, IsCancelled))
+	{
+		return Error;
+	}
+	const TArray<int16>& Expanded = Worker.SmoothScratch;
+	TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
+	Chunk->Key = Key;
+	Chunk->Density.SetNumUninitialized(FVoxelLandChunkData::SampleCount);
+	for (int32 Start = 0; Start < FVoxelLandChunkData::SampleCount; Start += SmoothBatchSize)
+	{
+		if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
+		const int32 Count = FMath::Min(SmoothBatchSize, FVoxelLandChunkData::SampleCount - Start);
+		FString ProviderError;
+		FVoxelLandOperatorOutput Writer(MakeArrayView(Chunk->Density.GetData() + Start, Count));
+		if (!Worker.Impl->OperatorWorkers[OperatorIndex]->EvaluateFilter(Expanded, Start, Writer, IsCancelled,
+			    ProviderError) ||
+		    !Writer.IsComplete(ProviderError))
+		{
+			if (IsCancelled())
+			{
+				return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled"));
+			}
+			FVoxelLandError Error = SmoothError(EVoxelLandErrorCode::InvalidProgram, TEXT("External filter failed"));
+			Error.Parameter = ProviderError;
+			return Error;
+		}
+	}
+	if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
+	Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);
+	if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
+	OutChunk = MoveTemp(Chunk);
+	return {};
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateExpandedDensity(const FVoxelLandChunkKey& Key,
-    FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const
+	FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const
 {
 	if (M4HeightGrid)
 	{
 		return GenerateM4Density(Key, ExpandedAxis, -2, Worker, Worker.SmoothScratch, IsCancelled);
 	}
 	TArray<int16>& Expanded = Worker.SmoothScratch;
-    Expanded.Reset();
-    Expanded.Reserve(ExpandedCount);
-    FVector3f Positions[SmoothBatchSize];
-    TArray<int16> Batch;
-    for (int32 Start = 0; Start < ExpandedCount; Start += SmoothBatchSize)
-    {
-        if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
-        const int32 Count = FMath::Min(SmoothBatchSize, ExpandedCount - Start);
-        if (FVoxelLandError Error = FillExpandedPositions(Key, Profile.VoxelSizeCm, Start, MakeArrayView(Positions, Count))) { return Error; }
-        if (FVoxelLandError Error = EvaluateSamples(MakeArrayView(Positions, Count), Worker, Batch)) { return Error; }
-        Expanded.Append(Batch);
-    }
-    return {};
+	Expanded.Reset();
+	Expanded.Reserve(ExpandedCount);
+	FVector3f Positions[SmoothBatchSize];
+	TArray<int16> Batch;
+	for (int32 Start = 0; Start < ExpandedCount; Start += SmoothBatchSize)
+	{
+		if (IsCancelled()) { return SmoothError(EVoxelLandErrorCode::Cancelled, TEXT("Filter generation cancelled")); }
+		const int32 Count = FMath::Min(SmoothBatchSize, ExpandedCount - Start);
+		if (FVoxelLandError Error = FillExpandedPositions(Key, Profile.VoxelSizeCm, Start,
+			MakeArrayView(Positions, Count))) { return Error; }
+		if (FVoxelLandError Error = EvaluateSamples(MakeArrayView(Positions, Count), Worker, Batch)) { return Error; }
+		Expanded.Append(Batch);
+	}
+	return {};
 }

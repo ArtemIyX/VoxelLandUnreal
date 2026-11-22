@@ -49,7 +49,7 @@ FVoxelLandError VoxelLandM4ErosionRandom::Start(uint64 WorldSeed, const FGuid& S
 	uint32 DropletIndex, int32 CellsX, int32 CellsY, FIntPoint& OutStart, TFunctionRef<bool()> IsCancelled)
 {
 	if (!StageId.IsValid() || CellsX < 1 || CellsY < 1 || CellsX > M4ErosionRandomMaxCells
-		|| CellsY > M4ErosionRandomMaxCells || DropletIndex >= uint32(M4ErosionRandomMaxDroplets))
+	    || CellsY > M4ErosionRandomMaxCells || DropletIndex >= uint32(M4ErosionRandomMaxDroplets))
 	{
 		return M4ErosionRandomError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 droplet stream parameters"));
@@ -80,7 +80,7 @@ FVoxelLandError VoxelLandM4ErosionRandom::Starts(uint64 WorldSeed, const FGuid& 
 	int32 CellsX, int32 CellsY, TArray<FIntPoint>& OutStarts, TFunctionRef<bool()> IsCancelled)
 {
 	if (!StageId.IsValid() || Count < 0 || Count > M4ErosionRandomMaxDroplets || CellsX < 1 || CellsY < 1
-		|| CellsX > M4ErosionRandomMaxCells || CellsY > M4ErosionRandomMaxCells)
+	    || CellsX > M4ErosionRandomMaxCells || CellsY > M4ErosionRandomMaxCells)
 	{
 		return M4ErosionRandomError(
 			EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 droplet stream parameters"));

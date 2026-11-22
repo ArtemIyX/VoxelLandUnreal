@@ -23,7 +23,7 @@ template <typename T> bool M4StageArrayEqual(const TArray<T>& A, const TArray<T>
 bool M4StageSameSource(const FVoxelLandGraphSnapshot& A, const FVoxelLandGraphSnapshot& B, const FGuid& OutputId)
 {
 	if (A.SourceVersion != B.SourceVersion || !M4StageArrayEqual(A.Parameters, B.Parameters)
-		|| !M4StageArrayEqual(A.Functions, B.Functions) || A.Nodes.Num() != B.Nodes.Num())
+	    || !M4StageArrayEqual(A.Functions, B.Functions) || A.Nodes.Num() != B.Nodes.Num())
 	{
 		return false;
 	}
@@ -39,7 +39,7 @@ bool M4StageSameSource(const FVoxelLandGraphSnapshot& A, const FVoxelLandGraphSn
 			++NextNode;
 		}
 		if (!B.Nodes.IsValidIndex(NextNode)
-			|| !FVoxelLandGraphNodeRecord::StaticStruct()->CompareScriptStruct(&Node, &B.Nodes[NextNode++], 0))
+		    || !FVoxelLandGraphNodeRecord::StaticStruct()->CompareScriptStruct(&Node, &B.Nodes[NextNode++], 0))
 		{
 			return false;
 		}
@@ -64,7 +64,7 @@ bool M4StageSameSource(const FVoxelLandGraphSnapshot& A, const FVoxelLandGraphSn
 			++NextLink;
 		}
 		if (!B.Links.IsValidIndex(NextLink)
-			|| !FVoxelLandGraphLinkRecord::StaticStruct()->CompareScriptStruct(&Link, &B.Links[NextLink++], 0))
+		    || !FVoxelLandGraphLinkRecord::StaticStruct()->CompareScriptStruct(&Link, &B.Links[NextLink++], 0))
 		{
 			return false;
 		}
@@ -82,7 +82,7 @@ bool VoxelLandM4HeightStageValidation::Validate(const FVoxelLandM4WorldSnapshot&
 	OutError.Reset();
 	const auto& Stage = Snapshot.HeightStage;
 	if (Stage.Version == 0 && !Stage.OutputNodeId.IsValid() && !Stage.ContinentalInputId.IsValid()
-		&& !Stage.MountainInputId.IsValid() && !Stage.PeaksInputId.IsValid())
+	    && !Stage.MountainInputId.IsValid() && !Stage.PeaksInputId.IsValid())
 	{
 		return true;
 	}
@@ -100,9 +100,9 @@ bool VoxelLandM4HeightStageValidation::Validate(const FVoxelLandM4WorldSnapshot&
 		const FVoxelLandGraphNodeRecord* Node = Control->Source.Nodes.FindByPredicate(
 			[&Stage](const FVoxelLandGraphNodeRecord& Item) { return Item.Id == Stage.OutputNodeId; });
 		if (!Node || Node->OperatorId != VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput)
-			|| Node->OperatorVersion != 1 || Node->Pins.Num() != 1 || Node->Pins[0].bOutput
-			|| Node->Pins[0].Type != EVoxelLandGraphValueType::Float || !Node->Pins[0].Id.IsValid()
-			|| Node->Pins[0].Id != Inputs[Index] || InputPins.Contains(Node->Pins[0].Id))
+		    || Node->OperatorVersion != 1 || Node->Pins.Num() != 1 || Node->Pins[0].bOutput
+		    || Node->Pins[0].Type != EVoxelLandGraphValueType::Float || !Node->Pins[0].Id.IsValid()
+		    || Node->Pins[0].Id != Inputs[Index] || InputPins.Contains(Node->Pins[0].Id))
 		{
 			OutError = TEXT("M4 height stage does not match its projected control inputs");
 			return false;

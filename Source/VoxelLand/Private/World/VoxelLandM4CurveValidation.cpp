@@ -8,8 +8,8 @@ bool VoxelLandM4CurveValidation::Validate(const FVoxelLandM4ControlSnapshot& Cha
 {
 	const FVoxelLandM4CookedCurve& Cooked = Channel.CookedCurve;
 	if (Cooked.BakeVersion != int32(VoxelLandM4CurveBake::AlgorithmVersion)
-		|| Cooked.SamplesQ8.Num() != FVoxelLandM4CurveLut::SampleCount || Channel.CurveKeys.Num() < 2
-		|| Channel.CurveKeys.Num() > 4097 || Cooked.SourceKeys.Num() != Channel.CurveKeys.Num())
+	    || Cooked.SamplesQ8.Num() != FVoxelLandM4CurveLut::SampleCount || Channel.CurveKeys.Num() < 2
+	    || Channel.CurveKeys.Num() > 4097 || Cooked.SourceKeys.Num() != Channel.CurveKeys.Num())
 	{
 		Error = TEXT("M4 baked curve is missing, unsupported, or exceeds key limits");
 		return false;
@@ -21,7 +21,7 @@ bool VoxelLandM4CurveValidation::Validate(const FVoxelLandM4ControlSnapshot& Cha
 		const FVoxelLandM4CurveAuthoringKey& Key = Channel.CurveKeys[Index];
 		const FVoxelLandM4CurveAuthoringKey& Source = Cooked.SourceKeys[Index];
 		if (Key.InputQ16 < 0 || Key.InputQ16 > 65535 || Key.InputQ16 != Source.InputQ16
-			|| Key.OutputQ8 != Source.OutputQ8)
+		    || Key.OutputQ8 != Source.OutputQ8)
 		{
 			Error = TEXT("M4 baked curve has invalid or stale source keys");
 			return false;

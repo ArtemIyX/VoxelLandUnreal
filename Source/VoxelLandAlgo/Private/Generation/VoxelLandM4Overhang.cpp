@@ -15,7 +15,7 @@ constexpr int32 NoiseScale = 32767;
 bool IsValid(const FVoxelLandM4OverhangSettings& Settings)
 {
 	return Settings.AmplitudeQ8 >= 0 && Settings.AmplitudeQ8 <= MaxAmplitudeQ8 && Settings.BandHalfWidthQ8 >= 1
-		&& Settings.BandHalfWidthQ8 <= MaxBandQ8 && Settings.AmplitudeQ8 <= Settings.BandHalfWidthQ8;
+	       && Settings.BandHalfWidthQ8 <= MaxBandQ8 && Settings.AmplitudeQ8 <= Settings.BandHalfWidthQ8;
 }
 
 bool QuantizeNoise(float Noise, int32& OutNoise)
@@ -40,7 +40,7 @@ bool DisplacementQ8(
 	const int64 Band = Settings.BandHalfWidthQ8;
 	// Compare before negation so even INT64_MIN is safe.
 	if (!Settings.bEnabled || Settings.AmplitudeQ8 == 0 || HeightDifferenceQ8 <= -Band || HeightDifferenceQ8 >= Band
-		|| NoiseQ == 0)
+	    || NoiseQ == 0)
 	{
 		OutDeltaQ8 = 0;
 		return true;

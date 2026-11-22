@@ -71,7 +71,7 @@ FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayV
 	for (const FVoxelLandM4StageFingerprintNode& Record : Semantics)
 	{
 		if (!ById.Contains(Record.Id) || SemanticById.Contains(Record.Id) || Record.SemanticsVersion == 0
-			|| Record.SemanticBytes.IsEmpty() || Record.SemanticBytes.Num() > MaxSemanticBytes)
+		    || Record.SemanticBytes.IsEmpty() || Record.SemanticBytes.Num() > MaxSemanticBytes)
 		{
 			return FingerprintFailure(TEXT("Invalid or duplicate M4 node semantics"));
 		}
@@ -95,7 +95,7 @@ FVoxelLandError Build(TConstArrayView<FVoxelLandM4StageNode> Nodes, TConstArrayV
 	Writer.U8('L');
 	Writer.U8('S');
 	Writer.U8('F');
-	Writer.U32(1);                           // encoding format, not terrain algorithm or program version
+	Writer.U32(1); // encoding format, not terrain algorithm or program version
 	FingerprintGuid(Writer, Closure.Last()); // requested output producer
 	Writer.U32(uint32(Context.Num()));
 	Writer.Bytes.Append(Context.GetData(), Context.Num());

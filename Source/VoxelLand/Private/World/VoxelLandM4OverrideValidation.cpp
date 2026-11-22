@@ -18,7 +18,7 @@ bool VoxelLandM4OverrideValidation::Validate(const FVoxelLandM4ControlSnapshot& 
 		{
 			const TCHAR C = P.Name[Index];
 			if (!((C >= TEXT('A') && C <= TEXT('Z')) || (C >= TEXT('a') && C <= TEXT('z')) || C == TEXT('_')
-					|| (Index > 0 && C >= TEXT('0') && C <= TEXT('9'))))
+			      || (Index > 0 && C >= TEXT('0') && C <= TEXT('9'))))
 			{
 				bValidName = false;
 				break;
@@ -26,17 +26,17 @@ bool VoxelLandM4OverrideValidation::Validate(const FVoxelLandM4ControlSnapshot& 
 		}
 		const FString LowerName = P.Name.ToLower();
 		if (!bValidName || P.Name.Len() > 128 || Names.Contains(LowerName) || !P.Id.IsValid()
-			|| Declarations.Contains(P.Id)
-			|| (P.Type != EVoxelLandGraphValueType::Float && P.Type != EVoxelLandGraphValueType::Int32
-				&& P.Type != EVoxelLandGraphValueType::Bool)
-			|| (P.Type == EVoxelLandGraphValueType::Float
-				&& (!FMath::IsFinite(P.FloatDefault)
-					|| (P.bHasRange
-						&& (!FMath::IsFinite(P.FloatMin) || !FMath::IsFinite(P.FloatMax) || P.FloatMin > P.FloatMax
-							|| P.FloatDefault < P.FloatMin || P.FloatDefault > P.FloatMax))))
-			|| (P.Type == EVoxelLandGraphValueType::Int32 && P.bHasRange
-				&& (P.IntMin > P.IntMax || P.IntDefault < P.IntMin || P.IntDefault > P.IntMax))
-			|| (P.Type == EVoxelLandGraphValueType::Bool && P.bHasRange))
+		    || Declarations.Contains(P.Id)
+		    || (P.Type != EVoxelLandGraphValueType::Float && P.Type != EVoxelLandGraphValueType::Int32
+		        && P.Type != EVoxelLandGraphValueType::Bool)
+		    || (P.Type == EVoxelLandGraphValueType::Float
+		        && (!FMath::IsFinite(P.FloatDefault)
+		            || (P.bHasRange
+		                && (!FMath::IsFinite(P.FloatMin) || !FMath::IsFinite(P.FloatMax) || P.FloatMin > P.FloatMax
+		                    || P.FloatDefault < P.FloatMin || P.FloatDefault > P.FloatMax))))
+		    || (P.Type == EVoxelLandGraphValueType::Int32 && P.bHasRange
+		        && (P.IntMin > P.IntMax || P.IntDefault < P.IntMin || P.IntDefault > P.IntMax))
+		    || (P.Type == EVoxelLandGraphValueType::Bool && P.bHasRange))
 		{
 			Error = TEXT("M4 graph contains invalid or duplicate override declarations");
 			return false;
@@ -49,12 +49,12 @@ bool VoxelLandM4OverrideValidation::Validate(const FVoxelLandM4ControlSnapshot& 
 	{
 		const FVoxelLandGraphParameter* const* Found = Declarations.Find(O.ParameterId);
 		if (!Found || Seen.Contains(O.ParameterId) || O.Type != (*Found)->Type
-			|| (O.Type == EVoxelLandGraphValueType::Float
-				&& (!FMath::IsFinite(O.FloatValue)
-					|| ((*Found)->bHasRange
-						&& (O.FloatValue < (*Found)->FloatMin || O.FloatValue > (*Found)->FloatMax))))
-			|| (O.Type == EVoxelLandGraphValueType::Int32 && (*Found)->bHasRange
-				&& (O.IntValue < (*Found)->IntMin || O.IntValue > (*Found)->IntMax)))
+		    || (O.Type == EVoxelLandGraphValueType::Float
+		        && (!FMath::IsFinite(O.FloatValue)
+		            || ((*Found)->bHasRange
+		                && (O.FloatValue < (*Found)->FloatMin || O.FloatValue > (*Found)->FloatMax))))
+		    || (O.Type == EVoxelLandGraphValueType::Int32 && (*Found)->bHasRange
+		        && (O.IntValue < (*Found)->IntMin || O.IntValue > (*Found)->IntMax)))
 		{
 			Error = TEXT("M4 override has an unknown or duplicate ID, incompatible type, or invalid value");
 			return false;

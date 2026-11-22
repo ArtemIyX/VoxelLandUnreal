@@ -42,15 +42,15 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	// every sample. This check also excludes square/multiplication overflow.
 	int32 Dummy = 0;
 	if (!VoxelLandM4Control::BilinearHeightQ8(0, 0, 0, 0, 0, 0, InSpacingCm, Dummy)
-		|| InSpacingCm > std::numeric_limits<int64>::max() / InCellsX
-		|| InSpacingCm > std::numeric_limits<int64>::max() / InCellsY)
+	    || InSpacingCm > std::numeric_limits<int64>::max() / InCellsX
+	    || InSpacingCm > std::numeric_limits<int64>::max() / InCellsY)
 	{
 		return false;
 	}
 	const int64 ExtentX = InSpacingCm * InCellsX;
 	const int64 ExtentY = InSpacingCm * InCellsY;
 	if (InOriginX > std::numeric_limits<int64>::max() - ExtentX
-		|| InOriginY > std::numeric_limits<int64>::max() - ExtentY)
+	    || InOriginY > std::numeric_limits<int64>::max() - ExtentY)
 	{
 		return false;
 	}
@@ -87,9 +87,9 @@ bool FVoxelLandM4HeightGrid::Create(int64 InOriginX, int64 InOriginY, int32 InCe
 	if (ObservedStats)
 	{
 		if (ObservedStats->SampleCount != Count || ObservedStats->ContinentalMin > ObservedStats->ContinentalMax
-			|| ObservedStats->MountainMin > ObservedStats->MountainMax
-			|| ObservedStats->PeaksMin > ObservedStats->PeaksMax
-			|| ObservedStats->BaseHeightMinQ8 > ObservedStats->BaseHeightMaxQ8)
+		    || ObservedStats->MountainMin > ObservedStats->MountainMax
+		    || ObservedStats->PeaksMin > ObservedStats->PeaksMax
+		    || ObservedStats->BaseHeightMinQ8 > ObservedStats->BaseHeightMaxQ8)
 		{
 			return false;
 		}
@@ -121,7 +121,7 @@ bool FVoxelLandM4HeightGrid::Sample(int64 WorldX, int64 WorldY, int32& OutHeight
 	}
 	int64 X = 0, Y = 0, Rx = 0, Ry = 0;
 	if (!VoxelLandM4Control::GridCoordinate(WorldX, OriginX, SpacingCm, X, Rx)
-		|| !VoxelLandM4Control::GridCoordinate(WorldY, OriginY, SpacingCm, Y, Ry))
+	    || !VoxelLandM4Control::GridCoordinate(WorldY, OriginY, SpacingCm, Y, Ry))
 	{
 		return false;
 	}

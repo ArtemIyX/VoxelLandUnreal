@@ -231,8 +231,8 @@ void UVoxelLandEditorSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeCo
 	Section.AddMenuEntry(FGenericCommands::Get().Delete);
 	const UVoxelLandEditorNode* OutputNode = Cast<UVoxelLandEditorNode>(Context->Node.Get());
 	UVoxelLandM4ControlGraph* Named = OutputNode && OutputNode->GetGraph()
-										? Cast<UVoxelLandM4ControlGraph>(OutputNode->GetGraph()->GetOuter())
-										: nullptr;
+		                                  ? Cast<UVoxelLandM4ControlGraph>(OutputNode->GetGraph()->GetOuter())
+		                                  : nullptr;
 	if (Named && OutputNode->Kind == int32(EVoxelLandBuiltinNode::M4HeightOutput))
 	{
 		TWeakObjectPtr<UVoxelLandM4ControlGraph> WeakGraph = Named;
@@ -318,8 +318,8 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
 	{
 		const int32 Kind = int32(Builtin);
 		if (Builtin == EVoxelLandBuiltinNode::M4HeightOutput
-			&& (!ContextMenuBuilder.CurrentGraph
-				|| !ContextMenuBuilder.CurrentGraph->GetOuter()->IsA<UVoxelLandM4ControlGraph>()))
+		    && (!ContextMenuBuilder.CurrentGraph
+		        || !ContextMenuBuilder.CurrentGraph->GetOuter()->IsA<UVoxelLandM4ControlGraph>()))
 		{
 			continue;
 		}
@@ -415,9 +415,15 @@ const FPinConnectionResponse UVoxelLandEditorSchema::CanCreateConnection(const U
 	}
 	FVoxelLandBuiltinNodeSpec SmoothSpec;
 	const bool bSmooth = ToNode && ToNode->Kind == int32(EVoxelLandBuiltinNode::SmoothDensity);
-	const bool bHasSmoothSpec = bSmooth && FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode::SmoothDensity, SmoothSpec);
-	const FVoxelLandBuiltinPinSpec* SmoothPin = bHasSmoothSpec ? SmoothSpec.Pins.FindByPredicate(
-		[Input](const FVoxelLandBuiltinPinSpec& PinSpec) { return !PinSpec.bOutput && FName(*PinSpec.Name) == Input->PinName; }) : nullptr;
+	const bool bHasSmoothSpec = bSmooth && FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode::SmoothDensity,
+		                            SmoothSpec);
+	const FVoxelLandBuiltinPinSpec* SmoothPin = bHasSmoothSpec
+		                                            ? SmoothSpec.Pins.FindByPredicate(
+			                                            [Input](const FVoxelLandBuiltinPinSpec& PinSpec) {
+				                                            return !PinSpec.bOutput && FName(*PinSpec.Name) == Input->
+				                                                   PinName;
+			                                            })
+		                                            : nullptr;
 	const bool bSmoothUniform = SmoothPin ? SmoothPin->bUniform : Input->PinName != FName(TEXT("Density"));
 	if (bSmooth && bSmoothUniform)
 	{
@@ -433,8 +439,7 @@ const FPinConnectionResponse UVoxelLandEditorSchema::CanCreateConnection(const U
 	FVoxelLandBuiltinNodeSpec NoiseSpec;
 	if (ToNode && FVoxelLandBuiltinCatalog::Find(EVoxelLandBuiltinNode(ToNode->Kind), NoiseSpec) && NoiseSpec.bNoise)
 	{
-		const bool bUniform = NoiseSpec.Pins.ContainsByPredicate([Input](const FVoxelLandBuiltinPinSpec& PinSpec)
-		{
+		const bool bUniform = NoiseSpec.Pins.ContainsByPredicate([Input](const FVoxelLandBuiltinPinSpec& PinSpec) {
 			return PinSpec.bUniform && FName(*PinSpec.Name) == Input->PinName;
 		});
 		if (bUniform)

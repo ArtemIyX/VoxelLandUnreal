@@ -8,16 +8,17 @@ namespace VoxelLandNative
 {
 FNode::FNode() = default;
 FNode::~FNode() = default;
+
 FNativeWorker::FNativeWorker(EBackend InBackend)
 	: Backend(InBackend)
-	, ThreadId(FPlatformTLS::GetCurrentThreadId())
-{
-}
+	  , ThreadId(FPlatformTLS::GetCurrentThreadId()) {}
+
 FNativeWorker::~FNativeWorker()
 {
 	checkf(ThreadId == FPlatformTLS::GetCurrentThreadId(), TEXT("Native noise worker destroyed on a different thread"));
 	Nodes.Empty();
 }
+
 bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError)
 {
 	Nodes.Reserve(Configs.Num());
@@ -25,8 +26,8 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 	{
 		const FConfig& Config = Configs[Index];
 		if (Config.Family == EVoxelLandNoiseFamily::Fbm
-			&& (Config.Octaves < 1 || Config.Octaves > 16 || !FMath::IsFinite(Config.Gain) || Config.Gain < 0.f
-				|| Config.Gain > 1.f || !FMath::IsFinite(Config.Lacunarity) || Config.Lacunarity < 1.f))
+		    && (Config.Octaves < 1 || Config.Octaves > 16 || !FMath::IsFinite(Config.Gain) || Config.Gain < 0.f
+		        || Config.Gain > 1.f || !FMath::IsFinite(Config.Lacunarity) || Config.Lacunarity < 1.f))
 		{
 			OutError = FString::Printf(TEXT("InvalidNoiseInput: invalid fBm configuration %d"), Index);
 			return false;
@@ -52,7 +53,8 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 				Node->Generator = FFastNoiseNative::CreatePerlin(OutError, Config.bUnitScale);
 				break;
 			case EVoxelLandNoiseFamily::Fbm:
-				Node->Generator = FFastNoiseNative::CreateFbm(Config.Octaves, Config.Gain, Config.Lacunarity, OutError, Config.bUnitScale);
+				Node->Generator = FFastNoiseNative::CreateFbm(Config.Octaves, Config.Gain, Config.Lacunarity, OutError,
+					Config.bUnitScale);
 				break;
 			case EVoxelLandNoiseFamily::Value:
 				Node->Generator = FFastNoiseNative::CreateValue(OutError, Config.bUnitScale);
@@ -73,10 +75,12 @@ bool FNativeWorker::Initialize(const TArray<FConfig>& Configs, FString& OutError
 	}
 	return true;
 }
+
 EBackend FNativeWorker::GetBackend() const
 {
 	return Backend;
 }
+
 bool FNativeWorker::Sample(int32 ConfigIndex, bool b3D, int32 Seed, int32 Count, const float* X, const float* Y,
 	const float* Z, float* Output, FString& OutError)
 {
@@ -94,16 +98,17 @@ bool FNativeWorker::Sample(int32 ConfigIndex, bool b3D, int32 Seed, int32 Count,
 	for (int32 Index = 0; Index < Count; ++Index)
 	{
 		if (!FMath::IsFinite(X[Index]) || !FMath::IsFinite(Y[Index])
-			|| FMath::Abs(double(X[Index])) > Node.MaximumPosition
-			|| FMath::Abs(double(Y[Index])) > Node.MaximumPosition
-			|| (b3D && (!FMath::IsFinite(Z[Index]) || FMath::Abs(double(Z[Index])) > Node.MaximumPosition)))
+		    || FMath::Abs(double(X[Index])) > Node.MaximumPosition
+		    || FMath::Abs(double(Y[Index])) > Node.MaximumPosition
+		    || (b3D && (!FMath::IsFinite(Z[Index]) || FMath::Abs(double(Z[Index])) > Node.MaximumPosition)))
 		{
 			OutError = FString::Printf(TEXT("InvalidNoiseInput: position %d exceeds the safe lattice domain"), Index);
 			return false;
 		}
 	}
-	const bool bSuccess = b3D ? Node.Generator->Sample3D(Count, X, Y, Z, Seed, Output, OutError)
-							  : Node.Generator->Sample2D(Count, X, Y, Seed, Output, OutError);
+	const bool bSuccess = b3D
+		                      ? Node.Generator->Sample3D(Count, X, Y, Z, Seed, Output, OutError)
+		                      : Node.Generator->Sample2D(Count, X, Y, Seed, Output, OutError);
 	if (!bSuccess)
 	{
 		return false;

@@ -67,7 +67,7 @@ bool M4ControlGridEnd(int64 Origin, int64 Spacing, int32 Cells, int64& End)
 {
 	int64 Offset = 0;
 	if (!VoxelLandM4Control::LatticePositionCm(Cells, Spacing, Offset)
-		|| Origin > std::numeric_limits<int64>::max() - Offset)
+	    || Origin > std::numeric_limits<int64>::max() - Offset)
 	{
 		return false;
 	}
@@ -119,8 +119,8 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, FVoxelLandWorkerC
 	}
 	int64 EndX = 0, EndY = 0;
 	if (!M4ControlGridEnd(OriginX, SpacingCm, CellsX, EndX) || !M4ControlGridEnd(OriginY, SpacingCm, CellsY, EndY)
-		|| OriginX < -ExactFloatInteger || OriginY < -ExactFloatInteger || EndX > ExactFloatInteger
-		|| EndY > ExactFloatInteger)
+	    || OriginX < -ExactFloatInteger || OriginY < -ExactFloatInteger || EndX > ExactFloatInteger
+	    || EndY > ExactFloatInteger)
 	{
 		return MakeM4ControlGridError(EVoxelLandErrorCode::NonFiniteCoordinate,
 			TEXT("M4 control grid coordinates exceed exact float integer range"));

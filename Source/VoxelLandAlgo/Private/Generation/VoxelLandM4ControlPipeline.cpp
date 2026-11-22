@@ -69,19 +69,19 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, const FVoxelL
 
 	TArray<uint16> Continental, Mountain, Peaks;
 	if (const FVoxelLandError Error =
-			VoxelLandM4ControlGrid::Evaluate(ContinentalGenerator, ContinentalWorker, Domain.OriginXCm,
-				Domain.OriginYCm, Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Continental, IsCancelled))
+		VoxelLandM4ControlGrid::Evaluate(ContinentalGenerator, ContinentalWorker, Domain.OriginXCm,
+			Domain.OriginYCm, Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Continental, IsCancelled))
 	{
 		return Error;
 	}
 	if (const FVoxelLandError Error =
-			VoxelLandM4ControlGrid::Evaluate(MountainGenerator, MountainWorker, Domain.OriginXCm, Domain.OriginYCm,
-				Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Mountain, IsCancelled))
+		VoxelLandM4ControlGrid::Evaluate(MountainGenerator, MountainWorker, Domain.OriginXCm, Domain.OriginYCm,
+			Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Mountain, IsCancelled))
 	{
 		return Error;
 	}
 	if (const FVoxelLandError Error = VoxelLandM4ControlGrid::Evaluate(PeaksGenerator, PeaksWorker, Domain.OriginXCm,
-			Domain.OriginYCm, Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Peaks, IsCancelled))
+		Domain.OriginYCm, Domain.GridSpacingCm, Domain.CellsX, Domain.CellsY, Peaks, IsCancelled))
 	{
 		return Error;
 	}
@@ -89,8 +89,8 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, const FVoxelL
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
 	uint64 Hash = 0;
 	if (const FVoxelLandError Error =
-			VoxelLandM4HeightPrepass::Generate(Domain, Continental, ContinentalCurve, Mountain, MountainCurve, Peaks,
-				PeaksCurve, BaseQ8, WorldSeed, StageId, Salt, DropletCount, Erosion, Grid, Hash, IsCancelled, Lease))
+		VoxelLandM4HeightPrepass::Generate(Domain, Continental, ContinentalCurve, Mountain, MountainCurve, Peaks,
+			PeaksCurve, BaseQ8, WorldSeed, StageId, Salt, DropletCount, Erosion, Grid, Hash, IsCancelled, Lease))
 	{
 		return Error;
 	}

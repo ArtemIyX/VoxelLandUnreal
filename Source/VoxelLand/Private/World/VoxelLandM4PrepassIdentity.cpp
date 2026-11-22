@@ -95,9 +95,9 @@ bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& C
 {
 	FString OverrideError;
 	if (!VoxelLandM4OverrideValidation::Validate(Channel, OverrideError)
-		|| VoxelLandM4ControlGrid::ValidateProgram(Program) || Channel.CookedCurve.BakeVersion != 1
-		|| Channel.CookedCurve.SamplesQ8.Num() != 4097 || Channel.Payload.Parameters.Num() > 128
-		|| Channel.Overrides.Num() > 128)
+	    || VoxelLandM4ControlGrid::ValidateProgram(Program) || Channel.CookedCurve.BakeVersion != 1
+	    || Channel.CookedCurve.SamplesQ8.Num() != 4097 || Channel.Payload.Parameters.Num() > 128
+	    || Channel.Overrides.Num() > 128)
 	{
 		return false;
 	}
@@ -124,8 +124,8 @@ bool M4IdentityChannel(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& C
 		// table corresponds to the compiled program's reachable parameter slots.
 		// All authored overrides have already been validated above.
 		if (EncodingVersion < 4
-			|| Channel.Payload.Parameters.ContainsByPredicate(
-				[&O](const FVoxelLandSerializedParameter& P) { return P.Id == O.ParameterId; }))
+		    || Channel.Payload.Parameters.ContainsByPredicate(
+			    [&O](const FVoxelLandSerializedParameter& P) { return P.Id == O.ParameterId; }))
 		{
 			Overrides.Add(&O);
 		}
@@ -206,20 +206,20 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 		EncodingVersion = Snapshot.HeightStage.Version == 1 ? 3u : 2u;
 	}
 	if ((EncodingVersion != 1 && EncodingVersion != 2 && EncodingVersion != 3 && EncodingVersion != 4)
-		|| (Snapshot.HeightStage.Version == 1 && EncodingVersion != 3 && EncodingVersion != 4)
-		|| (Snapshot.HeightStage.Version == 0 && EncodingVersion == 3)
-		|| Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite || VoxelLandM4Domain::Validate(Snapshot.Domain)
-		|| Snapshot.FormatVersion != 1 || Snapshot.BaseHeightQ8 < -512000000 || Snapshot.BaseHeightQ8 > 512000000)
+	    || (Snapshot.HeightStage.Version == 1 && EncodingVersion != 3 && EncodingVersion != 4)
+	    || (Snapshot.HeightStage.Version == 0 && EncodingVersion == 3)
+	    || Snapshot.Domain.Mode != EVoxelLandM4DomainMode::Finite || VoxelLandM4Domain::Validate(Snapshot.Domain)
+	    || Snapshot.FormatVersion != 1 || Snapshot.BaseHeightQ8 < -512000000 || Snapshot.BaseHeightQ8 > 512000000)
 	{
 		return M4IdentityFailure(TEXT("Invalid finite M4 prepass identity inputs"));
 	}
 	if (Snapshot.Domain.bGlobalErosion
-		&& (!Snapshot.ErosionStageId.IsValid() || Snapshot.ErosionSalt < 0 || Snapshot.DropletCount < 0
-			|| Snapshot.DropletCount > 65536 || Snapshot.Erosion.MaxSteps < 0 || Snapshot.Erosion.MaxSteps > 128
-			|| Snapshot.Erosion.ThermalIterations < 0 || Snapshot.Erosion.ThermalIterations > 32
-			|| Snapshot.Erosion.CapacityMaxQ8 < 0 || Snapshot.Erosion.CapacityMaxQ8 > 512000000
-			|| Snapshot.Erosion.TalusQ8 < 0 || Snapshot.Erosion.TalusQ8 > 512000000
-			|| Snapshot.Erosion.MaxTransferQ8 < 0 || Snapshot.Erosion.MaxTransferQ8 > 512000000))
+	    && (!Snapshot.ErosionStageId.IsValid() || Snapshot.ErosionSalt < 0 || Snapshot.DropletCount < 0
+	        || Snapshot.DropletCount > 65536 || Snapshot.Erosion.MaxSteps < 0 || Snapshot.Erosion.MaxSteps > 128
+	        || Snapshot.Erosion.ThermalIterations < 0 || Snapshot.Erosion.ThermalIterations > 32
+	        || Snapshot.Erosion.CapacityMaxQ8 < 0 || Snapshot.Erosion.CapacityMaxQ8 > 512000000
+	        || Snapshot.Erosion.TalusQ8 < 0 || Snapshot.Erosion.TalusQ8 > 512000000
+	        || Snapshot.Erosion.MaxTransferQ8 < 0 || Snapshot.Erosion.MaxTransferQ8 > 512000000))
 	{
 		return M4IdentityFailure(TEXT("Invalid M4 erosion identity inputs"));
 	}
@@ -255,8 +255,8 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 		M4IdentityU64(W, uint64(Snapshot.Erosion.MaxTransferQ8));
 	}
 	if (!M4IdentityChannel(W, Snapshot.Continental, Continental, EncodingVersion)
-		|| !M4IdentityChannel(W, Snapshot.Mountain, Mountain, EncodingVersion)
-		|| !M4IdentityChannel(W, Snapshot.Peaks, Peaks, EncodingVersion))
+	    || !M4IdentityChannel(W, Snapshot.Mountain, Mountain, EncodingVersion)
+	    || !M4IdentityChannel(W, Snapshot.Peaks, Peaks, EncodingVersion))
 	{
 		return M4IdentityFailure(TEXT("Unsupported or invalid M4 control identity inputs"));
 	}

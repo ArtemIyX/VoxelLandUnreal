@@ -11,7 +11,7 @@ namespace
 bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& Error)
 {
 	if (Source.SourceVersion != 1 || Source.Nodes.Num() > 128 || Source.Links.Num() > 2048
-		|| Source.Parameters.Num() > 128 || Source.Functions.Num() > 128)
+	    || Source.Parameters.Num() > 128 || Source.Functions.Num() > 128)
 	{
 		Error = TEXT("M4 control source exceeds projection limits or has an unsupported version.");
 		return false;
@@ -50,7 +50,7 @@ bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& 
 	{
 		ConfigBytes += Node.Configuration.Num();
 		if (!Node.Id.IsValid() || !Node.OperatorId.IsValid() || Node.OperatorVersion < 1 || Nodes.Contains(Node.Id)
-			|| Node.Pins.Num() > 64 || Node.Configuration.Num() > 65536 || ConfigBytes > 1048576)
+		    || Node.Pins.Num() > 64 || Node.Configuration.Num() > 65536 || ConfigBytes > 1048576)
 		{
 			Error = TEXT("Invalid or duplicate M4 graph node or configuration.");
 			return false;
@@ -59,8 +59,8 @@ bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& 
 		for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
 		{
 			if (!Pin.Id.IsValid() || Pins.Contains(Pin.Id) || Pin.bInvalidDefault || !FMath::IsFinite(Pin.FloatDefault)
-				|| (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
-					&& Pin.Type != EVoxelLandGraphValueType::Bool))
+			    || (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
+			        && Pin.Type != EVoxelLandGraphValueType::Bool))
 			{
 				Error = TEXT("Invalid or duplicate M4 graph pin.");
 				return false;
@@ -77,9 +77,9 @@ bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& 
 		const auto SourceOwner = Owners.Find(Link.SourcePin);
 		const auto TargetOwner = Owners.Find(Link.TargetPin);
 		if (!Nodes.Contains(Link.SourceNode) || !Nodes.Contains(Link.TargetNode) || !SourcePin || !TargetPin
-			|| !SourceOwner || !TargetOwner || *SourceOwner != Link.SourceNode || *TargetOwner != Link.TargetNode
-			|| !(*SourcePin)->bOutput || (*TargetPin)->bOutput || (*SourcePin)->Type != (*TargetPin)->Type
-			|| ConnectedInputs.Contains(Link.TargetPin))
+		    || !SourceOwner || !TargetOwner || *SourceOwner != Link.SourceNode || *TargetOwner != Link.TargetNode
+		    || !(*SourcePin)->bOutput || (*TargetPin)->bOutput || (*SourcePin)->Type != (*TargetPin)->Type
+		    || ConnectedInputs.Contains(Link.TargetPin))
 		{
 			Error = TEXT("Invalid M4 graph link or duplicate input connection.");
 			return false;
@@ -98,7 +98,7 @@ bool M4ProjectionValidateSource(const FVoxelLandGraphSnapshot& Source, FString& 
 bool M4ProjectionTerminalValid(const FVoxelLandGraphNodeRecord& Node, int32 Inputs)
 {
 	if (Node.OperatorVersion != 1 || !Node.Configuration.IsEmpty() || !Node.FunctionPath.IsNull()
-		|| Node.Pins.Num() != Inputs)
+	    || Node.Pins.Num() != Inputs)
 	{
 		return false;
 	}
@@ -119,7 +119,7 @@ void UVoxelLandM4ControlGraph::Serialize(FArchive& Ar)
 	Super::Serialize(Ar);
 	const FObjectSavePackageSerializeContext* Context = Ar.GetSavePackageSerializeContext();
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
-		&& Context->GetPhase() == EObjectSaveContextPhase::Write && !bCookPreparationSucceeded)
+	    && Context->GetPhase() == EObjectSaveContextPhase::Write && !bCookPreparationSucceeded)
 	{
 		Ar.SetError();
 	}
@@ -138,8 +138,8 @@ void UVoxelLandM4ControlGraph::PostSaveRoot(FObjectPostSaveRootContext ObjectSav
 FGuid UVoxelLandM4ControlGraph::GetOutputId(EVoxelLandM4ControlChannel Channel) const
 {
 	if (HeightOutputId.IsValid()
-		&& (Channel == EVoxelLandM4ControlChannel::Continental || Channel == EVoxelLandM4ControlChannel::Mountain
-			|| Channel == EVoxelLandM4ControlChannel::Peaks))
+	    && (Channel == EVoxelLandM4ControlChannel::Continental || Channel == EVoxelLandM4ControlChannel::Mountain
+	        || Channel == EVoxelLandM4ControlChannel::Peaks))
 	{
 		return HeightOutputId;
 	}
@@ -181,10 +181,13 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 	}
 	if (HeightOutputId.IsValid())
 	{
-		const int32 PinIndex = Channel == EVoxelLandM4ControlChannel::Continental ? 0
-							 : Channel == EVoxelLandM4ControlChannel::Mountain    ? 1
-							 : Channel == EVoxelLandM4ControlChannel::Peaks       ? 2
-																				  : INDEX_NONE;
+		const int32 PinIndex = Channel == EVoxelLandM4ControlChannel::Continental
+			                       ? 0
+			                       : Channel == EVoxelLandM4ControlChannel::Mountain
+			                       ? 1
+			                       : Channel == EVoxelLandM4ControlChannel::Peaks
+			                       ? 2
+			                       : INDEX_NONE;
 		const FVoxelLandGraphNodeRecord* Height = nullptr;
 		for (const FVoxelLandGraphNodeRecord& Node : Source.Nodes)
 		{
@@ -228,8 +231,8 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 	}
 	const FGuid Selected = GetOutputId(Channel);
 	if (!Selected.IsValid() || !ContinentalOutputId.IsValid() || !MountainOutputId.IsValid() || !PeaksOutputId.IsValid()
-		|| ContinentalOutputId == MountainOutputId || ContinentalOutputId == PeaksOutputId
-		|| MountainOutputId == PeaksOutputId)
+	    || ContinentalOutputId == MountainOutputId || ContinentalOutputId == PeaksOutputId
+	    || MountainOutputId == PeaksOutputId)
 	{
 		OutError = TEXT("M4 graph requires three distinct named output nodes.");
 		return false;
@@ -268,7 +271,7 @@ bool UVoxelLandM4ControlGraph::ProjectSnapshot(const FVoxelLandGraphSnapshot& So
 	});
 	Projection.Links.RemoveAll([&Terminals, Selected](const FVoxelLandGraphLinkRecord& Link) {
 		return (Terminals.Contains(Link.SourceNode) && Link.SourceNode != Selected)
-			|| (Terminals.Contains(Link.TargetNode) && Link.TargetNode != Selected);
+		       || (Terminals.Contains(Link.TargetNode) && Link.TargetNode != Selected);
 	});
 	OutProjection = MoveTemp(Projection);
 	return true;

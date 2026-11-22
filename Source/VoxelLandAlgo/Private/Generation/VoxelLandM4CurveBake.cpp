@@ -19,7 +19,7 @@ bool Bake(TConstArrayView<FVoxelLandM4CurveKey> Keys, int32 Minimum, int32 Maxim
 	for (int32 Index = 0; Index < Keys.Num(); ++Index)
 	{
 		if (Keys[Index].Output < Minimum || Keys[Index].Output > Maximum
-			|| (Index > 0 && Keys[Index - 1].InputQ16 >= Keys[Index].InputQ16))
+		    || (Index > 0 && Keys[Index - 1].InputQ16 >= Keys[Index].InputQ16))
 		{
 			OutError = FString::Printf(TEXT("Curve key %d is out of range or not strictly ordered"), Index);
 			return false;

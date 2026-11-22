@@ -7,22 +7,27 @@ constexpr int32 CellCount = 34;
 constexpr int32 Corner[8][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0}, {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1}};
 constexpr int32 Edges[12][2] = {
 	{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+
 int32 SampleIndex(int32 X, int32 Y, int32 Z)
 {
 	return (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
 }
+
 int32 CellIndex(int32 X, int32 Y, int32 Z)
 {
 	return (X + 1) + CellCount * ((Y + 1) + CellCount * (Z + 1));
 }
+
 int16 Sample(const FVoxelLandChunkData& Chunk, int32 X, int32 Y, int32 Z)
 {
 	return Chunk.Density[SampleIndex(X, Y, Z)];
 }
+
 bool IsSolid(int16 Q)
 {
 	return Q < 0;
 }
+
 FVector3f Axis(int32 I)
 {
 	return I == 0 ? FVector3f(1, 0, 0) : I == 1 ? FVector3f(0, 1, 0) : FVector3f(0, 0, 1);
@@ -32,11 +37,11 @@ FVector3f Gradient(const int16* Q, const FVector3f& P)
 {
 	const float X = P.X, Y = P.Y, Z = P.Z;
 	const float DX = (1 - Y) * (1 - Z) * (Q[1] - Q[0]) + Y * (1 - Z) * (Q[3] - Q[2]) + (1 - Y) * Z * (Q[5] - Q[4])
-				   + Y * Z * (Q[7] - Q[6]);
+	                 + Y * Z * (Q[7] - Q[6]);
 	const float DY = (1 - X) * (1 - Z) * (Q[2] - Q[0]) + X * (1 - Z) * (Q[3] - Q[1]) + (1 - X) * Z * (Q[6] - Q[4])
-				   + X * Z * (Q[7] - Q[5]);
+	                 + X * Z * (Q[7] - Q[5]);
 	const float DZ = (1 - X) * (1 - Y) * (Q[4] - Q[0]) + X * (1 - Y) * (Q[5] - Q[1]) + (1 - X) * Y * (Q[6] - Q[2])
-				   + X * Y * (Q[7] - Q[3]);
+	                 + X * Y * (Q[7] - Q[3]);
 	return FVector3f(DX, DY, DZ);
 }
 
@@ -62,6 +67,7 @@ EVoxelLandChunkClassification VoxelLandMeshing::ClassifyBeforeSampling()
 {
 	return EVoxelLandChunkClassification::NeedsSamples;
 }
+
 EVoxelLandChunkClassification VoxelLandMeshing::Classify(const FVoxelLandChunkData& Chunk)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_Classify);
@@ -93,9 +99,9 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SurfaceNets);
 	if (Chunk.Key.LOD != 0
-		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, VoxelSizeCm, bUnlimitedM4)
-		|| Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || VoxelSizeCm <= 0
-		|| !FMath::IsFinite(VoxelSizeCm * 34.f))
+	    || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, VoxelSizeCm, bUnlimitedM4)
+	    || Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || VoxelSizeCm <= 0
+	    || !FMath::IsFinite(VoxelSizeCm * 34.f))
 	{
 		return EVoxelLandMeshResult::InvalidInput;
 	}

@@ -61,10 +61,10 @@ FVoxelLandError VoxelLandM4Erosion::Apply(int32 CellsX, int32 CellsY, TConstArra
 	TFunctionRef<bool()> IsCancelled)
 {
 	if (CellsX < 1 || CellsY < 1 || CellsX > M4ErosionMaxCells || CellsY > M4ErosionMaxCells || Settings.MaxSteps < 0
-		|| Settings.MaxSteps > 128 || Settings.ThermalIterations < 0 || Settings.ThermalIterations > 32
-		|| Settings.CapacityMaxQ8 < 0 || Settings.CapacityMaxQ8 > M4ErosionMaxHeight || Settings.TalusQ8 < 0
-		|| Settings.TalusQ8 > M4ErosionMaxHeight || Settings.MaxTransferQ8 < 0
-		|| Settings.MaxTransferQ8 > M4ErosionMaxHeight || DropletStarts.Num() > 65536)
+	    || Settings.MaxSteps > 128 || Settings.ThermalIterations < 0 || Settings.ThermalIterations > 32
+	    || Settings.CapacityMaxQ8 < 0 || Settings.CapacityMaxQ8 > M4ErosionMaxHeight || Settings.TalusQ8 < 0
+	    || Settings.TalusQ8 > M4ErosionMaxHeight || Settings.MaxTransferQ8 < 0
+	    || Settings.MaxTransferQ8 > M4ErosionMaxHeight || DropletStarts.Num() > 65536)
 	{
 		return M4ErosionFail(EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid M4 erosion dimensions or settings"));
 	}

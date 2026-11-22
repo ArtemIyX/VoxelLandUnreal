@@ -19,9 +19,9 @@ EDataValidationResult UVoxelLandM4WorldConfig::IsDataValid(FDataValidationContex
 	{
 		const FVoxelLandSerializedProgram& Program = Control->Payload;
 		if (Program.EnvelopeVersion != 1 || Program.ProgramVersion < 1 || Program.ProgramVersion > 2
-			|| (Program.ProgramVersion == 2
-				&& Program.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion))
-			|| Program.RegisterCount < 1 || Program.RegisterCount > 1024 || Program.Instructions.IsEmpty())
+		    || (Program.ProgramVersion == 2
+		        && Program.CompilerSemanticVersion != int32(FVoxelLandProgramDraft::CompilerSemanticVersion))
+		    || Program.RegisterCount < 1 || Program.RegisterCount > 1024 || Program.Instructions.IsEmpty())
 		{
 			Context.AddError(FText::FromString(
 				TEXT("An M4 control graph has no supported compiled program; recompile and save it.")));

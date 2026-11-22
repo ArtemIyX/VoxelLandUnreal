@@ -95,7 +95,7 @@ FVoxelLandError Generate(const FVoxelLandM4DomainSettings& Domain, TConstArrayVi
 {
 	TArray<int32> BaseHeights;
 	if (const FVoxelLandError Error = BuildBaseHeights(Domain, Continental, ContinentalCurve, Mountain, MountainCurve,
-			Peaks, PeaksCurve, BaseQ8, BaseHeights, IsCancelled))
+		Peaks, PeaksCurve, BaseQ8, BaseHeights, IsCancelled))
 	{
 		return Error;
 	}

@@ -17,10 +17,12 @@ namespace VoxelLandM4PrepassIdentity
 // the entire validated control program is encoded. Downstream smoothing,
 // overhang, presentation, camera and material settings are deliberately omitted.
 // Compare the complete byte array, never a hash alone. OutBytes is unchanged on
-// failure. Version 1 preserves authored override order for existing world
-// identities; version 2 sorts unique override IDs; version 3 binds the graph height-stage version. The bytes are process-local until all algorithm/backend versions are
+// failure. Version 0 selects the current encoding for the supplied stage;
+// version 1 preserves legacy override order, version 2 sorts override IDs,
+// and version 3 additionally binds the graph height-stage version. The bytes
+// are process-local until all algorithm/backend versions are
 // explicitly bound to a persistent world format.
 VOXELLAND_API FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot,
 	const FVoxelLandProgram& Continental, const FVoxelLandProgram& Mountain, const FVoxelLandProgram& Peaks,
-	TArray<uint8>& OutBytes, uint32 EncodingVersion = 2);
+	TArray<uint8>& OutBytes, uint32 EncodingVersion = 0);
 }

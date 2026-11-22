@@ -2,6 +2,7 @@
 
 #include "Async/Async.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/Enums/VoxelLandBuiltinNode.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Misc/AutomationTest.h"
 #include "World/VoxelLandM4PrepassIdentity.h"
@@ -20,6 +21,7 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 	bool bSeedChanged = false, bCurveChanged = false, bProgramChanged = false, bDomainChanged = false;
 	bool bInvalidPreserves = false, bErosionChanged = false;
 	bool bCanonicalOrder = false, bLegacyOrder = false, bUnknownVersion = false;
+	bool bAutomaticStageVersion = false, bExplicitWrongVersion = false;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandProgramDraft Draft;
 		Draft.RegisterCount = 1;
@@ -96,6 +98,31 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 		S.Domain.bGlobalErosion = true;
 		S.ErosionStageId = FGuid(1, 2, 3, 4);
 		bErosionChanged = !Build(Other) && Other != Base;
+		S.Continental.Source.Parameters.Reset();
+		S.Continental.Overrides.Reset();
+		S.HeightStage.Version = 1;
+		S.HeightStage.OutputNodeId = FGuid(80, 0, 0, 0);
+		S.HeightStage.ContinentalInputId = FGuid(81, 0, 0, 1);
+		S.HeightStage.MountainInputId = FGuid(81, 0, 0, 2);
+		S.HeightStage.PeaksInputId = FGuid(81, 0, 0, 3);
+		const FGuid Inputs[] = {
+			S.HeightStage.ContinentalInputId, S.HeightStage.MountainInputId, S.HeightStage.PeaksInputId};
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			FVoxelLandGraphNodeRecord Output;
+			Output.Id = S.HeightStage.OutputNodeId;
+			Output.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+			Output.Pins.SetNum(1);
+			Output.Pins[0].Id = Inputs[Index];
+			Channels[Index]->Source.Nodes.Add(Output);
+		}
+		TArray<uint8> Automatic, Explicit;
+		bAutomaticStageVersion =
+			!Build(Automatic)
+			&& !VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Explicit, 3)
+			&& Automatic == Explicit;
+		bExplicitWrongVersion =
+			bool(VoxelLandM4PrepassIdentity::BuildCandidate(S, *Program, *Program, *Program, Explicit, 2));
 		TArray<uint8> Sentinel = {42};
 		S.Domain.Mode = EVoxelLandM4DomainMode::Unlimited;
 		bInvalidPreserves = bool(Build(Sentinel)) && Sentinel.Num() == 1 && Sentinel[0] == 42;
@@ -105,6 +132,8 @@ bool FVoxelLandM4PrepassIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("v2 candidate ignores override order"), bCanonicalOrder);
 	TestTrue(TEXT("v1 candidate preserves order sensitivity"), bLegacyOrder);
 	TestTrue(TEXT("unknown version leaves output unchanged"), bUnknownVersion);
+	TestTrue(TEXT("default encoding supports graph height stages"), bAutomaticStageVersion);
+	TestTrue(TEXT("explicit incompatible encoding is rejected"), bExplicitWrongVersion);
 	TestTrue(TEXT("downstream overhang and smoothing do not alter prepass identity"), bIgnoresDownstream);
 	TestTrue(TEXT("seed changes identity"), bSeedChanged);
 	TestTrue(TEXT("curve sample changes identity"), bCurveChanged);

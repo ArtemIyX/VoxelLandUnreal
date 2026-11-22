@@ -193,6 +193,10 @@ FVoxelLandError BuildCandidate(const FVoxelLandM4WorldSnapshot& Snapshot, const 
 	{
 		return M4IdentityFailure(*StageError);
 	}
+	if (EncodingVersion == 0)
+	{
+		EncodingVersion = Snapshot.HeightStage.Version == 1 ? 3u : 2u;
+	}
 	if ((EncodingVersion != 1 && EncodingVersion != 2 && EncodingVersion != 3)
 		|| (Snapshot.HeightStage.Version == 1 && EncodingVersion != 3)
 		|| (Snapshot.HeightStage.Version == 0 && EncodingVersion == 3)

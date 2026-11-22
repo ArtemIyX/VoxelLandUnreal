@@ -201,9 +201,10 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 		bUnlimited = VoxelLandM4WorldIdentity::Capture(S, Unlimited, Error)
 				  && VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error)
 				  && !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
-		++Unlimited.FormatVersion;
+		const int32 SupportedVersion = Unlimited.FormatVersion;
+		Unlimited.FormatVersion = 999;
 		bVersion = !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error);
-		--Unlimited.FormatVersion;
+		Unlimited.FormatVersion = SupportedVersion;
 		Unlimited.CanonicalBytes[0] ^= 1;
 		bCorrupt = !VoxelLandM4WorldIdentity::Matches(Unlimited, S, Error);
 	}).Get();

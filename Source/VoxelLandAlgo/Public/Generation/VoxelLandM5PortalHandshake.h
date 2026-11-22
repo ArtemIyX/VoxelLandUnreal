@@ -24,6 +24,9 @@ VOXELLANDALGO_API bool MatchPortalRecords(const FVoxelLandM5Portal& A, const FVo
 // corresponding validated final fields. This routine compares those inputs;
 // it does not establish their provenance, sufficient density influence, final
 // field safety, complete region-set closure, or permission to publish.
+// Route-bearing pairs receive metered structural validation only; success is
+// not a route geometry or walkability certificate. Both regional portal feet
+// anchors must be present and equal on both records for such pairs.
 // VoxelSizeCm and HaloSamples are validated descriptor and mesher inputs.
 // Blocks must use the M4 global sample lattice anchored at logical zero and
 // cover the portal plus the explicit sample halo in every direction.

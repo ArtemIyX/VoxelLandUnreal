@@ -4,6 +4,8 @@
 #include "Generation/VoxelLandM5CandidatePlanner.h"
 #include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5PortalHandshake.h"
+#include "Generation/VoxelLandM5RouteBuilder.h"
+#include "Generation/VoxelLandM5Seed.h"
 #include "Misc/AutomationTest.h"
 
 // Test-only admitted candidate copy; it retains the same budget until the
@@ -109,8 +111,8 @@ bool FVoxelLandM5PortalHandshakeTest::RunTest(const FString& Parameters)
 	Block.SpacingCm = 1;
 	Block.Samples = Densities;
 	const TArray<uint8> Identity = {1, 0, 2, 3};
-	// Both plan sides must reject currently unmetered nested route/junction
-	// content before descriptor comparison, topology or any additional budget.
+	// A single unanchored route or junction must fail structural validation on
+	// either side, and its nested storage remains covered by the fixture lease.
 	for (int32 Side = 0; Side < 2; ++Side)
 	{
 		for (int32 Kind = 0; Kind < 2; ++Kind)
@@ -132,20 +134,18 @@ bool FVoxelLandM5PortalHandshakeTest::RunTest(const FString& Parameters)
 			}
 			int64 LiveBefore = 0, Peak = 0, WorkBefore = 0;
 			Budget->GetUsage(LiveBefore, Peak, WorkBefore);
-			const TArray<uint8> WrongIdentity = {9};
 			int32 Calls = 0;
 			const FVoxelLandM5Diagnostic Error = VoxelLand::M5::PortalHandshake::Check(S, 42, Left, Right,
-				Side == 0 ? ModifiedResult : A, Side == 1 ? ModifiedResult : B, Identity, WrongIdentity, WrongIdentity,
-				1, 1, Block, Block, Budget.ToSharedRef(), [&Calls] {
+				Side == 0 ? ModifiedResult : A, Side == 1 ? ModifiedResult : B, Identity, Identity, Identity, 1, 1,
+				Block, Block, Budget.ToSharedRef(), [&Calls] {
 					++Calls;
 					return false;
 				});
 			int64 LiveAfter = 0, WorkAfter = 0;
 			Budget->GetUsage(LiveAfter, Peak, WorkAfter);
-			TestTrue(TEXT("unmetered content fails before descriptor comparison"),
-				Error.Code == EVoxelLandM5ErrorCode::Unproven);
-			TestEqual(TEXT("only initial cancellation callback observed"), Calls, 1);
-			TestEqual(TEXT("no additional work charged"), WorkAfter, WorkBefore);
+			TestTrue(TEXT("unanchored route or junction is rejected"), Error.Code != EVoxelLandM5ErrorCode::None);
+			TestTrue(TEXT("validation polls cancellation"), Calls > 1);
+			TestTrue(TEXT("validation work is charged"), WorkAfter > WorkBefore);
 			TestEqual(TEXT("no additional bytes retained"), LiveAfter, LiveBefore);
 		}
 	}
@@ -306,6 +306,170 @@ bool FVoxelLandM5PortalHandshakeWorkTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("candidate handles remain valid"), A.IsValid() && B.IsValid());
 		TestEqual(TEXT("cumulative precharge at boundary"), Work, Short == 0 ? RequiredWork : int64(30378));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5RoutedPortalHandshakeTest, "VoxelLand.M5.Regional.RoutedPortalHandshake", M5HandshakeFlags)
+bool FVoxelLandM5RoutedPortalHandshakeTest::RunTest(const FString& Parameters)
+{
+	FVoxelLandM5CaveSettings S;
+	S.bEnabled = true;
+	S.StageId = FGuid(1, 2, 3, 4);
+	S.PlanningMode = EVoxelLandM5PlanningMode::Regional;
+	S.RegionSizeCm = 1000;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!FVoxelLandM5Budget::TryCreate(S.Limits.MaxBytes, S.Limits.MaxValidationWork, Budget))
+	{
+		return false;
+	}
+	FVoxelLandM5PortalKey Key;
+	Key.WorldSeed = 11;
+	Key.StageId = S.StageId;
+	Key.RegionA.X = -1;
+	TArray<uint8> Digest;
+	uint64 PortalId = 0;
+	if (!TestTrue(TEXT("independent shared portal identifier"),
+			VoxelLand::M5::Seed::TryPortalDigest(11, S.StageId, static_cast<uint64>(S.Salt), -1, 0, 0, 0, Digest)
+				&& VoxelLand::M5::Seed::TryDigestWord(Digest, PortalId)))
+	{
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Built[2];
+	const auto Never = [] {
+		return false;
+	};
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		FVoxelLandM5CavePlan Plan;
+		Plan.Region = Side == 0 ? Key.RegionA : Key.RegionB;
+		FVoxelLandM5Chamber Chamber;
+		Chamber.bHasId = true;
+		Chamber.Id = 1;
+		Chamber.CenterCm.X = Side == 0 ? -200 : 200;
+		Chamber.CenterCm.Z = 200;
+		Chamber.RadiusCm = 200;
+		Plan.Chambers.Add(Chamber);
+		FVoxelLandM5Portal Portal;
+		Portal.bHasId = true;
+		Portal.Id = PortalId;
+		Portal.Key = Key;
+		Portal.CenterCm.Z = 200;
+		Portal.RadiusCm = 103;
+		Plan.Portals.Add(Portal);
+		FVoxelLandM5Connection Connection;
+		Connection.bHasId = true;
+		Connection.Id = 7;
+		Connection.Start.bValid = true;
+		Connection.Start.Id = 1;
+		Connection.Start.Region = Plan.Region;
+		Connection.End.bValid = true;
+		Connection.End.Kind = EVoxelLandM5EndpointKind::Portal;
+		Connection.End.Id = PortalId;
+		Connection.End.Region = Plan.Region;
+		Plan.Connections.Add(Connection);
+		FVoxelLandM5Segment Segment;
+		Segment.bHasId = true;
+		Segment.Id = 9;
+		Segment.bHasConnectionId = true;
+		Segment.ConnectionId = 7;
+		Segment.StartCm = Chamber.CenterCm;
+		Segment.EndCm = Portal.CenterCm;
+		Segment.RadiusCm = 103;
+		Plan.Segments.Add(Segment);
+		const auto Candidate = FVoxelLandM5HandshakeFixtureFactory::Make(Plan, S, 11, Budget.ToSharedRef());
+		if (!TestTrue(TEXT("admit regional candidate"), Candidate.IsValid()))
+		{
+			return false;
+		}
+		FVoxelLandM5RouteAnchorChoice ChamberAnchor;
+		ChamberAnchor.Endpoint = Connection.Start;
+		ChamberAnchor.Endpoint.AnchorRole = EVoxelLandM5AnchorRole::ChamberFeet;
+		ChamberAnchor.FeetCm = Chamber.CenterCm;
+		ChamberAnchor.FeetCm.Z = 108;
+		FVoxelLandM5RouteAnchorChoice AnchorA;
+		AnchorA.Endpoint = Connection.End;
+		AnchorA.Endpoint.Region = Key.RegionA;
+		AnchorA.Endpoint.AnchorRole = EVoxelLandM5AnchorRole::PortalRegionAFeet;
+		AnchorA.FeetCm.Z = 108;
+		AnchorA.bHasPortalKey = true;
+		AnchorA.PortalKey = Key;
+		FVoxelLandM5RouteAnchorChoice AnchorB = AnchorA;
+		AnchorB.Endpoint.Region = Key.RegionB;
+		AnchorB.Endpoint.AnchorRole = EVoxelLandM5AnchorRole::PortalRegionBFeet;
+		TArray<FVoxelLandM5RouteAnchorChoice> Anchors{ChamberAnchor, AnchorA, AnchorB};
+		FVoxelLandM5RouteConnectionChoice Choice;
+		Choice.bHasConnectionId = true;
+		Choice.ConnectionId = 7;
+		Choice.Start = ChamberAnchor.Endpoint;
+		Choice.End = Side == 0 ? AnchorA.Endpoint : AnchorB.Endpoint;
+		Choice.SegmentIds.Add(9);
+		const TArray<FVoxelLandM5RouteConnectionChoice> Choices{Choice};
+		const FVoxelLandM5Diagnostic Result = VoxelLand::M5::RouteBuilder::Build(
+			S, 11, Plan.Region, Candidate.ToSharedRef(), Anchors, Choices, Budget.ToSharedRef(), Never, Built[Side]);
+		if (!TestTrue(TEXT("build route using real route builder"),
+				Result.Code == EVoxelLandM5ErrorCode::None && Built[Side].IsValid()))
+		{
+			return false;
+		}
+	}
+	TArray<int16> Samples;
+	Samples.Init(-10, 343);
+	FVoxelLandM5PortalOverlap Block;
+	Block.OriginCm.X = -300;
+	Block.OriginCm.Y = -300;
+	Block.OriginCm.Z = -100;
+	Block.Counts = FIntVector(7, 7, 7);
+	Block.SpacingCm = 100;
+	Block.Samples = Samples;
+	const TArray<uint8> Identity = {5, 1, 0, 8};
+	const auto Check = [&](TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Other,
+						   TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> UseBudget) {
+		return VoxelLand::M5::PortalHandshake::Check(S, 11, Key.RegionA, Key.RegionB, Built[0], Other, Identity,
+			Identity, Identity, 100, 1, Block, Block, UseBudget, Never);
+	};
+	TestTrue(TEXT("structurally valid routed regions agree"),
+		Check(Built[1], Budget.ToSharedRef()).Code == EVoxelLandM5ErrorCode::None);
+	FVoxelLandM5CavePlan Invalid = Built[1]->GetPlan();
+	Invalid.Portals[0].RegionBFeetAnchorCm.Z += 1;
+	const auto Mismatched = FVoxelLandM5HandshakeFixtureFactory::Make(Invalid, S, 11, Budget.ToSharedRef());
+	if (!TestTrue(TEXT("admit inconsistent anchor fixture"), Mismatched.IsValid()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("different route anchor rejected"),
+		Check(Mismatched, Budget.ToSharedRef()).Code != EVoxelLandM5ErrorCode::None);
+	Invalid = Built[1]->GetPlan();
+	if (!TestTrue(TEXT("route and leg exist"), !Invalid.Routes.IsEmpty() && !Invalid.Routes[0].Legs.IsEmpty()))
+	{
+		return false;
+	}
+	Invalid.Routes[0].Legs[0].EndFeetCm.Z += 1;
+	const auto BrokenRoute = FVoxelLandM5HandshakeFixtureFactory::Make(Invalid, S, 11, Budget.ToSharedRef());
+	if (!TestTrue(TEXT("admit invalid route fixture"), BrokenRoute.IsValid()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("structurally invalid route rejected"),
+		Check(BrokenRoute, Budget.ToSharedRef()).Code != EVoxelLandM5ErrorCode::None);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ForeignBudget;
+	if (!FVoxelLandM5Budget::TryCreate(S.Limits.MaxBytes, S.Limits.MaxValidationWork, ForeignBudget))
+	{
+		return false;
+	}
+	TestTrue(TEXT("foreign budget rejected"),
+		Check(Built[1], ForeignBudget.ToSharedRef()).Code == EVoxelLandM5ErrorCode::InvalidInput);
+	int64 LiveBefore = 0, Peak = 0, Work = 0;
+	Budget->GetUsage(LiveBefore, Peak, Work);
+	if (!TestTrue(TEXT("exhaust remaining shared work"), Budget->TryChargeWork(S.Limits.MaxValidationWork - Work)))
+	{
+		return false;
+	}
+	TestTrue(TEXT("routed handshake budget exhaustion is reported"),
+		Check(Built[1], Budget.ToSharedRef()).Code == EVoxelLandM5ErrorCode::BudgetExceeded);
+	int64 LiveAfter = 0;
+	Budget->GetUsage(LiveAfter, Peak, Work);
+	TestEqual(TEXT("budget failure leaves candidate reservations intact"), LiveAfter, LiveBefore);
 	return true;
 }
 #endif

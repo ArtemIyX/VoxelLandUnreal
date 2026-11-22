@@ -6,6 +6,7 @@
 #include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5Seed.h"
+#include "Generation/VoxelLandM5RouteTopology.h"
 #include "Generation/VoxelLandM5Topology.h"
 
 namespace
@@ -101,13 +102,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PortalHandshake::Check(const FVoxelLandM5C
 	{
 		return M5HandshakeError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Incompatible regional inputs or budget"));
 	}
-	// Current topology and candidate admission do not charge nested route or
-	// junction storage. Never treat those unmetered plans as handshake-ready.
-	if (!A->GetPlan().Junctions.IsEmpty() || !B->GetPlan().Junctions.IsEmpty() || !A->GetPlan().Routes.IsEmpty()
-		|| !B->GetPlan().Routes.IsEmpty())
-	{
-		return M5HandshakeError(EVoxelLandM5ErrorCode::Unproven, TEXT("Route and junction accounting is unavailable"));
-	}
+	const bool bRouted = !A->GetPlan().Junctions.IsEmpty() || !B->GetPlan().Junctions.IsEmpty()
+					  || !A->GetPlan().Routes.IsEmpty() || !B->GetPlan().Routes.IsEmpty();
 	int64 AdjacentX = 0, AdjacentY = 0;
 	const bool bX = RegionA.Y == RegionB.Y
 				 && ((TryAdd(RegionA.X, 1, AdjacentX) && AdjacentX == RegionB.X)
@@ -172,12 +168,16 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PortalHandshake::Check(const FVoxelLandM5C
 		}
 	}
 	FVoxelLandM5Diagnostic D =
-		VoxelLand::M5::Topology::Validate(Settings, WorldSeed, RegionA, A.ToSharedRef(), Budget, IsCancelled);
+		bRouted ? VoxelLand::M5::RouteTopology::ValidateStructure(
+					  Settings, WorldSeed, RegionA, A.ToSharedRef(), Budget, IsCancelled)
+				: VoxelLand::M5::Topology::Validate(Settings, WorldSeed, RegionA, A.ToSharedRef(), Budget, IsCancelled);
 	if (D.Code != EVoxelLandM5ErrorCode::None)
 	{
 		return D;
 	}
-	D = VoxelLand::M5::Topology::Validate(Settings, WorldSeed, RegionB, B.ToSharedRef(), Budget, IsCancelled);
+	D = bRouted ? VoxelLand::M5::RouteTopology::ValidateStructure(
+					  Settings, WorldSeed, RegionB, B.ToSharedRef(), Budget, IsCancelled)
+				: VoxelLand::M5::Topology::Validate(Settings, WorldSeed, RegionB, B.ToSharedRef(), Budget, IsCancelled);
 	if (D.Code != EVoxelLandM5ErrorCode::None)
 	{
 		return D;
@@ -215,6 +215,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PortalHandshake::Check(const FVoxelLandM5C
 	{
 		return M5HandshakeError(
 			EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Neighboring portal geometry or key differs"));
+	}
+	if (bRouted && (!FoundA->bHasRegionAFeetAnchor || !FoundA->bHasRegionBFeetAnchor))
+	{
+		return M5HandshakeError(EVoxelLandM5ErrorCode::Unproven, TEXT("Both regional feet anchors are required"));
 	}
 	int64 FaceOffset = 0, Face = 0;
 	const int64 Higher = bX ? FMath::Max(RegionA.X, RegionB.X) : FMath::Max(RegionA.Y, RegionB.Y);

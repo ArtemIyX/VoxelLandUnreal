@@ -11,6 +11,7 @@
 #include "Styling/SlateBrush.h"
 
 class UVoxelLandTerrainGraph;
+class UWorld;
 class UEdGraph;
 class IDetailsView;
 class SGraphEditor;
@@ -48,6 +49,9 @@ public:
 	void Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host);
 	static bool StoreCompiledProgram(UVoxelLandTerrainGraph& Graph, FVoxelLandSerializedProgram&& Payload);
 	void Stop();
+	// Stop editor-owned asynchronous work and delegates without closing the
+	// toolkit or tearing down its preview world.
+	void QuiesceForModuleShutdown();
 	virtual void PostUndo(bool bSuccess) override;
 	virtual void PostRedo(bool bSuccess) override;
 #if WITH_DEV_AUTOMATION_TESTS
@@ -102,6 +106,7 @@ public:
 	}
 
 	void InitializePreviewForTests();
+	UWorld* GetPreviewWorldForTests() const;
 	FBox GetPreviewBoundsForTests() const;
 	FBox GetComponentBoundsForTests() const;
 	bool FramePreviewForTests();

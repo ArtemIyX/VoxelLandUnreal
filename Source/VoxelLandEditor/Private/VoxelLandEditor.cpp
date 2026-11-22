@@ -224,17 +224,13 @@ public:
 		}
 	}
 
-	void StopEditors()
+	void QuiesceEditors()
 	{
 		for (const TWeakPtr<FVoxelLandGraphToolkit>& Weak : Editors)
 		{
 			if (TSharedPtr<FVoxelLandGraphToolkit> Editor = Weak.Pin())
 			{
-				Editor->Stop();
-				if (!Editor->CloseWindow(EAssetEditorCloseReason::AssetEditorHostClosed))
-				{
-					UE_LOG(LogTemp, Warning, TEXT("VoxelLand graph editor declined to close during module shutdown"));
-				}
+				Editor->QuiesceForModuleShutdown();
 			}
 		}
 		Editors.Reset();
@@ -343,15 +339,15 @@ void FVoxelLandEditorModule::ShutdownModule()
 	FCoreUObjectDelegates::OnObjectsReplaced.Remove(FunctionReplacedHandle);
 	if (GraphAssetActions.IsValid())
 	{
-		StaticCastSharedPtr<FVoxelLandGraphAssetActions>(GraphAssetActions)->StopEditors();
+		StaticCastSharedPtr<FVoxelLandGraphAssetActions>(GraphAssetActions)->QuiesceEditors();
 	}
 	if (FunctionAssetActions.IsValid())
 	{
-		StaticCastSharedPtr<FVoxelLandFunctionAssetActions>(FunctionAssetActions)->StopEditors();
+		StaticCastSharedPtr<FVoxelLandFunctionAssetActions>(FunctionAssetActions)->QuiesceEditors();
 	}
 	if (M4ControlGraphAssetActions.IsValid())
 	{
-		StaticCastSharedPtr<FVoxelLandM4ControlGraphAssetActions>(M4ControlGraphAssetActions)->StopEditors();
+		StaticCastSharedPtr<FVoxelLandM4ControlGraphAssetActions>(M4ControlGraphAssetActions)->QuiesceEditors();
 	}
 	if (GraphAssetActions.IsValid() && FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
 	{

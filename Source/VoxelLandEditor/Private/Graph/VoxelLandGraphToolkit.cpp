@@ -602,6 +602,18 @@ FVoxelLandGraphToolkit::~FVoxelLandGraphToolkit()
 
 void FVoxelLandGraphToolkit::Stop()
 {
+	QuiesceForModuleShutdown();
+	M4StageBrush.SetResourceObject(nullptr);
+	M4StageTexture = nullptr;
+	M4ControlsBrush.SetResourceObject(nullptr);
+	M4ControlsTexture = nullptr;
+	NoiseBrush.SetResourceObject(nullptr);
+	NoiseTexture = nullptr;
+	ClearPreview();
+}
+
+void FVoxelLandGraphToolkit::QuiesceForModuleShutdown()
+{
 	if (bStopped)
 	{
 		return;
@@ -646,13 +658,6 @@ void FVoxelLandGraphToolkit::Stop()
 	WorkerTasks.Reset();
 	CompileWork.Reset();
 	PreviewWork.Reset();
-	M4StageBrush.SetResourceObject(nullptr);
-	M4StageTexture = nullptr;
-	M4ControlsBrush.SetResourceObject(nullptr);
-	M4ControlsTexture = nullptr;
-	NoiseBrush.SetResourceObject(nullptr);
-	NoiseTexture = nullptr;
-	ClearPreview();
 }
 
 void FVoxelLandGraphToolkit::AddReferencedObjects(FReferenceCollector& Collector)
@@ -781,6 +786,11 @@ void FVoxelLandGraphToolkit::InitializePreviewForTests()
 		FTickerDelegate::CreateSP(this, &FVoxelLandGraphToolkit::PollJobs), 0.05f);
 	BeginPIEHandle = FEditorDelegates::PreBeginPIE.AddRaw(this, &FVoxelLandGraphToolkit::BeginPIE);
 	EndPIEHandle = FEditorDelegates::EndPIE.AddRaw(this, &FVoxelLandGraphToolkit::EndPIE);
+}
+
+UWorld* FVoxelLandGraphToolkit::GetPreviewWorldForTests() const
+{
+	return PreviewScene ? PreviewScene->GetWorld() : nullptr;
 }
 
 FBox FVoxelLandGraphToolkit::GetPreviewBoundsForTests() const

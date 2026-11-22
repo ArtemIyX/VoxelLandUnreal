@@ -10,8 +10,9 @@ struct FVoxelLandGraphSnapshot;
 namespace VoxelLand::M5::SourceFingerprint
 {
 // Bounded, UObject-free subset of the existing version-1 source encoding.
-// Function dependencies/calls, non-ASCII names and duplicate parameter/node
-// IDs are rejected. Caller retains the immutable input and its admission lease.
+// Captured function dependencies and calls are supported with bounded ASCII paths.
+// Non-ASCII names/paths, invalid dependency graphs and duplicate IDs are rejected.
+// Caller retains the immutable input and its admission lease.
 // This computes a source fingerprint only: it does not load a program, bind a
 // provider or authorize identity capture. Output is unchanged on failure.
 // Reservations cover writer and index payload estimates, not allocator/control

@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Data/Structs/VoxelLandGraphSnapshot.h"
+#include "Data/VoxelLandGraphFunctionId.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Graph/VoxelLandM5SourceFingerprint.h"
 #include "Graph/VoxelLandProgramCodec.h"
@@ -128,7 +129,7 @@ bool FVoxelLandM5SourceFingerprintFailureTest::RunTest(const FString& Parameters
 	Graph.Nodes.Add(FunctionNode);
 	TestEqual(TEXT("function path rejected"),
 		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Result).Code),
-		int32(EVoxelLandM5ErrorCode::Unproven));
+		int32(EVoxelLandM5ErrorCode::InvalidInput));
 	TestEqual(TEXT("function retains output"), Result, Sentinel);
 	Graph.Nodes.Empty();
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> NoWork;
@@ -177,16 +178,124 @@ bool FVoxelLandM5SourceFingerprintFailureTest::RunTest(const FString& Parameters
 	Graph.Links.AddDefaulted();
 	int32 Polls = 0;
 	const auto CancelDuringWrite = [&Polls] {
-		return ++Polls == 8;
+		return ++Polls == 9;
 	};
 	TestEqual(TEXT("cancellation after sorting rejected"),
 		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), CancelDuringWrite, Result).Code),
 		int32(EVoxelLandM5ErrorCode::Cancelled));
 	TestEqual(TEXT("partial cancellation retains output"), Result, Sentinel);
-	TestEqual(TEXT("partial cancellation reached writer"), Polls, 8);
+	TestEqual(TEXT("partial cancellation reached writer"), Polls, 9);
 	int64 LiveBytes = -1, PeakBytes = -1, Work = -1;
 	Budget->GetUsage(LiveBytes, PeakBytes, Work);
 	TestEqual(TEXT("partial cancellation releases scratch"), LiveBytes, int64(0));
+
+	FVoxelLandGraphSnapshot Oversized;
+	Oversized.Nodes.SetNum(4097);
+	TestEqual(TEXT("oversized node scan rejected before inspection"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Oversized, Budget.ToSharedRef(), NeverCancel, Result).Code),
+		int32(EVoxelLandM5ErrorCode::BudgetExceeded));
+	TestEqual(TEXT("oversized scan preserves output"), Result, Sentinel);
+	FVoxelLandGraphSnapshot Scan;
+	Scan.Nodes.SetNum(3);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ScanNoWork;
+	FVoxelLandM5Budget::TryCreate(8192, 2, ScanNoWork);
+	int32 ScanPolls = 0;
+	const auto CountPolls = [&ScanPolls] {
+		++ScanPolls;
+		return false;
+	};
+	TestEqual(TEXT("detection scan charged before inspection"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Scan, ScanNoWork.ToSharedRef(), CountPolls, Result).Code),
+		int32(EVoxelLandM5ErrorCode::BudgetExceeded));
+	TestEqual(TEXT("no detection callbacks when under budget"), ScanPolls, 0);
+	TestEqual(TEXT("detection work failure preserves output"), Result, Sentinel);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ScanBudget;
+	FVoxelLandM5Budget::TryCreate(8192, 10000, ScanBudget);
+	ScanPolls = 0;
+	const auto CancelMidScan = [&ScanPolls] {
+		return ++ScanPolls == 2;
+	};
+	TestEqual(TEXT("detection scan cancellation"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Scan, ScanBudget.ToSharedRef(), CancelMidScan, Result).Code),
+		int32(EVoxelLandM5ErrorCode::Cancelled));
+	TestEqual(TEXT("detection stopped mid scan"), ScanPolls, 2);
+	TestEqual(TEXT("detection cancellation preserves output"), Result, Sentinel);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5SourceFingerprintFunctionsTest,
+	"VoxelLand.M5.Identity.SourceFingerprint.Functions", M5SourceFingerprintTestFlags)
+bool FVoxelLandM5SourceFingerprintFunctionsTest::RunTest(const FString& Parameters)
+{
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("budget"), FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 200000000, Budget)))
+	{
+		return false;
+	}
+	auto NeverCancel = [] {
+		return false;
+	};
+	FVoxelLandGraphSnapshot Graph;
+	FVoxelLandGraphNodeRecord ACall;
+	ACall.Id = FGuid(1, 0, 0, 0);
+	ACall.OperatorId = VoxelLandGraphFunctionCallId();
+	ACall.FunctionPath = FSoftObjectPath(TEXT("/Game/A.A"));
+	FVoxelLandGraphNodeRecord BCall = ACall;
+	BCall.Id = FGuid(2, 0, 0, 0);
+	BCall.FunctionPath = FSoftObjectPath(TEXT("/Game/B.B"));
+	Graph.Nodes = {ACall, BCall};
+	FVoxelLandGraphFunctionSnapshot A;
+	A.AssetPath = TEXT("/Game/A.A");
+	FVoxelLandGraphNodeRecord Nested = BCall;
+	Nested.Id = FGuid(10, 0, 0, 0);
+	A.Nodes.Add(Nested);
+	FVoxelLandGraphFunctionSnapshot B;
+	B.AssetPath = TEXT("/Game/B.B");
+	Graph.Functions = {A, B};
+	uint64 Hash = 0;
+	TestEqual(TEXT("nested shared functions accepted"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::None));
+	// Independently encoded little-endian 342-byte graph/function extension,
+	// with function A's own extension and function B's empty source hash.
+	TestEqual(TEXT("nested function fixed vector"), Hash, uint64(0x06b6c560852b27e2ULL));
+	TestEqual(TEXT("legacy nested compatibility"), Hash, FVoxelLandProgramCodec::SourceFingerprint(Graph));
+	const uint64 Initial = Hash;
+	Swap(Graph.Nodes[0], Graph.Nodes[1]);
+	Swap(Graph.Functions[0], Graph.Functions[1]);
+	TestEqual(TEXT("reordered dependencies accepted"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::None));
+	TestEqual(TEXT("stable canonical order"), Hash, Initial);
+	Graph.Functions[0].OutputPin = FGuid(7, 0, 0, 0);
+	TestEqual(TEXT("metadata change accepted"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::None));
+	TestTrue(TEXT("function metadata changes hash"), Hash != Initial);
+	TestEqual(TEXT("legacy metadata compatibility"), Hash, FVoxelLandProgramCodec::SourceFingerprint(Graph));
+	constexpr uint64 Sentinel = 0x123456789abcdef0ULL;
+	Hash = Sentinel;
+	Graph.Functions.RemoveAt(0); // B is still referenced by both roots and A.
+	TestEqual(TEXT("missing dependency rejected"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::InvalidInput));
+	TestEqual(TEXT("missing preserves output"), Hash, Sentinel);
+	Graph.Functions = {A, A};
+	TestEqual(TEXT("duplicate dependency rejected"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::InvalidInput));
+	B.Nodes.Add(ACall); // A -> B -> A.
+	Graph.Functions = {A, B};
+	TestEqual(TEXT("dependency cycle rejected"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, Budget.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::InvalidInput));
+	TestEqual(TEXT("cycle preserves output"), Hash, Sentinel);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> NoWork;
+	FVoxelLandM5Budget::TryCreate(1 << 20, 0, NoWork);
+	TestEqual(TEXT("function work budget rejected"),
+		int32(VoxelLand::M5::SourceFingerprint::Compute(Graph, NoWork.ToSharedRef(), NeverCancel, Hash).Code),
+		int32(EVoxelLandM5ErrorCode::BudgetExceeded));
+	TestEqual(TEXT("work preserves output"), Hash, Sentinel);
 	return true;
 }
 #endif

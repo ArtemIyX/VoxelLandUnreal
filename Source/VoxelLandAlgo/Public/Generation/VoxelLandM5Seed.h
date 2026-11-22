@@ -8,6 +8,9 @@
 // Every output is unchanged on failure. A digest contains all 32 SHA-256 bytes.
 namespace VoxelLand::M5::Seed
 {
+// Standard SHA-256 for bounded packets of at most 119 bytes. Output is unchanged on failure.
+VOXELLANDALGO_API bool TrySha256(TConstArrayView<uint8> Bytes, TArray<uint8>& OutDigest);
+
 VOXELLANDALGO_API bool TryStreamPacket(uint8 Namespace, int64 WorldSeed, const FGuid& StageId, uint64 Salt,
 	uint64 ElementId, uint32 Attempt, uint32 Draw, TArray<uint8>& OutPacket);
 VOXELLANDALGO_API bool TryStreamDigest(uint8 Namespace, int64 WorldSeed, const FGuid& StageId, uint64 Salt,

@@ -31,8 +31,8 @@ uint32 M5RotateRight(uint32 X, uint32 Count)
 	return (X >> Count) | (X << (32 - Count));
 }
 
-// Only the fixed, bounded M5 packet sizes call this function. SHA-256's
-// compression words and additions are uint32, so wraparound is defined.
+// Caller bounds the input to 119 bytes. SHA-256 compression words and
+// additions are uint32, so wraparound is defined.
 void M5Sha256(TConstArrayView<uint8> Bytes, TArray<uint8>& Out)
 {
 	static constexpr uint32 K[64] = {0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u, 0x3956c25bu, 0x59f111f1u,
@@ -47,15 +47,19 @@ void M5Sha256(TConstArrayView<uint8> Bytes, TArray<uint8>& Out)
 	uint32 State[8] = {
 		0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au, 0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
 	uint8 Padded[128] = {};
-	const int32 Length = Bytes.Num(); // Callers pass exactly 61 or 77 bytes.
-	FMemory::Memcpy(Padded, Bytes.GetData(), Length);
+	const int32 Length = Bytes.Num();
+	if (Length != 0)
+	{
+		FMemory::Memcpy(Padded, Bytes.GetData(), Length);
+	}
 	Padded[Length] = 0x80;
 	const uint64 BitLength = static_cast<uint64>(Length) * 8;
+	const int32 BlockCount = Length < 56 ? 1 : 2;
 	for (int32 I = 0; I < 8; ++I)
 	{
-		Padded[127 - I] = static_cast<uint8>(BitLength >> (I * 8));
+		Padded[BlockCount * 64 - 1 - I] = static_cast<uint8>(BitLength >> (I * 8));
 	}
-	for (int32 Block = 0; Block < 2; ++Block)
+	for (int32 Block = 0; Block < BlockCount; ++Block)
 	{
 		uint32 W[64];
 		for (int32 I = 0; I < 16; ++I)
@@ -113,6 +117,16 @@ void M5Sha256(TConstArrayView<uint8> Bytes, TArray<uint8>& Out)
 
 namespace VoxelLand::M5::Seed
 {
+bool TrySha256(TConstArrayView<uint8> Bytes, TArray<uint8>& OutDigest)
+{
+	if (Bytes.Num() > 119)
+	{
+		return false;
+	}
+	M5Sha256(Bytes, OutDigest);
+	return true;
+}
+
 bool TryStreamPacket(uint8 Namespace, int64 WorldSeed, const FGuid& StageId, uint64 Salt, uint64 ElementId,
 	uint32 Attempt, uint32 Draw, TArray<uint8>& OutPacket)
 {

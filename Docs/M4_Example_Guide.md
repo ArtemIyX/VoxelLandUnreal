@@ -1,10 +1,16 @@
 # VoxelLand M4: reproducible control-map example
 
-This is an authoring recipe and an unrun automation fixture, not a shipped set of `.uasset` files or evidence that M4 has passed visual, cook, dedicated-server, or cross-platform acceptance. The fixture `VoxelLand.M4.Example.Reproducibility` builds transient source graphs without writing packages. It exercises the control programs, curve bake, finite erosion prepass, overhang path, and repeated chunk generation. It does not create an editor graph or prove that the resulting landscape reads clearly at 2 km.
+This is an authoring recipe and a set of unrun automation fixtures, not a shipped set of `.uasset` files or evidence that M4 has passed visual, cook, dedicated-server, or cross-platform acceptance. The fixture `VoxelLand.M4.Example.Reproducibility` builds transient source graphs without writing packages. It exercises the control programs, curve bake, finite erosion prepass, overhang path, and repeated chunk generation. It does not create an editor graph or prove that the resulting landscape reads clearly at 2 km.
 
-## Create the assets
+## Generate the example assets
 
-In the Content Browser create three **VoxelLand Terrain Graph** assets and one **VoxelLand M4 World Config**. For a project-local example, suggested paths are `/Game/VoxelLandExamples/M4/DA_M4_Continental`, `/Game/VoxelLandExamples/M4/DA_M4_Mountain`, `/Game/VoxelLandExamples/M4/DA_M4_Peaks`, and `/Game/VoxelLandExamples/M4/DA_M4_World`. These are suggested paths, not files supplied by this plugin. Create new assets at unused paths; do not overwrite the existing M3 example.
+After building an editor target, launch Unreal Editor with `-VoxelLandCreateM4Examples` and run `VoxelLand.M4.Example.CreateAssets` in Automation. It creates the four project-local packages at the paths below with stable node IDs, three editable control graphs, baked curves, finite erosion, overhang and bounded 100 cm height detail. It refuses to overwrite any of the four package paths. A write failure can leave a partial set: inspect any created files before choosing how to proceed. The reduced erosion counts are for a quick functional example, not a quality or performance claim. Assign a material setup if your project needs one.
+
+In a fresh editor process, pass `-VoxelLandVerifyM4Examples` and run `VoxelLand.M4.Example.VerifyAssets` to check that the saved assets, graph layouts, references, configuration, and baked curves reopen. `VoxelLand.M4.Example.Authoring` exercises transient creation and curve staleness without writing packages. These tests have not been run for this revision.
+
+## Create the assets manually
+
+In the Content Browser create three **VoxelLand Terrain Graph** assets and one **VoxelLand M4 World Config**. For a project-local example, suggested paths are `/Game/VoxelLandExamples/M4/DA_M4_Continental`, `/Game/VoxelLandExamples/M4/DA_M4_Mountain`, `/Game/VoxelLandExamples/M4/DA_M4_Peaks`, and `/Game/VoxelLandExamples/M4/DA_M4_World`. These paths are also used by the opt-in generator above; assets are not supplied as prebuilt files. Create new assets at unused paths; do not overwrite the existing M3 example.
 
 Build each control graph with `Position X` and `Position Y` connected to `Fbm2` inputs `X` and `Y`, and connect its `Result` to the `Density Output` input. The output is interpreted as a normalized control value for M4; it is not the final terrain density. Leave the fBm defaults at three octaves, gain `0.5`, and lacunarity `2`. Set the noise frequency in inverse centimeters:
 
@@ -14,7 +20,7 @@ Build each control graph with `Position X` and `Position Y` connected to `Fbm2` 
 | Mountain | `0.00006` | `46` |
 | Peaks | `0.00012` | `75` |
 
-The runtime also derives separate channel seeds from the world seed. The graph editor supplies stable node IDs; keep the three graph assets and their node IDs if you need an existing world's random streams to remain stable. The exact node GUIDs in manually authored assets need not match the transient fixture, so their output hashes are not expected to match the fixture's hashes. Save each graph successfully so its compiled program is current. M4 control graphs currently reject Z-dependent or 3D operations, density filters, external providers, and graph functions.
+The runtime also derives separate channel seeds from the world seed. The graph editor supplies stable node IDs; keep the three graph assets and their node IDs if you need an existing world's random streams to remain stable. The exact node GUIDs in manually authored assets need not match the transient fixture, so their output hashes are not expected to match the fixture's hashes. Save each graph successfully so its compiled program is current. M4 control graphs currently reject Z-dependent or 3D operations, density filters, external providers, and unsupported graph dependencies.
 
 Assign each graph to its matching control in the M4 config. Enter three strictly increasing curve keys in each control. Inputs are normalized integers in `[0, 65535]`; outputs are **Q8 centimeters**, meaning `256` units per centimeter. The current height expression adds the three curve outputs to `Base Height Q8` in continental, mountain, then peaks order.
 

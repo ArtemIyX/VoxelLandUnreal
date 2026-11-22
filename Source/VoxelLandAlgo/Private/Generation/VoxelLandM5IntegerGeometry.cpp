@@ -4,7 +4,7 @@
 
 namespace
 {
-constexpr int64 CoordinateLimit = 1048576;
+constexpr int64 M5IntegerCoordinateLimit = 1048576;
 constexpr uint64 WordMask = 0xffffffffULL;
 
 // High and low words, respectively. Only bounded unsigned operations are used.
@@ -12,13 +12,13 @@ using FWide = TPair<uint64, uint64>;
 
 bool ValidPoint(const FVoxelLandM5PointCm& P)
 {
-	return P.X >= -CoordinateLimit && P.X <= CoordinateLimit && P.Y >= -CoordinateLimit && P.Y <= CoordinateLimit
-		&& P.Z >= -CoordinateLimit && P.Z <= CoordinateLimit;
+	return P.X >= -M5IntegerCoordinateLimit && P.X <= M5IntegerCoordinateLimit && P.Y >= -M5IntegerCoordinateLimit
+		&& P.Y <= M5IntegerCoordinateLimit && P.Z >= -M5IntegerCoordinateLimit && P.Z <= M5IntegerCoordinateLimit;
 }
 
 bool ValidRadius(int64 Radius)
 {
-	return Radius > 0 && Radius <= CoordinateLimit;
+	return Radius > 0 && Radius <= M5IntegerCoordinateLimit;
 }
 
 FWide Multiply64(uint64 A, uint64 B)

@@ -5,8 +5,8 @@
 
 namespace
 {
-constexpr int64 Limit = 1048576;
-constexpr int32 CoefficientLimit = 32767;
+constexpr int64 M5TriangleSupportLimit = 1048576;
+constexpr int32 M5TriangleSupportCoefficientLimit = 32767;
 
 FVoxelLandM5Diagnostic Error(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
@@ -19,7 +19,7 @@ FVoxelLandM5Diagnostic Error(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 
 bool InRange(int64 V)
 {
-	return V >= -Limit && V <= Limit;
+	return V >= -M5TriangleSupportLimit && V <= M5TriangleSupportLimit;
 }
 bool InRange(const FVoxelLandM5PointCm& P)
 {
@@ -106,7 +106,7 @@ bool EdgePairCompatible(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm&
 	return true;
 }
 
-bool OnPlane(const FVoxelLandM5PointCm& P, const FVoxelLandM5SupportPlane& Plane)
+bool M5TriangleSupportOnPlane(const FVoxelLandM5PointCm& P, const FVoxelLandM5SupportPlane& Plane)
 {
 	return (P.Z - Plane.Origin.Z) * int64(Plane.Denominator)
 		== (P.X - Plane.Origin.X) * int64(Plane.GradientX) + (P.Y - Plane.Origin.Y) * int64(Plane.GradientY);
@@ -131,12 +131,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 	{
 		return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 	}
-	if (!InRange(FeetStart) || !InRange(FeetEnd) || !InRange(Plane.Origin) || RadiusCm < 1 || RadiusCm > Limit
-		|| HeightCm < 2 * RadiusCm || HeightCm > Limit || ContactSkinCm < 0 || ContactSkinCm > Limit
-		|| RadiusCm + ContactSkinCm > Limit || Plane.Denominator < 1 || Plane.Denominator > CoefficientLimit
-		|| Plane.GradientX < -CoefficientLimit || Plane.GradientX > CoefficientLimit
-		|| Plane.GradientY < -CoefficientLimit || Plane.GradientY > CoefficientLimit || MaxSlopeNumerator < 0
-		|| MaxSlopeNumerator > CoefficientLimit || MaxSlopeDenominator < 1 || MaxSlopeDenominator > CoefficientLimit)
+	if (!InRange(FeetStart) || !InRange(FeetEnd) || !InRange(Plane.Origin) || RadiusCm < 1
+		|| RadiusCm > M5TriangleSupportLimit || HeightCm < 2 * RadiusCm || HeightCm > M5TriangleSupportLimit
+		|| ContactSkinCm < 0 || ContactSkinCm > M5TriangleSupportLimit
+		|| RadiusCm + ContactSkinCm > M5TriangleSupportLimit || Plane.Denominator < 1
+		|| Plane.Denominator > M5TriangleSupportCoefficientLimit || Plane.GradientX < -M5TriangleSupportCoefficientLimit
+		|| Plane.GradientX > M5TriangleSupportCoefficientLimit || Plane.GradientY < -M5TriangleSupportCoefficientLimit
+		|| Plane.GradientY > M5TriangleSupportCoefficientLimit || MaxSlopeNumerator < 0
+		|| MaxSlopeNumerator > M5TriangleSupportCoefficientLimit || MaxSlopeDenominator < 1
+		|| MaxSlopeDenominator > M5TriangleSupportCoefficientLimit)
 	{
 		return Error(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid capsule, plane or slope"));
 	}
@@ -203,8 +206,9 @@ FVoxelLandM5Diagnostic VoxelLand::M5::TriangleSupport::CertifyLinearContact(cons
 		{
 			return Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support check cancelled"));
 		}
-		if (!InRange(T.A) || !InRange(T.B) || !InRange(T.C) || !OnPlane(T.A, Plane) || !OnPlane(T.B, Plane)
-			|| !OnPlane(T.C, Plane) || Orient(T.A, T.B, T.C) <= 0)
+		if (!InRange(T.A) || !InRange(T.B) || !InRange(T.C) || !M5TriangleSupportOnPlane(T.A, Plane)
+			|| !M5TriangleSupportOnPlane(T.B, Plane) || !M5TriangleSupportOnPlane(T.C, Plane)
+			|| Orient(T.A, T.B, T.C) <= 0)
 		{
 			return Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Invalid, noncoplanar or downward triangle"));
 		}

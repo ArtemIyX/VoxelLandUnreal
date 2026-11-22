@@ -30,7 +30,7 @@ public:
 	bool bLoop = false;
 };
 
-FVoxelLandM5Diagnostic Failure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+FVoxelLandM5Diagnostic M5CandidateFailure(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
 {
 	FVoxelLandM5Diagnostic Result;
 	Result.Code = Code;
@@ -55,13 +55,13 @@ bool ValidBounds(const FVoxelLandM5Bounds& B)
 		&& MaxOk(B.MaxExclusive.Y) && MaxOk(B.MaxExclusive.Z) && B.MinInclusive.X < B.MaxExclusive.X
 		&& B.MinInclusive.Y < B.MaxExclusive.Y && B.MinInclusive.Z < B.MaxExclusive.Z;
 }
-uint64 SquaredDistance(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
+uint64 M5CandidateSquaredDistance(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
 {
 	// Validated +/-2^20 cm gives |delta| <= 2^21, so this sum is < 2^44.
 	const int64 X = A.X - B.X, Y = A.Y - B.Y, Z = A.Z - B.Z;
 	return uint64(X * X + Y * Y + Z * Z);
 }
-bool SamePoint(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
+bool M5CandidateSamePoint(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
 {
 	return A.X == B.X && A.Y == B.Y && A.Z == B.Z;
 }
@@ -195,13 +195,13 @@ bool FVoxelLandM5CandidateResult::MatchesSource(
 	const FVoxelLandM5CaveSettings& S, int64 Seed, const FVoxelLandM5RegionCoord& Region) const
 {
 	const auto& A = SourceSettings;
-	const auto SamePoint = [](const FVoxelLandM5PointCm& X, const FVoxelLandM5PointCm& Y) {
+	const auto M5CandidateSamePoint = [](const FVoxelLandM5PointCm& X, const FVoxelLandM5PointCm& Y) {
 		return X.X == Y.X && X.Y == Y.Y && X.Z == Y.Z;
 	};
 	return SourceSeed == Seed && SourceRegion.X == Region.X && SourceRegion.Y == Region.Y && A.bEnabled == S.bEnabled
 		&& A.StageId == S.StageId && A.Salt == S.Salt && A.PlanningMode == S.PlanningMode
-		&& SamePoint(A.Bounds.MinInclusive, S.Bounds.MinInclusive)
-		&& SamePoint(A.Bounds.MaxExclusive, S.Bounds.MaxExclusive) && A.RegionSizeCm == S.RegionSizeCm
+		&& M5CandidateSamePoint(A.Bounds.MinInclusive, S.Bounds.MinInclusive)
+		&& M5CandidateSamePoint(A.Bounds.MaxExclusive, S.Bounds.MaxExclusive) && A.RegionSizeCm == S.RegionSizeCm
 		&& A.RegionOriginXCm == S.RegionOriginXCm && A.RegionOriginYCm == S.RegionOriginYCm
 		&& A.RoofThicknessCm == S.RoofThicknessCm && A.Capsule.StandingHeightCm == S.Capsule.StandingHeightCm
 		&& A.Capsule.RadiusCm == S.Capsule.RadiusCm && A.Capsule.MaxSlopeDegrees == S.Capsule.MaxSlopeDegrees
@@ -235,7 +235,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	};
 	if (Cancelled())
 	{
-		return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 	}
 	const auto& T = S.Topology;
 	const auto& L = S.Limits;
@@ -248,7 +248,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 		|| T.MaxTunnelRadiusCm < T.MinTunnelRadiusCm || T.MinChamberRadiusCm < T.MaxTunnelRadiusCm
 		|| T.MaxChamberRadiusCm < T.MinChamberRadiusCm || T.MaxChamberRadiusCm > LimitCm)
 	{
-		return Failure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid cave candidate settings or budgets"));
+		return M5CandidateFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid cave candidate settings or budgets"));
 	}
 	// A looser shared budget would allow the sum of candidate, entrance and
 	// validation work (or their simultaneously live outputs) to exceed the
@@ -257,7 +258,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	Budget->GetLimits(SharedMaxBytes, SharedMaxWork);
 	if (SharedMaxBytes > L.MaxBytes || SharedMaxWork > L.MaxValidationWork)
 	{
-		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared budget exceeds authored per-plan limits"));
+		return M5CandidateFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared budget exceeds authored per-plan limits"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	FVoxelLandM5CavePlan Scratch;
@@ -272,7 +274,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 			|| (S.Bounds.MaxExclusive.Y - S.RegionOriginYCm) % S.RegionSizeCm != 0
 			|| !RegionBounds(S, Region, Scratch.Bounds))
 		{
-			return Failure(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Region is outside the bounded planning domain"));
+			return M5CandidateFailure(
+				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Region is outside the bounded planning domain"));
 		}
 	}
 	else
@@ -286,7 +289,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	const int64 MinZ = B.MinInclusive.Z + Margin, MaxZ = B.MaxExclusive.Z - 1 - Margin;
 	if (MinX > MaxX || MinY > MaxY || MinZ > MaxZ)
 	{
-		return Failure(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Planning volume cannot contain a chamber"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Planning volume cannot contain a chamber"));
 	}
 	const int32 MaxNodes = T.MaxChambers + (S.PlanningMode == EVoxelLandM5PlanningMode::Regional ? 4 : 0);
 	const int64 MaxPairs = int64(MaxNodes) * (MaxNodes - 1) / 2;
@@ -306,17 +309,19 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 		|| !TryAdd(EdgeBytes, NodeBytes, PayloadBytes) || !TryAdd(PayloadBytes, OutputBytes, PayloadBytes)
 		|| !TryMultiplyNonNegative(PayloadBytes, 4, NeededBytes) || !TryAdd(NeededBytes, 16384, NeededBytes))
 	{
-		return Failure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Candidate admission size overflow"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Candidate admission size overflow"));
 	}
 	if (MaxPairs > L.MaxEdges || NeededBytes > L.MaxBytes)
 	{
-		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Candidate graph exceeds edge or memory budget"));
+		return M5CandidateFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Candidate graph exceeds edge or memory budget"));
 	}
 	// Reserve for the candidate's complete lifetime, including the returned
 	// output arrays. On every failure Scratch is destroyed before Lease.
 	if (!Budget->TryReserveBytes(NeededBytes, Lease))
 	{
-		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared candidate memory budget exceeded"));
+		return M5CandidateFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared candidate memory budget exceeded"));
 	}
 	// Precharge an upper bound before dispatch. One unit covers one bounded
 	// comparison, disjoint-set step, cancellation point, or fixed-size SHA
@@ -333,22 +338,22 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 		|| !TryAdd(Work, AttemptWork, Work) || !TryAdd(Work, SortWork, Work) || !TryAdd(Work, EdgeWork, Work)
 		|| !TryAdd(Work, RadiusWork, Work) || !TryAdd(Work, NodeWork, Work))
 	{
-		return Failure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Candidate work estimate overflow"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Candidate work estimate overflow"));
 	}
 	if (L.MaxValidationWork < 0 || Work > L.MaxValidationWork)
 	{
-		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Candidate stage work limit exceeded"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Candidate stage work limit exceeded"));
 	}
 	if (!Budget->TryChargeWork(Work))
 	{
-		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared candidate work budget exceeded"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared candidate work budget exceeded"));
 	}
 	TArray<FCandidateNode> Nodes;
 	Nodes.Reserve(MaxNodes);
 	int64 Target = 0;
 	if (!RandomInterval(S, Seed, Region, 1, MAX_uint64, 0, 0, T.MinChambers, T.MaxChambers, Cancelled, Target))
 	{
-		return Failure(Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
+		return M5CandidateFailure(Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
 			TEXT("Could not select chamber count"));
 	}
 	const uint64 Spacing = uint64(2 * Margin) * uint64(2 * Margin);
@@ -359,7 +364,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 		{
 			if (Cancelled())
 			{
-				return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
+				return M5CandidateFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 			}
 			FVoxelLandM5Chamber Chamber;
 			int64 Radius = 0;
@@ -371,13 +376,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 				|| !RandomInterval(S, Seed, Region, 1, Id, uint32(Attempt), 192, T.MinChamberRadiusCm,
 					T.MaxChamberRadiusCm, Cancelled, Radius))
 			{
-				return Failure(Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
+				return M5CandidateFailure(
+					Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
 					TEXT("Candidate random stream exhausted"));
 			}
 			bool bSeparated = true;
 			for (const FVoxelLandM5Chamber& Prior : Scratch.Chambers)
 			{
-				if (SquaredDistance(Prior.CenterCm, Chamber.CenterCm) < Spacing)
+				if (M5CandidateSquaredDistance(Prior.CenterCm, Chamber.CenterCm) < Spacing)
 				{
 					bSeparated = false;
 					break;
@@ -403,7 +409,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	}
 	if (Scratch.Chambers.Num() != Target)
 	{
-		return Failure(EVoxelLandM5ErrorCode::Blocked, TEXT("Candidate spacing exhausted the bounded chamber budget"));
+		return M5CandidateFailure(
+			EVoxelLandM5ErrorCode::Blocked, TEXT("Candidate spacing exhausted the bounded chamber budget"));
 	}
 	if (S.PlanningMode == EVoxelLandM5PlanningMode::Regional)
 	{
@@ -418,7 +425,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 				const int64 Current = Axis == 0 ? Region.X : Region.Y;
 				if (!VoxelLand::M5::CheckedMath::TryAdd(Current, Sign, Changed))
 				{
-					return Failure(EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Neighbor region overflow"));
+					return M5CandidateFailure(
+						EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Neighbor region overflow"));
 				}
 				if (Axis == 0)
 				{
@@ -435,7 +443,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 				}
 				if (!AddPortal(S, Seed, Region, Neighbor, B, Scratch, Nodes))
 				{
-					return Failure(
+					return M5CandidateFailure(
 						EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Cannot construct unique shared portal"));
 				}
 			}
@@ -459,16 +467,17 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 		{
 			if (Cancelled())
 			{
-				return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
+				return M5CandidateFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 			}
-			if (SamePoint(Nodes[I].Position, Nodes[J].Position))
+			if (M5CandidateSamePoint(Nodes[I].Position, Nodes[J].Position))
 			{
-				return Failure(EVoxelLandM5ErrorCode::Blocked, TEXT("Candidate nodes occupy the same position"));
+				return M5CandidateFailure(
+					EVoxelLandM5ErrorCode::Blocked, TEXT("Candidate nodes occupy the same position"));
 			}
 			FCandidateEdge Edge;
 			Edge.A = I;
 			Edge.B = J;
-			Edge.DistanceSquared = SquaredDistance(Nodes[I].Position, Nodes[J].Position);
+			Edge.DistanceSquared = M5CandidateSquaredDistance(Nodes[I].Position, Nodes[J].Position);
 			Edges.Add(Edge);
 		}
 	}
@@ -495,7 +504,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	{
 		if (Cancelled())
 		{
-			return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
+			return M5CandidateFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 		}
 		int32 A = Edge.A, BRoot = Edge.B;
 		while (Parent[A] != A)
@@ -515,28 +524,28 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	}
 	if (TreeEdges != NodeCount - 1)
 	{
-		return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Cannot connect candidate graph"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Cannot connect candidate graph"));
 	}
 	int64 LoopCount = 0;
 	if (!RandomInterval(S, Seed, Region, 2, MAX_uint64, 0, 0, T.MinLoops, T.MaxLoops, Cancelled, LoopCount))
 	{
-		return Failure(Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
+		return M5CandidateFailure(Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
 			TEXT("Could not select loop count"));
 	}
 	if (LoopCount > Edges.Num() - TreeEdges || int64(TreeEdges) + LoopCount > L.MaxSegments)
 	{
-		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Loop or segment budget exceeded"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Loop or segment budget exceeded"));
 	}
 	for (FCandidateEdge& Edge : Edges)
 	{
 		if (Cancelled())
 		{
-			return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate loop ranking cancelled"));
+			return M5CandidateFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate loop ranking cancelled"));
 		}
 		if (!Edge.bTree
 			&& !EdgeWord(S, Seed, Region, Nodes[Edge.A].Endpoint, Nodes[Edge.B].Endpoint, 0, Edge.LoopOrder))
 		{
-			return Failure(EVoxelLandM5ErrorCode::Blocked, TEXT("Could not derive loop order"));
+			return M5CandidateFailure(EVoxelLandM5ErrorCode::Blocked, TEXT("Could not derive loop order"));
 		}
 	}
 	TArray<int32> LoopIndices;
@@ -566,7 +575,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 		{
 			if (Cancelled())
 			{
-				return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
+				return M5CandidateFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 			}
 			FVoxelLandM5Connection Connection;
 			Connection.bHasId = true;
@@ -598,7 +607,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 						},
 						Cancelled, Radius, Draws))
 				{
-					return Failure(Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
+					return M5CandidateFailure(
+						Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
 						TEXT("Cannot choose a tunnel radius"));
 				}
 			}
@@ -609,7 +619,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	}
 	if (Cancelled())
 	{
-		return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
+		return M5CandidateFailure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 	}
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result =
 		MakeShareable(new FVoxelLandM5CandidateResult(Budget, S, Seed, Region, MoveTemp(Scratch), MoveTemp(Lease)));

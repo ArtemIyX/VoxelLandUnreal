@@ -144,13 +144,24 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate region does not match provenance"));
 	}
 	const int64 NodeCount = static_cast<int64>(Plan.Chambers.Num()) + Plan.Entrances.Num() + Plan.Portals.Num();
+	if (Settings.Topology.MinChambers < 1 || Settings.Topology.MaxChambers < Settings.Topology.MinChambers
+		|| Settings.Topology.MaxChambers > Settings.Limits.MaxCandidates || Settings.Topology.MinLoops < 0
+		|| Settings.Topology.MaxLoops < Settings.Topology.MinLoops)
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid chamber or loop limits"));
+	}
 	if (Settings.Limits.MaxCandidates < 1 || Settings.Limits.MaxEdges < 1 || Settings.Limits.MaxBytes < 1
 		|| Settings.Limits.MaxValidationWork < 1 || Settings.Topology.EntranceCount < 0 || NodeCount > MaximumNodes
 		|| Plan.Connections.Num() > MaximumConnections || Plan.Chambers.Num() > Settings.Limits.MaxCandidates
-		|| Plan.Connections.Num() > Settings.Limits.MaxEdges || Plan.Entrances.Num() > Settings.Topology.EntranceCount
-		|| Plan.Portals.Num() > 4)
+		|| Plan.Connections.Num() > Settings.Limits.MaxEdges || Plan.Portals.Num() > 4)
 	{
 		return M5TopologyError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Topology count exceeds admission limit"));
+	}
+	if (Plan.Chambers.Num() < Settings.Topology.MinChambers || Plan.Chambers.Num() > Settings.Topology.MaxChambers
+		|| Plan.Entrances.Num() != Settings.Topology.EntranceCount)
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::InconsistentTopology,
+			TEXT("Topology chamber or entrance count does not match settings"));
 	}
 	if (!Settings.StageId.IsValid())
 	{
@@ -168,13 +179,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 	{
 		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Shared budget exceeds per-plan limits"));
 	}
-	// Four scratch arrays: nodes, parent, connections and canonical edges. Twice
+	// Five scratch arrays: nodes, two union/find parents, connections and canonical edges. Twice
 	// their payload accounts for capacity slack; 4096 further bytes cover the
 	// bounded SHA packet/digest and diagnostic scratch. Unreal allocator metadata
 	// is excluded, as documented by FVoxelLandM5Budget.
 	using namespace VoxelLand::M5::CheckedMath;
 	int64 NodeBytes = 0, EdgeBytes = 0, ScratchBytes = 0, Sum = 0, Square = 0, Work = 0, PortalWork = 0;
-	if (!TryMultiplyNonNegative(NodeCount, sizeof(FVoxelLandM5Endpoint) + sizeof(int32), NodeBytes)
+	if (!TryMultiplyNonNegative(NodeCount, sizeof(FVoxelLandM5Endpoint) + 2 * sizeof(int32), NodeBytes)
 		|| !TryMultiplyNonNegative(Plan.Connections.Num(), sizeof(FVoxelLandM5Connection) + sizeof(uint64), EdgeBytes)
 		|| !TryAdd(NodeBytes, EdgeBytes, ScratchBytes) || !TryMultiplyNonNegative(ScratchBytes, 2, ScratchBytes)
 		|| !TryAdd(ScratchBytes, 4096, ScratchBytes) || !TryAdd(NodeCount, Plan.Connections.Num(), Sum)
@@ -332,13 +343,17 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 		return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
 	}
 	TArray<int32> Parent;
+	TArray<int32> TreeParent;
 	Parent.Reserve(Nodes.Num());
+	TreeParent.Reserve(Nodes.Num());
 	for (int32 I = 0; I < Nodes.Num(); ++I)
 	{
 		Parent.Add(I);
+		TreeParent.Add(I);
 	}
 	TArray<uint64> Edges;
 	Edges.Reserve(Connections.Num());
+	int32 MarkedLoops = 0;
 	for (int32 I = 0; I < Connections.Num(); ++I)
 	{
 		if (IsCancelled())
@@ -378,6 +393,25 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 		if (ARoot != BRoot)
 		{
 			Parent[FMath::Max(ARoot, BRoot)] = FMath::Min(ARoot, BRoot);
+		}
+		if (Connection.bLoop)
+		{
+			++MarkedLoops;
+		}
+		else
+		{
+			const int32 TreeA = M5Root(TreeParent, A, IsCancelled);
+			const int32 TreeB = M5Root(TreeParent, B, IsCancelled);
+			if (TreeA == INDEX_NONE || TreeB == INDEX_NONE)
+			{
+				return M5TopologyError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
+			}
+			if (TreeA == TreeB)
+			{
+				return M5TopologyError(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Non-loop edges form a cycle"),
+					true, Connection.Id);
+			}
+			TreeParent[FMath::Max(TreeA, TreeB)] = FMath::Min(TreeA, TreeB);
 		}
 	}
 	if (!M5TopologySort(Edges, [](uint64 A, uint64 B) { return A < B; }, IsCancelled))
@@ -455,6 +489,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 			return M5TopologyError(EVoxelLandM5ErrorCode::InconsistentTopology,
 				TEXT("Topology contains disconnected nodes"), true, Nodes[I].Id);
 		}
+	}
+	// With a connected simple undirected graph the cyclomatic rank is E-N+1.
+	// Count every chamber, portal and entrance as a node. An acyclic non-loop
+	// backbone with N-1 edges then proves every marked loop is an extra edge.
+	const int64 GraphLoops = int64(Connections.Num()) - int64(Nodes.Num()) + 1;
+	if (GraphLoops < Settings.Topology.MinLoops || GraphLoops > Settings.Topology.MaxLoops || GraphLoops != MarkedLoops)
+	{
+		return M5TopologyError(EVoxelLandM5ErrorCode::InconsistentTopology,
+			TEXT("Graph loop count or loop markers do not match settings"));
 	}
 	if (IsCancelled())
 	{

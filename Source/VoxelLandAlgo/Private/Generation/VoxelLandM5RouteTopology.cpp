@@ -105,6 +105,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVo
 	}
 	const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
 	const FVoxelLandM5ResourceLimits& L = Settings.Limits;
+	const auto& Topology = Settings.Topology;
 	int64 BudgetBytes = 0, BudgetWork = 0;
 	Budget->GetLimits(BudgetBytes, BudgetWork);
 	if (!Settings.StageId.IsValid() || !SameRegion(Plan.Region, Region) || L.MaxBytes < 1 || L.MaxValidationWork < 1
@@ -114,12 +115,23 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVo
 	{
 		return Failure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid source or limits"));
 	}
+	if (Topology.MinChambers < 1 || Topology.MaxChambers < Topology.MinChambers
+		|| Topology.MaxChambers > L.MaxCandidates || Topology.EntranceCount < 0 || Topology.MinLoops < 0
+		|| Topology.MaxLoops < Topology.MinLoops)
+	{
+		return Failure(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid chamber, entrance or loop settings"));
+	}
 	if (Plan.Chambers.Num() > L.MaxCandidates || Plan.Connections.Num() > L.MaxEdges
 		|| Plan.Segments.Num() > L.MaxSegments || Plan.Junctions.Num() > L.MaxJunctions
-		|| Plan.Routes.Num() > L.MaxRoutes || Plan.Entrances.Num() > Settings.Topology.EntranceCount
-		|| Plan.Portals.Num() > 4)
+		|| Plan.Routes.Num() > L.MaxRoutes || Plan.Portals.Num() > 4)
 	{
 		return Failure(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Route plan count exceeds limit"));
+	}
+	if (Plan.Chambers.Num() < Topology.MinChambers || Plan.Chambers.Num() > Topology.MaxChambers
+		|| Plan.Entrances.Num() != Topology.EntranceCount)
+	{
+		return Failure(
+			EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Chamber or entrance count does not match settings"));
 	}
 	if (Plan.Chambers.IsEmpty() || Plan.Connections.IsEmpty() || Plan.Routes.IsEmpty())
 	{
@@ -409,8 +421,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVo
 				true, Portal.Id);
 		}
 	}
-	for (const auto& Connection : Plan.Connections)
+	int64 MarkedLoops = 0;
+	for (int32 ConnectionIndex = 0; ConnectionIndex < Plan.Connections.Num(); ++ConnectionIndex)
 	{
+		const auto& Connection = Plan.Connections[ConnectionIndex];
 		if (IsCancelled())
 		{
 			return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
@@ -423,6 +437,31 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVo
 			return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Invalid graph connection"),
 				Connection.bHasId, Connection.Id);
 		}
+		MarkedLoops += Connection.bLoop ? 1 : 0;
+		for (int32 Previous = 0; Previous < ConnectionIndex; ++Previous)
+		{
+			if (IsCancelled())
+			{
+				return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
+			}
+			const auto& Other = Plan.Connections[Previous];
+			if (Other.bHasId
+				&& (Other.Id == Connection.Id
+					|| ((SameNode(Other.Start, Connection.Start) && SameNode(Other.End, Connection.End))
+						|| (SameNode(Other.Start, Connection.End) && SameNode(Other.End, Connection.Start)))))
+			{
+				return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Duplicate graph connection"), true,
+					Connection.Id);
+			}
+		}
+	}
+	const int64 NodeCount =
+		static_cast<int64>(Plan.Chambers.Num()) + Plan.Entrances.Num() + Plan.Portals.Num() + Plan.Junctions.Num();
+	const int64 GraphLoops = static_cast<int64>(Plan.Connections.Num()) - NodeCount + 1;
+	if (GraphLoops < Topology.MinLoops || GraphLoops > Topology.MaxLoops || GraphLoops != MarkedLoops)
+	{
+		return Failure(
+			EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Graph loop count or markers do not match settings"));
 	}
 	for (const auto& Segment : Plan.Segments)
 	{
@@ -935,6 +974,118 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVo
 	{
 		return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Route graph is disconnected"));
 	}
+	// Independently require the unmarked edges to form the connected backbone.
+	// The checks above establish a simple graph with E-N+1 marked loops, so a
+	// connected non-loop subgraph incident to every node has exactly N-1 edges.
+	TArray<uint8> IsLoop;
+	IsLoop.Init(0, Plan.Routes.Num());
+	int32 FirstTreeRoute = INDEX_NONE;
+	int32 TreeRouteCount = 0;
+	for (int32 I = 0; I < Plan.Routes.Num(); ++I)
+	{
+		for (const auto& Ref : Plan.Routes[I].CoveredFeatures)
+		{
+			if (IsCancelled())
+			{
+				return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
+			}
+			if (Ref.Kind != EVoxelLandM5RouteFeatureKind::Connection)
+			{
+				continue;
+			}
+			for (const auto& Connection : Plan.Connections)
+			{
+				if (IsCancelled())
+				{
+					return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
+				}
+				if (Connection.bHasId && Connection.Id == Ref.Id)
+				{
+					IsLoop[I] = Connection.bLoop ? 1 : 0;
+					if (!Connection.bLoop)
+					{
+						++TreeRouteCount;
+						if (FirstTreeRoute == INDEX_NONE)
+						{
+							FirstTreeRoute = I;
+						}
+					}
+				}
+			}
+		}
+	}
+	if (FirstTreeRoute == INDEX_NONE || int64(TreeRouteCount) != NodeCount - 1)
+	{
+		return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Non-loop edges do not form a spanning tree"));
+	}
+	Reached.Init(0, Plan.Routes.Num());
+	Queue.Reset();
+	Reached[FirstTreeRoute] = 1;
+	Queue.Add(FirstTreeRoute);
+	for (int32 Head = 0; Head < Queue.Num(); ++Head)
+	{
+		const auto& A = Plan.Routes[Queue[Head]];
+		for (int32 I = 0; I < Plan.Routes.Num(); ++I)
+		{
+			if (IsCancelled())
+			{
+				return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
+			}
+			const auto& B = Plan.Routes[I];
+			if (!IsLoop[I] && !Reached[I]
+				&& ((SameNode(A.Start, B.Start) && SamePoint(A.Legs[0].StartFeetCm, B.Legs[0].StartFeetCm))
+					|| (SameNode(A.Start, B.End) && SamePoint(A.Legs[0].StartFeetCm, B.Legs.Last().EndFeetCm))
+					|| (SameNode(A.End, B.Start) && SamePoint(A.Legs.Last().EndFeetCm, B.Legs[0].StartFeetCm))
+					|| (SameNode(A.End, B.End) && SamePoint(A.Legs.Last().EndFeetCm, B.Legs.Last().EndFeetCm))))
+			{
+				Reached[I] = 1;
+				Queue.Add(I);
+			}
+		}
+	}
+	if (Queue.Num() != TreeRouteCount)
+	{
+		return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Non-loop backbone is disconnected"));
+	}
+	const auto HasTreeEdge = [&Plan, &Region, &IsCancelled](
+								 EVoxelLandM5EndpointKind Kind, bool bHasId, uint64 Id) -> int32 {
+		if (!bHasId)
+		{
+			return 0;
+		}
+		FVoxelLandM5Endpoint Node;
+		Node.bValid = true;
+		Node.Kind = Kind;
+		Node.Region = Region;
+		Node.Id = Id;
+		for (const auto& Connection : Plan.Connections)
+		{
+			if (IsCancelled())
+			{
+				return -1;
+			}
+			if (!Connection.bLoop && (SameNode(Connection.Start, Node) || SameNode(Connection.End, Node)))
+			{
+				return 1;
+			}
+		}
+		return 0;
+	};
+#define M5_REQUIRE_TREE_EDGE(Array, Kind)                                                                              \
+	for (const auto& V : Plan.Array)                                                                                   \
+	{                                                                                                                  \
+		const int32 Found = HasTreeEdge(EVoxelLandM5EndpointKind::Kind, V.bHasId, V.Id);                               \
+		if (Found < 0)                                                                                                 \
+			return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));                      \
+		if (!Found)                                                                                                    \
+			return Failure(EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Node is absent from non-loop backbone"), \
+				V.bHasId, V.Id);                                                                                       \
+	}
+	M5_REQUIRE_TREE_EDGE(Chambers, Chamber)
+	M5_REQUIRE_TREE_EDGE(Entrances, Entrance)
+	M5_REQUIRE_TREE_EDGE(Portals, Portal)
+	M5_REQUIRE_TREE_EDGE(Junctions, Junction)
+#undef M5_REQUIRE_TREE_EDGE
 	if (IsCancelled())
 	{
 		return Failure(EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));

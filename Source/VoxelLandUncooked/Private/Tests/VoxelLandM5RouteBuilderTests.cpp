@@ -70,6 +70,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5RouteBuilderTest, "VoxelLand.M5.Rou
 bool FVoxelLandM5RouteBuilderTest::RunTest(const FString& Parameters)
 {
 	FVoxelLandM5CaveSettings Settings;
+	Settings.Topology.MinChambers = Settings.Topology.MaxChambers = 2;
+	Settings.Topology.EntranceCount = 0;
+	Settings.Topology.MinLoops = Settings.Topology.MaxLoops = 0;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!TestTrue(TEXT("budget"),
 			FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, Settings.Limits.MaxValidationWork, Budget))
@@ -177,6 +180,9 @@ bool FVoxelLandM5RouteBuilderJunctionTest::RunTest(const FString& Parameters)
 {
 	FVoxelLandM5CaveSettings Settings;
 	Settings.StageId = FGuid(1, 2, 3, 4);
+	Settings.Topology.MinChambers = Settings.Topology.MaxChambers = 1;
+	Settings.Topology.EntranceCount = 1;
+	Settings.Topology.MinLoops = Settings.Topology.MaxLoops = 0;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, Settings.Limits.MaxValidationWork, Budget))
 	{
@@ -327,6 +333,9 @@ bool FVoxelLandM5RouteBuilderPortalTest::RunTest(const FString& Parameters)
 	FVoxelLandM5CaveSettings Settings;
 	Settings.StageId = FGuid(1, 2, 3, 4);
 	Settings.PlanningMode = EVoxelLandM5PlanningMode::Regional;
+	Settings.Topology.MinChambers = Settings.Topology.MaxChambers = 1;
+	Settings.Topology.EntranceCount = 0;
+	Settings.Topology.MinLoops = Settings.Topology.MaxLoops = 0;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, Settings.Limits.MaxValidationWork, Budget)
 		|| !Budget.IsValid())

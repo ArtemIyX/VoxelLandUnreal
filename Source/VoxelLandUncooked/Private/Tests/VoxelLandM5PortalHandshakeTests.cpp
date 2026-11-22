@@ -49,6 +49,7 @@ bool FVoxelLandM5PortalHandshakeTest::RunTest(const FString& Parameters)
 	S.RegionSizeCm = 200;
 	S.RegionOriginYCm = -100;
 	S.Topology.MinChambers = S.Topology.MaxChambers = 1;
+	S.Topology.EntranceCount = 0;
 	S.Topology.MinLoops = S.Topology.MaxLoops = 0;
 	S.Topology.MinTunnelRadiusCm = 1;
 	S.Topology.MaxTunnelRadiusCm = 2;
@@ -254,6 +255,7 @@ bool FVoxelLandM5PortalHandshakeWorkTest::RunTest(const FString& Parameters)
 		S.RegionSizeCm = 200;
 		S.RegionOriginYCm = -100;
 		S.Topology.MinChambers = S.Topology.MaxChambers = 1;
+		S.Topology.EntranceCount = 0;
 		S.Topology.MinLoops = S.Topology.MaxLoops = 0;
 		S.Topology.MinTunnelRadiusCm = 1;
 		S.Topology.MaxTunnelRadiusCm = 2;
@@ -318,6 +320,9 @@ bool FVoxelLandM5RoutedPortalHandshakeTest::RunTest(const FString& Parameters)
 	S.StageId = FGuid(1, 2, 3, 4);
 	S.PlanningMode = EVoxelLandM5PlanningMode::Regional;
 	S.RegionSizeCm = 1000;
+	S.Topology.MinChambers = S.Topology.MaxChambers = 1;
+	S.Topology.EntranceCount = 0;
+	S.Topology.MinLoops = S.Topology.MaxLoops = 0;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!FVoxelLandM5Budget::TryCreate(S.Limits.MaxBytes, S.Limits.MaxValidationWork, Budget))
 	{

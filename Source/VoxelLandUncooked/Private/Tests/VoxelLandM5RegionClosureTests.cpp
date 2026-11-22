@@ -29,6 +29,8 @@ bool FVoxelLandM5RegionClosureTest::RunTest(const FString& Parameters)
 	S.Bounds.MaxExclusive.Z = 100;
 	S.RegionSizeCm = 200;
 	S.Topology.MinChambers = S.Topology.MaxChambers = 1;
+	// These are raw candidates, before the separate entrance-planning stage.
+	S.Topology.EntranceCount = 0;
 	S.Topology.MinLoops = S.Topology.MaxLoops = 0;
 	S.Topology.MinTunnelRadiusCm = 1;
 	S.Topology.MaxTunnelRadiusCm = 2;

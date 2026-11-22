@@ -39,8 +39,11 @@ FVoxelLandM5CaveSettings M5EntranceSettings()
 	S.StageId = FGuid(1, 2, 3, 4);
 	S.Bounds.MinInclusive.X = S.Bounds.MinInclusive.Y = S.Bounds.MinInclusive.Z = -1000;
 	S.Bounds.MaxExclusive.X = S.Bounds.MaxExclusive.Y = S.Bounds.MaxExclusive.Z = 1000;
+	S.Topology.MinChambers = S.Topology.MaxChambers = 1;
 	S.Topology.EntranceCount = 1;
-	S.Topology.MaxTunnelRadiusCm = 100;
+	S.Topology.MinLoops = S.Topology.MaxLoops = 0;
+	S.Topology.MinTunnelRadiusCm = S.Topology.MaxTunnelRadiusCm = 100;
+	S.Topology.MinChamberRadiusCm = S.Topology.MaxChamberRadiusCm = 200;
 	S.Capsule.ClearanceMarginCm = 0;
 	S.Limits.MaxAttempts = 4;
 	return S;

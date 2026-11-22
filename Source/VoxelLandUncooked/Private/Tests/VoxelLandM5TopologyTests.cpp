@@ -41,6 +41,8 @@ FVoxelLandM5Diagnostic M5TopologyValidate(const FVoxelLandM5CavePlan& Plan, int3
 	Settings.StageId = M5TopologyStage;
 	Settings.Salt = M5TopologySalt;
 	Settings.Topology.EntranceCount = 1;
+	Settings.Topology.MinChambers = 1;
+	Settings.Topology.MaxChambers = MaxChambers;
 	Settings.Limits.MaxCandidates = MaxChambers;
 	Settings.Limits.MaxEdges = MaxConnections;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
@@ -141,6 +143,7 @@ bool FVoxelLandM5TopologyGraphTest::RunTest(const FString& Parameters)
 		Validate(Plan) == EVoxelLandM5ErrorCode::None);
 	Plan.Connections.Add(M5TopologyLink(4, M5TopologyEndpoint(EVoxelLandM5EndpointKind::Chamber, 0),
 		M5TopologyEndpoint(EVoxelLandM5EndpointKind::Portal, Plan.Portals[0].Id)));
+	Plan.Connections.Last().bLoop = true;
 	TestTrue(TEXT("connected cycle accepted"), Validate(Plan) == EVoxelLandM5ErrorCode::None);
 	Plan.Connections.RemoveAt(3);
 	Plan.Connections.RemoveAt(2);
@@ -220,6 +223,8 @@ bool FVoxelLandM5TopologyBudgetTest::RunTest(const FString& Parameters)
 	Settings.StageId = M5TopologyStage;
 	Settings.Salt = M5TopologySalt;
 	Settings.Topology.EntranceCount = 1;
+	Settings.Topology.MinChambers = 1;
+	Settings.Topology.MaxChambers = 2;
 	Settings.Limits.MaxValidationWork = 10000;
 	const FVoxelLandM5CavePlan Plan = M5TopologyFixture();
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
@@ -245,7 +250,7 @@ bool FVoxelLandM5TopologyBudgetTest::RunTest(const FString& Parameters)
 	Budget->GetUsage(Live, Peak, Work);
 	const int64 ExpectedScratch = 4096
 								+ 2
-									  * (4 * (sizeof(FVoxelLandM5Endpoint) + sizeof(int32))
+									  * (4 * (sizeof(FVoxelLandM5Endpoint) + 2 * sizeof(int32))
 										  + 3 * (sizeof(FVoxelLandM5Connection) + sizeof(uint64)));
 	TestEqual(TEXT("scratch lease released"), Live, int64(65536));
 	TestEqual(TEXT("peak includes candidate and full scratch"), Peak, int64(65536) + ExpectedScratch);
@@ -360,6 +365,74 @@ bool FVoxelLandM5TopologyBudgetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("invalid role preserves admitted work charge"), Work, int64(6144));
 	TestTrue(TEXT("invalid role remains unchanged in candidate"),
 		RoleCandidate->GetPlan().Connections[0].Start.AnchorRole == EVoxelLandM5AnchorRole::ChamberFeet);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5TopologyCardinalityTest, "VoxelLand.M5.Topology.ConfiguredCardinality", M5TopologyFlags)
+bool FVoxelLandM5TopologyCardinalityTest::RunTest(const FString& Parameters)
+{
+	FVoxelLandM5CaveSettings Settings;
+	Settings.StageId = M5TopologyStage;
+	Settings.Salt = M5TopologySalt;
+	Settings.Topology.MinChambers = 2;
+	Settings.Topology.MaxChambers = 4;
+	Settings.Topology.EntranceCount = 1;
+	Settings.Topology.MinLoops = 0;
+	Settings.Topology.MaxLoops = 1;
+	const auto NeverCancel = []() {
+		return false;
+	};
+	const auto Check = [&NeverCancel](const FVoxelLandM5CavePlan& Plan, const FVoxelLandM5CaveSettings& Config) {
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+		if (!FVoxelLandM5Budget::TryCreate(Config.Limits.MaxBytes, Config.Limits.MaxValidationWork, Budget))
+		{
+			return EVoxelLandM5ErrorCode::InvalidInput;
+		}
+		const auto Candidate =
+			FVoxelLandM5TopologyFixtureFactory::Make(Plan, Config, M5TopologySeed, Budget.ToSharedRef());
+		if (!Candidate.IsValid())
+		{
+			return EVoxelLandM5ErrorCode::InvalidInput;
+		}
+		return VoxelLand::M5::Topology::Validate(
+			Config, M5TopologySeed, Plan.Region, Candidate.ToSharedRef(), Budget.ToSharedRef(), NeverCancel)
+			.Code;
+	};
+	const auto Plan = M5TopologyFixture();
+	TestTrue(TEXT("portal and entrance tree satisfies configured limits"),
+		Check(Plan, Settings) == EVoxelLandM5ErrorCode::None);
+	Settings.Topology.MinChambers = 3;
+	TestTrue(TEXT("too few chambers rejected"), Check(Plan, Settings) == EVoxelLandM5ErrorCode::InconsistentTopology);
+	Settings.Topology.MinChambers = 1;
+	Settings.Topology.MaxChambers = 1;
+	TestTrue(TEXT("too many chambers rejected"), Check(Plan, Settings) == EVoxelLandM5ErrorCode::InconsistentTopology);
+	Settings.Topology.MaxChambers = 4;
+	Settings.Topology.EntranceCount = 2;
+	TestTrue(TEXT("missing configured entrance rejected"),
+		Check(Plan, Settings) == EVoxelLandM5ErrorCode::InconsistentTopology);
+	Settings.Topology.EntranceCount = 1;
+	Settings.Topology.MinLoops = 1;
+	TestTrue(
+		TEXT("missing configured loop rejected"), Check(Plan, Settings) == EVoxelLandM5ErrorCode::InconsistentTopology);
+	FVoxelLandM5CavePlan Cycle = Plan;
+	Cycle.Connections.Add(M5TopologyLink(4, M5TopologyEndpoint(EVoxelLandM5EndpointKind::Chamber, 0),
+		M5TopologyEndpoint(EVoxelLandM5EndpointKind::Portal, Cycle.Portals[0].Id)));
+	Cycle.Connections.Last().bLoop = true;
+	TestTrue(TEXT("loop through portal counted from graph"), Check(Cycle, Settings) == EVoxelLandM5ErrorCode::None);
+	Settings.Topology.MinLoops = 0;
+	Settings.Topology.MaxLoops = 0;
+	TestTrue(
+		TEXT("too many graph loops rejected"), Check(Cycle, Settings) == EVoxelLandM5ErrorCode::InconsistentTopology);
+	Settings.Topology.MaxLoops = 1;
+	Cycle.Connections.Last().bLoop = false;
+	TestTrue(TEXT("unmarked cycle rejected"), Check(Cycle, Settings) == EVoxelLandM5ErrorCode::InconsistentTopology);
+	Cycle = Plan;
+	Cycle.Connections[1].bLoop = true;
+	TestTrue(TEXT("marking an entrance bridge as a loop rejected"),
+		Check(Cycle, Settings) == EVoxelLandM5ErrorCode::InconsistentTopology);
+	Settings.Topology.MinLoops = 2;
+	TestTrue(TEXT("invalid loop range rejected"), Check(Plan, Settings) == EVoxelLandM5ErrorCode::InvalidInput);
 	return true;
 }
 

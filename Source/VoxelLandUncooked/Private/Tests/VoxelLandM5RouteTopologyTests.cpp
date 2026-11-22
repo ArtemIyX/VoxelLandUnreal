@@ -202,8 +202,51 @@ FVoxelLandM5CavePlan FullRouteFixture()
 	P.Segments[3].StartCm.Z = 100;
 	return P;
 }
+FVoxelLandM5CavePlan LoopedRouteFixture()
+{
+	auto P = RouteFixture();
+	FVoxelLandM5Chamber C;
+	C.bHasId = true;
+	C.Id = 8;
+	C.CenterCm.X = 70;
+	C.bHasFeetAnchor = true;
+	C.FeetAnchorCm.X = 70;
+	P.Chambers.Add(C);
+	AddCoveredRoute(P, 1, 6, 10, TypedNode(EVoxelLandM5EndpointKind::Chamber, 7, EVoxelLandM5AnchorRole::ChamberFeet),
+		TypedNode(EVoxelLandM5EndpointKind::Chamber, 8, EVoxelLandM5AnchorRole::ChamberFeet), 40, 70,
+		EVoxelLandM5RouteFeatureKind::Chamber, 8);
+	FVoxelLandM5Connection Edge;
+	Edge.bHasId = true;
+	Edge.Id = 8;
+	Edge.Start = RouteNode(8, EVoxelLandM5AnchorRole::None);
+	Edge.End = RouteNode(0, EVoxelLandM5AnchorRole::None);
+	Edge.bLoop = true;
+	P.Connections.Add(Edge);
+	FVoxelLandM5Segment Segment;
+	Segment.bHasId = true;
+	Segment.Id = 12;
+	Segment.bHasConnectionId = true;
+	Segment.ConnectionId = 8;
+	Segment.StartCm.X = 70;
+	Segment.RadiusCm = 100;
+	P.Segments.Add(Segment);
+	FVoxelLandM5Route Route;
+	Route.bHasId = true;
+	Route.Id = 2;
+	Route.Start = RouteNode(8, EVoxelLandM5AnchorRole::ChamberFeet);
+	Route.End = RouteNode(0, EVoxelLandM5AnchorRole::ChamberFeet);
+	Route.CoveredFeatures.Add(RouteFeature(EVoxelLandM5RouteFeatureKind::Connection, 8));
+	Route.CoveredFeatures.Add(RouteFeature(EVoxelLandM5RouteFeatureKind::Segment, 12));
+	FVoxelLandM5RouteLeg Leg;
+	Leg.StartFeetCm.X = 70;
+	Leg.Feature = Route.CoveredFeatures[1];
+	Route.Legs.Add(Leg);
+	P.Routes.Add(MoveTemp(Route));
+	return P;
+}
 FVoxelLandM5Diagnostic ValidateFixture(const FVoxelLandM5CavePlan& Plan, TFunctionRef<bool()> Cancel,
-	int64 Work = 10000000, bool bStructureOnly = false, int64 OriginX = 130)
+	int64 Work = 10000000, bool bStructureOnly = false, int64 OriginX = 130, int32 RequestedEntrances = INDEX_NONE,
+	int32 RequestedChambers = INDEX_NONE, int32 RequestedMinLoops = 0, int32 RequestedMaxLoops = 3)
 {
 	FVoxelLandM5CaveSettings S;
 	S.StageId = FGuid(1, 2, 3, 4);
@@ -218,6 +261,11 @@ FVoxelLandM5Diagnostic ValidateFixture(const FVoxelLandM5CavePlan& Plan, TFuncti
 	S.Bounds.MinInclusive.Z = -1000;
 	S.Bounds.MaxExclusive.Z = 1000;
 	S.Limits.MaxValidationWork = Work;
+	S.Topology.MinChambers = RequestedChambers == INDEX_NONE ? FMath::Max(1, Plan.Chambers.Num()) : RequestedChambers;
+	S.Topology.MaxChambers = S.Topology.MinChambers;
+	S.Topology.EntranceCount = RequestedEntrances == INDEX_NONE ? Plan.Entrances.Num() : RequestedEntrances;
+	S.Topology.MinLoops = RequestedMinLoops;
+	S.Topology.MaxLoops = RequestedMaxLoops;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!FVoxelLandM5Budget::TryCreate(S.Limits.MaxBytes, Work, Budget))
 	{
@@ -255,6 +303,45 @@ bool FVoxelLandM5RouteTopologyTest::RunTest(const FString& Parameters)
 	};
 	const auto Good = RouteFixture();
 	Expected(TEXT("structurally valid route remains unproven"), Good, EVoxelLandM5ErrorCode::Unproven);
+	TestTrue(TEXT("missing configured entrance is rejected"),
+		ValidateFixture(Good, Never, 10000000, true, 130, 1).Code == EVoxelLandM5ErrorCode::InconsistentTopology);
+	TestTrue(TEXT("chamber count below configured minimum is rejected"),
+		ValidateFixture(Good, Never, 10000000, true, 130, 0, 3).Code == EVoxelLandM5ErrorCode::InconsistentTopology);
+	TestTrue(
+		TEXT("missing required loop is rejected"), ValidateFixture(Good, Never, 10000000, true, 130, 0, 2, 1, 3).Code
+													   == EVoxelLandM5ErrorCode::InconsistentTopology);
+	auto WrongMarker = Good;
+	WrongMarker.Connections[0].bLoop = true;
+	Expected(TEXT("tree edge cannot be marked as a loop"), WrongMarker, EVoxelLandM5ErrorCode::InconsistentTopology);
+	const auto Loop = LoopedRouteFixture();
+	TestTrue(TEXT("connected tree with one marked extra edge is structurally valid"),
+		ValidateFixture(Loop, Never, 10000000, true, 130, 0, 3, 1, 1).Code == EVoxelLandM5ErrorCode::None);
+	auto UnmarkedCycle = Loop;
+	UnmarkedCycle.Connections.Last().bLoop = false;
+	Expected(TEXT("unmarked cycle is rejected"), UnmarkedCycle, EVoxelLandM5ErrorCode::InconsistentTopology);
+	auto Duplicate = Good;
+	auto DuplicateEdge = Good.Connections[0];
+	DuplicateEdge.Id = 77;
+	DuplicateEdge.bLoop = true;
+	Duplicate.Connections.Add(DuplicateEdge);
+	Expected(
+		TEXT("duplicate undirected connection is rejected"), Duplicate, EVoxelLandM5ErrorCode::InconsistentTopology);
+	auto DisconnectedBackbone = Loop;
+	DisconnectedBackbone.Connections.Last().bLoop = false;
+	FVoxelLandM5Chamber Fourth;
+	Fourth.bHasId = true;
+	Fourth.Id = 9;
+	Fourth.CenterCm.X = 100;
+	Fourth.bHasFeetAnchor = true;
+	Fourth.FeetAnchorCm.X = 100;
+	DisconnectedBackbone.Chambers.Add(Fourth);
+	AddCoveredRoute(DisconnectedBackbone, 3, 9, 13,
+		TypedNode(EVoxelLandM5EndpointKind::Chamber, 8, EVoxelLandM5AnchorRole::ChamberFeet),
+		TypedNode(EVoxelLandM5EndpointKind::Chamber, 9, EVoxelLandM5AnchorRole::ChamberFeet), 70, 100,
+		EVoxelLandM5RouteFeatureKind::Chamber, 9);
+	DisconnectedBackbone.Connections.Last().bLoop = true;
+	Expected(TEXT("marked edge cannot be the only link to a node"), DisconnectedBackbone,
+		EVoxelLandM5ErrorCode::InconsistentTopology);
 	auto Single = Good;
 	Single.Routes[0].Legs.SetNum(1);
 	Single.Routes[0].Legs[0].EndFeetCm.X = 40;

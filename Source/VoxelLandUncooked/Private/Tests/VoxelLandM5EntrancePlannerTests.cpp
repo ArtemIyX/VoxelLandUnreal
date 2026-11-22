@@ -194,6 +194,32 @@ bool FVoxelLandM5EntranceFailureTest::RunTest(const FString& Parameters)
 	const FVoxelLandM5CavePlan Input = M5EntranceCandidate(S);
 	FVoxelLandM5CavePlan Out;
 	Out.Region.X = 733;
+	FVoxelLandM5CavePlan WithRoutes = Input;
+	FVoxelLandM5Route Route;
+	Route.Legs.AddDefaulted();
+	Route.CoveredFeatures.AddDefaulted();
+	WithRoutes.Routes.Add(MoveTemp(Route));
+	int32 RouteQueryCount = 0;
+	const auto RouteQuery = [&RouteQueryCount](int64 X, int64 Y, int32 Radius, int64& Z, int64& MinZ, int64& MaxZ,
+								int32& Slope, bool& bProtected, bool& bFlooded) {
+		++RouteQueryCount;
+		return M5FlatSurface(X, Y, Radius, Z, MinZ, MaxZ, Slope, bProtected, bFlooded);
+	};
+	TestTrue(TEXT("nested routes rejected before copy"), M5RunEntrance(
+															 S, 42, WithRoutes, RouteQuery, [] { return false; }, Out)
+																 .Code
+															 == EVoxelLandM5ErrorCode::Unproven);
+	TestEqual(TEXT("nested routes skip surface query"), RouteQueryCount, 0);
+	TestEqual(TEXT("nested routes preserve previous output"), Out.Region.X, int64(733));
+	FVoxelLandM5CavePlan WithJunctions = Input;
+	WithJunctions.Junctions.AddDefaulted();
+	TestTrue(
+		TEXT("junction records rejected before copy"), M5RunEntrance(
+														   S, 42, WithJunctions, RouteQuery, [] { return false; }, Out)
+															   .Code
+														   == EVoxelLandM5ErrorCode::Unproven);
+	TestEqual(TEXT("junctions skip surface query"), RouteQueryCount, 0);
+	TestEqual(TEXT("junctions preserve previous output"), Out.Region.X, int64(733));
 	const auto Protected = [](int64 X, int64 Y, int32 Radius, int64& Z, int64& MinZ, int64& MaxZ, int32& Slope,
 							   bool& bProtected, bool& Flooded) {
 		Z = MinZ = MaxZ = 0;

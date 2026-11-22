@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM5Bounds.h"
+#include "Data/Structs/VoxelLandM5PointCm.h"
 
 // Only this explicitly bounded opening may cross the protected surface roof.
 struct VOXELLANDDATA_API FVoxelLandM5Entrance
@@ -11,5 +12,11 @@ struct VOXELLANDDATA_API FVoxelLandM5Entrance
 	bool bHasConnectionId = false;
 	uint64 ConnectionId = 0;
 	FVoxelLandM5Bounds OpeningBoundsCm;
+	// Intent only: both standing locations and their connection must be proven
+	// against the final surface before the entrance can be published.
+	bool bHasInsideFeetAnchor = false;
+	FVoxelLandM5PointCm InsideFeetAnchorCm;
+	bool bHasOutsideFeetAnchor = false;
+	FVoxelLandM5PointCm OutsideFeetAnchorCm;
 	bool bFlooded = false;
 };

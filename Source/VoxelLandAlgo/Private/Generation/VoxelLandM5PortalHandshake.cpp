@@ -32,6 +32,11 @@ bool M5HandshakeSameKey(const FVoxelLandM5PortalKey& A, const FVoxelLandM5Portal
 		&& M5HandshakeSameRegion(A.RegionA, B.RegionA) && M5HandshakeSameRegion(A.RegionB, B.RegionB);
 }
 
+bool M5HandshakeSamePoint(const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B)
+{
+	return A.X == B.X && A.Y == B.Y && A.Z == B.Z;
+}
+
 bool M5HandshakeBounds(const FVoxelLandM5PortalOverlap& V, int64 (&Last)[3], int64& Count)
 {
 	if (V.SpacingCm <= 0 || V.Counts.X <= 0 || V.Counts.Y <= 0 || V.Counts.Z <= 0)
@@ -57,6 +62,16 @@ bool M5HandshakeBounds(const FVoxelLandM5PortalOverlap& V, int64 (&Last)[3], int
 	}
 	return true;
 }
+}
+
+bool VoxelLand::M5::PortalHandshake::MatchPortalRecords(const FVoxelLandM5Portal& A, const FVoxelLandM5Portal& B)
+{
+	return A.bHasId && B.bHasId && M5HandshakeSameKey(A.Key, B.Key) && A.Id == B.Id && A.RadiusCm > 0
+		&& A.RadiusCm == B.RadiusCm && M5HandshakeSamePoint(A.CenterCm, B.CenterCm)
+		&& A.bHasRegionAFeetAnchor == B.bHasRegionAFeetAnchor
+		&& (!A.bHasRegionAFeetAnchor || M5HandshakeSamePoint(A.RegionAFeetAnchorCm, B.RegionAFeetAnchorCm))
+		&& A.bHasRegionBFeetAnchor == B.bHasRegionBFeetAnchor
+		&& (!A.bHasRegionBFeetAnchor || M5HandshakeSamePoint(A.RegionBFeetAnchorCm, B.RegionBFeetAnchorCm));
 }
 
 FVoxelLandM5Diagnostic VoxelLand::M5::PortalHandshake::Check(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
@@ -85,6 +100,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PortalHandshake::Check(const FVoxelLandM5C
 		|| !B->MatchesSource(Settings, WorldSeed, RegionB))
 	{
 		return M5HandshakeError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Incompatible regional inputs or budget"));
+	}
+	// Current topology and candidate admission do not charge nested route or
+	// junction storage. Never treat those unmetered plans as handshake-ready.
+	if (!A->GetPlan().Junctions.IsEmpty() || !B->GetPlan().Junctions.IsEmpty() || !A->GetPlan().Routes.IsEmpty()
+		|| !B->GetPlan().Routes.IsEmpty())
+	{
+		return M5HandshakeError(EVoxelLandM5ErrorCode::Unproven, TEXT("Route and junction accounting is unavailable"));
 	}
 	int64 AdjacentX = 0, AdjacentY = 0;
 	const bool bX = RegionA.Y == RegionB.Y
@@ -188,9 +210,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PortalHandshake::Check(const FVoxelLandM5C
 	{
 		return M5HandshakeError(EVoxelLandM5ErrorCode::Blocked, TEXT("A neighboring portal is missing"));
 	}
-	if (!FoundA->bHasId || !FoundB->bHasId || !M5HandshakeSameKey(FoundA->Key, FoundB->Key) || FoundA->Id != FoundB->Id
-		|| FoundA->RadiusCm <= 0 || FoundA->RadiusCm != FoundB->RadiusCm || FoundA->CenterCm.X != FoundB->CenterCm.X
-		|| FoundA->CenterCm.Y != FoundB->CenterCm.Y || FoundA->CenterCm.Z != FoundB->CenterCm.Z
+	if (!MatchPortalRecords(*FoundA, *FoundB)
 		|| (bX ? FoundA->Key.Axis != EVoxelLandM5PortalAxis::X : FoundA->Key.Axis != EVoxelLandM5PortalAxis::Y))
 	{
 		return M5HandshakeError(

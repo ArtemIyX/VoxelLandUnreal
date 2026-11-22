@@ -16,6 +16,17 @@ struct VOXELLANDDATA_API FVoxelLandM5ResourceLimits
 	int32 MaxEdges = 32640;
 	UPROPERTY(EditAnywhere, Category = "Limits", meta = (ClampMin = "1", ToolTip = "Maximum tunnel segments per plan."))
 	int32 MaxSegments = 8192;
+	UPROPERTY(EditAnywhere, Category = "Limits",
+		meta = (ClampMin = "1", ToolTip = "Maximum explicit route junctions per plan."))
+	int32 MaxJunctions = 8192;
+	UPROPERTY(EditAnywhere, Category = "Limits", meta = (ClampMin = "1", ToolTip = "Maximum routes per plan."))
+	int32 MaxRoutes = 16384;
+	UPROPERTY(
+		EditAnywhere, Category = "Limits", meta = (ClampMin = "1", ToolTip = "Maximum total route legs across a plan."))
+	int32 MaxRouteLegs = 65536;
+	UPROPERTY(EditAnywhere, Category = "Limits",
+		meta = (ClampMin = "1", ToolTip = "Maximum total covered-feature references across a plan."))
+	int32 MaxRouteFeatureRefs = 131072;
 	UPROPERTY(
 		EditAnywhere, Category = "Limits", meta = (ClampMin = "1", ToolTip = "Maximum deterministic plan attempts."))
 	int32 MaxAttempts = 8;

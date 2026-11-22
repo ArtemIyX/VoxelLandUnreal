@@ -220,8 +220,10 @@ bool FVoxelLandM5CandidateResult::MatchesSource(
 		&& A.Protection.bRequireMask == S.Protection.bRequireMask && A.Water.Policy == S.Water.Policy
 		&& A.Water.LevelCm == S.Water.LevelCm && A.Limits.MaxCandidates == S.Limits.MaxCandidates
 		&& A.Limits.MaxEdges == S.Limits.MaxEdges && A.Limits.MaxSegments == S.Limits.MaxSegments
-		&& A.Limits.MaxAttempts == S.Limits.MaxAttempts && A.Limits.MaxBytes == S.Limits.MaxBytes
-		&& A.Limits.MaxValidationWork == S.Limits.MaxValidationWork;
+		&& A.Limits.MaxJunctions == S.Limits.MaxJunctions && A.Limits.MaxRoutes == S.Limits.MaxRoutes
+		&& A.Limits.MaxRouteLegs == S.Limits.MaxRouteLegs
+		&& A.Limits.MaxRouteFeatureRefs == S.Limits.MaxRouteFeatureRefs && A.Limits.MaxAttempts == S.Limits.MaxAttempts
+		&& A.Limits.MaxBytes == S.Limits.MaxBytes && A.Limits.MaxValidationWork == S.Limits.MaxValidationWork;
 }
 
 FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5CaveSettings& S, int64 Seed,

@@ -131,6 +131,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate provenance or budget mismatch"));
 	}
 	const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
+	// Route and junction records need distinct graph semantics and nested-array
+	// accounting. Until implemented, fail closed before topology scratch or work
+	// admission rather than silently accepting an incomplete graph.
+	if (!Plan.Junctions.IsEmpty() || !Plan.Routes.IsEmpty())
+	{
+		return M5TopologyError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Topology validation of junctions and routes is not implemented"));
+	}
 	if (!M5SameRegion(Plan.Region, Region))
 	{
 		return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate region does not match provenance"));
@@ -343,11 +351,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 			return M5TopologyError(
 				EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Duplicate connection ID"), true, Connection.Id);
 		}
-		if (!Connection.Start.bValid || !Connection.End.bValid || !M5SameRegion(Connection.Start.Region, Plan.Region)
-			|| !M5SameRegion(Connection.End.Region, Plan.Region))
+		if (!Connection.Start.bValid || !Connection.End.bValid
+			|| Connection.Start.AnchorRole != EVoxelLandM5AnchorRole::None
+			|| Connection.End.AnchorRole != EVoxelLandM5AnchorRole::None
+			|| !M5SameRegion(Connection.Start.Region, Plan.Region) || !M5SameRegion(Connection.End.Region, Plan.Region))
 		{
-			return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid connection endpoint or region"),
-				true, Connection.Id);
+			return M5TopologyError(EVoxelLandM5ErrorCode::InvalidInput,
+				TEXT("Invalid connection endpoint, anchor role or region"), true, Connection.Id);
 		}
 		const int32 A = M5FindNode(Nodes, Connection.Start);
 		const int32 B = M5FindNode(Nodes, Connection.End);

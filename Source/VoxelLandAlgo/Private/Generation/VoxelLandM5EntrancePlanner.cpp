@@ -143,6 +143,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate budget or source descriptor mismatch"));
 	}
 	const FVoxelLandM5CavePlan& Candidate = CandidateResult->GetPlan();
+	// Routes own nested arrays and junctions add another array. This stage does
+	// not yet account for either, so reject before making an uncharged copy.
+	if (!Candidate.Routes.IsEmpty() || !Candidate.Junctions.IsEmpty())
+	{
+		return M5EntranceError(EVoxelLandM5ErrorCode::Unproven,
+			TEXT("Entrance planning cannot yet copy route or junction records under the shared budget"));
+	}
 	const auto& T = S.Topology;
 	const auto& L = S.Limits;
 	const auto& Capsule = S.Capsule;

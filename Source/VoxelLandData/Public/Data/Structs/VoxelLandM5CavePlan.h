@@ -5,8 +5,10 @@
 #include "Data/Structs/VoxelLandM5Chamber.h"
 #include "Data/Structs/VoxelLandM5Connection.h"
 #include "Data/Structs/VoxelLandM5Entrance.h"
+#include "Data/Structs/VoxelLandM5Junction.h"
 #include "Data/Structs/VoxelLandM5Portal.h"
 #include "Data/Structs/VoxelLandM5RegionCoord.h"
+#include "Data/Structs/VoxelLandM5Route.h"
 #include "Data/Structs/VoxelLandM5Segment.h"
 
 // Scratch until all validation and indexing succeed; publish only by shared const reference.
@@ -21,5 +23,7 @@ struct VOXELLANDDATA_API FVoxelLandM5CavePlan
 	TArray<FVoxelLandM5Connection> Connections;
 	TArray<FVoxelLandM5Segment> Segments;
 	TArray<FVoxelLandM5Entrance> Entrances;
+	TArray<FVoxelLandM5Junction> Junctions;
 	TArray<FVoxelLandM5Portal> Portals;
+	TArray<FVoxelLandM5Route> Routes;
 };

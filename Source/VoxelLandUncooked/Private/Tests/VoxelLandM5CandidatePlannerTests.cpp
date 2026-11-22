@@ -341,6 +341,18 @@ bool FVoxelLandM5CandidateSharedBudgetTest::RunTest(const FString& Parameters)
 	Changed = S;
 	++Changed.Limits.MaxBytes;
 	TestFalse(TEXT("resource policy change rejected"), A->MatchesSource(Changed, 42, Region));
+	Changed = S;
+	++Changed.Limits.MaxJunctions;
+	TestFalse(TEXT("junction budget change rejected"), A->MatchesSource(Changed, 42, Region));
+	Changed = S;
+	++Changed.Limits.MaxRoutes;
+	TestFalse(TEXT("route budget change rejected"), A->MatchesSource(Changed, 42, Region));
+	Changed = S;
+	++Changed.Limits.MaxRouteLegs;
+	TestFalse(TEXT("route-leg budget change rejected"), A->MatchesSource(Changed, 42, Region));
+	Changed = S;
+	++Changed.Limits.MaxRouteFeatureRefs;
+	TestFalse(TEXT("route-feature budget change rejected"), A->MatchesSource(Changed, 42, Region));
 	FM5CandidateHandle Shared = A;
 	A.Reset();
 	Budget->GetUsage(Live, Peak, Work);

@@ -74,7 +74,9 @@ bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error)
 		|| N.AmplitudeCm < 0 || N.AmplitudeCm > M5IdentityCoordinateLimit || N.MinDepthCm < 0
 		|| N.MaxDepthCm < N.MinDepthCm || N.MaxDepthCm > 2 * M5IdentityCoordinateLimit
 		|| L.MaxCandidates < T.MaxChambers || L.MaxCandidates > 256 || L.MaxEdges < 1 || L.MaxEdges > 32640
-		|| L.MaxSegments < 1 || L.MaxSegments > 8192 || L.MaxAttempts < 1 || L.MaxAttempts > 64 || L.MaxBytes < 1
+		|| L.MaxSegments < 1 || L.MaxSegments > 8192 || L.MaxJunctions < 1 || L.MaxJunctions > 8192 || L.MaxRoutes < 1
+		|| L.MaxRoutes > 16384 || L.MaxRouteLegs < 1 || L.MaxRouteLegs > 65536 || L.MaxRouteFeatureRefs < 1
+		|| L.MaxRouteFeatureRefs > 131072 || L.MaxAttempts < 1 || L.MaxAttempts > 64 || L.MaxBytes < 1
 		|| L.MaxBytes > 268435456 || L.MaxValidationWork < 1 || L.MaxValidationWork > 1000000000)
 	{
 		Error = TEXT("Invalid or out-of-range M5 identity inputs");
@@ -189,6 +191,10 @@ bool VoxelLandM5WorldIdentity::Capture(
 	W.U32(uint32(L.MaxCandidates));
 	W.U32(uint32(L.MaxEdges));
 	W.U32(uint32(L.MaxSegments));
+	W.U32(uint32(L.MaxJunctions));
+	W.U32(uint32(L.MaxRoutes));
+	W.U32(uint32(L.MaxRouteLegs));
+	W.U32(uint32(L.MaxRouteFeatureRefs));
 	W.U32(uint32(L.MaxAttempts));
 	M5WriteU64(W, uint64(L.MaxBytes));
 	M5WriteU64(W, uint64(L.MaxValidationWork));

@@ -7,5 +7,6 @@ enum class EVoxelLandM5EndpointKind : uint8
 {
 	Chamber,
 	Entrance,
-	Portal
+	Portal,
+	Junction
 };

@@ -11,4 +11,8 @@ struct VOXELLANDDATA_API FVoxelLandM5Chamber
 	uint64 Id = 0;
 	FVoxelLandM5PointCm CenterCm;
 	int32 RadiusCm = 0;
+	// The cave-volume center is not a feet position. All incident routes must
+	// connect to this candidate anchor or have validated connector routes.
+	bool bHasFeetAnchor = false;
+	FVoxelLandM5PointCm FeetAnchorCm;
 };

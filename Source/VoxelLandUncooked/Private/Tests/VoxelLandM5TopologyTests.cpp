@@ -161,6 +161,12 @@ bool FVoxelLandM5TopologyGraphTest::RunTest(const FString& Parameters)
 	Plan.Connections[0].Start.Region.X++;
 	TestTrue(TEXT("wrong endpoint region rejected"), Validate(Plan) == EVoxelLandM5ErrorCode::InvalidInput);
 	Plan = M5TopologyFixture();
+	Plan.Connections[0].Start.AnchorRole = EVoxelLandM5AnchorRole::ChamberFeet;
+	TestTrue(TEXT("route anchor role on graph start rejected"), Validate(Plan) == EVoxelLandM5ErrorCode::InvalidInput);
+	Plan = M5TopologyFixture();
+	Plan.Connections[0].End.AnchorRole = static_cast<EVoxelLandM5AnchorRole>(255);
+	TestTrue(TEXT("unknown graph end role rejected"), Validate(Plan) == EVoxelLandM5ErrorCode::InvalidInput);
+	Plan = M5TopologyFixture();
 	Plan.Connections[1].Id = 10;
 	TestTrue(
 		TEXT("entrance connection reference checked"), Validate(Plan) == EVoxelLandM5ErrorCode::InconsistentTopology);
@@ -197,6 +203,13 @@ bool FVoxelLandM5TopologyGraphTest::RunTest(const FString& Parameters)
 	Plan.Portals.Add(OtherWorld);
 	TestTrue(TEXT("mixed self-consistent portal world keys rejected"),
 		Validate(Plan) == EVoxelLandM5ErrorCode::InvalidInput);
+	Plan = M5TopologyFixture();
+	Plan.Junctions.AddDefaulted();
+	TestTrue(TEXT("unimplemented junction topology cannot pass"), Validate(Plan) == EVoxelLandM5ErrorCode::Unproven);
+	Plan = M5TopologyFixture();
+	Plan.Routes.AddDefaulted();
+	Plan.Routes[0].Legs.AddDefaulted();
+	TestTrue(TEXT("unimplemented route topology cannot pass"), Validate(Plan) == EVoxelLandM5ErrorCode::Unproven);
 	return true;
 }
 
@@ -288,6 +301,65 @@ bool FVoxelLandM5TopologyBudgetTest::RunTest(const FString& Parameters)
 			Oversized.ToSharedRef(), NeverCancel)
 				.Code
 			== EVoxelLandM5ErrorCode::InvalidInput);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> RouteBudget;
+	if (!TestTrue(TEXT("route fixture budget created"),
+			FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, 10000, RouteBudget)))
+	{
+		return false;
+	}
+	FVoxelLandM5CavePlan WithRoute = Plan;
+	WithRoute.Routes.AddDefaulted();
+	WithRoute.Routes[0].Legs.AddDefaulted();
+	const auto RouteCandidate =
+		FVoxelLandM5TopologyFixtureFactory::Make(WithRoute, Settings, M5TopologySeed, RouteBudget.ToSharedRef());
+	if (!TestTrue(TEXT("route candidate admitted"), RouteCandidate.IsValid()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("unsupported route fails closed"),
+		VoxelLand::M5::Topology::Validate(Settings, M5TopologySeed, WithRoute.Region, RouteCandidate.ToSharedRef(),
+			RouteBudget.ToSharedRef(), NeverCancel)
+				.Code
+			== EVoxelLandM5ErrorCode::Unproven);
+	RouteBudget->GetUsage(Live, Peak, Work);
+	TestEqual(TEXT("unsupported route uses no topology scratch"), Live, int64(65536));
+	TestEqual(TEXT("unsupported route does not charge topology work"), Work, int64(0));
+	TestEqual(TEXT("immutable candidate route preserved"), RouteCandidate->GetPlan().Routes.Num(), 1);
+	const auto AlwaysCancel = []() {
+		return true;
+	};
+	TestTrue(TEXT("cancellation takes precedence over unsupported route"),
+		VoxelLand::M5::Topology::Validate(Settings, M5TopologySeed, WithRoute.Region, RouteCandidate.ToSharedRef(),
+			RouteBudget.ToSharedRef(), AlwaysCancel)
+				.Code
+			== EVoxelLandM5ErrorCode::Cancelled);
+	RouteBudget->GetUsage(Live, Peak, Work);
+	TestEqual(TEXT("cancellation preserves budget and candidate lease"), Live, int64(65536));
+	TestEqual(TEXT("cancellation adds no work"), Work, int64(0));
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> RoleBudget;
+	if (!TestTrue(TEXT("role fixture budget created"),
+			FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, 10000, RoleBudget)))
+	{
+		return false;
+	}
+	FVoxelLandM5CavePlan WithRole = Plan;
+	WithRole.Connections[0].Start.AnchorRole = EVoxelLandM5AnchorRole::ChamberFeet;
+	const auto RoleCandidate =
+		FVoxelLandM5TopologyFixtureFactory::Make(WithRole, Settings, M5TopologySeed, RoleBudget.ToSharedRef());
+	if (!TestTrue(TEXT("role candidate admitted"), RoleCandidate.IsValid()))
+	{
+		return false;
+	}
+	TestTrue(
+		TEXT("graph route role rejected"), VoxelLand::M5::Topology::Validate(Settings, M5TopologySeed, WithRole.Region,
+											   RoleCandidate.ToSharedRef(), RoleBudget.ToSharedRef(), NeverCancel)
+												   .Code
+											   == EVoxelLandM5ErrorCode::InvalidInput);
+	RoleBudget->GetUsage(Live, Peak, Work);
+	TestEqual(TEXT("invalid role releases temporary scratch"), Live, int64(65536));
+	TestEqual(TEXT("invalid role preserves admitted work charge"), Work, int64(6144));
+	TestTrue(TEXT("invalid role remains unchanged in candidate"),
+		RoleCandidate->GetPlan().Connections[0].Start.AnchorRole == EVoxelLandM5AnchorRole::ChamberFeet);
 	return true;
 }
 

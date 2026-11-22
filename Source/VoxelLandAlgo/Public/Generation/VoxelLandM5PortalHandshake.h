@@ -10,9 +10,15 @@
 
 class FVoxelLandM5Budget;
 class FVoxelLandM5CandidateResult;
+struct FVoxelLandM5Portal;
 
 namespace VoxelLand::M5::PortalHandshake
 {
+// Compares the full canonical key, identifier, geometry and both optional
+// region-specific feet anchors. Absence is distinct from a zero coordinate.
+// This comparison alone does not validate portal identity or traversal.
+VOXELLANDALGO_API bool MatchPortalRecords(const FVoxelLandM5Portal& A, const FVoxelLandM5Portal& B);
+
 // Checks exactly one supplied face-adjacent pair. Descriptor bytes and overlap
 // samples must be retained immutable by their caller and be from the actual
 // corresponding validated final fields. This routine compares those inputs;

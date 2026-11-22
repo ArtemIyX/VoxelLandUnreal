@@ -12,4 +12,10 @@ struct VOXELLANDDATA_API FVoxelLandM5Portal
 	FVoxelLandM5PortalKey Key;
 	FVoxelLandM5PointCm CenterCm;
 	int32 RadiusCm = 0;
+	// Feet anchors are separate from cave geometry. Each belongs to the matching
+	// signed region in Key, and must be validated with a cross-boundary route.
+	bool bHasRegionAFeetAnchor = false;
+	FVoxelLandM5PointCm RegionAFeetAnchorCm;
+	bool bHasRegionBFeetAnchor = false;
+	FVoxelLandM5PointCm RegionBFeetAnchorCm;
 };

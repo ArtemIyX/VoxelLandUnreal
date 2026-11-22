@@ -6,6 +6,26 @@
 #include "Generation/VoxelLandM5PortalHandshake.h"
 #include "Misc/AutomationTest.h"
 
+// Test-only admitted candidate copy; it retains the same budget until the
+// copied plan, including its route or junction storage, is destroyed.
+class FVoxelLandM5HandshakeFixtureFactory
+{
+public:
+	static TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Make(const FVoxelLandM5CavePlan& Plan,
+		const FVoxelLandM5CaveSettings& Settings, int64 Seed,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget)
+	{
+		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+		if (!Budget->TryReserveBytes(65536, Lease))
+		{
+			return nullptr;
+		}
+		FVoxelLandM5CavePlan Copy = Plan;
+		return MakeShareable(
+			new FVoxelLandM5CandidateResult(Budget, Settings, Seed, Plan.Region, MoveTemp(Copy), MoveTemp(Lease)));
+	}
+};
+
 namespace
 {
 constexpr EAutomationTestFlags M5HandshakeFlags =
@@ -57,6 +77,28 @@ bool FVoxelLandM5PortalHandshakeTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	const FVoxelLandM5Portal& P = A->GetPlan().Portals[0];
+	FVoxelLandM5Portal AnchorA = P;
+	FVoxelLandM5Portal AnchorB = P;
+	AnchorA.bHasRegionAFeetAnchor = AnchorB.bHasRegionAFeetAnchor = true;
+	AnchorA.bHasRegionBFeetAnchor = AnchorB.bHasRegionBFeetAnchor = true;
+	AnchorA.RegionAFeetAnchorCm.X = AnchorB.RegionAFeetAnchorCm.X = -10;
+	AnchorA.RegionBFeetAnchorCm.X = AnchorB.RegionBFeetAnchorCm.X = 10;
+	TestTrue(TEXT("matching region-specific anchors agree"),
+		VoxelLand::M5::PortalHandshake::MatchPortalRecords(AnchorA, AnchorB));
+	AnchorB.RegionAFeetAnchorCm.Z = 1;
+	TestFalse(
+		TEXT("mismatched A anchor rejected"), VoxelLand::M5::PortalHandshake::MatchPortalRecords(AnchorA, AnchorB));
+	AnchorB = AnchorA;
+	AnchorB.RegionBFeetAnchorCm.Y = -1;
+	TestFalse(
+		TEXT("mismatched B anchor rejected"), VoxelLand::M5::PortalHandshake::MatchPortalRecords(AnchorA, AnchorB));
+	AnchorB = AnchorA;
+	AnchorB.bHasRegionAFeetAnchor = false;
+	TestFalse(TEXT("anchor presence mismatch rejected"),
+		VoxelLand::M5::PortalHandshake::MatchPortalRecords(AnchorA, AnchorB));
+	AnchorA.bHasRegionAFeetAnchor = false;
+	TestTrue(TEXT("absent anchors ignore inactive coordinates"),
+		VoxelLand::M5::PortalHandshake::MatchPortalRecords(AnchorA, AnchorB));
 	TArray<int16> Densities;
 	Densities.Init(-20, 343);
 	FVoxelLandM5PortalOverlap Block;
@@ -67,6 +109,46 @@ bool FVoxelLandM5PortalHandshakeTest::RunTest(const FString& Parameters)
 	Block.SpacingCm = 1;
 	Block.Samples = Densities;
 	const TArray<uint8> Identity = {1, 0, 2, 3};
+	// Both plan sides must reject currently unmetered nested route/junction
+	// content before descriptor comparison, topology or any additional budget.
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		for (int32 Kind = 0; Kind < 2; ++Kind)
+		{
+			FVoxelLandM5CavePlan Modified = Side == 0 ? A->GetPlan() : B->GetPlan();
+			if (Kind == 0)
+			{
+				Modified.Junctions.AddDefaulted();
+			}
+			else
+			{
+				Modified.Routes.AddDefaulted();
+			}
+			const auto ModifiedResult =
+				FVoxelLandM5HandshakeFixtureFactory::Make(Modified, S, 42, Budget.ToSharedRef());
+			if (!TestTrue(TEXT("admit route/junction fixture"), ModifiedResult.IsValid()))
+			{
+				return false;
+			}
+			int64 LiveBefore = 0, Peak = 0, WorkBefore = 0;
+			Budget->GetUsage(LiveBefore, Peak, WorkBefore);
+			const TArray<uint8> WrongIdentity = {9};
+			int32 Calls = 0;
+			const FVoxelLandM5Diagnostic Error = VoxelLand::M5::PortalHandshake::Check(S, 42, Left, Right,
+				Side == 0 ? ModifiedResult : A, Side == 1 ? ModifiedResult : B, Identity, WrongIdentity, WrongIdentity,
+				1, 1, Block, Block, Budget.ToSharedRef(), [&Calls] {
+					++Calls;
+					return false;
+				});
+			int64 LiveAfter = 0, WorkAfter = 0;
+			Budget->GetUsage(LiveAfter, Peak, WorkAfter);
+			TestTrue(TEXT("unmetered content fails before descriptor comparison"),
+				Error.Code == EVoxelLandM5ErrorCode::Unproven);
+			TestEqual(TEXT("only initial cancellation callback observed"), Calls, 1);
+			TestEqual(TEXT("no additional work charged"), WorkAfter, WorkBefore);
+			TestEqual(TEXT("no additional bytes retained"), LiveAfter, LiveBefore);
+		}
+	}
 	const auto Check = [&](TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Other,
 						   TConstArrayView<uint8> OtherIdentity, const FVoxelLandM5PortalOverlap& OtherBlock,
 						   TFunctionRef<bool()> Cancel) {

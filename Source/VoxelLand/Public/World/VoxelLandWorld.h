@@ -98,6 +98,10 @@ public:
 	void ReleaseDataChunk(FIntVector Coordinate);
 	UFUNCTION(BlueprintPure, Category = "VoxelLand|Data")
 	bool HasDataChunk(FIntVector Coordinate) const;
+	// Returns the latest asynchronous failure for a still-resident chunk. A new
+	// explicit request clears the failure and retries; releasing may retire it.
+	UFUNCTION(BlueprintPure, Category = "VoxelLand|Data")
+	bool GetDataChunkError(FIntVector Coordinate, FString& OutError) const;
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> FindChunk(const FVoxelLandChunkKey& Key) const;
 	void SetRegionHidden(FIntVector Region, bool bRegionHidden);
 	void SetTerrainMaterial(UMaterialInterface* Material);

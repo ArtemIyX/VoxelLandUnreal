@@ -373,6 +373,7 @@ bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 	FRecord& Record = State->Records.FindOrAdd(Key);
 	Record.bExplicit = true;
 	Record.bFailed = false;
+	Record.Error.Reset();
 	State->bDemandComplete = false;
 	if (!Record.Data && !Record.bRunning)
 	{
@@ -398,6 +399,25 @@ bool AVoxelLandWorld::HasDataChunk(FIntVector Coordinate) const
 	Key.Coordinate = Coordinate;
 	return FindChunk(Key).IsValid();
 }
+bool AVoxelLandWorld::GetDataChunkError(FIntVector Coordinate, FString& OutError) const
+{
+	check(IsInGameThread());
+	OutError.Reset();
+	if (!State)
+	{
+		return false;
+	}
+	FVoxelLandChunkKey Key;
+	Key.Coordinate = Coordinate;
+	const FRecord* Record = State->Records.Find(Key);
+	if (!Record || !Record->bFailed)
+	{
+		return false;
+	}
+	OutError = Record->Error;
+	return true;
+}
+
 void AVoxelLandWorld::ReleaseChunk(const FVoxelLandChunkKey& Key)
 {
 	check(IsInGameThread());
@@ -762,6 +782,9 @@ void AVoxelLandWorld::PumpCompletions()
 		if (Done.Error)
 		{
 			Record->bFailed = true;
+			Record->Error = Done.Error.Message.IsEmpty()
+							  ? FString::Printf(TEXT("Chunk generation failed (error code %d)"), int32(Done.Error.Code))
+							  : Done.Error.Message.Left(1024);
 			++State->Failed;
 			UE_LOG(LogTemp, Error, TEXT("VoxelLand chunk (%d,%d,%d): %s"), Done.Job.Key.Coordinate.X,
 				Done.Job.Key.Coordinate.Y, Done.Job.Key.Coordinate.Z, *Done.Error.Message);
@@ -785,6 +808,7 @@ void AVoxelLandWorld::PumpCompletions()
 			{
 				Record->Data.Reset();
 				Record->bFailed = true;
+				Record->Error = TEXT("VoxelLand region spawn failed");
 				++State->Failed;
 				UE_LOG(LogTemp, Error, TEXT("VoxelLand region spawn failed"));
 				continue;
@@ -799,6 +823,7 @@ void AVoxelLandWorld::PumpCompletions()
 		{
 			Record->Data.Reset();
 			Record->bFailed = true;
+			Record->Error = TEXT("VoxelLand component rejected mesh");
 			++State->Failed;
 			UE_LOG(LogTemp, Error, TEXT("VoxelLand component rejected mesh for (%d,%d,%d)"), C.X, C.Y, C.Z);
 		}

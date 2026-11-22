@@ -10,6 +10,7 @@
 
 class UVoxelLandMaterialSetup;
 struct FVoxelLandM4WorldSnapshot;
+struct FVoxelLandM5WorldSnapshot;
 
 // M4 authoring configuration. It is separate from M3 world settings so
 // old assets and their serialized program identity remain unchanged.
@@ -33,6 +34,17 @@ public:
 	// evaluation, cooked program validation and prepass execution are separate.
 	bool ValidateSettings(FString& OutError) const;
 	bool CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnapshot, FString& OutError) const;
+	// Game-thread capture of an enabled M5 stage and its M4 base. This only
+	// snapshots authoring data: the caller must independently validate the M5
+	// descriptor, programs, providers and generated plan before publication.
+	// Failure leaves OutSnapshot unchanged.
+	bool CaptureM5Snapshot(FVoxelLandM5WorldSnapshot& OutSnapshot, FString& OutError) const;
+	// Checks captured settings only; the caller must still verify graph contents,
+	// graph identity and provider lifetime before publishing a result.
+	bool MatchesM5Snapshot(const FVoxelLandM5WorldSnapshot& Snapshot) const;
+#if WITH_EDITOR
+	bool MatchesM5PreviewSnapshot(const FVoxelLandM5WorldSnapshot& Snapshot) const;
+#endif
 	// Checks density-affecting authored values, not the material, graph identity,
 	// or graph contents. Caller must verify graph inputs and refresh the current
 	// material separately on the game thread before publishing.
@@ -44,7 +56,10 @@ public:
 #endif
 
 private:
-	bool MatchesSnapshotInternal(const FVoxelLandM4WorldSnapshot& Snapshot, bool bCompareBakedCurves) const;
+	bool CaptureSnapshotInternal(FVoxelLandM4WorldSnapshot& OutSnapshot, FString& OutError, bool bAllowM5) const;
+	bool MatchesSnapshotInternal(
+		const FVoxelLandM4WorldSnapshot& Snapshot, bool bCompareBakedCurves, bool bAllowM5) const;
+	bool MatchesM5SnapshotInternal(const FVoxelLandM5WorldSnapshot& Snapshot, bool bCompareBakedCurves) const;
 
 public:
 	// Replaces all three baked curves atomically after validation.

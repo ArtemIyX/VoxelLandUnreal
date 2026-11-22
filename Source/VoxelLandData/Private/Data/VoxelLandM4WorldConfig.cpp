@@ -5,6 +5,7 @@
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/VoxelLandGraphFunctionId.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
+#include "Data/Structs/VoxelLandM5WorldSnapshot.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Hash/xxhash.h"
 #include <limits>
@@ -508,13 +509,49 @@ bool UVoxelLandM4WorldConfig::ValidateSettings(FString& OutError) const
 
 bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnapshot, FString& OutError) const
 {
+	return CaptureSnapshotInternal(OutSnapshot, OutError, false);
+}
+
+bool UVoxelLandM4WorldConfig::CaptureM5Snapshot(FVoxelLandM5WorldSnapshot& OutSnapshot, FString& OutError) const
+{
+	OutError.Reset();
+	if (!IsInGameThread())
+	{
+		OutError = TEXT("M5 settings must be captured on the game thread.");
+		return false;
+	}
+	if (!Caves.bEnabled && !Caves.Pockets.bEnabled)
+	{
+		OutError = TEXT("M5 capture requires an enabled cave network or pocket stage.");
+		return false;
+	}
+	FVoxelLandM5WorldSnapshot S;
+	S.Caves = Caves;
+	if (!CaptureSnapshotInternal(S.Base, OutError, true))
+	{
+		return false;
+	}
+	// Graph/function loading can reenter game-thread code. Do not publish a
+	// snapshot made from settings that changed while the base was captured.
+	if (!MatchesM5SnapshotInternal(S, true))
+	{
+		OutError = TEXT("M5 settings changed during capture; retry with current settings.");
+		return false;
+	}
+	OutSnapshot = MoveTemp(S);
+	return true;
+}
+
+bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
+	FVoxelLandM4WorldSnapshot& OutSnapshot, FString& OutError, bool bAllowM5) const
+{
 	OutError.Reset();
 	if (!IsInGameThread())
 	{
 		OutError = TEXT("M4 settings must be captured on the game thread.");
 		return false;
 	}
-	if (Caves.bEnabled || Caves.Pockets.bEnabled)
+	if (!bAllowM5 && (Caves.bEnabled || Caves.Pockets.bEnabled))
 	{
 		OutError = TEXT("Enabled M5 caves or pockets require M5 initialization, which is not yet available.");
 		return false;
@@ -664,18 +701,40 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnap
 
 bool UVoxelLandM4WorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S) const
 {
-	return MatchesSnapshotInternal(S, true);
+	return MatchesSnapshotInternal(S, true, false);
 }
 #if WITH_EDITOR
 bool UVoxelLandM4WorldConfig::MatchesPreviewSnapshot(const FVoxelLandM4WorldSnapshot& S) const
 {
-	return MatchesSnapshotInternal(S, false);
+	return MatchesSnapshotInternal(S, false, false);
 }
 #endif
-bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
-	const FVoxelLandM4WorldSnapshot& S, bool bCompareBakedCurves) const
+bool UVoxelLandM4WorldConfig::MatchesM5Snapshot(const FVoxelLandM5WorldSnapshot& S) const
 {
-	if (!IsInGameThread() || Caves.bEnabled || Caves.Pockets.bEnabled)
+	return MatchesM5SnapshotInternal(S, true);
+}
+#if WITH_EDITOR
+bool UVoxelLandM4WorldConfig::MatchesM5PreviewSnapshot(const FVoxelLandM5WorldSnapshot& S) const
+{
+	return MatchesM5SnapshotInternal(S, false);
+}
+#endif
+bool UVoxelLandM4WorldConfig::MatchesM5SnapshotInternal(
+	const FVoxelLandM5WorldSnapshot& S, bool bCompareBakedCurves) const
+{
+	if (!IsInGameThread() || (!Caves.bEnabled && !Caves.Pockets.bEnabled) || S.FormatVersion != 1)
+	{
+		return false;
+	}
+	const FVoxelLandM5StageManifest CurrentManifest;
+	return FVoxelLandM5StageManifest::StaticStruct()->CompareScriptStruct(&S.Manifest, &CurrentManifest, 0)
+		&& FVoxelLandM5CaveSettings::StaticStruct()->CompareScriptStruct(&Caves, &S.Caves, 0)
+		&& MatchesSnapshotInternal(S.Base, bCompareBakedCurves, true);
+}
+bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
+	const FVoxelLandM4WorldSnapshot& S, bool bCompareBakedCurves, bool bAllowM5) const
+{
+	if (!IsInGameThread() || (!bAllowM5 && (Caves.bEnabled || Caves.Pockets.bEnabled)))
 	{
 		return false;
 	}

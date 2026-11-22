@@ -1,4 +1,5 @@
 #include "World/VoxelLandM4PrepassIdentity.h"
+#include "World/VoxelLandM4OverrideValidation.h"
 
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
@@ -91,7 +92,9 @@ void M4IdentityProgram(FCanonicalWriter& W, const FVoxelLandProgramDraft& D)
 bool M4IdentityChannel(
 	FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel, const FVoxelLandProgram& Program)
 {
-	if (VoxelLandM4ControlGrid::ValidateProgram(Program) || Channel.CookedCurve.BakeVersion != 1
+	FString OverrideError;
+	if (!VoxelLandM4OverrideValidation::Validate(Channel, OverrideError)
+		|| VoxelLandM4ControlGrid::ValidateProgram(Program) || Channel.CookedCurve.BakeVersion != 1
 		|| Channel.CookedCurve.SamplesQ8.Num() != 4097 || Channel.Payload.Parameters.Num() > 128
 		|| Channel.Overrides.Num() > 128)
 	{

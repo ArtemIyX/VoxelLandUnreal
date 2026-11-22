@@ -8,6 +8,7 @@
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Hash/xxhash.h"
 #include "World/VoxelLandM4PrepassIdentity.h"
+#include "World/VoxelLandM4OverrideValidation.h"
 #include "World/VoxelLandM4Preparation.h"
 
 namespace
@@ -79,6 +80,10 @@ bool VoxelLandM4WorldIdentity::Capture(
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Programs[3];
 	for (int32 I = 0; I < 3; ++I)
 	{
+		if (!VoxelLandM4OverrideValidation::Validate(*Channels[I], Error))
+		{
+			return false;
+		}
 		if (!M4WorldIdentityCurveValid(*Channels[I]))
 		{
 			Error = TEXT("M4 identity requires current, intact baked curves");

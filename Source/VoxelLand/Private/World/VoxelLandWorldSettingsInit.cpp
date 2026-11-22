@@ -2,6 +2,7 @@
 #include "World/VoxelLandM4Preparation.h"
 #include "World/VoxelLandM4PrepassCoordinator.h"
 #include "World/VoxelLandM4PrepassIdentity.h"
+#include "World/VoxelLandM4OverrideValidation.h"
 #include "World/VoxelLandM4SavedWorldPreflight.h"
 #include "World/VoxelLandM4WorldIdentity.h"
 
@@ -717,6 +718,10 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 		&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
 	for (const FVoxelLandM4ControlSnapshot* Channel : ValidatedChannels)
 	{
+		if (!VoxelLandM4OverrideValidation::Validate(*Channel, OutError))
+		{
+			return false;
+		}
 		const FVoxelLandM4CookedCurve& Curve = Channel->CookedCurve;
 		if (Curve.BakeVersion != 1 || Curve.SamplesQ8.Num() != 4097 || Curve.SourceKeys.Num() < 2
 			|| Curve.SourceKeys.Num() != Channel->CurveKeys.Num())

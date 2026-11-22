@@ -25,6 +25,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 {
 	bool bBuilt = false, bStable = false, bSeed = false, bShape = false, bDetail = false;
 	bool bMaterial = false, bUnlimited = false, bVersion = false, bCorrupt = false, bRoundTrip = false;
+	bool bInvalidOverride = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4WorldSnapshot S;
@@ -80,6 +81,13 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 			return;
 		}
 		bStable = VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+		FVoxelLandParameterOverride Unknown;
+		Unknown.ParameterId = FGuid(9, 9, 9, 9);
+		S.Continental.Overrides.Add(Unknown);
+		FVoxelLandM4IdentityRecord Invalid;
+		bInvalidOverride = !VoxelLandM4WorldIdentity::Capture(S, Invalid, Error)
+						&& !VoxelLandM4WorldIdentity::Matches(Record, S, Error);
+		S.Continental.Overrides.Reset();
 		TArray<uint8> Stored;
 		FMemoryWriter Writer(Stored);
 		FVoxelLandM4IdentityRecord::StaticStruct()->SerializeItem(Writer, &Record, nullptr);
@@ -112,6 +120,7 @@ bool FVoxelLandM4WorldIdentityTest::RunTest(const FString& Parameters)
 	}).Get();
 	TestTrue(FString::Printf(TEXT("identity captures: %s"), *Error), bBuilt);
 	TestTrue(TEXT("identical inputs match"), bStable);
+	TestTrue(TEXT("capture and matching reject unknown overrides"), bInvalidOverride);
 	TestTrue(TEXT("serialized identity matches after round trip"), bRoundTrip);
 	TestTrue(TEXT("seed changes reject reuse"), bSeed);
 	TestTrue(TEXT("slope changes reject reuse"), bShape);

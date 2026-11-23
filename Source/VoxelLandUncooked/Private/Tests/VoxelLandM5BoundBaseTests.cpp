@@ -450,6 +450,14 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 	const auto NoMaskCurrent = Capture->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
 	TestTrue(TEXT("omitted optional protection remains current"),
 		NoMaskCurrent.Code == EVoxelLandM5ErrorCode::None && bProtectionCurrent);
+	Definition->Common.Caves.Protection.bProtectAll = !Snapshot.Caves.Protection.bProtectAll;
+	const auto NoMaskProtectAllChanged = Capture->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+	TestTrue(TEXT("changed protect-all is stale without a mask"),
+		NoMaskProtectAllChanged.Code == EVoxelLandM5ErrorCode::None && !bProtectionCurrent);
+	Definition->Common.Caves.Protection.bProtectAll = Snapshot.Caves.Protection.bProtectAll;
+	const auto NoMaskProtectAllRestored = Capture->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+	TestTrue(TEXT("restored protect-all is current without a mask"),
+		NoMaskProtectAllRestored.Code == EVoxelLandM5ErrorCode::None && bProtectionCurrent);
 	Definition->Common.Caves.Protection.bRequireMask = true;
 	const auto RequiredNow = Capture->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
 	TestTrue(TEXT("new required mask is stale"),
@@ -493,6 +501,14 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 			const auto InitiallyCurrent = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
 			TestTrue(TEXT("captured protection matches authoring"),
 				InitiallyCurrent.Code == EVoxelLandM5ErrorCode::None && bProtectionCurrent);
+			Definition->Common.Caves.Protection.bProtectAll = !WithMask->GetSnapshot().Caves.Protection.bProtectAll;
+			const auto MaskProtectAllChanged = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("changed protect-all is stale with a mask"),
+				MaskProtectAllChanged.Code == EVoxelLandM5ErrorCode::None && !bProtectionCurrent);
+			Definition->Common.Caves.Protection.bProtectAll = WithMask->GetSnapshot().Caves.Protection.bProtectAll;
+			const auto MaskProtectAllRestored = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("restored protect-all is current with a mask"),
+				MaskProtectAllRestored.Code == EVoxelLandM5ErrorCode::None && bProtectionCurrent);
 			Mask->Cells[0] = 0;
 			const auto Edited = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
 			TestTrue(TEXT("edited protection is stale"), Edited.Code == EVoxelLandM5ErrorCode::None && !bProtectionCurrent);

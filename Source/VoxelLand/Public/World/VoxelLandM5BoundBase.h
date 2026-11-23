@@ -45,9 +45,9 @@ public:
 	{
 		return ProtectionGrid;
 	}
-	// Game thread only. Compares only the finite protection dependency, not the
-	// rest of the world definition or any publication certificate. Charges this
-	// capture's shared work budget before scanning. A changed dependency returns
+	// Game thread only. Compares protect-all, the effective mask requirement and
+	// mask contents, not the rest of the world or any publication certificate.
+	// Charges this capture's shared work budget before scanning. A changed dependency returns
 	// success with false; invalid input or exhausted budget leaves output alone.
 	FVoxelLandM5Diagnostic CheckFiniteProtectionCurrent(const UVoxelLandFiniteWorld& Definition, bool& bOutCurrent) const;
 

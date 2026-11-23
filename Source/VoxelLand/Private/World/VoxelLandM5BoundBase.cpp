@@ -236,7 +236,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::CheckFiniteProtectionCurrent(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Protection freshness work budget exhausted"));
 	}
 	const bool bCurrentRequired = Definition.Common.Caves.Protection.bRequireMask || Mask != nullptr;
-	if (bCurrentRequired != Snapshot.Caves.Protection.bRequireMask || (Mask != nullptr) != ProtectionGrid.IsValid())
+	if (Definition.Common.Caves.Protection.bProtectAll != Snapshot.Caves.Protection.bProtectAll
+		|| bCurrentRequired != Snapshot.Caves.Protection.bRequireMask || (Mask != nullptr) != ProtectionGrid.IsValid())
 	{
 		bOutCurrent = false;
 		return {};

@@ -578,4 +578,195 @@ bool FVoxelLandTypedFiniteDispatchTest::RunTest(const FString& Parameters)
 	Definition->RemoveFromRoot();
 	return true;
 }
+class FTypedFiniteLifecycleCommand final : public IAutomationLatentCommand
+{
+public:
+	FTypedFiniteLifecycleCommand(FAutomationTestBase* InTest, UWorld* InWorld, AVoxelLandWorld* InActor,
+		UVoxelLandFiniteWorld* InDefinition, UVoxelLandM4WorldConfig* InConfig, UVoxelLandTerrainGraph* InGraph)
+		: Test(InTest)
+		, World(InWorld)
+		, Actor(InActor)
+		, Definition(InDefinition)
+		, Config(InConfig)
+		, Graph(InGraph)
+		, Start(FPlatformTime::Seconds())
+	{
+	}
+
+	bool Update() override
+	{
+		if (!IsValid(World) || !IsValid(Actor) || !IsValid(Definition) || !IsValid(Config) || !IsValid(Graph)
+			|| FPlatformTime::Seconds() - Start > 60.0)
+		{
+			Test->AddError(TEXT("Typed finite lifecycle timed out or lost its fixture"));
+			Cleanup();
+			return true;
+		}
+		Actor->Tick(0.016f);
+		if (Actor->bInitializing)
+		{
+			return false;
+		}
+		if (Phase == 0)
+		{
+			if (!Actor->HasWorldStateForTests())
+			{
+				Test->AddError(
+					FString::Printf(TEXT("Typed finite initialization failed: %s"), *Actor->LastInitializationError));
+				Cleanup();
+				return true;
+			}
+			if (!Actor->HasDataChunk(FIntVector(-2, -2, 0)))
+			{
+				return false;
+			}
+			Test->TestTrue(
+				TEXT("disabled finite world publishes center chunk"), Actor->HasDataChunk(FIntVector(-2, -2, 0)));
+			if (!Actor->InitializeFromWorldDefinition(Definition))
+			{
+				Test->AddError(TEXT("Could not start stale settings request"));
+				Cleanup();
+				return true;
+			}
+			Definition->Common.HorizontalRadius = 2;
+			Phase = 1;
+			return false;
+		}
+		if (Phase == 1)
+		{
+			Test->TestTrue(TEXT("changed typed settings reject completion"),
+				Actor->LastInitializationError.Contains(TEXT("superseded")));
+			Definition->Common.HorizontalRadius = 1;
+			if (!Actor->InitializeFromWorldDefinition(Definition))
+			{
+				Test->AddError(TEXT("Could not start stale graph request"));
+				Cleanup();
+				return true;
+			}
+			Graph->Nodes[0].Pins[0].FloatDefault = 0.25f;
+			Phase = 2;
+			return false;
+		}
+		Test->TestTrue(TEXT("changed source graph rejects completion"),
+			Actor->LastInitializationError.Contains(TEXT("superseded")));
+		Cleanup();
+		return true;
+	}
+
+private:
+	void Cleanup()
+	{
+		if (IsValid(Actor))
+		{
+			Actor->Shutdown();
+		}
+		if (IsValid(World))
+		{
+			World->DestroyWorld(false);
+			if (GEngine)
+			{
+				GEngine->DestroyWorldContext(World);
+			}
+			World->RemoveFromRoot();
+		}
+		if (IsValid(Config))
+		{
+			Config->RemoveFromRoot();
+		}
+		if (IsValid(Definition))
+		{
+			Definition->RemoveFromRoot();
+		}
+	}
+
+	FAutomationTestBase* Test;
+	UWorld* World;
+	AVoxelLandWorld* Actor;
+	UVoxelLandFiniteWorld* Definition;
+	UVoxelLandM4WorldConfig* Config;
+	UVoxelLandTerrainGraph* Graph;
+	double Start;
+	int32 Phase = 0;
+};
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandTypedFiniteLifecycleTest, "VoxelLand.M5.Runtime.TypedFiniteLifecycle", M4RuntimeFlags)
+bool FVoxelLandTypedFiniteLifecycleTest::RunTest(const FString& Parameters)
+{
+	if (!TestNotNull(TEXT("engine available"), GEngine))
+	{
+		return false;
+	}
+	UVoxelLandFiniteWorld* Definition = NewObject<UVoxelLandFiniteWorld>();
+	Definition->AddToRoot();
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	Config->AddToRoot();
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Definition);
+	FString Error;
+	if (!M4RuntimeMakeProgram(*Graph, Error))
+	{
+		AddError(FString::Printf(TEXT("Could not create graph: %s"), *Error));
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
+	M4RuntimeSetCurve(Config->Continental);
+	M4RuntimeSetCurve(Config->Mountain);
+	M4RuntimeSetCurve(Config->Peaks);
+	TArray<int32> Samples;
+	Samples.Init(0, 4097);
+	if (!Config->SetBakedCurves(Samples, Samples, Samples, 1, Error))
+	{
+		AddError(FString::Printf(TEXT("Could not bake curves: %s"), *Error));
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	Definition->Common.Continental = Config->Continental;
+	Definition->Common.Mountain = Config->Mountain;
+	Definition->Common.Peaks = Config->Peaks;
+	Definition->Common.HorizontalRadius = Definition->Common.VerticalRadius = 1;
+	Definition->Finite.CellsX = Definition->Finite.CellsY = 8;
+	Definition->Finite.OriginXCm = Definition->Finite.OriginYCm = -30000;
+	Definition->Finite.GridSpacingCm = 6400;
+	Definition->Finite.bGlobalErosion = false;
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("world created"), World))
+	{
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	World->AddToRoot();
+	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	AVoxelLandWorld* Actor = World->SpawnActor<AVoxelLandWorld>();
+	if (!Actor)
+	{
+		AddError(TEXT("Could not spawn typed finite world actor"));
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		World->RemoveFromRoot();
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	Actor->bDataOnly = true;
+	Actor->DispatchBeginPlay();
+	if (!Actor->InitializeFromWorldDefinition(Definition))
+	{
+		AddError(
+			FString::Printf(TEXT("Could not start typed finite initialization: %s"), *Actor->LastInitializationError));
+		Actor->Shutdown();
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		World->RemoveFromRoot();
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	ADD_LATENT_AUTOMATION_COMMAND(FTypedFiniteLifecycleCommand(this, World, Actor, Definition, Config, Graph));
+	return true;
+}
 #endif

@@ -93,4 +93,81 @@ bool FVoxelLandM5ProtectionGridTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("extent overflow"), D.Code, EVoxelLandM5ErrorCode::ArithmeticOverflow);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5ProtectionColumnsTest, "VoxelLand.M5.Protection.Columns",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandM5ProtectionColumnsTest::RunTest(const FString& Parameters)
+{
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("budget"), FVoxelLandM5Budget::TryCreate(100000, 100000, Budget)))
+	{
+		return false;
+	}
+	const auto Never = [] { return false; };
+	TArray<uint8> Cells;
+	Cells.Init(0, 64);
+	// Last Z plane proves that all captured layers are considered.
+	Cells[1 + 4 * (1 + 4 * 3)] = 1;
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Grid;
+	const auto Origin = FVoxelLandM5ProtectionGridTestHelpers::Point(-100, -100, -100);
+	FVoxelLandM5Diagnostic D = FVoxelLandM5ProtectionGrid::Capture(
+		FIntVector(4, 4, 4), Origin, 10, Cells, Budget.ToSharedRef(), Never, Grid);
+	if (!TestEqual(TEXT("capture"), D.Code, EVoxelLandM5ErrorCode::None) || !Grid.IsValid())
+	{
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe> Columns;
+	const auto ColumnOrigin = FVoxelLandM5ProtectionGridTestHelpers::Point(-90, -90, MAX_int64);
+	D = Grid->ProjectColumns(FIntPoint(3, 3), ColumnOrigin, Budget.ToSharedRef(), Never, Columns);
+	if (!TestEqual(TEXT("column projection"), D.Code, EVoxelLandM5ErrorCode::None) || !Columns.IsValid())
+	{
+		return false;
+	}
+	for (int32 Y = 0; Y < 3; ++Y)
+	{
+		for (int32 X = 0; X < 3; ++X)
+		{
+			TestEqual(TEXT("incident XY corners and X-fastest layout"),
+				Columns->GetSamples()[X + 3 * Y], uint8(X < 2 && Y < 2 ? 1 : 0));
+		}
+	}
+	const auto Saved = Columns;
+	D = Grid->ProjectColumns(FIntPoint(1, 1), Origin, Budget.ToSharedRef(), Never, Columns);
+	TestEqual(TEXT("missing negative XY halo"), D.Code, EVoxelLandM5ErrorCode::OutOfDomain);
+	TestTrue(TEXT("missing halo preserves columns"), Columns == Saved);
+	D = Grid->ProjectColumns(FIntPoint(1, 1), FVoxelLandM5ProtectionGridTestHelpers::Point(-60, -90, 0),
+		Budget.ToSharedRef(), Never, Columns);
+	TestEqual(TEXT("missing positive XY halo"), D.Code, EVoxelLandM5ErrorCode::OutOfDomain);
+	D = Grid->ProjectColumns(FIntPoint(1, 1), FVoxelLandM5ProtectionGridTestHelpers::Point(-89, -90, 0),
+		Budget.ToSharedRef(), Never, Columns);
+	TestEqual(TEXT("unaligned column"), D.Code, EVoxelLandM5ErrorCode::InvalidInput);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> OtherBudget;
+	if (!TestTrue(TEXT("other budget"), FVoxelLandM5Budget::TryCreate(100000, 100000, OtherBudget)))
+	{
+		return false;
+	}
+	D = Grid->ProjectColumns(FIntPoint(1, 1), ColumnOrigin, OtherBudget.ToSharedRef(), Never, Columns);
+	TestEqual(TEXT("foreign budget"), D.Code, EVoxelLandM5ErrorCode::InvalidInput);
+	int32 Polls = 0;
+	const auto CancelDuring = [&Polls] { return ++Polls >= 2; };
+	D = Grid->ProjectColumns(FIntPoint(1, 1), ColumnOrigin, Budget.ToSharedRef(), CancelDuring, Columns);
+	TestEqual(TEXT("in-flight cancellation"), D.Code, EVoxelLandM5ErrorCode::Cancelled);
+	TestTrue(TEXT("failed calls preserve columns"), Columns == Saved);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> TightBudget;
+	if (!TestTrue(TEXT("tight budget"), FVoxelLandM5Budget::TryCreate(100000, 150, TightBudget)))
+	{
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> TightGrid;
+	D = FVoxelLandM5ProtectionGrid::Capture(FIntVector(4, 4, 4), Origin, 10, Cells,
+		TightBudget.ToSharedRef(), Never, TightGrid);
+	if (!TestEqual(TEXT("tight capture"), D.Code, EVoxelLandM5ErrorCode::None) || !TightGrid.IsValid())
+	{
+		return false;
+	}
+	D = TightGrid->ProjectColumns(FIntPoint(2, 2), ColumnOrigin, TightBudget.ToSharedRef(), Never, Columns);
+	TestEqual(TEXT("column work budget"), D.Code, EVoxelLandM5ErrorCode::BudgetExceeded);
+	TestTrue(TEXT("budget failure preserves columns"), Columns == Saved);
+	return true;
+}
 #endif

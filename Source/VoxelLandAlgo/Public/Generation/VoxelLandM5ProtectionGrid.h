@@ -44,6 +44,18 @@ public:
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe>& OutSamples) const;
 
+	// Same-spacing aligned XY vertices. A column is marked if any of its four
+	// incident XY cells is protected at any captured Z. All four cells must be
+	// present; missing XY halo returns OutOfDomain. Result is X-fastest for
+	// SurfaceQuery::QueryFlatSurface. ColumnOriginCm.Z is ignored. The caller
+	// must prove the captured Z domain and XY influence are complete, and must
+	// separately certify provenance, water, surface and final-field safety.
+	// Budget must be the same accounting object used for capture. Output is
+	// unchanged on failure or cancellation.
+	FVoxelLandM5Diagnostic ProjectColumns(FIntPoint ColumnCount, const FVoxelLandM5PointCm& ColumnOriginCm,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe>& OutColumns) const;
+
 private:
 	FVoxelLandM5ProtectionGrid(FIntVector InSize, const FVoxelLandM5PointCm& InOriginCm, int64 InSpacingCm,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);

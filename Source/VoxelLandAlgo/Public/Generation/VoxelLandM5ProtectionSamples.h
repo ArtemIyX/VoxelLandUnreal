@@ -5,7 +5,7 @@
 class FVoxelLandM5BudgetLease;
 class FVoxelLandM5ProtectionGrid;
 
-// Immutable X-fastest vertex samples. The lease follows all readers.
+// Immutable X-fastest vertex samples or XY column flags. The lease follows all readers.
 class VOXELLANDALGO_API FVoxelLandM5ProtectionSamples final
 {
 public:

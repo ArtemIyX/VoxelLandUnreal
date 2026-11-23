@@ -209,3 +209,97 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProtectionGrid::Project(FIntVector SampleSize
 	OutSamples = MoveTemp(Scratch);
 	return {};
 }
+
+FVoxelLandM5Diagnostic FVoxelLandM5ProtectionGrid::ProjectColumns(FIntPoint ColumnCount,
+	const FVoxelLandM5PointCm& ColumnOriginCm, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe>& OutColumns) const
+{
+	using namespace VoxelLand::M5::CheckedMath;
+	using E = EVoxelLandM5ErrorCode;
+	if (!IsOwnedBy(*Budget))
+	{
+		return FVoxelLandM5ProtectionGridInternals::Error(E::InvalidInput,
+			TEXT("Protection grid belongs to a different budget"));
+	}
+	int64 Count = 0;
+	if (!FVoxelLandM5ProtectionGridInternals::Count(FIntVector(ColumnCount.X, ColumnCount.Y, 1), Count))
+	{
+		return FVoxelLandM5ProtectionGridInternals::Error(E::InvalidInput, TEXT("Invalid protection column dimensions"));
+	}
+	int64 Start[2] = {};
+	for (int32 Axis = 0; Axis < 2; ++Axis)
+	{
+		const int64 N = Axis == 0 ? Size.X : Size.Y;
+		const int64 Columns = Axis == 0 ? ColumnCount.X : ColumnCount.Y;
+		const int64 Origin = Axis == 0 ? OriginCm.X : OriginCm.Y;
+		const int64 ColumnOrigin = Axis == 0 ? ColumnOriginCm.X : ColumnOriginCm.Y;
+		int64 Delta = 0, End = 0;
+		if (!TrySubtract(ColumnOrigin, Origin, Delta))
+		{
+			return FVoxelLandM5ProtectionGridInternals::Error(E::ArithmeticOverflow,
+				TEXT("Protection column origin overflow"));
+		}
+		if (Delta % SpacingCm != 0)
+		{
+			return FVoxelLandM5ProtectionGridInternals::Error(E::InvalidInput,
+				TEXT("Protection columns must align to the cell lattice"));
+		}
+		Start[Axis] = Delta / SpacingCm;
+		if (!TryAdd(Start[Axis], Columns - 1, End) || Start[Axis] < 1 || End >= N)
+		{
+			return FVoxelLandM5ProtectionGridInternals::Error(E::OutOfDomain,
+				TEXT("Protection grid lacks incident XY cell coverage"));
+		}
+	}
+	int64 Bytes = 0, Visits = 0, Work = 0;
+	if (!TryAdd(Count, 4096, Bytes) || !TryMultiplyNonNegative(Count, Size.Z, Visits)
+		|| !TryMultiplyNonNegative(Visits, 4, Visits) || !TryAdd(Visits, Count, Work) || !TryAdd(Work, 1, Work))
+	{
+		return FVoxelLandM5ProtectionGridInternals::Error(E::ArithmeticOverflow,
+			TEXT("Protection column admission overflow"));
+	}
+	if (IsCancelled())
+	{
+		return FVoxelLandM5ProtectionGridInternals::Error(E::Cancelled, TEXT("Protection column projection cancelled"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> ColumnLease;
+	if (!Budget->TryReserveBytes(Bytes, ColumnLease) || !Budget->TryChargeWork(Work))
+	{
+		return FVoxelLandM5ProtectionGridInternals::Error(E::BudgetExceeded, TEXT("Protection column admission exhausted"));
+	}
+	TSharedPtr<FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe> Scratch =
+		MakeShareable(new FVoxelLandM5ProtectionSamples(MoveTemp(ColumnLease)));
+	Scratch->Samples.SetNumUninitialized(int32(Count));
+	int32 OutputIndex = 0;
+	int64 Inspected = 0;
+	for (int64 Y = 0; Y < ColumnCount.Y; ++Y)
+	{
+		for (int64 X = 0; X < ColumnCount.X; ++X, ++OutputIndex)
+		{
+			uint8 Protected = 0;
+			for (int64 Z = 0; Z < Size.Z; ++Z)
+			{
+				for (int64 DY = -1; DY <= 0; ++DY)
+				{
+					for (int64 DX = -1; DX <= 0; ++DX)
+					{
+						if ((Inspected++ & 1023) == 0 && IsCancelled())
+						{
+							return FVoxelLandM5ProtectionGridInternals::Error(E::Cancelled,
+								TEXT("Protection column projection cancelled"));
+						}
+						const int64 Index = (Start[0] + X + DX) + int64(Size.X) * ((Start[1] + Y + DY) + int64(Size.Y) * Z);
+						Protected |= Cells[int32(Index)];
+					}
+				}
+			}
+			Scratch->Samples[OutputIndex] = Protected;
+		}
+	}
+	if (IsCancelled())
+	{
+		return FVoxelLandM5ProtectionGridInternals::Error(E::Cancelled, TEXT("Protection column projection cancelled"));
+	}
+	OutColumns = MoveTemp(Scratch);
+	return {};
+}

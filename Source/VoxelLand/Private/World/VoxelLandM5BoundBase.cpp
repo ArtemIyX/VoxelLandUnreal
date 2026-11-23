@@ -1,12 +1,14 @@
 #include "World/VoxelLandM5BoundBase.h"
 
 #include "Data/Assets/VoxelLandFiniteWorld.h"
+#include "Data/Assets/VoxelLandM5ProtectionAsset.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4GridLease.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5ProtectionGrid.h"
 #include "Misc/ScopeLock.h"
 #include "UObject/StrongObjectPtr.h"
 #include "World/VoxelLandFiniteSnapshotAdapter.h"
@@ -18,6 +20,8 @@ public:
 	// A logical per-capture allowance for snapshot and identity bookkeeping. It is
 	// not a measurement or process-wide bound on M4 compiler/provider memory.
 	static constexpr int64 M5BoundBaseMetadataAllowance = 48ll * 1024 * 1024;
+
+	static bool NeverCancelled() { return false; }
 
 	static FVoxelLandM5Diagnostic M5BoundBaseFailure(EVoxelLandM5ErrorCode Code, const FString& Message)
 	{
@@ -33,12 +37,14 @@ FVoxelLandM5BaseCapture::FVoxelLandM5BaseCapture(TSharedRef<FVoxelLandM5Budget, 
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InMetadataLease,
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>&& InGridLease,
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>&& InValidationLease,
-	FVoxelLandM5WorldSnapshot&& InSnapshot)
+	FVoxelLandM5WorldSnapshot&& InSnapshot,
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe>&& InProtectionGrid)
 	: Budget(MoveTemp(InBudget))
 	, MetadataLease(MoveTemp(InMetadataLease))
 	, GridLease(MoveTemp(InGridLease))
 	, ValidationLease(MoveTemp(InValidationLease))
 	, Snapshot(MoveTemp(InSnapshot))
+	, ProtectionGrid(MoveTemp(InProtectionGrid))
 {
 }
 
@@ -94,7 +100,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandM4WorldConfig&
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 budget exceeds captured limits"));
 	}
 	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandM5BaseCapture(
-		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot)));
+		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot), {}));
 	OutCapture = MoveTemp(Result);
 	return {};
 }
@@ -109,6 +115,13 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 finite capture requires a valid asset and the game thread"));
 	}
 	TStrongObjectPtr<UVoxelLandFiniteWorld> DefinitionGuard(&Definition);
+	UVoxelLandM5ProtectionAsset* const AuthoredMask = Definition.ProtectionMask.Get();
+	if (AuthoredMask && !IsValid(AuthoredMask))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid finite protection asset"));
+	}
+	TStrongObjectPtr<UVoxelLandM5ProtectionAsset> MaskGuard(AuthoredMask);
 	int64 MaxBytes = 0;
 	int64 MaxWork = 0;
 	InBudget->GetLimits(MaxBytes, MaxWork);
@@ -143,6 +156,18 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 	{
 		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(EVoxelLandM5ErrorCode::InvalidInput, Error);
 	}
+	// Graph capture can reenter game-thread code. Do not combine a snapshot
+	// with a different mask assignment from the one present at entry.
+	if (Definition.ProtectionMask.Get() != AuthoredMask || (AuthoredMask && !IsValid(AuthoredMask)))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Finite protection asset changed during capture"));
+	}
+	if (!AuthoredMask && Finite.Common.Caves.Protection.bRequireMask)
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Required finite protection asset is missing"));
+	}
 	if (!Finite.Common.Caves.bEnabled && !Finite.Common.Caves.Pockets.bEnabled)
 	{
 		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
@@ -153,6 +178,19 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 budget exceeds captured limits"));
 	}
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> ProtectionGrid;
+	if (AuthoredMask)
+	{
+		// Native copy is budgeted and the source remains on this game thread.
+		// This call does not pump events; its cancellation callback cannot reenter.
+		const FVoxelLandM5Diagnostic MaskResult = FVoxelLandM5ProtectionGrid::Capture(AuthoredMask->CellCounts,
+			AuthoredMask->OriginCm, AuthoredMask->SpacingCm, AuthoredMask->Cells, InBudget,
+			FVoxelLandM5BoundBaseInternals::NeverCancelled, ProtectionGrid);
+		if (MaskResult.Code != EVoxelLandM5ErrorCode::None)
+		{
+			return MaskResult;
+		}
+	}
 	FVoxelLandM5WorldSnapshot Snapshot;
 	if (!FVoxelLandFiniteSnapshotAdapter::TryConvert(Finite, Snapshot.Base, Error))
 	{
@@ -161,12 +199,19 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 	Snapshot.FormatVersion = 1;
 	Snapshot.Manifest = FVoxelLandM5StageManifest{};
 	Snapshot.Caves = MoveTemp(Finite.Common.Caves);
+	// Assigned masks must never be silently ignored by current identity code.
+	// This is the captured effective requirement, not an authoring mutation.
+	if (ProtectionGrid)
+	{
+		Snapshot.Caves.Protection.bRequireMask = true;
+	}
 	if (Snapshot.Caves.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld)
 	{
 		Snapshot.Manifest.Descriptor = 2;
 	}
 	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandM5BaseCapture(
-		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot)));
+		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot),
+		MoveTemp(ProtectionGrid)));
 	OutCapture = MoveTemp(Result);
 	return {};
 }

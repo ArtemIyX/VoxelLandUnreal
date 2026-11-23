@@ -1,6 +1,8 @@
 #include "Data/Assets/VoxelLandFiniteWorld.h"
 
+#include "Data/Assets/VoxelLandM5ProtectionAsset.h"
 #include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
+#include "UObject/StrongObjectPtr.h"
 
 bool UVoxelLandFiniteWorld::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSnapshot, FString& OutError) const
 {
@@ -10,6 +12,13 @@ bool UVoxelLandFiniteWorld::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSn
 		OutError = TEXT("Finite world settings must be captured on the game thread.");
 		return false;
 	}
+	UVoxelLandM5ProtectionAsset* const AuthoredMask = ProtectionMask.Get();
+	if (AuthoredMask && !IsValid(AuthoredMask))
+	{
+		OutError = TEXT("Finite protection asset is invalid.");
+		return false;
+	}
+	TStrongObjectPtr<UVoxelLandM5ProtectionAsset> MaskGuard(AuthoredMask);
 	const FVoxelLandFiniteWorldSettings Authored = Finite;
 	constexpr int64 ExactControlLimit = 16777216;
 	constexpr int64 HeightLimitQ8 = 512000000;
@@ -31,17 +40,25 @@ bool UVoxelLandFiniteWorld::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSn
 		return false;
 	}
 	FVoxelLandFiniteWorldSnapshot Scratch;
-	const auto IsModeCurrent = [this, &Authored]() {
-		return FVoxelLandFiniteWorldSettings::StaticStruct()->CompareScriptStruct(&Finite, &Authored, 0);
+	const auto IsModeCurrent = [this, &Authored, AuthoredMask]() {
+		return ProtectionMask.Get() == AuthoredMask && (!AuthoredMask || IsValid(AuthoredMask))
+			&& FVoxelLandFiniteWorldSettings::StaticStruct()->CompareScriptStruct(&Finite, &Authored, 0);
 	};
 	if (!CaptureCommon(EVoxelLandWorldKind::Finite, IsModeCurrent, Scratch.Common, OutError))
 	{
 		return false;
 	}
-	if (!FVoxelLandFiniteWorldSettings::StaticStruct()->CompareScriptStruct(&Finite, &Authored, 0))
+	if (!IsModeCurrent())
 	{
 		OutError = TEXT("Finite world settings changed during capture.");
 		return false;
+	}
+	// A present mask is an effective requirement, even when the authored flag
+	// permits omission. Existing M5 identity validation rejects it until the
+	// mask data is bound; no payload or UObject enters this snapshot.
+	if (AuthoredMask)
+	{
+		Scratch.Common.Caves.Protection.bRequireMask = true;
 	}
 	Scratch.Finite = Authored;
 	// The last height-grid sample is inclusive; use a half-open centimetre

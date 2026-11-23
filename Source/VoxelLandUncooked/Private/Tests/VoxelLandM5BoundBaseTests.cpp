@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Async/Async.h"
 #include "Data/Assets/VoxelLandFiniteWorld.h"
+#include "Data/Assets/VoxelLandM5ProtectionAsset.h"
+#include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
@@ -10,6 +12,8 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4GridLease.h"
 #include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5ProtectionGrid.h"
+#include "Generation/VoxelLandM5ProtectionSamples.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Hash/xxhash.h"
@@ -442,6 +446,55 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 		Snapshot.Base.Continental.Payload.ProgramFingerprint == Control.Payload.ProgramFingerprint);
 
 	const TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Prior = Capture;
+	Definition->Common.Caves.Protection.bRequireMask = true;
+	const auto MissingMask = FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), Capture);
+	if (MissingMask.Code == EVoxelLandM5ErrorCode::BudgetExceeded)
+	{
+		AddWarning(TEXT("Protection capture checks skipped: producer or validation admission unavailable"));
+	}
+	else
+	{
+		TestTrue(TEXT("missing required mask preserves output"),
+			MissingMask.Code == EVoxelLandM5ErrorCode::InvalidInput && Capture == Prior);
+		Definition->Common.Caves.Protection.bRequireMask = false;
+		UVoxelLandM5ProtectionAsset* Mask = NewObject<UVoxelLandM5ProtectionAsset>(Definition.Get());
+		Mask->CellCounts = FIntVector(3, 3, 3);
+		Mask->SpacingCm = 10;
+		Mask->Cells.Init(0, 27);
+		Mask->Cells[0] = 2;
+		Definition->ProtectionMask = Mask;
+		const auto BadMask = FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), Capture);
+		TestTrue(TEXT("nonbinary mask preserves output"),
+			BadMask.Code == EVoxelLandM5ErrorCode::InvalidInput && Capture == Prior);
+		Mask->Cells[0] = 1;
+		FVoxelLandFiniteWorldSnapshot SourceSnapshot;
+		FString MaskError;
+		TestTrue(TEXT("source snapshot captures effective mask requirement"),
+			Definition->CaptureSnapshot(SourceSnapshot, MaskError) && SourceSnapshot.Common.Caves.Protection.bRequireMask
+				&& !Definition->Common.Caves.Protection.bRequireMask);
+		TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> WithMask;
+		const auto MaskCapture = FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), WithMask);
+		if (MaskCapture.Code == EVoxelLandM5ErrorCode::BudgetExceeded)
+		{
+			AddWarning(TEXT("Valid protection capture skipped: producer or validation admission unavailable"));
+		}
+		else if (TestTrue(TEXT("optional mask captured with effective requirement"),
+			MaskCapture.Code == EVoxelLandM5ErrorCode::None && WithMask.IsValid()
+				&& WithMask->GetProtectionGrid().IsValid() && WithMask->GetSnapshot().Caves.Protection.bRequireMask))
+		{
+			Mask->Cells[0] = 0;
+			FVoxelLandM5PointCm SampleOrigin;
+			SampleOrigin.X = SampleOrigin.Y = SampleOrigin.Z = 10;
+			TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe> Samples;
+			const auto Projected = WithMask->GetProtectionGrid()->Project(
+				FIntVector(1, 1, 1), SampleOrigin, Budget.ToSharedRef(), [] { return false; }, Samples);
+			TestTrue(TEXT("captured protection remains immutable after asset edit"),
+				Projected.Code == EVoxelLandM5ErrorCode::None && Samples.IsValid()
+					&& Samples->GetSamples().Num() == 1 && Samples->GetSamples()[0] == 1);
+		}
+		Definition->ProtectionMask = nullptr;
+	}
+	Definition->Common.Caves.Protection.bRequireMask = false;
 	Definition->Common.Caves.Limits.MaxBytes = 1;
 	const FVoxelLandM5Diagnostic Limited =
 		FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), Capture);

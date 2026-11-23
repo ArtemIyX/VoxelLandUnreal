@@ -6,6 +6,7 @@
 #include "VoxelLandFiniteWorld.generated.h"
 
 struct FVoxelLandFiniteWorldSnapshot;
+class UVoxelLandM5ProtectionAsset;
 
 UCLASS(BlueprintType)
 class VOXELLANDDATA_API UVoxelLandFiniteWorld : public UVoxelLandWorldDefinition
@@ -20,4 +21,9 @@ public:
 	UPROPERTY(
 		EditAnywhere, Category = "VoxelLand", meta = (ToolTip = "Bounded world grid and global erosion settings."))
 	FVoxelLandFiniteWorldSettings Finite;
+
+	// Optional mask. An assigned asset always contributes protection; omission
+	// is allowed only when the cave settings do not require a mask.
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|Caves")
+	TObjectPtr<UVoxelLandM5ProtectionAsset> ProtectionMask = nullptr;
 };

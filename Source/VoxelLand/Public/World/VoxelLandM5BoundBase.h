@@ -14,6 +14,7 @@ class FVoxelLandM4GridLease;
 class FVoxelLandM5Budget;
 class FVoxelLandM5BudgetLease;
 class FVoxelLandM5BoundBase;
+class FVoxelLandM5ProtectionGrid;
 
 // Immutable UObject-free game-thread capture, with real M4 admission tokens.
 // It is a private input to base preparation, not a validated cave plan.
@@ -38,6 +39,13 @@ public:
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture);
 	const FVoxelLandM5WorldSnapshot& GetSnapshot() const { return Snapshot; }
+	// The immutable mask is not yet bound into identity or freshness checks.
+	// A present mask forces the captured effective bRequireMask flag so existing
+	// identity validation fails closed until that binding is implemented.
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> GetProtectionGrid() const
+	{
+		return ProtectionGrid;
+	}
 
 private:
 	friend class FVoxelLandM5BoundBase;
@@ -49,7 +57,8 @@ private:
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InMetadataLease,
 		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>&& InGridLease,
 		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>&& InValidationLease,
-		FVoxelLandM5WorldSnapshot&& InSnapshot);
+		FVoxelLandM5WorldSnapshot&& InSnapshot,
+		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe>&& InProtectionGrid);
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ClaimGridLease() const;
 
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
@@ -58,6 +67,7 @@ private:
 	mutable TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> GridLease;
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease;
 	FVoxelLandM5WorldSnapshot Snapshot;
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> ProtectionGrid;
 };
 
 // Reserved for an eventual exact captured-descriptor/generator binding. No

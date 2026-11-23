@@ -45,6 +45,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchProtectionCheck::Check(
 	{
 		return FVoxelLandM5ScratchProtectionCheckInternals::Error(E::Unproven, TEXT("Required protection grid is missing"));
 	}
+	if (!Chunks.MatchesProtectionInputs(Baseline, Protection, bRequireMask, bProtectAll))
+	{
+		return FVoxelLandM5ScratchProtectionCheckInternals::Error(
+			E::InvalidInput, TEXT("Protection inputs do not match scratch chunk sources"));
+	}
 	constexpr int64 Axis = FVoxelLandChunkData::Cells;
 	constexpr int64 CellCount = Axis * Axis * Axis;
 	constexpr int64 SampleAxis = FVoxelLandChunkData::SamplesPerAxis;

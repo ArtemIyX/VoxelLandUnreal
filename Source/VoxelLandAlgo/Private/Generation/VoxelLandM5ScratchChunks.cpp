@@ -1,6 +1,7 @@
 #include "Generation/VoxelLandM5ScratchChunks.h"
 
 #include "Data/Structs/VoxelLandM5ChunkFootprint.h"
+#include "Data/Structs/VoxelLandM5CaveSettings.h"
 #include "Generation/VoxelLandM5BaselineWindow.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
@@ -48,6 +49,13 @@ bool FVoxelLandM5ScratchChunks::MatchesDependencies(const FVoxelLandM5BaselineWi
 		&& SourceManifest.Geometry == Manifest.Geometry && SourceManifest.RegionalOwnership == Manifest.RegionalOwnership
 		&& SourceManifest.PocketNoise == Manifest.PocketNoise && SourceManifest.SurfaceValidation == Manifest.SurfaceValidation
 		&& SourceManifest.Composition == Manifest.Composition;
+}
+
+bool FVoxelLandM5ScratchChunks::MatchesProtectionInputs(const FVoxelLandM5BaselineWindow& Window,
+	const FVoxelLandM5ProtectionGrid* Protection, bool bRequireMask, bool bProtectAll) const
+{
+	return SourceWindow.Get() == &Window && SourceProtection.Get() == Protection
+		&& bSourceRequireMask == bRequireMask && bSourceProtectAll == bProtectAll;
 }
 
 FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSettings& Settings,
@@ -127,6 +135,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 		return FVoxelLandM5ScratchChunksInternals::Error(E::BudgetExceeded, TEXT("Scratch chunk memory exhausted"));
 	}
 	const FVoxelLandM5StageManifest CapturedManifest = Manifest;
+	const bool bCapturedRequireMask = Settings.Protection.bRequireMask;
+	const bool bCapturedProtectAll = Settings.Protection.bProtectAll;
 	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe> Field;
 	const FVoxelLandM5Diagnostic Diagnostic = VoxelLand::M5::WindowFinalField::Build(
 		Settings, CapturedManifest, WorldSeed, Window.Get(), Candidate, Protection.Get(), Start, Count, Budget, IsCancelled, Field);
@@ -145,6 +155,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 	Result->SourceWindow = Window;
 	Result->SourceCandidate = Candidate;
 	Result->SourceProtection = Protection;
+	Result->bSourceRequireMask = bCapturedRequireMask;
+	Result->bSourceProtectAll = bCapturedProtectAll;
 	Result->SourceWorldSeed = WorldSeed;
 	Result->SourceManifest = CapturedManifest;
 	Result->MinInclusive = MinInclusive;

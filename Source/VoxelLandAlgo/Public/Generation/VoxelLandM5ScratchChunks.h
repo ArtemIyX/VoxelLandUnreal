@@ -32,6 +32,10 @@ public:
 	bool MatchesDependencies(const FVoxelLandM5BaselineWindow& Window,
 		const FVoxelLandM5CandidateResult& Candidate, const FVoxelLandM5ProtectionGrid* Protection,
 		int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest) const;
+	// Exact protection inputs used to compose these chunks. This does not prove
+	// current world identity, complete influence, or final-field safety.
+	bool MatchesProtectionInputs(const FVoxelLandM5BaselineWindow& Window,
+		const FVoxelLandM5ProtectionGrid* Protection, bool bRequireMask, bool bProtectAll) const;
 
 	// Finite, half-open LOD-zero chunk rectangle. Retains immutable input owners
 	// through the final reader; callers retain provider/module lifetime separately.
@@ -61,6 +65,8 @@ private:
 	TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> SourceWindow;
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> SourceCandidate;
 	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> SourceProtection;
+	bool bSourceRequireMask = false;
+	bool bSourceProtectAll = false;
 	int64 SourceWorldSeed = 0;
 	FVoxelLandM5StageManifest SourceManifest;
 	FIntVector MinInclusive = FIntVector::ZeroValue;

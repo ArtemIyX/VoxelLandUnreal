@@ -12,7 +12,8 @@ class FVoxelLandM5ScratchChunks;
 namespace VoxelLand::M5::ScratchProtectionCheck
 {
 // Checks the 4x4x4 contributing samples around each protected owned cell.
-// Inputs must be immutable and share Budget. A supplied binary grid must cover
+// Inputs must be immutable, share Budget, and match the baseline, protection
+// grid and flags used to compose Chunks. A supplied binary grid must cover
 // every owned cell; an absent optional grid adds no protection. This is not a
 // roof, opening, water, full mesher-influence, provenance or publication proof.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Check(const FVoxelLandM5BaselineWindow& Baseline,

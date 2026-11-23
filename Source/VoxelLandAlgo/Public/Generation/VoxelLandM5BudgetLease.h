@@ -14,6 +14,9 @@ public:
 	FVoxelLandM5BudgetLease(const FVoxelLandM5BudgetLease&) = delete;
 	FVoxelLandM5BudgetLease& operator=(const FVoxelLandM5BudgetLease&) = delete;
 
+	// Reservation size is immutable. It does not establish allocation ownership.
+	int64 GetReservedBytes() const { return Bytes; }
+
 private:
 	friend class FVoxelLandM5Budget;
 	FVoxelLandM5BudgetLease(TSharedRef<FVoxelLandM5BudgetState, ESPMode::ThreadSafe> InState, int64 InBytes);

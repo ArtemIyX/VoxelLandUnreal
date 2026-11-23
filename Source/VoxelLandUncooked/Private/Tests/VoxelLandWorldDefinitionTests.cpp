@@ -169,6 +169,20 @@ bool FVoxelLandWorldDefinitionCaptureTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("worker input omits authoring text history"), CapturedInput.Tooltip.IsEmpty());
 	TestFalse(TEXT("function retains authoring tooltip"), Function->Parameters[0].Tooltip.IsEmpty());
 	FiniteSnapshot.Common.Seed = 54321;
+	FVoxelLandGraphParameter DuplicateInput = Input;
+	DuplicateInput.Id = FGuid(25, 26, 27, 28);
+	DuplicateInput.Name = TEXT("AMPLITUDE");
+	Function->Parameters.Add(DuplicateInput);
+	TestFalse(TEXT("duplicate function input names rejected"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestTrue(TEXT("function input error identifies control"), Error.Contains(TEXT("Continental control")));
+	TestEqual(TEXT("invalid function leaves output unchanged"), FiniteSnapshot.Common.Seed, int64(54321));
+	Function->Parameters.RemoveAt(1);
+	Function->Parameters[0].bHasRange = true;
+	Function->Parameters[0].FloatMin = 3.0f;
+	Function->Parameters[0].FloatMax = 4.0f;
+	TestFalse(TEXT("function input default outside range rejected"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestEqual(TEXT("invalid range leaves output unchanged"), FiniteSnapshot.Common.Seed, int64(54321));
+	Function->Parameters[0].bHasRange = false;
 	FVoxelLandGraphNodeRecord RecursiveNode = FunctionNode;
 	RecursiveNode.Id = FGuid(21, 22, 23, 24);
 	Function->Nodes.Add(RecursiveNode);
@@ -185,6 +199,22 @@ bool FVoxelLandWorldDefinitionCaptureTest::RunTest(const FString& Parameters)
 	NestedNode.FunctionPath = FSoftObjectPath(Nested.Get());
 	Function->Nodes.Add(NestedNode);
 	int32 LoadCount = 0;
+	bool bRenamed = false;
+	const FName NewFunctionName = MakeUniqueObjectName(Function->GetOuter(), Function->GetClass());
+	VoxelLandWorldDefinitionSetBeforeLoadHook([&Function, &LoadCount, &bRenamed, NewFunctionName]() {
+		if (++LoadCount == 2)
+		{
+			bRenamed = Function->Rename(*NewFunctionName.ToString(), nullptr, REN_DontCreateRedirectors);
+		}
+	});
+	TestFalse(TEXT("reentrant function rename rejects capture"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestTrue(TEXT("function rename succeeded"), bRenamed);
+	TestEqual(TEXT("rename retains previous snapshot"), FiniteSnapshot.Common.Seed, int64(54321));
+	TestTrue(TEXT("rename reports freshness failure"), Error.Contains(TEXT("changed")));
+	VoxelLandWorldDefinitionSetBeforeLoadHook(TFunction<void()>());
+	FunctionNode.FunctionPath = FSoftObjectPath(Function.Get());
+	Graph->Nodes[0].FunctionPath = FunctionNode.FunctionPath;
+	LoadCount = 0;
 	VoxelLandWorldDefinitionSetBeforeLoadHook([Graph, &Function, &LoadCount]() {
 		if (++LoadCount == 2)
 		{
@@ -233,6 +263,14 @@ bool FVoxelLandWorldDefinitionCaptureTest::RunTest(const FString& Parameters)
 	Infinite->Infinite.RegionSizeCm = 409600;
 	Infinite->Infinite.MaxZCm = Infinite->Infinite.MinZCm;
 	TestFalse(TEXT("empty vertical domain rejected"), Infinite->CaptureSnapshot(InfiniteSnapshot, Error));
+	Infinite->Infinite.MinZCm = MIN_int64;
+	Infinite->Infinite.MaxZCm = MAX_int64;
+	TestFalse(TEXT("overflowing infinite vertical extent rejected"), Infinite->CaptureSnapshot(InfiniteSnapshot, Error));
+	TestEqual(TEXT("overflowing infinite extent preserves output"), InfiniteSnapshot.Common.Seed, int64(9876));
+	Finite->Finite.MinZCm = MIN_int64;
+	Finite->Finite.MaxZCm = MAX_int64;
+	TestFalse(TEXT("overflowing finite vertical extent rejected"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestEqual(TEXT("overflowing finite extent preserves output"), FiniteSnapshot.Common.Seed, int64(54321));
 
 	// These methods must reject before touching any UObject from a worker thread.
 	const bool bWorkerRejected = Async(EAsyncExecution::ThreadPool, [Finite]() {

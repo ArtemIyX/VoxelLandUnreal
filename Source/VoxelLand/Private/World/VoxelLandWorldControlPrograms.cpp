@@ -73,6 +73,11 @@ FVoxelLandM5Diagnostic FVoxelLandWorldControlPrograms::Load(
 		return FVoxelLandWorldControlProgramsInternals::Failure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Source lease belongs to another budget."));
 	}
+	if (SourceLease->GetReservedBytes() < int64(sizeof(FVoxelLandWorldSourceSnapshot)))
+	{
+		return FVoxelLandWorldControlProgramsInternals::Failure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Source lease cannot cover the fixed snapshot record."));
+	}
 	constexpr int64 ResultBytes = 4096;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(ResultBytes, Lease))

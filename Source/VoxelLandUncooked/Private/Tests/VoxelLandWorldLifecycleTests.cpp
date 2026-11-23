@@ -80,6 +80,15 @@ bool FVoxelLandWorldLifecycleIsolationTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("worker start failure preserves tick"), Actors[1]->IsActorTickEnabled());
 		TestTrue(TEXT("worker start failure reports error"),
 			Actors[1]->LastInitializationError.Contains(TEXT("Unable to start terrain workers")));
+		FVoxelLandChunkKey Startup;
+		Startup.Coordinate = FIntVector(MAX_int32, 0, 0);
+		TestFalse(TEXT("invalid startup rejected before replacement"),
+			Actors[1]->TryInitializeWithStartupForTests(Generator, Startup));
+		TestTrue(TEXT("invalid startup preserves active state"), Actors[1]->HasWorldStateForTests());
+		Startup.Coordinate = FIntVector::ZeroValue;
+		TestTrue(TEXT("replacement stages valid startup"),
+			Actors[1]->TryInitializeWithStartupForTests(Generator, Startup));
+		TestTrue(TEXT("startup demand is queued in replacement"), Actors[1]->IsExplicitChunkForTests(Startup));
 		TestFalse(TEXT("missing settings rejected"), Actors[1]->InitializeFromSettings(nullptr));
 		TestTrue(TEXT("missing settings preserve terrain state"), Actors[1]->HasWorldStateForTests());
 		TestFalse(TEXT("missing M4 settings rejected"), Actors[1]->InitializeM4FromSettings(nullptr, FIntVector::ZeroValue));
@@ -97,6 +106,10 @@ bool FVoxelLandWorldLifecycleIsolationTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("cancelled replacement preserves tick"), Actors[1]->IsActorTickEnabled());
 			TestEqual(TEXT("cancelled replacement preserves demand"), Actors[1]->HorizontalRadius, OriginalRadius);
 		}
+		Actors[1]->SetShutdownHookForTests([&Actors, Generator] { Actors[1]->Initialize(Generator); });
+		Actors[1]->Shutdown();
+		TestTrue(TEXT("reentrant replacement survives retiring old state"), Actors[1]->HasWorldStateForTests());
+		TestTrue(TEXT("reentrant replacement keeps ticking"), Actors[1]->IsActorTickEnabled());
 		Actors[0]->EndPlay(EEndPlayReason::EndPlayInEditor);
 		TestFalse(TEXT("first actor stops its own job"), Actors[0]->IsActorTickEnabled());
 		TestTrue(TEXT("other world retains terrain state"), Actors[1]->HasWorldStateForTests());

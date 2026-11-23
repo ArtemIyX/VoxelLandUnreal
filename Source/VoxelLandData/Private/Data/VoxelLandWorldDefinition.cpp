@@ -47,6 +47,11 @@ TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandW
 	return nullptr;
 }
 
+bool UVoxelLandWorldDefinition::HasRepresentableVerticalExtent(int64 Minimum, int64 Maximum)
+{
+	return Minimum < Maximum && (Minimum >= 0 || Maximum <= MAX_int64 + Minimum);
+}
+
 const TCHAR* UVoxelLandWorldDefinition::GetPreparationBlocker() const
 {
 	if (IsA<UVoxelLandFiniteWorld>())
@@ -130,6 +135,7 @@ public:
 	public:
 		explicit FWorldDefinitionGraphStamp(UVoxelLandTerrainGraph& Graph)
 			: Asset(&Graph)
+			, AssetPath(&Graph)
 		{
 		}
 
@@ -143,13 +149,18 @@ public:
 			}
 			int64 ConfigurationBytes = 0;
 			int32 PinCount = 0;
-			for (const auto& Parameter : Graph.Parameters)
+			TSet<FGuid> ParameterIds;
+			TSet<FString> ParameterNames;
+			for (const FVoxelLandGraphParameter& Parameter : Graph.Parameters)
 			{
-				if (Parameter.Name.Len() > 128)
+				if (!FVoxelLandWorldDefinitionValidation::WorldDefinitionParameterValid(Parameter)
+					|| ParameterIds.Contains(Parameter.Id) || ParameterNames.Contains(Parameter.Name.ToLower()))
 				{
-					Error = TEXT("Control graph parameter name exceeds capture limits.");
+					Error = TEXT("Control graph or function parameters are invalid or duplicated.");
 					return false;
 				}
+				ParameterIds.Add(Parameter.Id);
+				ParameterNames.Add(Parameter.Name.ToLower());
 			}
 			for (const auto& Node : Graph.Nodes)
 			{
@@ -215,7 +226,7 @@ public:
 		bool IsCurrent() const
 		{
 			const UVoxelLandTerrainGraph* Graph = Asset.Get();
-			if (!Graph || Graph->SourceVersion != Source.SourceVersion
+			if (!Graph || FSoftObjectPath(Graph) != AssetPath || Graph->SourceVersion != Source.SourceVersion
 				|| Graph->Parameters.Num() != Source.Parameters.Num() || Graph->Nodes.Num() != Source.Nodes.Num()
 				|| Graph->Links.Num() != Source.Links.Num())
 			{
@@ -271,6 +282,7 @@ public:
 		}
 
 		TStrongObjectPtr<UVoxelLandTerrainGraph> Asset;
+		FSoftObjectPath AssetPath;
 		FVoxelLandGraphSnapshot Source;
 		bool bFunction = false;
 		bool bNamed = false;

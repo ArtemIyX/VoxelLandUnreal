@@ -12,9 +12,9 @@ bool UVoxelLandInfiniteWorld::CaptureSnapshot(FVoxelLandInfiniteWorldSnapshot& O
 	}
 	const FVoxelLandInfiniteWorldSettings Authored = Infinite;
 	if (Authored.RegionSizeCm <= 0 || Common.VoxelSizeCm <= 0 || Authored.RegionSizeCm % Common.VoxelSizeCm != 0
-		|| Authored.MinZCm >= Authored.MaxZCm)
+		|| !HasRepresentableVerticalExtent(Authored.MinZCm, Authored.MaxZCm))
 	{
-		OutError = TEXT("Infinite regions require a positive voxel-aligned width and ordered vertical bounds.");
+		OutError = TEXT("Infinite regions require a positive voxel-aligned width and representable vertical bounds.");
 		return false;
 	}
 	FVoxelLandInfiniteWorldSnapshot Scratch;

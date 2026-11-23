@@ -22,6 +22,7 @@
 #include "Misc/ScopeLock.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ProfilingDebugging/CountersTrace.h"
+#include "UObject/StrongObjectPtr.h"
 
 TRACE_DECLARE_INT_COUNTER(VoxelQueued, TEXT("VoxelLand/Queued"));
 TRACE_DECLARE_INT_COUNTER(VoxelOutstanding, TEXT("VoxelLand/Outstanding"));
@@ -311,7 +312,8 @@ void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::
 	TryInitialize(MoveTemp(Generator));
 }
 
-bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator)
+bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
+	const FVoxelLandChunkKey* Startup)
 {
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
@@ -330,6 +332,24 @@ bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMod
 	Candidate->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
 	Candidate->RegionDimensions = FIntVector(
 		FMath::Clamp(RegionSize.X, 1, 32), FMath::Clamp(RegionSize.Y, 1, 32), FMath::Clamp(RegionSize.Z, 1, 8));
+	if (Startup)
+	{
+		if (Startup->LOD != 0 || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
+				Startup->Coordinate, Generator->GetProfile().VoxelSizeCm, Generator->IsM4Unlimited()))
+		{
+			LastInitializationError = TEXT("Startup chunk exceeds the supported coordinate range.");
+			return false;
+		}
+		if (const FVoxelLandError Error = Generator->ValidateM4ChunkDemand(*Startup))
+		{
+			LastInitializationError = FString::Printf(TEXT("Startup chunk is invalid: %s"), *Error.Message);
+			return false;
+		}
+		FRecord& Record = Candidate->Records.Add(*Startup);
+		Record.bExplicit = true;
+		Record.bQueued = true;
+		Candidate->bDemandComplete = false;
+	}
 	const int32 Count = FMath::Clamp(WorkerCount, 1, FWorker::MaxWorkers);
 	for (int32 I = 0; I < Count; ++I)
 	{
@@ -400,37 +420,53 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 	{
 		return;
 	}
-	++State->Epoch;
-	for (auto& Pair : State->Records)
+	TUniquePtr<FVoxelLandWorldState> Retired = MoveTemp(State);
+	TArray<TStrongObjectPtr<AVoxelLandRegion>> RetiredRegions;
+	if (bDestroyRegionActors)
+	{
+		RetiredRegions.Reserve(Regions.Num());
+		for (AVoxelLandRegion* Region : Regions)
+		{
+			if (IsValid(Region))
+			{
+				RetiredRegions.Emplace(Region);
+			}
+		}
+	}
+	Regions.Empty();
+	++Retired->Epoch;
+	for (auto& Pair : Retired->Records)
 	{
 		if (Pair.Value.Cancel)
 		{
 			Pair.Value.Cancel->bCancelled.Store(true);
 		}
 	}
-	if (bDestroyRegionActors)
+	Retired->Work->bStop.Store(true);
+	for (int32 I = 0; I < Retired->Threads.Num(); ++I)
 	{
-		for (AVoxelLandRegion* Region : Regions)
+		Retired->Work->Wake->Trigger();
+	}
+#if WITH_DEV_AUTOMATION_TESTS
+	if (ShutdownHookForTests)
+	{
+		TFunction<void()> Hook = MoveTemp(ShutdownHookForTests);
+		Hook();
+	}
+#endif
+	for (const TStrongObjectPtr<AVoxelLandRegion>& Region : RetiredRegions)
+	{
+		if (IsValid(Region.Get()))
 		{
-			if (IsValid(Region))
-			{
-				Region->SetActorHiddenInGame(true);
-				Region->Destroy();
-			}
+			Region->SetActorHiddenInGame(true);
+			Region->Destroy();
 		}
 	}
-	Regions.Empty();
-	State->Work->bStop.Store(true);
-	for (int32 I = 0; I < State->Threads.Num(); ++I)
-	{
-		State->Work->Wake->Trigger();
-	}
-	for (FRunnableThread* Thread : State->Threads)
+	for (FRunnableThread* Thread : Retired->Threads)
 	{
 		Thread->WaitForCompletion();
 		delete Thread;
 	}
-	State.Reset();
 }
 
 bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
@@ -613,6 +649,12 @@ int32 AVoxelLandWorld::GetDemandedChunkCount() const
 		}
 	}
 	return Count;
+}
+
+bool AVoxelLandWorld::IsExplicitChunkForTests(const FVoxelLandChunkKey& Key) const
+{
+	const FRecord* Record = State ? State->Records.Find(Key) : nullptr;
+	return Record && Record->bExplicit && Record->bQueued;
 }
 
 bool AVoxelLandWorld::IsChunkDemanded(FIntVector Coordinate) const

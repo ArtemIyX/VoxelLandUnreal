@@ -81,6 +81,11 @@ bool FVoxelLandWorldControlProgramsTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> UndersizedLease;
+	if (!Budget->TryReserveBytes(1, UndersizedLease))
+	{
+		return false;
+	}
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> OtherBudget;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> OtherLease;
 	if (!FVoxelLandM5Budget::TryCreate(1024, 1024, OtherBudget)
@@ -98,7 +103,7 @@ bool FVoxelLandWorldControlProgramsTest::RunTest(const FString& Parameters)
 		MakeShared<FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe>(MoveTemp(BadFinite));
 	const TSharedRef<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> Source =
 		MakeShared<FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe>(MoveTemp(Finite));
-	return Async(EAsyncExecution::ThreadPool, [this, Source, InfiniteSource, BadSource, Budget, InputLease, OtherLease] {
+	return Async(EAsyncExecution::ThreadPool, [this, Source, InfiniteSource, BadSource, Budget, InputLease, UndersizedLease, OtherLease] {
 		TSharedPtr<const FVoxelLandWorldControlPrograms, ESPMode::ThreadSafe> Output;
 		const auto NeverCancel = [] { return false; };
 		FVoxelLandM5Diagnostic Result = FVoxelLandWorldControlPrograms::Load(
@@ -126,6 +131,10 @@ bool FVoxelLandWorldControlProgramsTest::RunTest(const FString& Parameters)
 			Source, OtherLease.ToSharedRef(), Budget.ToSharedRef(), NeverCancel, Output);
 		TestEqual(TEXT("foreign source lease rejected"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::InvalidInput));
 		TestTrue(TEXT("foreign lease preserves prior product"), Output.Get() == Previous);
+		Result = FVoxelLandWorldControlPrograms::Load(
+			Source, UndersizedLease.ToSharedRef(), Budget.ToSharedRef(), NeverCancel, Output);
+		TestEqual(TEXT("undersized source lease rejected"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::BudgetExceeded));
+		TestTrue(TEXT("undersized lease preserves prior product"), Output.Get() == Previous);
 		Result = FVoxelLandWorldControlPrograms::Load(
 			BadSource, InputLease.ToSharedRef(), Budget.ToSharedRef(), NeverCancel, Output);
 		TestEqual(TEXT("corrupt peaks curve rejected"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::InvalidInput));

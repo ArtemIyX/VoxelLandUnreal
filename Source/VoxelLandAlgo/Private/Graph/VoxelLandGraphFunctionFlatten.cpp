@@ -172,7 +172,7 @@ public:
 			}
 			for (const FVoxelLandGraphParameter& Input : (*Function)->Inputs)
 			{
-				if (Input.Name.Len() > 128 || Input.Tooltip.ToString().Len() > 4096)
+				if (Input.Name.Len() > 128)
 				{
 					return FailAt(RootCall, Path, Node, TEXT("Captured function interface text exceeds size limits."));
 				}
@@ -203,11 +203,13 @@ public:
 	{
 	public:
 		FFunctionExpander(FVoxelLandGraphSnapshot& InGraph, FVoxelLandGraphDiagnostic& InDiagnostic,
-			TMap<FGuid, FGuid>& InOriginCalls, TMap<FGuid, FString>& InOriginDescriptions)
+			TMap<FGuid, FGuid>& InOriginCalls, TMap<FGuid, FString>& InOriginDescriptions,
+			TMap<FGuid, FVoxelLandGraphNodeOrigin>* InNodeOrigins)
 			: Graph(InGraph)
 			, Diagnostic(InDiagnostic)
 			, OriginCalls(InOriginCalls)
 			, OriginDescriptions(InOriginDescriptions)
+			, NodeOrigins(InNodeOrigins)
 		{
 		}
 
@@ -474,6 +476,10 @@ public:
 				Nodes.Add(Node.Id, Id);
 				Existing.Add(Id);
 				OriginCalls.Add(Id, RootCall);
+				if (NodeOrigins)
+				{
+					NodeOrigins->Add(Id, FVoxelLandGraphNodeOrigin{Node.Id, Function.AssetPath});
+				}
 				OriginDescriptions.Add(
 					Id, FString::Printf(TEXT("function %s, node %s"), *Function.AssetPath, *Node.Id.ToString()));
 				for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
@@ -652,6 +658,7 @@ public:
 		FVoxelLandGraphDiagnostic& Diagnostic;
 		TMap<FGuid, FGuid>& OriginCalls;
 		TMap<FGuid, FString>& OriginDescriptions;
+		TMap<FGuid, FVoxelLandGraphNodeOrigin>* NodeOrigins;
 	};
 };
 
@@ -671,18 +678,23 @@ bool FVoxelLandGraphFunctionFlatten::Expand(const FVoxelLandGraphSnapshot& Sourc
 }
 
 bool FVoxelLandGraphFunctionFlatten::Expand(const FVoxelLandGraphSnapshot& Source, FVoxelLandGraphSnapshot& OutGraph,
-	FVoxelLandGraphDiagnostic& Diagnostic, TMap<FGuid, FGuid>& OriginCalls, TMap<FGuid, FString>& OriginDescriptions)
+	FVoxelLandGraphDiagnostic& Diagnostic, TMap<FGuid, FGuid>& OriginCalls, TMap<FGuid, FString>& OriginDescriptions,
+	TMap<FGuid, FVoxelLandGraphNodeOrigin>* NodeOrigins)
 {
 	OutGraph = FVoxelLandGraphSnapshot();
 	Diagnostic = FVoxelLandGraphDiagnostic();
 	OriginCalls.Reset();
 	OriginDescriptions.Reset();
+	if (NodeOrigins)
+	{
+		NodeOrigins->Reset();
+	}
 	if (!ValidateSource(Source, Diagnostic))
 	{
 		return false;
 	}
 	FVoxelLandGraphSnapshot Copy = Source;
-	if (!FVoxelLandGraphFunctionFlattenInternals::FFunctionExpander(Copy, Diagnostic, OriginCalls, OriginDescriptions)
+	if (!FVoxelLandGraphFunctionFlattenInternals::FFunctionExpander(Copy, Diagnostic, OriginCalls, OriginDescriptions, NodeOrigins)
 			.Run())
 	{
 		TranslateDiagnostic(Diagnostic, OriginCalls, OriginDescriptions);

@@ -41,6 +41,8 @@ public:
 	FVoxelLandWorldCommonSettings Common;
 
 protected:
+	static bool HasRepresentableVerticalExtent(int64 Minimum, int64 Maximum);
+
 	// Game thread only; leaves OutSnapshot unchanged on failure. This captures
 	// source inputs, not proof that a graph is valid for the selected world mode.
 	bool CaptureCommon(EVoxelLandWorldKind Kind, TFunctionRef<bool()> IsModeCurrent,

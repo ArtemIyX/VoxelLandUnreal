@@ -125,7 +125,7 @@ public:
 		}
 	}
 
-	static void RemoveUnusedTotalInstructions(FVoxelLandProgramDraft& Draft)
+	static void RemoveUnusedTotalInstructions(FVoxelLandProgramDraft& Draft, TArray<FGuid>* InstructionNodes)
 	{
 		TArray<int32> Uses;
 		Uses.Init(0, Draft.RegisterCount);
@@ -147,8 +147,16 @@ public:
 		{
 			if (Keep[Index])
 			{
+				if (InstructionNodes)
+				{
+					(*InstructionNodes)[Instructions.Num()] = (*InstructionNodes)[Index];
+				}
 				Instructions.Add(Draft.Instructions[Index]);
 			}
+		}
+		if (InstructionNodes)
+		{
+			InstructionNodes->SetNum(Instructions.Num(), EAllowShrinking::No);
 		}
 		Draft.Instructions = MoveTemp(Instructions);
 	}
@@ -279,9 +287,9 @@ public:
 	}
 };
 
-bool FVoxelLandProgramOptimizer::Optimize(FVoxelLandProgramDraft& Draft, FString& Error)
+bool FVoxelLandProgramOptimizer::Optimize(FVoxelLandProgramDraft& Draft, FString& Error, TArray<FGuid>* InstructionNodes)
 {
-	FVoxelLandProgramOptimizerInternals::RemoveUnusedTotalInstructions(Draft);
+	FVoxelLandProgramOptimizerInternals::RemoveUnusedTotalInstructions(Draft, InstructionNodes);
 	FVoxelLandProgramOptimizerInternals::CompactConstants(Draft);
 	return FVoxelLandProgramOptimizerInternals::AllocateRegisters(Draft, Error);
 }

@@ -150,7 +150,7 @@ bool FVoxelLandWorldCompilerTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("requirement failure"), int32(Capability.Code),
 			int32(EVoxelLandWorldCapabilityError::FiniteWorldRequired));
 		TestTrue(TEXT("diagnostic identifies provider node"), Capability.NodeId == Graph.Nodes[1].Id);
-		TestTrue(TEXT("rejected compile clears draft"), Draft.Instructions.IsEmpty());
+		TestTrue(TEXT("rejected compile leaves empty draft untouched"), Draft.Instructions.IsEmpty());
 		TestTrue(TEXT("finite compiles same frozen graph"),
 			FVoxelLandGraphCompiler::CompileForWorld(Graph, EVoxelLandWorldKind::Finite, Frozen,
 				WorldCompilerBudget().ToSharedRef(), NeverCancel, Draft, Capability, GraphDiagnostic));
@@ -158,6 +158,7 @@ bool FVoxelLandWorldCompilerTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("infinite accepts built-in local graph"),
 			FVoxelLandGraphCompiler::CompileForWorld(WorldCompilerGraph(false), EVoxelLandWorldKind::Infinite, Frozen,
 				WorldCompilerBudget().ToSharedRef(), NeverCancel, Draft, Capability, GraphDiagnostic));
+		const int32 PriorInstructionCount = Draft.Instructions.Num();
 		for (const auto& Case : {TPair<EVoxelLandBuiltinNode, bool>(EVoxelLandBuiltinNode::Perlin2, false),
 				 TPair<EVoxelLandBuiltinNode, bool>(EVoxelLandBuiltinNode::Value3, true)})
 		{
@@ -165,12 +166,15 @@ bool FVoxelLandWorldCompilerTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("infinite rejects noise unsupported by current backend"),
 				FVoxelLandGraphCompiler::CompileForWorld(Noise, EVoxelLandWorldKind::Infinite, Frozen,
 					WorldCompilerBudget().ToSharedRef(), NeverCancel, Draft, Capability, GraphDiagnostic));
-			TestFalse(TEXT("backend diagnostic does not guess a source node"), Capability.NodeId.IsValid());
-			TestFalse(TEXT("graph diagnostic does not guess a source node"), GraphDiagnostic.NodeId.IsValid());
+			const FGuid NoiseNodeId = Noise.Nodes[Noise.Nodes.Num() - 2].Id;
+			TestEqual(TEXT("backend diagnostic names the authored node"), Capability.NodeId, NoiseNodeId);
+			TestEqual(TEXT("graph diagnostic names the authored node"), GraphDiagnostic.NodeId, NoiseNodeId);
 			TestTrue(
 				TEXT("backend diagnostic identifies instruction"), Capability.Message.Contains(TEXT("instruction ")));
 			TestTrue(TEXT("diagnostic names actual backend"), Capability.Message.Contains(TEXT("fixed-lattice")));
-			TestTrue(TEXT("rejected backend clears draft"), Draft.Instructions.IsEmpty());
+			TestEqual(TEXT("backend failure is distinct from semantic capability failure"), int32(Capability.Code),
+				int32(EVoxelLandWorldCapabilityError::BackendUnsupported));
+			TestEqual(TEXT("rejected backend preserves prior draft"), Draft.Instructions.Num(), PriorInstructionCount);
 		}
 		FVoxelLandGraphSnapshot RepeatedNoise = WorldCompilerNoiseGraph(EVoxelLandBuiltinNode::Perlin2, false);
 		FVoxelLandGraphNodeRecord UnusedNoise = RepeatedNoise.Nodes[2];
@@ -183,7 +187,7 @@ bool FVoxelLandWorldCompilerTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("repeated opcode rejects unsupported connected noise"),
 			FVoxelLandGraphCompiler::CompileForWorld(RepeatedNoise, EVoxelLandWorldKind::Infinite, Frozen,
 				WorldCompilerBudget().ToSharedRef(), NeverCancel, Draft, Capability, GraphDiagnostic));
-		TestFalse(TEXT("repeated opcode does not blame first unrelated node"), Capability.NodeId.IsValid());
+		TestEqual(TEXT("repeated opcode identifies the connected node"), Capability.NodeId, RepeatedNoise.Nodes[3].Id);
 		TestTrue(
 			TEXT("repeated opcode diagnostic reports instruction"), Capability.Message.Contains(TEXT("instruction ")));
 
@@ -210,9 +214,10 @@ bool FVoxelLandWorldCompilerTest::RunTest(const FString& Parameters)
 			FVoxelLandGraphCompiler::CompileForWorld(NestedNoise, EVoxelLandWorldKind::Infinite, Frozen,
 				WorldCompilerBudget().ToSharedRef(), NeverCancel, Draft, Capability, GraphDiagnostic));
 		TestTrue(TEXT("nested failure comes from fixed backend"), Capability.Message.Contains(TEXT("fixed-lattice")));
-		TestFalse(TEXT("nested backend diagnostic does not guess node"), Capability.NodeId.IsValid());
-		TestTrue(TEXT("nested backend diagnostic does not guess function"), Capability.FunctionPath.IsEmpty());
-		TestTrue(TEXT("nested backend failure clears draft"), Draft.Instructions.IsEmpty());
+		TestEqual(TEXT("nested backend diagnostic names the authored node"), Capability.NodeId, NoiseFunction.OutputNode);
+		TestEqual(TEXT("nested backend diagnostic names the function"), Capability.FunctionPath, NoiseFunction.AssetPath);
+		TestEqual(
+			TEXT("nested backend failure preserves prior draft"), Draft.Instructions.Num(), PriorInstructionCount);
 		const FVoxelLandGraphSnapshot FixedNoise = WorldCompilerNoiseGraph(EVoxelLandBuiltinNode::Value2, false);
 		TestTrue(TEXT("infinite accepts supported fixed-lattice Value2"),
 			FVoxelLandGraphCompiler::CompileForWorld(FixedNoise, EVoxelLandWorldKind::Infinite, Frozen,
@@ -248,6 +253,7 @@ bool FVoxelLandWorldCompilerTest::RunTest(const FString& Parameters)
 				WorldCompilerBudget(1024 * 1024, 0).ToSharedRef(), NeverCancel, Draft, Capability, GraphDiagnostic));
 		TestEqual(TEXT("budget failure is explicit"), int32(Capability.Code),
 			int32(EVoxelLandWorldCapabilityError::BudgetExceeded));
+		const int32 BeforeCancellation = Draft.Instructions.Num();
 		const auto AlwaysCancel = [] {
 			return true;
 		};
@@ -256,6 +262,7 @@ bool FVoxelLandWorldCompilerTest::RunTest(const FString& Parameters)
 				WorldCompilerBudget().ToSharedRef(), AlwaysCancel, Draft, Capability, GraphDiagnostic));
 		TestEqual(
 			TEXT("cancellation is explicit"), int32(Capability.Code), int32(EVoxelLandWorldCapabilityError::Cancelled));
+		TestEqual(TEXT("cancelled compile preserves prior draft"), Draft.Instructions.Num(), BeforeCancellation);
 	}
 	TestTrue(
 		TEXT("unregister test provider"), FVoxelLandOperatorRegistry::Unregister(WorldCompilerProviderId, 1, Error));

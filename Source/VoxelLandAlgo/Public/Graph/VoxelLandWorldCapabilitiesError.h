@@ -9,5 +9,6 @@ enum class EVoxelLandWorldCapabilityError : uint8
 	UnknownCapability,
 	FiniteWorldRequired,
 	BudgetExceeded,
-	Cancelled
+	Cancelled,
+	BackendUnsupported
 };

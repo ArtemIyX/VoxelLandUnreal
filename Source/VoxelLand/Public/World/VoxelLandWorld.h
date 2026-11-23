@@ -120,8 +120,12 @@ public:
 	int32 GetDemandedChunkCount() const;
 	bool IsChunkDemanded(FIntVector Coordinate) const;
 	bool HasWorldStateForTests() const { return State.IsValid(); }
+	bool TryInitializeWithStartupForTests(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
+		const FVoxelLandChunkKey& Startup) { return TryInitialize(MoveTemp(Generator), &Startup); }
+	bool IsExplicitChunkForTests(const FVoxelLandChunkKey& Key) const;
 	void SetFailWorkerStartForTests(bool bFail) { bFailWorkerStartForTests = bFail; }
 	void SetPresentationHookForTests(TFunction<void()>&& Hook) { PresentationHookForTests = MoveTemp(Hook); }
+	void SetShutdownHookForTests(TFunction<void()>&& Hook) { ShutdownHookForTests = MoveTemp(Hook); }
 #if WITH_EDITOR
     void SetInitReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { InitReloadBarrierForTests = MoveTemp(Barrier); }
     void OnInitObjectsReplacedForTests(const TMap<UObject*, UObject*>& Map) { HandleInitObjectsReplaced(Map); }
@@ -150,7 +154,8 @@ public:
 	TObjectPtr<UMaterialInterface> TerrainMaterial;
 
 private:
-	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator);
+	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
+		const FVoxelLandChunkKey* Startup = nullptr);
 	void UpdateDemand();
 	void RetireChunk(const FVoxelLandChunkKey& Key);
 	void PumpCompletions();
@@ -182,6 +187,7 @@ private:
 	FDelegateHandle WorldTearDownHandle;
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<void()> PresentationHookForTests;
+	TFunction<void()> ShutdownHookForTests;
 	bool bFailWorkerStartForTests = false;
 #endif
 	TUniquePtr<FVoxelLandWorldState> State;

@@ -20,11 +20,13 @@ class FVoxelLandGraphCompilePass final
 
 public:
 	FVoxelLandGraphCompilePass(const FVoxelLandGraphSnapshot& InSource,
-		const FVoxelLandOperatorRegistrySnapshot& InProviders, FVoxelLandGraphDiagnostic& InDiagnostic)
+		const FVoxelLandOperatorRegistrySnapshot& InProviders, FVoxelLandGraphDiagnostic& InDiagnostic,
+		TArray<FGuid>* InInstructionNodes)
 		: Source(InSource)
 		, Providers(InProviders)
 		, Diagnostic(InDiagnostic)
 		, Error(InDiagnostic.Message)
+		, InstructionNodes(InInstructionNodes)
 	{
 		Draft.FormatVersion = FVoxelLandProgramDraft::CurrentFormatVersion;
 	}
@@ -43,12 +45,12 @@ public:
 		FVoxelLandInstruction Store;
 		Store.Op = EVoxelLandOpcode::StoreDensity;
 		Store.A = Result;
-		Draft.Instructions.Add(Store);
+		AddInstruction(Store, Output->Id);
 		if (Draft.Instructions.Num() > MaxInstructions)
 		{
 			return Fail(TEXT("Graph exceeds instruction limit"));
 		}
-		if (!FVoxelLandProgramOptimizer::Optimize(Draft, Error))
+		if (!FVoxelLandProgramOptimizer::Optimize(Draft, Error, InstructionNodes))
 		{
 			return false;
 		}
@@ -56,7 +58,20 @@ public:
 		return true;
 	}
 
+	static bool CompileSource(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandOperatorRegistrySnapshot& Providers,
+		FVoxelLandProgramDraft& OutDraft, FVoxelLandGraphDiagnostic& OutDiagnostic, TArray<FGuid>* InstructionNodes,
+		TMap<FGuid, FVoxelLandGraphNodeOrigin>* NodeOrigins);
+
 private:
+	void AddInstruction(const FVoxelLandInstruction& Instruction, const FGuid& NodeId)
+	{
+		Draft.Instructions.Add(Instruction);
+		if (InstructionNodes)
+		{
+			InstructionNodes->Add(NodeId);
+		}
+	}
+
 	bool Fail(const TCHAR* Message)
 	{
 		Error = Message;
@@ -505,7 +520,7 @@ private:
 		Instruction.C = C;
 		Instruction.Imm = Imm;
 		Result = Instruction.Dst;
-		Draft.Instructions.Add(Instruction);
+		AddInstruction(Instruction, CurrentNode ? CurrentNode->Id : FGuid());
 		if (Op == EVoxelLandOpcode::LoadConstant)
 		{
 			KnownConstants.Add(Result, Draft.Constants[Imm]);
@@ -627,6 +642,7 @@ private:
 	const FVoxelLandOperatorRegistrySnapshot& Providers;
 	FVoxelLandGraphDiagnostic& Diagnostic;
 	FString& Error;
+	TArray<FGuid>* InstructionNodes;
 	const FVoxelLandGraphNodeRecord* CurrentNode = nullptr;
 	FGuid ActivePin;
 	FVoxelLandProgramDraft Draft;
@@ -1193,6 +1209,14 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot,
 	FVoxelLandGraphDiagnostic& OutDiagnostic)
 {
 	OutDraft = FVoxelLandProgramDraft();
+	return FVoxelLandGraphCompilePass::CompileSource(Snapshot, Providers, OutDraft, OutDiagnostic, nullptr, nullptr);
+}
+
+bool FVoxelLandGraphCompilePass::CompileSource(const FVoxelLandGraphSnapshot& Snapshot,
+	const FVoxelLandOperatorRegistrySnapshot& Providers, FVoxelLandProgramDraft& OutDraft,
+	FVoxelLandGraphDiagnostic& OutDiagnostic, TArray<FGuid>* InstructionNodes,
+	TMap<FGuid, FVoxelLandGraphNodeOrigin>* NodeOrigins)
+{
 	OutDiagnostic = FVoxelLandGraphDiagnostic();
 	if (!FVoxelLandBuiltinCatalog::Validate(OutDiagnostic.Message))
 	{
@@ -1206,11 +1230,11 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot,
 		FVoxelLandGraphSnapshot Expanded;
 		TMap<FGuid, FGuid> OriginCalls;
 		TMap<FGuid, FString> OriginDescriptions;
-		if (!FVoxelLandGraphFunctionFlatten::Expand(Snapshot, Expanded, OutDiagnostic, OriginCalls, OriginDescriptions))
+		if (!FVoxelLandGraphFunctionFlatten::Expand(Snapshot, Expanded, OutDiagnostic, OriginCalls, OriginDescriptions, NodeOrigins))
 		{
 			return false;
 		}
-		FVoxelLandGraphCompilePass Compiler(Expanded, Providers, OutDiagnostic);
+		FVoxelLandGraphCompilePass Compiler(Expanded, Providers, OutDiagnostic, InstructionNodes);
 		if (!Compiler.Run(OutDraft))
 		{
 			FVoxelLandGraphFunctionFlatten::TranslateDiagnostic(OutDiagnostic, OriginCalls, OriginDescriptions);
@@ -1218,7 +1242,7 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot,
 		}
 		return true;
 	}
-	FVoxelLandGraphCompilePass Compiler(Snapshot, Providers, OutDiagnostic);
+	FVoxelLandGraphCompilePass Compiler(Snapshot, Providers, OutDiagnostic, InstructionNodes);
 	return Compiler.Run(OutDraft);
 }
 
@@ -1227,7 +1251,7 @@ bool FVoxelLandGraphCompiler::CompileForWorld(const FVoxelLandGraphSnapshot& Sna
 	TFunctionRef<bool()> IsCancelled, FVoxelLandProgramDraft& OutDraft,
 	FVoxelLandWorldCapabilityDiagnostic& OutCapabilityDiagnostic, FVoxelLandGraphDiagnostic& OutDiagnostic)
 {
-	OutDraft = FVoxelLandProgramDraft();
+	FVoxelLandProgramDraft Draft;
 	OutCapabilityDiagnostic = FVoxelLandWorldCapabilityDiagnostic();
 	OutDiagnostic = FVoxelLandGraphDiagnostic();
 	auto FailCapability = [&](EVoxelLandWorldCapabilityError Code, const TCHAR* Message) {
@@ -1376,7 +1400,11 @@ bool FVoxelLandGraphCompiler::CompileForWorld(const FVoxelLandGraphSnapshot& Sna
 	{
 		return FailCapability(EVoxelLandWorldCapabilityError::Cancelled, TEXT("World compilation cancelled"));
 	}
-	if (!Compile(Snapshot, Providers, OutDraft, OutDiagnostic))
+	TArray<FGuid> InstructionNodes;
+	TMap<FGuid, FVoxelLandGraphNodeOrigin> NodeOrigins;
+	const bool bHasFixedBackend = Kind == EVoxelLandWorldKind::Infinite;
+	if (!FVoxelLandGraphCompilePass::CompileSource(Snapshot, Providers, Draft, OutDiagnostic,
+			bHasFixedBackend ? &InstructionNodes : nullptr, bHasFixedBackend ? &NodeOrigins : nullptr))
 	{
 		return false;
 	}
@@ -1395,34 +1423,42 @@ bool FVoxelLandGraphCompiler::CompileForWorld(const FVoxelLandGraphSnapshot& Sna
 			Value
 		};
 		auto FailFixed = [&](int32 Index, const TCHAR* Message) {
-			// Flattening and bytecode do not retain instruction source origins.
-			// Do not guess an unrelated node when multiple nodes share an opcode.
-			OutCapabilityDiagnostic.NodeId = FGuid();
-			OutCapabilityDiagnostic.FunctionPath.Reset();
-			OutCapabilityDiagnostic.Code = EVoxelLandWorldCapabilityError::InvalidInput;
+			if (InstructionNodes.IsValidIndex(Index))
+			{
+				const FGuid& NodeId = InstructionNodes[Index];
+				const FVoxelLandGraphNodeOrigin* Origin = NodeOrigins.Find(NodeId);
+				OutCapabilityDiagnostic.NodeId = Origin ? Origin->NodeId : NodeId;
+				if (Origin)
+				{
+					OutCapabilityDiagnostic.FunctionPath = Origin->FunctionPath;
+				}
+			}
+			OutCapabilityDiagnostic.Code = EVoxelLandWorldCapabilityError::BackendUnsupported;
 			OutCapabilityDiagnostic.Message =
 				FString::Printf(TEXT("Infinite fixed-lattice backend: %s (instruction %d)"), Message, Index);
 			OutDiagnostic.Message = OutCapabilityDiagnostic.Message;
+			if (!OutCapabilityDiagnostic.FunctionPath.IsEmpty())
+			{
+				OutDiagnostic.Message += FString::Printf(TEXT(" (function %s)"), *OutCapabilityDiagnostic.FunctionPath);
+			}
 			OutDiagnostic.NodeId = OutCapabilityDiagnostic.NodeId;
-			OutDraft = FVoxelLandProgramDraft();
 			return false;
 		};
-		if (OutDraft.RegisterCount < 1 || OutDraft.RegisterCount > 8192 || OutDraft.Instructions.Num() > 8192
-			|| OutDraft.SmoothFilter.bPresent || OutDraft.ExternalFilterIndex != INDEX_NONE
-			|| !OutDraft.ExternalOperators.IsEmpty())
+		if (Draft.RegisterCount < 1 || Draft.RegisterCount > 8192 || Draft.Instructions.Num() > 8192
+			|| Draft.SmoothFilter.bPresent || Draft.ExternalFilterIndex != INDEX_NONE
+			|| !Draft.ExternalOperators.IsEmpty())
 		{
 			return FailFixed(INDEX_NONE, TEXT("filters or external operators are not supported"));
 		}
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> FixedCheckLease;
-		if (!Budget->TryChargeWork(1 + int64(OutDraft.Instructions.Num()) * 64)
-			|| !Budget->TryReserveBytes(4096 + int64(OutDraft.RegisterCount) * 2, FixedCheckLease))
+		if (!Budget->TryChargeWork(1 + int64(Draft.Instructions.Num()) * 64)
+			|| !Budget->TryReserveBytes(4096 + int64(Draft.RegisterCount) * 2, FixedCheckLease))
 		{
-			OutDraft = FVoxelLandProgramDraft();
 			return FailCapability(
 				EVoxelLandWorldCapabilityError::BudgetExceeded, TEXT("Fixed-lattice check exceeds budget"));
 		}
 		TArray<EWorldCompilerRegisterKind> Kinds;
-		Kinds.Init(EWorldCompilerRegisterKind::Unknown, OutDraft.RegisterCount);
+		Kinds.Init(EWorldCompilerRegisterKind::Unknown, Draft.RegisterCount);
 		constexpr int64 Q = int64(1) << 24;
 		auto Quantize = [=](float Value, int64& Out) {
 			if (!FMath::IsFinite(Value) || FMath::Abs(double(Value)) > 64.0)
@@ -1434,21 +1470,20 @@ bool FVoxelLandGraphCompiler::CompileForWorld(const FVoxelLandGraphSnapshot& Sna
 			return true;
 		};
 		auto Constant = [&](const FVoxelLandValueSource& Source, float& Out) {
-			if (Source.bParameter || !OutDraft.Constants.IsValidIndex(int32(Source.Index)))
+			if (Source.bParameter || !Draft.Constants.IsValidIndex(int32(Source.Index)))
 			{
 				return false;
 			}
-			Out = OutDraft.Constants[Source.Index];
+			Out = Draft.Constants[Source.Index];
 			return true;
 		};
-		for (int32 Index = 0; Index < OutDraft.Instructions.Num(); ++Index)
+		for (int32 Index = 0; Index < Draft.Instructions.Num(); ++Index)
 		{
 			if (IsCancelled())
 			{
-				OutDraft = FVoxelLandProgramDraft();
 				return FailCapability(EVoxelLandWorldCapabilityError::Cancelled, TEXT("World compilation cancelled"));
 			}
-			const FVoxelLandInstruction& I = OutDraft.Instructions[Index];
+			const FVoxelLandInstruction& I = Draft.Instructions[Index];
 			if (I.Op != EVoxelLandOpcode::StoreDensity && !Kinds.IsValidIndex(I.Dst))
 			{
 				return FailFixed(Index, TEXT("invalid destination register"));
@@ -1468,7 +1503,7 @@ bool FVoxelLandGraphCompiler::CompileForWorld(const FVoxelLandGraphSnapshot& Sna
 				case EVoxelLandOpcode::LoadConstant:
 				{
 					int64 Fixed = 0;
-					if (!OutDraft.Constants.IsValidIndex(int32(I.Imm)) || !Quantize(OutDraft.Constants[I.Imm], Fixed))
+					if (!Draft.Constants.IsValidIndex(int32(I.Imm)) || !Quantize(Draft.Constants[I.Imm], Fixed))
 					{
 						return FailFixed(Index, TEXT("constant is outside the supported Q24 range"));
 					}
@@ -1478,11 +1513,11 @@ bool FVoxelLandGraphCompiler::CompileForWorld(const FVoxelLandGraphSnapshot& Sna
 				case EVoxelLandOpcode::Fbm2:
 				{
 					if (!KindIs(I.A, EWorldCompilerRegisterKind::X) || !KindIs(I.B, EWorldCompilerRegisterKind::Y)
-						|| !OutDraft.Noise.IsValidIndex(int32(I.Imm)))
+						|| !Draft.Noise.IsValidIndex(int32(I.Imm)))
 					{
 						return FailFixed(Index, TEXT("noise requires direct global X/Y inputs"));
 					}
-					const FVoxelLandNoiseConfig& N = OutDraft.Noise[I.Imm];
+					const FVoxelLandNoiseConfig& N = Draft.Noise[I.Imm];
 					float F = 0, G = 0, L = 0, O = 0;
 					int64 Fq = 0, Gq = 0, Lq = 0;
 					if (!Constant(N.Frequency, F) || !Constant(N.Gain, G) || !Constant(N.Lacunarity, L)
@@ -1536,8 +1571,8 @@ bool FVoxelLandGraphCompiler::CompileForWorld(const FVoxelLandGraphSnapshot& Sna
 	}
 	if (IsCancelled())
 	{
-		OutDraft = FVoxelLandProgramDraft();
 		return FailCapability(EVoxelLandWorldCapabilityError::Cancelled, TEXT("World compilation cancelled"));
 	}
+	OutDraft = MoveTemp(Draft);
 	return true;
 }

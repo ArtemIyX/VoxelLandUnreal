@@ -19,8 +19,8 @@ public:
 
 	// Worker thread only. Caller must supply the source's admission lease from
 	// the same budget, sized for its complete retained storage. This function
-	// verifies provenance and retains the lease, but cannot verify its size. No UObject
-	// access or recompilation occurs.
+	// verifies provenance and the fixed record size, but cannot verify dynamic
+	// storage. It retains the lease. No UObject access or recompilation occurs.
 	// Providers, backend suitability, complete identity, plans and final field
 	// remain separate requirements. Output is unchanged on failure.
 	static FVoxelLandM5Diagnostic Load(

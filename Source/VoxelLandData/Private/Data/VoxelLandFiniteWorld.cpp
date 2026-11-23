@@ -14,7 +14,8 @@ bool UVoxelLandFiniteWorld::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSn
 	constexpr int64 ExactControlLimit = 16777216;
 	constexpr int64 HeightLimitQ8 = 512000000;
 	if (Authored.CellsX < 1 || Authored.CellsX > 1024 || Authored.CellsY < 1 || Authored.CellsY > 1024
-		|| Authored.GridSpacingCm < 1 || Authored.GridSpacingCm > 134217 || Authored.MinZCm >= Authored.MaxZCm
+		|| Authored.GridSpacingCm < 1 || Authored.GridSpacingCm > 134217
+		|| !HasRepresentableVerticalExtent(Authored.MinZCm, Authored.MaxZCm)
 		|| Authored.OriginXCm < -ExactControlLimit || Authored.OriginXCm > ExactControlLimit
 		|| Authored.OriginYCm < -ExactControlLimit || Authored.OriginYCm > ExactControlLimit
 		|| Authored.GridSpacingCm > (ExactControlLimit - Authored.OriginXCm) / Authored.CellsX

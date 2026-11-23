@@ -20,7 +20,6 @@
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Data/Structs/VoxelLandM4SavedWorld.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
-#include "Data/Structs/VoxelLandMeshData.h"
 #include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandWorldState.h"
 #include "Engine/World.h"
@@ -111,8 +110,7 @@ public:
 		virtual bool IsCurrent() const = 0;
 		virtual TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld&) const { return {}; }
 		virtual void ApplyDemand(AVoxelLandWorld&) const = 0;
-		virtual bool ValidateStartup(const FVoxelLandGenerator&, FString&) const { return true; }
-		virtual bool PublishStartup(AVoxelLandWorld&) const { return true; }
+		virtual TOptional<FVoxelLandChunkKey> GetStartup() const { return {}; }
 #if WITH_EDITOR
 		virtual bool References(const UObject* Object) const = 0;
 		virtual bool ReferencesPackage(const UPackage* Package) const = 0;
@@ -487,29 +485,11 @@ public:
 			World.VerticalRadius = Snapshot.VerticalRadius;
 		}
 
-		bool ValidateStartup(const FVoxelLandGenerator& Generator, FString& OutError) const override
+		TOptional<FVoxelLandChunkKey> GetStartup() const override
 		{
 			FVoxelLandChunkKey Key;
 			Key.Coordinate = Startup;
-			if (!VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
-					Startup, Generator.GetProfile().VoxelSizeCm, Generator.IsM4Unlimited()))
-			{
-				OutError = TEXT("Startup chunk exceeds the supported coordinate range.");
-				return false;
-			}
-			if (const FVoxelLandError Error = Generator.ValidateM4ChunkDemand(Key))
-			{
-				OutError = FString::Printf(TEXT("Startup chunk is invalid: %s"), *Error.Message);
-				return false;
-			}
-			return true;
-		}
-
-		bool PublishStartup(AVoxelLandWorld& World) const override
-		{
-			FVoxelLandChunkKey Key;
-			Key.Coordinate = Startup;
-			return World.RequestChunk(Key);
+			return Key;
 		}
 
 		TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld& World) const override
@@ -1410,16 +1390,9 @@ void AVoxelLandWorld::PollInitialization()
 		OnInitializationFinished.Broadcast(false);
 		return;
 	}
-	FString StartupError;
-	if (!Job->Request->ValidateStartup(*Job->Generator, StartupError))
-	{
-		LastInitializationError = MoveTemp(StartupError);
-		SetActorTickEnabled(State.IsValid());
-		OnInitializationFinished.Broadcast(false);
-		return;
-	}
+	const TOptional<FVoxelLandChunkKey> Startup = Job->Request->GetStartup();
 	const uint64 StartupEpoch = ConfigurationEpoch;
-	if (!TryInitialize(Job->Generator))
+	if (!TryInitialize(Job->Generator, Startup.IsSet() ? &Startup.GetValue() : nullptr))
 	{
 		if (ConfigurationEpoch != StartupEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
 			|| GetWorld()->bIsTearingDown)
@@ -1430,13 +1403,6 @@ void AVoxelLandWorld::PollInitialization()
 		return;
 	}
 	Job->Request->ApplyDemand(*this);
-	if (!Job->Request->PublishStartup(*this))
-	{
-		Shutdown();
-		LastInitializationError = TEXT("Unable to publish startup demand");
-		OnInitializationFinished.Broadcast(false);
-		return;
-	}
 	if (Presentation.IsSet())
 	{
 		SetTerrainMaterial(Presentation->Get());

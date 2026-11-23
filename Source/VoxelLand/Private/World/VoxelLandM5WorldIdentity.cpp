@@ -7,31 +7,17 @@
 #include "Data/Structs/VoxelLandM5WorldSnapshot.h"
 #include "Hash/xxhash.h"
 #include "World/VoxelLandM4WorldIdentity.h"
+#include "World/VoxelLandM5CanonicalSettings.h"
 
 class FVoxelLandM5WorldIdentityInternals final
 {
 public:
 	static constexpr int64 M5IdentityCoordinateLimit = 1048576;
 	static constexpr int32 M5IdentityMaxBytes = 8 * 1024 * 1024 + 4096;
-	static void M5WriteU64(FCanonicalWriter& W, uint64 Value);
-	static void M5WritePoint(FCanonicalWriter& W, const FVoxelLandM5PointCm& P);
 	static int64 M5IdentityHash(const TArray<uint8>& Bytes);
 	static bool M5ValidAxis(int64 Min, int64 Max);
 	static bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error);
 };
-
-void FVoxelLandM5WorldIdentityInternals::M5WriteU64(FCanonicalWriter& W, uint64 Value)
-{
-	W.U32(uint32(Value));
-	W.U32(uint32(Value >> 32));
-}
-
-void FVoxelLandM5WorldIdentityInternals::M5WritePoint(FCanonicalWriter& W, const FVoxelLandM5PointCm& P)
-{
-	M5WriteU64(W, uint64(P.X));
-	M5WriteU64(W, uint64(P.Y));
-	M5WriteU64(W, uint64(P.Z));
-}
 
 int64 FVoxelLandM5WorldIdentityInternals::M5IdentityHash(const TArray<uint8>& Bytes)
 {
@@ -150,60 +136,7 @@ bool VoxelLandM5WorldIdentity::Capture(
 	W.U32(uint32(Base.FormatVersion));
 	W.U32(uint32(Base.CanonicalBytes.Num()));
 	W.Bytes.Append(Base.CanonicalBytes);
-	W.U8(C.bEnabled ? 1 : 0);
-	W.U32(C.StageId.A);
-	W.U32(C.StageId.B);
-	W.U32(C.StageId.C);
-	W.U32(C.StageId.D);
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.Salt));
-	W.U8(uint8(C.PlanningMode));
-	FVoxelLandM5WorldIdentityInternals::M5WritePoint(W, C.Bounds.MinInclusive);
-	FVoxelLandM5WorldIdentityInternals::M5WritePoint(W, C.Bounds.MaxExclusive);
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.RegionSizeCm));
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.RegionOriginXCm));
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.RegionOriginYCm));
-	W.U32(uint32(C.RoofThicknessCm));
-	const auto& P = C.Capsule;
-	W.U32(uint32(P.StandingHeightCm));
-	W.U32(uint32(P.RadiusCm));
-	W.U32(uint32(P.MaxSlopeDegrees));
-	W.U32(uint32(P.MaxStepCm));
-	W.U32(uint32(P.ClearanceMarginCm));
-	const auto& T = C.Topology;
-	W.U32(uint32(T.MinChambers));
-	W.U32(uint32(T.MaxChambers));
-	W.U32(uint32(T.EntranceCount));
-	W.U32(uint32(T.MinLoops));
-	W.U32(uint32(T.MaxLoops));
-	W.U32(uint32(T.MinTunnelRadiusCm));
-	W.U32(uint32(T.MaxTunnelRadiusCm));
-	W.U32(uint32(T.MinChamberRadiusCm));
-	W.U32(uint32(T.MaxChamberRadiusCm));
-	const auto& N = C.Pockets;
-	W.U8(N.bEnabled ? 1 : 0);
-	W.U32(uint32(N.LatticeSpacingCm));
-	W.U32(uint32(N.ThresholdQ16));
-	W.U32(uint32(N.AmplitudeCm));
-	W.U32(uint32(N.MinDepthCm));
-	W.U32(uint32(N.MaxDepthCm));
-	W.U8(N.bAllowAttachment ? 1 : 0);
-	W.U8(N.bAllowEnclosedVoids ? 1 : 0);
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(N.Salt));
-	W.U8(C.Protection.bProtectAll ? 1 : 0);
-	W.U8(C.Protection.bRequireMask ? 1 : 0);
-	W.U8(uint8(C.Water.Policy));
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(C.Water.LevelCm));
-	const auto& L = C.Limits;
-	W.U32(uint32(L.MaxCandidates));
-	W.U32(uint32(L.MaxEdges));
-	W.U32(uint32(L.MaxSegments));
-	W.U32(uint32(L.MaxJunctions));
-	W.U32(uint32(L.MaxRoutes));
-	W.U32(uint32(L.MaxRouteLegs));
-	W.U32(uint32(L.MaxRouteFeatureRefs));
-	W.U32(uint32(L.MaxAttempts));
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(L.MaxBytes));
-	FVoxelLandM5WorldIdentityInternals::M5WriteU64(W, uint64(L.MaxValidationWork));
+	VoxelLandM5CanonicalSettings::Write(W, C);
 	if (W.Bytes.Num() > FVoxelLandM5WorldIdentityInternals::M5IdentityMaxBytes)
 	{
 		Error = TEXT("M5 identity exceeds its supported size");

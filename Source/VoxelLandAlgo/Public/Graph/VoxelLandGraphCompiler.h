@@ -27,7 +27,7 @@ public:
 	// provider snapshot for both capability validation and compilation. The
 	// capability check and provider collection are budgeted and cancellable;
 	// the existing compiler/flattening pass is not yet metered and is checked
-	// for cancellation before and after execution. Failure clears OutDraft.
+	// for cancellation before and after execution. Failure preserves OutDraft.
 	static bool CompileForWorld(const FVoxelLandGraphSnapshot& Snapshot, EVoxelLandWorldKind Kind,
 		const FVoxelLandOperatorRegistrySnapshot& Providers, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TFunctionRef<bool()> IsCancelled, FVoxelLandProgramDraft& OutDraft,

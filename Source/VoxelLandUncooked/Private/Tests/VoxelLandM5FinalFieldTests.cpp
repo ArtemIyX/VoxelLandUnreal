@@ -164,6 +164,7 @@ bool FVoxelLandM5FinalFieldTest::RunTest(const FString& Parameters)
 	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Outside);
 	TestEqual(TEXT("zero amplitude outside cave domain"), Error.Code, EVoxelLandM5ErrorCode::None);
 	Inputs.Pockets.bEnabled = false;
+	Inputs.StageId = FGuid();
 	Inputs.Pockets.AmplitudeCm = -1;
 	Inputs.PocketNoiseVersion = 2;
 	Inputs.CompositionVersion = 2;
@@ -173,6 +174,11 @@ bool FVoxelLandM5FinalFieldTest::RunTest(const FString& Parameters)
 	Inputs.Pockets.bEnabled = true;
 	Inputs.Pockets.AmplitudeCm = 0;
 	Inputs.CompositionVersion = 1;
+	Inputs.PocketNoiseVersion = 1;
+	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Disabled);
+	TestEqual(TEXT("enabled zero amplitude rejects invalid stage ID"), Error.Code, EVoxelLandM5ErrorCode::InvalidInput);
+	TestTrue(TEXT("invalid stage ID retains result"), Disabled == Before);
+	Inputs.StageId = FGuid(1, 2, 3, 4);
 	Inputs.PocketNoiseVersion = 2;
 	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Disabled);
 	TestEqual(TEXT("zero amplitude rejects unsupported pocket version"), Error.Code,

@@ -73,10 +73,10 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 	if (Inputs.Size.X <= 0 || Inputs.Size.Y <= 0 || Inputs.Size.Z <= 0 || Inputs.SpacingCm <= 0
 		|| Inputs.VoxelSizeCm <= 0
 		|| (Inputs.Pockets.bEnabled
-			&& (Inputs.Pockets.AmplitudeCm < 0
+			&& (!Inputs.StageId.IsValid() || Inputs.Pockets.AmplitudeCm < 0
 				|| Inputs.Pockets.AmplitudeCm > FVoxelLandM5FinalFieldInternals::CoordinateLimit))
 		|| (bPocket
-			&& (!Inputs.StageId.IsValid() || Inputs.Pockets.LatticeSpacingCm <= 0
+			&& (Inputs.Pockets.LatticeSpacingCm <= 0
 				|| Inputs.Pockets.LatticeSpacingCm > FVoxelLandM5FinalFieldInternals::CoordinateLimit
 				|| Inputs.Pockets.ThresholdQ16 < 0 || Inputs.Pockets.ThresholdQ16 > 65535)))
 	{

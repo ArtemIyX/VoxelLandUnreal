@@ -15,6 +15,7 @@
 #include "Graph/VoxelLandM5ProgramLoader.h"
 #include "World/VoxelLandM4CurveValidation.h"
 #include "World/VoxelLandM5MeteredPrepass.h"
+#include "World/VoxelLandM5HeightStageValidation.h"
 #include "World/VoxelLandM5PrepassBytes.h"
 
 namespace VoxelLandM4PrepassIdentity
@@ -31,7 +32,7 @@ public:
 	static constexpr uint32 HeightPrepassAlgorithmVersion = 1;
 
 	static FVoxelLandError Build(const FVoxelLandM4WorldSnapshot& Snapshot, const FVoxelLandM4PrepassKeyInputs& Inputs,
-		TArray<uint8>& OutBytes, TFunctionRef<bool()> IsCancelled);
+		TArray<uint8>& OutBytes, TFunctionRef<bool()> IsCancelled, bool bHeightPrevalidated = false);
 	static FVoxelLandError M4IdentityFailure(const TCHAR* Message);
 	static void M4IdentityU64(FCanonicalWriter& W, uint64 Value);
 	static void M4IdentityGuid(FCanonicalWriter& W, const FGuid& Id);
@@ -257,7 +258,8 @@ bool FVoxelLandM4PrepassKeyWriter::M4IdentityChannel(FCanonicalWriter& W, const 
 }
 
 FVoxelLandError FVoxelLandM4PrepassKeyWriter::Build(const FVoxelLandM4WorldSnapshot& Snapshot,
-	const FVoxelLandM4PrepassKeyInputs& Inputs, TArray<uint8>& OutBytes, TFunctionRef<bool()> IsCancelled)
+	const FVoxelLandM4PrepassKeyInputs& Inputs, TArray<uint8>& OutBytes, TFunctionRef<bool()> IsCancelled,
+	bool bHeightPrevalidated)
 {
 	const FVoxelLandM4DomainSettings& Domain = Snapshot.Domain;
 	if (IsCancelled())
@@ -265,7 +267,7 @@ FVoxelLandError FVoxelLandM4PrepassKeyWriter::Build(const FVoxelLandM4WorldSnaps
 		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(TEXT("M4 prepass identity cancelled"));
 	}
 	FString StageError;
-	if (!VoxelLandM4HeightStageValidation::Validate(Snapshot, StageError))
+	if (!bHeightPrevalidated && !VoxelLandM4HeightStageValidation::Validate(Snapshot, StageError))
 	{
 		return FVoxelLandM4PrepassKeyWriter::M4IdentityFailure(*StageError);
 	}
@@ -388,12 +390,10 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4World
 		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Prepass identity requires a worker thread"));
 	}
-	// Version 1 projection validation traverses reflected FText and nested graph
-	// state. Do not pretend that work is metered until its bounded replacement exists.
-	if (Snapshot.HeightStage.Version != 0)
+	if (const FVoxelLandM5Diagnostic Stage = FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget, IsCancelled);
+		Stage.Code != EVoxelLandM5ErrorCode::None)
 	{
-		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
-			EVoxelLandM5ErrorCode::Unproven, TEXT("Metered height-stage projection is unavailable"));
+		return Stage;
 	}
 	if (EncodingVersion != 0 && EncodingVersion != 1)
 	{
@@ -491,7 +491,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredPrepass::Build(const FVoxelLandM4World
 	};
 	if (const FVoxelLandError Error = VoxelLandM4PrepassIdentity::FVoxelLandM4PrepassKeyWriter::Build(Snapshot,
 			{*Programs[0], *Programs[1], *Programs[2], EncodingVersion, false, true, int32(ByteUpper)}, Result->Bytes,
-			Poll))
+			Poll, true))
 	{
 		return FVoxelLandM4PrepassOverrideChecks::M5PrepassFailure(
 			bCancelled ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::InvalidInput,

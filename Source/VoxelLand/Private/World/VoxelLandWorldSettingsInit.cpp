@@ -6,12 +6,16 @@
 #include "World/VoxelLandM4CurveValidation.h"
 #include "World/VoxelLandM4SavedWorldPreflight.h"
 #include "World/VoxelLandM4WorldIdentity.h"
+#include "World/VoxelLandFiniteSnapshotAdapter.h"
 
 #include "Async/Async.h"
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 #include "Data/Structs/VoxelLandReloadTestBarrier.h"
 #endif
 #include "Data/Assets/VoxelLandMaterialSetup.h"
+#include "Data/Assets/VoxelLandFiniteWorld.h"
+#include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
+#include "Data/Structs/VoxelLandWorldSourceSnapshot.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
@@ -435,6 +439,33 @@ public:
 			}
 		}
 
+		FM4InitializationRequest(UVoxelLandFiniteWorld& Definition,
+			TSharedRef<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> InSource,
+			FVoxelLandM4WorldSnapshot&& InSnapshot, FIntVector InStartup,
+			TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InValidationLease)
+			: WeakDefinition(&Definition)
+			, Continental(Definition.Common.Continental.Graph)
+			, Mountain(Definition.Common.Mountain.Graph)
+			, Peaks(Definition.Common.Peaks.Graph)
+			, ValidationLease(MoveTemp(InValidationLease))
+			, Snapshot(MoveTemp(InSnapshot))
+			, Startup(InStartup)
+			, DefinitionSource(MoveTemp(InSource))
+		{
+			const FVoxelLandM4ControlSnapshot* Channels[] = {
+				&Snapshot.Continental, &Snapshot.Mountain, &Snapshot.Peaks};
+			for (const FVoxelLandM4ControlSnapshot* Channel : Channels)
+			{
+				for (const FVoxelLandGraphFunctionSnapshot& Function : Channel->Source.Functions)
+				{
+					if (UObject* Dependency = FSoftObjectPath(Function.AssetPath).ResolveObject())
+					{
+						FunctionDependencies.AddUnique(TWeakObjectPtr<UObject>(Dependency));
+					}
+				}
+			}
+		}
+
 		FM4InitializationRequest(const FVoxelLandM4SavedWorld& Saved, FIntVector InStartup,
 			TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InLease,
 			TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InValidationLease)
@@ -451,6 +482,26 @@ public:
 			if (SavedIdentity.IsSet())
 			{
 				return true; // Owned snapshot cannot be edited or reinstanced.
+			}
+			if (DefinitionSource.IsValid())
+			{
+				TStrongObjectPtr<UVoxelLandFiniteWorld> Definition(WeakDefinition.Get());
+				if (!Definition.IsValid() || Definition->Common.Continental.Graph != Continental.Get()
+					|| Definition->Common.Mountain.Graph != Mountain.Get()
+					|| Definition->Common.Peaks.Graph != Peaks.Get())
+				{
+					return false;
+				}
+				FString Error;
+				const TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> Current =
+					Definition->CaptureSource(Error);
+				const FVoxelLandFiniteWorldSnapshot* OriginalFinite = DefinitionSource->GetFinite();
+				const FVoxelLandFiniteWorldSnapshot* CurrentFinite = Current.IsValid() ? Current->GetFinite() : nullptr;
+				return OriginalFinite && CurrentFinite && Definition->Common.Continental.Graph == Continental.Get()
+					&& Definition->Common.Mountain.Graph == Mountain.Get()
+					&& Definition->Common.Peaks.Graph == Peaks.Get()
+					&& FVoxelLandFiniteWorldSnapshot::StaticStruct()->CompareScriptStruct(
+						OriginalFinite, CurrentFinite, 0);
 			}
 			TStrongObjectPtr<UVoxelLandM4WorldConfig> ConfigGuard(WeakConfig.Get());
 			UVoxelLandM4WorldConfig* Config = ConfigGuard.Get();
@@ -497,6 +548,11 @@ public:
 #if !UE_SERVER
 			if (!World.bDataOnly && World.GetNetMode() != NM_DedicatedServer)
 			{
+				TStrongObjectPtr<UVoxelLandFiniteWorld> Definition(WeakDefinition.Get());
+				if (Definition.IsValid())
+				{
+					return TWeakObjectPtr<UMaterialInterface>(ResolveDefinitionTerrainMaterial(*Definition));
+				}
 				TStrongObjectPtr<UVoxelLandM4WorldConfig> Config(WeakConfig.Get());
 				if (Config.IsValid())
 				{
@@ -510,8 +566,8 @@ public:
 #if WITH_EDITOR
 		bool References(const UObject* Object) const override
 		{
-			if (Object == WeakConfig.Get() || Object == Continental.Get() || Object == Mountain.Get()
-				|| Object == Peaks.Get())
+			if (Object == WeakConfig.Get() || Object == WeakDefinition.Get() || Object == Continental.Get()
+				|| Object == Mountain.Get() || Object == Peaks.Get())
 			{
 				return true;
 			}
@@ -527,7 +583,8 @@ public:
 
 		bool ReferencesPackage(const UPackage* Package) const override
 		{
-			const UObject* Objects[] = {WeakConfig.Get(), Continental.Get(), Mountain.Get(), Peaks.Get()};
+			const UObject* Objects[] = {
+				WeakConfig.Get(), WeakDefinition.Get(), Continental.Get(), Mountain.Get(), Peaks.Get()};
 			for (const UObject* Object : Objects)
 			{
 				if (Object && Object->GetOutermost() == Package)
@@ -615,6 +672,7 @@ public:
 
 	private:
 		TWeakObjectPtr<UVoxelLandM4WorldConfig> WeakConfig;
+		TWeakObjectPtr<UVoxelLandFiniteWorld> WeakDefinition;
 		TWeakObjectPtr<UVoxelLandTerrainGraph> Continental, Mountain, Peaks;
 		TArray<TWeakObjectPtr<UObject>> FunctionDependencies;
 		// Declared before Snapshot so admission remains held until its memory is freed.
@@ -623,12 +681,28 @@ public:
 		FIntVector Startup;
 		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
 		TOptional<FVoxelLandM4IdentityRecord> SavedIdentity;
+		TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> DefinitionSource;
 	};
 
 #if !UE_SERVER
 	static UMaterialInterface* ResolveTerrainMaterial(const UVoxelLandWorldSettings& Settings)
 	{
 		const UVoxelLandMaterialSetup* Setup = Settings.MaterialSetup.LoadSynchronous();
+		const TSoftObjectPtr<UMaterialInterface> MaterialPath =
+			Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
+		UMaterialInterface* Material = MaterialPath.LoadSynchronous();
+		if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("VoxelLand: missing or unsupported terrain material; using the default surface material"));
+			return UMaterial::GetDefaultMaterial(MD_Surface);
+		}
+		return Material;
+	}
+
+	static UMaterialInterface* ResolveDefinitionTerrainMaterial(const UVoxelLandFiniteWorld& Definition)
+	{
+		const UVoxelLandMaterialSetup* Setup = Definition.Common.MaterialSetup.LoadSynchronous();
 		const TSoftObjectPtr<UMaterialInterface> MaterialPath =
 			Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
 		UMaterialInterface* Material = MaterialPath.LoadSynchronous();
@@ -1132,11 +1206,92 @@ bool AVoxelLandWorld::InitializeFromWorldDefinition(UVoxelLandWorldDefinition* D
 		LastInitializationError = TEXT("World actor is not ready for explicit initialization.");
 		return false;
 	}
-	// Reject before loading dependencies or taking admission. The current
-	// generator cannot publish a certified field for either asset type.
-	LastInitializationError =
-		IsValid(Definition) ? Definition->GetPreparationBlocker() : TEXT("World definition is missing or invalid.");
-	return false;
+	UVoxelLandFiniteWorld* Finite = Cast<UVoxelLandFiniteWorld>(Definition);
+	if (!IsValid(Finite) || Finite->Common.Caves.bEnabled || Finite->Common.Caves.Pockets.bEnabled)
+	{
+		LastInitializationError =
+			IsValid(Definition) ? Definition->GetPreparationBlocker() : TEXT("World definition is missing or invalid.");
+		return false;
+	}
+	LastInitializationError.Reset();
+	StopDemo();
+	StopPendingInitialization();
+	++ConfigurationEpoch;
+	if (!VoxelLandM4Preparation::EnsureCoordinatorReady())
+	{
+		LastInitializationError = TEXT("M4 shared prepass coordinator is unavailable");
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease =
+		VoxelLandM4Preparation::ReserveValidation();
+	if (!ValidationLease)
+	{
+		LastInitializationError = TEXT("M4 snapshot validation capacity is exhausted");
+		return false;
+	}
+	TStrongObjectPtr<UVoxelLandFiniteWorld> DefinitionGuard(Finite);
+	const uint64 CaptureEpoch = ConfigurationEpoch;
+	FString CaptureError;
+	const TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> Source =
+		Finite->CaptureSource(CaptureError);
+	if (ConfigurationEpoch != CaptureEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+		|| GetWorld()->bIsTearingDown)
+	{
+		return false;
+	}
+	const FVoxelLandFiniteWorldSnapshot* FiniteSource = Source.IsValid() ? Source->GetFinite() : nullptr;
+	if (!FiniteSource || FiniteSource->Common.Caves.bEnabled || FiniteSource->Common.Caves.Pockets.bEnabled)
+	{
+		LastInitializationError = FiniteSource ? Finite->GetPreparationBlocker() : MoveTemp(CaptureError);
+		return false;
+	}
+	FVoxelLandM4WorldSnapshot Snapshot;
+	if (!FVoxelLandFiniteSnapshotAdapter::TryConvert(*FiniteSource, Snapshot, LastInitializationError))
+	{
+		return false;
+	}
+	// Select a deterministic point near the grid center; the worker validates
+	// every chunk in the complete startup bubble before publishing anything.
+	const int64 ChunkWidth = int64(Snapshot.VoxelSizeCm) * FVoxelLandChunkData::Cells;
+	const int64 CenterX = Snapshot.Domain.OriginXCm + Snapshot.Domain.GridSpacingCm * Snapshot.Domain.CellsX / 2;
+	const int64 CenterY = Snapshot.Domain.OriginYCm + Snapshot.Domain.GridSpacingCm * Snapshot.Domain.CellsY / 2;
+	const int64 StartupX = CenterX / ChunkWidth - (CenterX % ChunkWidth < 0 ? 1 : 0);
+	const int64 StartupY = CenterY / ChunkWidth - (CenterY % ChunkWidth < 0 ? 1 : 0);
+	if (StartupX < MIN_int32 || StartupX > MAX_int32 || StartupY < MIN_int32 || StartupY > MAX_int32)
+	{
+		LastInitializationError = TEXT("M4 startup demand coordinate overflows");
+		return false;
+	}
+	const FIntVector Startup(int32(StartupX), int32(StartupY), 0);
+	const TSharedRef<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe> Request =
+		MakeShared<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe>(
+			*Finite, Source.ToSharedRef(), MoveTemp(Snapshot), Startup, MoveTemp(ValidationLease));
+	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
+		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
+	PendingInitialization = Job;
+#if WITH_EDITOR
+	InitPackageReloadHandle =
+		FCoreUObjectDelegates::OnPackageReloaded.AddUObject(this, &AVoxelLandWorld::HandleInitPackageReload);
+	InitObjectsReplacedHandle =
+		FCoreUObjectDelegates::OnObjectsReplaced.AddUObject(this, &AVoxelLandWorld::HandleInitObjectsReplaced);
+#endif
+	bInitializing = true;
+	SetActorTickEnabled(true);
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+	const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MoveTemp(InitReloadBarrierForTests);
+	InitializationTask = Async(EAsyncExecution::ThreadPool, [Job, Barrier]()
+#else
+	InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
+#endif
+		{
+			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+#if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
+				,
+				Barrier
+#endif
+			);
+		});
+	return true;
 }
 
 bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk)
@@ -1144,7 +1299,7 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
 	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
-	    || World->bIsTearingDown || !HasActorBegunPlay())
+		|| World->bIsTearingDown || !HasActorBegunPlay())
 	{
 		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
 		return false;

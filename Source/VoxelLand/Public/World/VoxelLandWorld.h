@@ -63,8 +63,9 @@ public:
 	// Copies settings on the game thread and initializes asynchronously. No work starts in BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool InitializeFromSettings(UVoxelLandWorldSettings* Settings);
-	// Synchronous rejection until certified preparation is available. The
-	// caller should read LastInitializationError when this returns false.
+	// Initializes cave-disabled finite definitions asynchronously. The initial
+	// chunk is selected near the control-grid center and its demand bubble must fit.
+	// Enabled caves and other definitions remain rejected pending preparation.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool InitializeFromWorldDefinition(UVoxelLandWorldDefinition* Definition);
 	// Explicit M4 startup. The entire requested startup radius must fit the selected mode.

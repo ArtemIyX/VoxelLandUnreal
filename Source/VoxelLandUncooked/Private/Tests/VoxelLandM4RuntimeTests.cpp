@@ -2,6 +2,7 @@
 
 #include "Async/Async.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/Assets/VoxelLandFiniteWorld.h"
 #include "Data/Assets/VoxelLandMaterialSetup.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
@@ -500,4 +501,81 @@ bool FVoxelLandM4RuntimeValidationAdmissionTest::RunTest(const FString& Paramete
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandTypedFiniteDispatchTest, "VoxelLand.M5.Runtime.TypedFiniteDispatch", M4RuntimeFlags)
+bool FVoxelLandTypedFiniteDispatchTest::RunTest(const FString& Parameters)
+{
+	if (!TestNotNull(TEXT("engine available"), GEngine))
+	{
+		return false;
+	}
+	UVoxelLandFiniteWorld* Definition = NewObject<UVoxelLandFiniteWorld>();
+	Definition->AddToRoot();
+	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	Config->AddToRoot();
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Definition);
+	FString Error;
+	if (!M4RuntimeMakeProgram(*Graph, Error))
+	{
+		AddError(FString::Printf(TEXT("Could not create graph: %s"), *Error));
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
+	M4RuntimeSetCurve(Config->Continental);
+	M4RuntimeSetCurve(Config->Mountain);
+	M4RuntimeSetCurve(Config->Peaks);
+	TArray<int32> Samples;
+	Samples.Init(0, 4097);
+	if (!Config->SetBakedCurves(Samples, Samples, Samples, 1, Error))
+	{
+		AddError(FString::Printf(TEXT("Could not bake curves: %s"), *Error));
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	Definition->Common.Continental = Config->Continental;
+	Definition->Common.Mountain = Config->Mountain;
+	Definition->Common.Peaks = Config->Peaks;
+	Definition->Finite.CellsX = Definition->Finite.CellsY = 8;
+	Definition->Finite.OriginXCm = Definition->Finite.OriginYCm = -25600;
+	Definition->Finite.GridSpacingCm = 6400;
+	Definition->Finite.bGlobalErosion = false;
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("world created"), World))
+	{
+		Config->RemoveFromRoot();
+		Definition->RemoveFromRoot();
+		return false;
+	}
+	World->AddToRoot();
+	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	AVoxelLandWorld* Actor = World->SpawnActor<AVoxelLandWorld>();
+	if (TestNotNull(TEXT("world actor created"), Actor))
+	{
+		Actor->bDataOnly = true;
+		Actor->DispatchBeginPlay();
+		TestFalse(TEXT("begin play is inert"), Actor->HasWorldStateForTests());
+		if (TestTrue(TEXT("disabled finite capture starts initialization"),
+				Actor->InitializeFromWorldDefinition(Definition)))
+		{
+			TestTrue(TEXT("initialization is pending"), Actor->bInitializing);
+			Definition->Common.Caves.bEnabled = true;
+			TestFalse(TEXT("enabled cave initialization rejected"), Actor->InitializeFromWorldDefinition(Definition));
+			TestTrue(TEXT("rejected request retains current pending job"), Actor->bInitializing);
+			Actor->CancelInitialization();
+			TestFalse(TEXT("cancel removes pending job"), Actor->bInitializing);
+			TestFalse(TEXT("cancel publishes no terrain"), Actor->HasWorldStateForTests());
+		}
+		Actor->Shutdown();
+	}
+	World->DestroyWorld(false);
+	GEngine->DestroyWorldContext(World);
+	World->RemoveFromRoot();
+	Config->RemoveFromRoot();
+	Definition->RemoveFromRoot();
+	return true;
+}
 #endif

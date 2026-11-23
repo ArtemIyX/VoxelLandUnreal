@@ -81,12 +81,44 @@ bool FVoxelLandM5RequestResolverTest::RunTest(const FString& Parameters)
 		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,
 		EVoxelLandM5ErrorCode::None);
 	TestFalse(TEXT("Outside filter halo"), bIntersects);
+	Key.Coordinate.X = -1;
+	Influence.MinInclusive.X = -35;
+	Influence.MaxExclusive.X = -34;
+	TestEqual(TEXT("Negative chunk lower exclusive boundary evaluated"),
+		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,
+		EVoxelLandM5ErrorCode::None);
+	TestFalse(TEXT("Negative chunk excludes interval ending at first sample"), bIntersects);
+	Influence.MinInclusive.X = -34;
+	Influence.MaxExclusive.X = -33;
+	TestEqual(TEXT("Negative chunk first sample evaluated"),
+		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,
+		EVoxelLandM5ErrorCode::None);
+	TestTrue(TEXT("Negative chunk includes first halo sample"), bIntersects);
+	Influence.MinInclusive.X = 2;
+	Influence.MaxExclusive.X = 3;
+	TestEqual(TEXT("Negative chunk last sample evaluated"),
+		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,
+		EVoxelLandM5ErrorCode::None);
+	TestTrue(TEXT("Negative chunk includes last halo sample"), bIntersects);
+	Influence.MinInclusive.X = 3;
+	Influence.MaxExclusive.X = 4;
+	TestEqual(TEXT("Negative chunk upper boundary evaluated"),
+		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,
+		EVoxelLandM5ErrorCode::None);
+	TestFalse(TEXT("Negative chunk excludes interval after last sample"), bIntersects);
 	Key.LOD = 1;
 	bIntersects = true;
 	TestEqual(TEXT("Unsupported LOD rejected"),
 		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,
 		EVoxelLandM5ErrorCode::InvalidInput);
 	TestTrue(TEXT("Error preserves intersection output"), bIntersects);
+	Key.LOD = 0;
+	Key.Coordinate.Z = MAX_int32;
+	Snapshot.Base.VoxelSizeCm = MAX_int32;
+	TestEqual(TEXT("Footprint overflow rejected"),
+		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,
+		EVoxelLandM5ErrorCode::ArithmeticOverflow);
+	TestTrue(TEXT("Overflow preserves intersection output"), bIntersects);
 	Snapshot.Caves.bEnabled = false;
 	TestEqual(TEXT("Disabled has no barrier"),
 		FVoxelLandM5RequestResolver::IntersectsStoredSamples(Snapshot, Influence, Key, bIntersects).Code,

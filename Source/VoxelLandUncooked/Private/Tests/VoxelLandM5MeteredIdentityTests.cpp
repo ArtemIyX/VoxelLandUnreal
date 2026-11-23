@@ -27,6 +27,7 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	bool bPolicyAtomic = false;
 	bool bDryIdentity = false, bDryMismatchAtomic = false;
 	bool bMaskIdentity = false, bMaskCellChanged = false, bMaskGeometryChanged = false;
+	bool bMaskEncoding = false;
 	bool bMaskMissing = false, bMaskForeign = false, bMaskWater = false, bMaskCancelled = false;
 	bool bCancelledAtomic = false;
 	bool bBudgetAtomic = false;
@@ -145,7 +146,11 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 		}
 		TArray<uint8> Cells;
 		Cells.Init(0, 8);
+		Cells[1] = Cells[4] = Cells[6] = 1;
 		FVoxelLandM5PointCm MaskOrigin;
+		MaskOrigin.X = -100;
+		MaskOrigin.Y = -257;
+		MaskOrigin.Z = 42;
 		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Grid;
 		if (FVoxelLandM5ProtectionGrid::Capture(FIntVector(2, 2, 2), MaskOrigin, 100, Cells,
 				MaskBudget.ToSharedRef(), [] { return false; }, Grid).Code != EVoxelLandM5ErrorCode::None)
@@ -157,6 +162,24 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 			Snapshot, *Grid, MaskBudget.ToSharedRef(), [] { return false; }, MaskIdentity);
 		bMaskIdentity = MaskOk.Code == EVoxelLandM5ErrorCode::None && MaskIdentity.IsValid()
 			&& MaskIdentity->GetIdentity().CanonicalBytes != DryExpected.CanonicalBytes;
+		// Independent literal suffix: 2x2x2, origin (-100,-257,42), spacing
+		// 100, eight cells [0,1,0,0,1,0,1,0]. Signed values use 64-bit
+		// two's-complement, least significant byte first. Descriptor 2 has the
+		// same fixed-length prefix, so its length is the exact suffix offset.
+		const uint8 ExpectedMaskSuffix[] = {
+			0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+			0x9c, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00};
+		if (MaskIdentity.IsValid())
+		{
+			const TArray<uint8>& Bytes = MaskIdentity->GetIdentity().CanonicalBytes;
+			const int32 Offset = DryExpected.CanonicalBytes.Num();
+			bMaskEncoding = Bytes.Num() == Offset + UE_ARRAY_COUNT(ExpectedMaskSuffix)
+				&& FMemory::Memcmp(Bytes.GetData() + Offset, ExpectedMaskSuffix, sizeof(ExpectedMaskSuffix)) == 0;
+		}
 		const FVoxelLandM5MeteredIdentity* MaskBefore = MaskIdentity.Get();
 		const auto Missing = FVoxelLandM5MeteredIdentity::Capture(
 			Snapshot, MaskBudget.ToSharedRef(), [] { return false; }, MaskIdentity);
@@ -184,7 +207,7 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 				&& MaskChanged->GetIdentity().CanonicalBytes != MaskIdentity->GetIdentity().CanonicalBytes;
 		}
 		Cells[7] = 0;
-		MaskOrigin.X = -100;
+		MaskOrigin.X = -200;
 		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> ShiftedGrid;
 		TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe> MaskShifted;
 		if (FVoxelLandM5ProtectionGrid::Capture(FIntVector(2, 2, 2), MaskOrigin, 100, Cells,
@@ -261,6 +284,7 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("metered dry identity matches unmetered identity"), bDryIdentity);
 	TestTrue(TEXT("metered dry descriptor mismatch preserves output"), bDryMismatchAtomic);
 	TestTrue(TEXT("dry mask descriptor has an identity"), bMaskIdentity);
+	TestTrue(TEXT("mask descriptor uses the independent canonical suffix"), bMaskEncoding);
 	TestTrue(TEXT("mask cell changes identity"), bMaskCellChanged);
 	TestTrue(TEXT("mask origin changes identity"), bMaskGeometryChanged);
 	TestTrue(TEXT("missing mask rejects atomically"), bMaskMissing);

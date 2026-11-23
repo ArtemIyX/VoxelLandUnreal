@@ -231,9 +231,8 @@ bool FVoxelLandM5HeightStageValidationTest::RunTest(const FString& Parameters)
 		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
 		EVoxelLandM5ErrorCode::InvalidInput);
 	Snapshot.Peaks.Source.Functions[0] = OriginalFunction;
-	FString EmbeddedA(TEXT("prefix"));
-	EmbeddedA.AppendChar(TCHAR(0));
-	EmbeddedA.AppendChar(TCHAR('x'));
+	FString EmbeddedA(TEXT("prefixx"));
+	EmbeddedA.GetCharArray().Insert(TCHAR(0), 6);
 	FString EmbeddedB = EmbeddedA;
 	EmbeddedB[EmbeddedB.Len() - 1] = TCHAR('y');
 	if (!TestEqual(TEXT("embedded-null fixture retains trailing code unit"), EmbeddedA.Len(), 8))

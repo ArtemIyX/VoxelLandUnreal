@@ -57,6 +57,7 @@ public:
 
 private:
 #if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5ScratchRoofFixtureFactory;
 	friend class FVoxelLandM5ScratchProtectionCheckTest;
 #endif
 	explicit FVoxelLandM5ScratchChunks(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);

@@ -8,6 +8,7 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5CandidatePlanner.h"
 #include "Generation/VoxelLandM5CandidateResult.h"
+#include "Generation/VoxelLandM5ProtectionGrid.h"
 #include "Generation/VoxelLandM5ScratchChunks.h"
 #include "Hash/xxhash.h"
 #include "Misc/AutomationTest.h"
@@ -18,7 +19,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5ScratchChunksTest, "VoxelLand.M5.Sc
 bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 {
 	bool bSuccess = false, bHalos = false, bHashes = false, bBounds = false, bLimit = false;
-	bool bCancelled = false, bForeign = false;
+	bool bCancelled = false, bForeign = false, bDependencies = false, bLifetime = false;
 	const bool bSetup = Async(EAsyncExecution::ThreadPool, [&]() {
 		const auto Never = [] { return false; };
 		FVoxelLandProgramDraft Draft;
@@ -86,9 +87,23 @@ bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 			return false;
 		}
 		const FVoxelLandM5StageManifest Manifest;
+		const FIntVector WindowSize = Window->GetSize();
+		const FIntVector MaskSize(WindowSize.X + 1, WindowSize.Y + 1, WindowSize.Z + 1);
+		FVoxelLandM5PointCm MaskOrigin = Window->GetOriginCm();
+		MaskOrigin.X -= 100;
+		MaskOrigin.Y -= 100;
+		MaskOrigin.Z -= 100;
+		TArray<uint8> Cells;
+		Cells.Init(0, MaskSize.X * MaskSize.Y * MaskSize.Z);
+		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection;
+		if (FVoxelLandM5ProtectionGrid::Capture(MaskSize, MaskOrigin, 100, Cells, Budget.ToSharedRef(), Never,
+				Protection).Code != EVoxelLandM5ErrorCode::None || !Protection)
+		{
+			return false;
+		}
 		TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Out;
-		FVoxelLandM5Diagnostic D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, *Window,
-			Candidate.ToSharedRef(), nullptr, FIntVector(0, 0, 0), FIntVector(2, 1, 1),
+		FVoxelLandM5Diagnostic D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, Window.ToSharedRef(),
+			Candidate.ToSharedRef(), Protection, FIntVector(0, 0, 0), FIntVector(2, 1, 1),
 			2, Budget.ToSharedRef(), Never, Out);
 		bSuccess = D.Code == EVoxelLandM5ErrorCode::None && Out && Out->GetChunks().Num() == 2;
 		if (!bSuccess)
@@ -124,14 +139,14 @@ bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 			}
 			bHashes &= Chunk.Hash == FXxHash64::HashBuffer(Bytes.GetData(), Bytes.Num()).Hash;
 		}
-		const TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Original = Out;
-		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, *Window, Candidate.ToSharedRef(), nullptr,
+		TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Original = Out;
+		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, Window.ToSharedRef(), Candidate.ToSharedRef(), Protection,
 			FIntVector(0, 0, 0), FIntVector(3, 1, 1), 3, Budget.ToSharedRef(), Never, Out);
 		bBounds = D.Code == EVoxelLandM5ErrorCode::OutOfDomain && Out == Original;
-		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, *Window, Candidate.ToSharedRef(), nullptr,
+		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, Window.ToSharedRef(), Candidate.ToSharedRef(), Protection,
 			FIntVector(0, 0, 0), FIntVector(2, 1, 1), 1, Budget.ToSharedRef(), Never, Out);
 		bLimit = D.Code == EVoxelLandM5ErrorCode::OutOfDomain && Out == Original;
-		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, *Window, Candidate.ToSharedRef(), nullptr,
+		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, Window.ToSharedRef(), Candidate.ToSharedRef(), Protection,
 			FIntVector(0, 0, 0), FIntVector(2, 1, 1), 2, Budget.ToSharedRef(), [] { return true; }, Out);
 		bCancelled = D.Code == EVoxelLandM5ErrorCode::Cancelled && Out == Original;
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Other;
@@ -139,9 +154,57 @@ bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 		{
 			return false;
 		}
-		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, *Window, Candidate.ToSharedRef(), nullptr,
+		D = FVoxelLandM5ScratchChunks::Build(Settings, Manifest, 42, Window.ToSharedRef(), Candidate.ToSharedRef(), Protection,
 			FIntVector(0, 0, 0), FIntVector(2, 1, 1), 2, Other.ToSharedRef(), Never, Out);
 		bForeign = D.Code == EVoxelLandM5ErrorCode::InvalidInput && Out == Original;
+
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> OtherWindow;
+		if (FVoxelLandM5BaselineWindow::Build(Generator.ToSharedRef(), FIntVector(0, 0, 0), FIntVector(1, 1, 1), 1,
+				Budget.ToSharedRef(), Never, OtherWindow).Code != EVoxelLandM5ErrorCode::None || !OtherWindow)
+		{
+			return false;
+		}
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> OtherCandidate;
+		if (VoxelLand::M5::CandidatePlanner::Build(Settings, 42, {}, Budget.ToSharedRef(), Never, OtherCandidate).Code
+				!= EVoxelLandM5ErrorCode::None || !OtherCandidate)
+		{
+			return false;
+		}
+		TArray<uint8> OtherCells;
+		OtherCells.Init(0, 1);
+		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> OtherProtection;
+		if (FVoxelLandM5ProtectionGrid::Capture(FIntVector(1), FVoxelLandM5PointCm{}, 100, OtherCells,
+				Budget.ToSharedRef(), Never, OtherProtection).Code != EVoxelLandM5ErrorCode::None || !OtherProtection)
+		{
+			return false;
+		}
+		bDependencies = Out->MatchesDependencies(*Window, *Candidate, Protection.Get(), 42, Manifest)
+			&& !Out->MatchesDependencies(*OtherWindow, *Candidate, Protection.Get(), 42, Manifest)
+			&& !Out->MatchesDependencies(*Window, *OtherCandidate, Protection.Get(), 42, Manifest)
+			&& !Out->MatchesDependencies(*Window, *Candidate, OtherProtection.Get(), 42, Manifest)
+			&& !Out->MatchesDependencies(*Window, *Candidate, nullptr, 42, Manifest)
+			&& !Out->MatchesDependencies(*Window, *Candidate, Protection.Get(), 43, Manifest);
+		int32 FVoxelLandM5StageManifest::* Versions[] = {&FVoxelLandM5StageManifest::Descriptor,
+			&FVoxelLandM5StageManifest::Seed, &FVoxelLandM5StageManifest::Topology,
+			&FVoxelLandM5StageManifest::Geometry, &FVoxelLandM5StageManifest::RegionalOwnership,
+			&FVoxelLandM5StageManifest::PocketNoise, &FVoxelLandM5StageManifest::SurfaceValidation,
+			&FVoxelLandM5StageManifest::Composition};
+		for (auto Version : Versions)
+		{
+			FVoxelLandM5StageManifest Changed = Manifest;
+			++(Changed.*Version);
+			bDependencies &= !Out->MatchesDependencies(*Window, *Candidate, Protection.Get(), 42, Changed);
+		}
+		TWeakPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> WeakWindow = Window;
+		TWeakPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> WeakCandidate = Candidate;
+		TWeakPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> WeakProtection = Protection;
+		Window.Reset();
+		Candidate.Reset();
+		Protection.Reset();
+		bLifetime = WeakWindow.IsValid() && WeakCandidate.IsValid() && WeakProtection.IsValid();
+		Original.Reset();
+		Out.Reset();
+		bLifetime &= !WeakWindow.IsValid() && !WeakCandidate.IsValid() && !WeakProtection.IsValid();
 		return true;
 	}).Get();
 	TestTrue(TEXT("fixture setup"), bSetup);
@@ -152,6 +215,8 @@ bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("chunk limit fails without replacing output"), bLimit);
 	TestTrue(TEXT("cancellation preserves output"), bCancelled);
 	TestTrue(TEXT("foreign budget preserves output"), bForeign);
+	TestTrue(TEXT("dependency identities, seed and every version match"), bDependencies);
+	TestTrue(TEXT("scratch chunks retain and release their immediate inputs"), bLifetime);
 	return bSetup;
 }
 

@@ -38,10 +38,24 @@ bool FVoxelLandM5ScratchChunks::IsOwnedBy(const FVoxelLandM5Budget& Budget) cons
 	return Lease.IsValid() && Budget.OwnsLease(*Lease);
 }
 
+bool FVoxelLandM5ScratchChunks::MatchesDependencies(const FVoxelLandM5BaselineWindow& Window,
+	const FVoxelLandM5CandidateResult& Candidate, const FVoxelLandM5ProtectionGrid* Protection,
+	int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest) const
+{
+	return SourceWindow.Get() == &Window && SourceCandidate.Get() == &Candidate && SourceProtection.Get() == Protection
+		&& SourceWorldSeed == WorldSeed && SourceManifest.Descriptor == Manifest.Descriptor
+		&& SourceManifest.Seed == Manifest.Seed && SourceManifest.Topology == Manifest.Topology
+		&& SourceManifest.Geometry == Manifest.Geometry && SourceManifest.RegionalOwnership == Manifest.RegionalOwnership
+		&& SourceManifest.PocketNoise == Manifest.PocketNoise && SourceManifest.SurfaceValidation == Manifest.SurfaceValidation
+		&& SourceManifest.Composition == Manifest.Composition;
+}
+
 FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSettings& Settings,
-	const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed, const FVoxelLandM5BaselineWindow& Window,
+	const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed,
+	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Window,
 	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
-	const FVoxelLandM5ProtectionGrid* Protection, const FIntVector& MinInclusive, const FIntVector& MaxExclusive,
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
+	const FIntVector& MinInclusive, const FIntVector& MaxExclusive,
 	int32 MaxChunks, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe>& OutChunks)
 {
@@ -52,21 +66,21 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 		return FVoxelLandM5ScratchChunksInternals::Error(E::Cancelled, TEXT("Scratch chunk assembly cancelled"));
 	}
 	if (MaxChunks < 1 || MaxChunks > FVoxelLandM5ScratchChunksInternals::MaximumChunks
-		|| Window.GetVoxelSizeCm() <= 0)
+		|| Window->GetVoxelSizeCm() <= 0)
 	{
 		return FVoxelLandM5ScratchChunksInternals::Error(E::InvalidInput, TEXT("Invalid scratch chunk limit or spacing"));
 	}
 	FVoxelLandChunkKey FirstKey;
 	FirstKey.Coordinate = MinInclusive;
 	FVoxelLandM5ChunkFootprint First;
-	if (!VoxelLand::M5::ChunkFootprint::TryBuild(FirstKey, Window.GetVoxelSizeCm(), false, false, First))
+	if (!VoxelLand::M5::ChunkFootprint::TryBuild(FirstKey, Window->GetVoxelSizeCm(), false, false, First))
 	{
 		return FVoxelLandM5ScratchChunksInternals::Error(E::OutOfDomain, TEXT("Scratch chunk footprint overflow"));
 	}
-	const FVoxelLandM5PointCm WindowOrigin = Window.GetOriginCm();
+	const FVoxelLandM5PointCm WindowOrigin = Window->GetOriginCm();
 	const int64 StoredMin[] = {First.StoredMin.X, First.StoredMin.Y, First.StoredMin.Z};
 	const int64 WindowMin[] = {WindowOrigin.X, WindowOrigin.Y, WindowOrigin.Z};
-	const FIntVector WindowSize = Window.GetSize();
+	const FIntVector WindowSize = Window->GetSize();
 	FIntVector Start;
 	FIntVector Count;
 	int64 ChunkCount = 1;
@@ -78,11 +92,11 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 			|| ChunkCount > MaxChunks || !TryMultiplyNonNegative(AxisChunks, FVoxelLandChunkData::Cells, Samples)
 			|| !TryAdd(Samples, 3, Samples) || Samples > MAX_int32
 			|| !TrySubtract(StoredMin[Axis], WindowMin[Axis], Delta) || Delta < 0
-			|| Delta % Window.GetVoxelSizeCm() != 0)
+			|| Delta % Window->GetVoxelSizeCm() != 0)
 		{
 			return FVoxelLandM5ScratchChunksInternals::Error(E::OutOfDomain, TEXT("Unsupported chunk rectangle or window alignment"));
 		}
-		const int64 AxisStart = Delta / Window.GetVoxelSizeCm();
+		const int64 AxisStart = Delta / Window->GetVoxelSizeCm();
 		if (!TryAdd(AxisStart, Samples, End) || AxisStart > MAX_int32 || End > WindowSize[Axis])
 		{
 			return FVoxelLandM5ScratchChunksInternals::Error(E::OutOfDomain, TEXT("Scratch chunk rectangle is outside baseline window"));
@@ -112,9 +126,10 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 	{
 		return FVoxelLandM5ScratchChunksInternals::Error(E::BudgetExceeded, TEXT("Scratch chunk memory exhausted"));
 	}
+	const FVoxelLandM5StageManifest CapturedManifest = Manifest;
 	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe> Field;
 	const FVoxelLandM5Diagnostic Diagnostic = VoxelLand::M5::WindowFinalField::Build(
-		Settings, Manifest, WorldSeed, Window, Candidate, Protection, Start, Count, Budget, IsCancelled, Field);
+		Settings, CapturedManifest, WorldSeed, Window.Get(), Candidate, Protection.Get(), Start, Count, Budget, IsCancelled, Field);
 	if (Diagnostic.Code != E::None)
 	{
 		return Diagnostic;
@@ -127,9 +142,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 	}
 	TSharedPtr<FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Result =
 		MakeShareable(new FVoxelLandM5ScratchChunks(MoveTemp(OutputLease)));
+	Result->SourceWindow = Window;
+	Result->SourceCandidate = Candidate;
+	Result->SourceProtection = Protection;
+	Result->SourceWorldSeed = WorldSeed;
+	Result->SourceManifest = CapturedManifest;
 	Result->MinInclusive = MinInclusive;
 	Result->MaxExclusive = MaxExclusive;
-	Result->VoxelSizeCm = Window.GetVoxelSizeCm();
+	Result->VoxelSizeCm = Window->GetVoxelSizeCm();
 	Result->Chunks.Reserve(int32(ChunkCount));
 	TArray<uint8> HashInput;
 	HashInput.Reserve(FVoxelLandChunkData::SampleCount * 2);

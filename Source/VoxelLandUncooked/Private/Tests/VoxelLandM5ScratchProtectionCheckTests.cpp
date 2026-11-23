@@ -68,7 +68,7 @@ bool FVoxelLandM5ScratchProtectionCheckTest::RunTest(const FString& Parameters)
 		if (VoxelLand::M5::CandidatePlanner::Build(S, 42, {}, Budget.ToSharedRef(), Never, Candidate).Code
 			!= EVoxelLandM5ErrorCode::None || !Candidate) { return false; }
 		TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Chunks;
-		if (FVoxelLandM5ScratchChunks::Build(S, FVoxelLandM5StageManifest{}, 42, *Window, Candidate.ToSharedRef(),
+		if (FVoxelLandM5ScratchChunks::Build(S, FVoxelLandM5StageManifest{}, 42, Window.ToSharedRef(), Candidate.ToSharedRef(),
 			nullptr, FIntVector(0, 0, 0), FIntVector(1, 1, 1), 1, Budget.ToSharedRef(), Never, Chunks).Code
 			!= EVoxelLandM5ErrorCode::None || !Chunks) { return false; }
 		using namespace VoxelLand::M5::ScratchProtectionCheck;

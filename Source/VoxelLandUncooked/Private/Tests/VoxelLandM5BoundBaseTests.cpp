@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Async/Async.h"
+#include "Data/Assets/VoxelLandFiniteWorld.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
@@ -353,6 +354,129 @@ bool FVoxelLandM5BoundBaseTest::RunTest(const FString& Parameters)
 	}).Wait();
 	TestTrue(TEXT("zero work fails before unmetered preparation"),
 		NoWorkResult.Code == EVoxelLandM5ErrorCode::BudgetExceeded && Base == Sentinel);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5TypedFiniteBaseCaptureTest, "VoxelLand.M5.Runtime.TypedFiniteBaseCapture", M5BoundBaseTestFlags)
+bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("fixture requires the game thread"), IsInGameThread()))
+	{
+		return false;
+	}
+	FVoxelLandM4ControlSnapshot Control;
+	FString Error;
+	bool bFixture = false;
+	Async(EAsyncExecution::ThreadPool, [&Control, &Error, &bFixture] {
+		bFixture = M5BoundBaseMakeControl(Control, Error);
+	}).Wait();
+	if (!TestTrue(TEXT("control graph compiled on worker"), bFixture))
+	{
+		AddError(Error);
+		return false;
+	}
+	TStrongObjectPtr<UVoxelLandM4WorldConfig> Config(NewObject<UVoxelLandM4WorldConfig>());
+	M5BoundBaseApplyControl(*Config.Get(), Config->Continental, Control);
+	M5BoundBaseApplyControl(*Config.Get(), Config->Mountain, Control);
+	M5BoundBaseApplyControl(*Config.Get(), Config->Peaks, Control);
+	TStrongObjectPtr<UVoxelLandFiniteWorld> Definition(NewObject<UVoxelLandFiniteWorld>());
+	Definition->Common.Continental = Config->Continental;
+	Definition->Common.Mountain = Config->Mountain;
+	Definition->Common.Peaks = Config->Peaks;
+	Definition->Common.Seed = -12345;
+	Definition->Common.Caves.bEnabled = true;
+	Definition->Common.Caves.StageId = FGuid(11, 22, 33, 44);
+	Definition->Finite.bGlobalErosion = false;
+	Definition->Finite.CellsX = Definition->Finite.CellsY = 4;
+	Definition->Finite.OriginXCm = Definition->Finite.OriginYCm = -12800;
+	Definition->Finite.GridSpacingCm = 6400;
+	Definition->Finite.MinZCm = -9000;
+	Definition->Finite.MaxZCm = 11000;
+
+	IConsoleVariable* ProcessBudget = IConsoleManager::Get().FindConsoleVariable(TEXT("voxel.M4.PrepassBudgetMiB"));
+	if (!TestNotNull(TEXT("M4 process admission cvar exists"), ProcessBudget))
+	{
+		return false;
+	}
+	FM5BoundBaseBudgetRestore Restore(*ProcessBudget);
+	if (ProcessBudget->GetInt() != 256)
+	{
+		AddWarning(TEXT("Typed finite capture fixture skipped: unable to isolate the M4 budget at 256 MiB"));
+		return true;
+	}
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("budget created"), FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 10000000, Budget)))
+	{
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Capture;
+	const FVoxelLandM5Diagnostic Captured =
+		FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), Capture);
+	if (Captured.Code == EVoxelLandM5ErrorCode::BudgetExceeded)
+	{
+		AddWarning(TEXT("Typed finite capture fixture skipped: producer or validation admission is unavailable"));
+		return true;
+	}
+	if (!TestTrue(
+			TEXT("typed finite capture admitted"), Captured.Code == EVoxelLandM5ErrorCode::None && Capture.IsValid()))
+	{
+		AddError(Captured.Message);
+		return false;
+	}
+	const FVoxelLandM5WorldSnapshot& Snapshot = Capture->GetSnapshot();
+	const TWeakPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ProducerReservation = Capture->GridLease;
+	TestTrue(TEXT("typed capture retains a producer reservation"), ProducerReservation.IsValid());
+	TestEqual(TEXT("typed seed retained"), Snapshot.Base.Seed, int64(-12345));
+	TestTrue(TEXT("finite mode retained"), Snapshot.Base.Domain.Mode == EVoxelLandM4DomainMode::Finite
+											   && Snapshot.Caves.PlanningMode == EVoxelLandM5PlanningMode::Finite);
+	TestTrue(TEXT("full upstream bounds retained"),
+		Snapshot.Caves.Bounds.MinInclusive.X == -12800 && Snapshot.Caves.Bounds.MaxExclusive.X == 12801
+			&& Snapshot.Caves.Bounds.MinInclusive.Z == -9000 && Snapshot.Caves.Bounds.MaxExclusive.Z == 11000);
+	TestTrue(TEXT("enabled settings and version retained"),
+		Snapshot.Caves.bEnabled && Snapshot.Caves.StageId == Definition->Common.Caves.StageId
+			&& Snapshot.FormatVersion == 1 && Snapshot.Manifest.Descriptor == 1 && Snapshot.Manifest.Composition == 1);
+	TestTrue(TEXT("control payload retained"),
+		Snapshot.Base.Continental.Payload.ProgramFingerprint == Control.Payload.ProgramFingerprint);
+
+	const TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Prior = Capture;
+	Definition->Common.Caves.Limits.MaxBytes = 1;
+	const FVoxelLandM5Diagnostic Limited =
+		FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), Capture);
+	TestTrue(TEXT("over-limit request preserves capture"),
+		Limited.Code == EVoxelLandM5ErrorCode::InvalidInput && Capture == Prior);
+	Definition->Common.Caves.Limits.MaxBytes = 268435456;
+	Definition->Common.Caves.bEnabled = false;
+	TestTrue(TEXT("live edits leave frozen capture unchanged"),
+		Snapshot.Caves.bEnabled && Snapshot.Caves.Limits.MaxBytes == 268435456);
+
+	FVoxelLandM5Diagnostic Cancelled;
+	TSharedPtr<const FVoxelLandM5BoundBase, ESPMode::ThreadSafe> Base;
+	Async(EAsyncExecution::ThreadPool, [&Capture, &Base, &Cancelled] {
+		Cancelled = FVoxelLandM5BoundBase::Prepare(Capture.ToSharedRef(), [] { return true; }, Base);
+	}).Wait();
+	TestTrue(TEXT("cancelled preparation publishes nothing"),
+		Cancelled.Code == EVoxelLandM5ErrorCode::Cancelled && !Base.IsValid());
+	TestFalse(
+		TEXT("cancel releases the producer reservation while capture remains live"), ProducerReservation.IsValid());
+	FVoxelLandM5Diagnostic Consumed;
+	Async(EAsyncExecution::ThreadPool, [&Capture, &Base, &Consumed] {
+		Consumed = FVoxelLandM5BoundBase::Prepare(Capture.ToSharedRef(), [] { return false; }, Base);
+	}).Wait();
+	TestTrue(
+		TEXT("typed producer is one-shot"), Consumed.Code == EVoxelLandM5ErrorCode::InvalidInput && !Base.IsValid());
+	const FVoxelLandM5Diagnostic Disabled =
+		FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), Capture);
+	if (Disabled.Code == EVoxelLandM5ErrorCode::BudgetExceeded)
+	{
+		AddWarning(TEXT("Disabled capture check skipped: producer or validation admission became unavailable"));
+		TestTrue(TEXT("failed disabled admission preserves capture"), Capture == Prior);
+	}
+	else
+	{
+		TestTrue(TEXT("disabled capture rejected atomically"),
+			Disabled.Code == EVoxelLandM5ErrorCode::InvalidInput && Capture == Prior);
+	}
 	return true;
 }
 #endif

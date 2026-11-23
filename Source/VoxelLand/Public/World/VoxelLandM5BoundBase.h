@@ -8,6 +8,7 @@
 #include "Templates/Function.h"
 
 class UVoxelLandM4WorldConfig;
+class UVoxelLandFiniteWorld;
 class FVoxelLandGenerator;
 class FVoxelLandM4GridLease;
 class FVoxelLandM5Budget;
@@ -31,12 +32,18 @@ public:
 	static FVoxelLandM5Diagnostic Capture(UVoxelLandM4WorldConfig& Config,
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture);
+	// Typed finite equivalent. The captured bounds are authored upstream bounds,
+	// not proof of a usable footprint; the caller checks freshness and lifecycle.
+	static FVoxelLandM5Diagnostic Capture(UVoxelLandFiniteWorld& Definition,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+		TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture);
 	const FVoxelLandM5WorldSnapshot& GetSnapshot() const { return Snapshot; }
 
 private:
 	friend class FVoxelLandM5BoundBase;
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FVoxelLandM5BoundBaseTest;
+	friend class FVoxelLandM5TypedFiniteBaseCaptureTest;
 #endif
 	FVoxelLandM5BaseCapture(TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InMetadataLease,

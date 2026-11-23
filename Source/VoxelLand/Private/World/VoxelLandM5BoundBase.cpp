@@ -1,12 +1,15 @@
 #include "World/VoxelLandM5BoundBase.h"
 
+#include "Data/Assets/VoxelLandFiniteWorld.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4GridLease.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Misc/ScopeLock.h"
 #include "UObject/StrongObjectPtr.h"
+#include "World/VoxelLandFiniteSnapshotAdapter.h"
 #include "World/VoxelLandM4Preparation.h"
 
 class FVoxelLandM5BoundBaseInternals final
@@ -90,6 +93,74 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandM4WorldConfig&
 		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 budget exceeds captured limits"));
 	}
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandM5BaseCapture(
+		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot)));
+	OutCapture = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& Definition,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture)
+{
+	if (!IsInGameThread() || !IsValid(&Definition))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 finite capture requires a valid asset and the game thread"));
+	}
+	TStrongObjectPtr<UVoxelLandFiniteWorld> DefinitionGuard(&Definition);
+	int64 MaxBytes = 0;
+	int64 MaxWork = 0;
+	InBudget->GetLimits(MaxBytes, MaxWork);
+	if (MaxBytes > Definition.Common.Caves.Limits.MaxBytes
+		|| MaxWork > Definition.Common.Caves.Limits.MaxValidationWork)
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 budget exceeds the authored limits"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Metadata;
+	if (!InBudget->TryReserveBytes(FVoxelLandM5BoundBaseInternals::M5BoundBaseMetadataAllowance, Metadata))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("M5 base metadata admission failed"));
+	}
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> GridLease = VoxelLandM4Preparation::Reserve();
+	if (!GridLease)
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("M4 preparation reservation unavailable"));
+	}
+	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease =
+		VoxelLandM4Preparation::ReserveValidation();
+	if (!ValidationLease)
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("M4 snapshot validation permit unavailable"));
+	}
+	FVoxelLandFiniteWorldSnapshot Finite;
+	FString Error;
+	if (!Definition.CaptureSnapshot(Finite, Error))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(EVoxelLandM5ErrorCode::InvalidInput, Error);
+	}
+	if (!Finite.Common.Caves.bEnabled && !Finite.Common.Caves.Pockets.bEnabled)
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 capture requires an enabled cave network or pocket stage"));
+	}
+	if (MaxBytes > Finite.Common.Caves.Limits.MaxBytes || MaxWork > Finite.Common.Caves.Limits.MaxValidationWork)
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 budget exceeds captured limits"));
+	}
+	FVoxelLandM5WorldSnapshot Snapshot;
+	if (!FVoxelLandFiniteSnapshotAdapter::TryConvert(Finite, Snapshot.Base, Error))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(EVoxelLandM5ErrorCode::InvalidInput, Error);
+	}
+	Snapshot.FormatVersion = 1;
+	Snapshot.Manifest = FVoxelLandM5StageManifest{};
+	Snapshot.Caves = MoveTemp(Finite.Common.Caves);
 	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandM5BaseCapture(
 		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot)));
 	OutCapture = MoveTemp(Result);

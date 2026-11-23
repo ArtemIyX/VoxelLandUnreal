@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Data/Structs/VoxelLandM5CavePlan.h"
 #include "Generation/VoxelLandM5ChunkCarve.h"
+#include "Generation/VoxelLandM5PocketMapping.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -190,6 +191,92 @@ bool FVoxelLandM5ChunkCarveMaskTest::RunTest(const FString& Parameters)
 		TryCarve(Baseline, FIntVector(4, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, true, true, Plans, Network,
 			Pocket, Protected, PocketValues, 8, 16, NotCancelled, Out));
 	TestTrue(TEXT("mask failure is atomic"), Out == TArray<int16>({777}));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5ChunkCarvePocketPresenceTest, "VoxelLand.M5.ChunkCarve.MappedPocketPresence", M5ChunkCarveFlags)
+bool FVoxelLandM5ChunkCarvePocketPresenceTest::RunTest(const FString& Parameters)
+{
+	using namespace VoxelLand::M5;
+	TArray<int64> Pockets;
+	TArray<uint8> Presence;
+	bool bHas = true;
+	int64 Distance = 777;
+	if (!TestTrue(TEXT("below threshold maps"), PocketMapping::TryMap(true, -1, 32768, 100, bHas, Distance)))
+	{
+		return false;
+	}
+	TestFalse(TEXT("below threshold absent"), bHas);
+	Pockets.Add(Distance);
+	Presence.Add(bHas ? 1 : 0);
+	if (!TestTrue(TEXT("threshold equality maps"), PocketMapping::TryMap(true, 0, 32768, 100, bHas, Distance)))
+	{
+		return false;
+	}
+	TestFalse(TEXT("threshold equality absent"), bHas);
+	Pockets.Add(Distance);
+	Presence.Add(bHas ? 1 : 0);
+	if (!TestTrue(TEXT("selected value maps"), PocketMapping::TryMap(true, 32767, 0, 100, bHas, Distance)))
+	{
+		return false;
+	}
+	TestTrue(TEXT("selected contribution present"), bHas);
+	Pockets.Add(Distance);
+	Presence.Add(bHas ? 1 : 0);
+	Pockets.Add(Distance);
+	Presence.Add(1);
+	Pockets.Add(25600);
+	Presence.Add(1);
+	Pockets.Add(0);
+	Presence.Add(1);
+	const TArray<int16> Baseline = {-3000, -3000, -3000, -3000, -3000, -3000};
+	const TArray<uint8> Allowed = {1, 1, 1, 1, 1, 1};
+	TArray<uint8> Protected = {0, 0, 0, 1, 0, 0};
+	const TArray<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans;
+	TArray<int16> Out;
+	const auto NotCancelled = [] {
+		return false;
+	};
+	if (!TestTrue(TEXT("mapped pockets carve"),
+			ChunkCarve::TryCarve(Baseline, FIntVector(6, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, false, true,
+				Plans, Allowed, Allowed, Protected, Presence, Pockets, 12, 12, NotCancelled, Out))
+		|| Out.Num() != 6)
+	{
+		AddError(TEXT("Mapped pocket output unavailable"));
+		return false;
+	}
+	TestEqual(TEXT("below threshold preserves solid"), Out[0], int16(-3000));
+	TestEqual(TEXT("threshold equality preserves solid"), Out[1], int16(-3000));
+	TestEqual(TEXT("selected contribution carves"), Out[2], int16(1024));
+	TestEqual(TEXT("protection wins over selected pocket"), Out[3], int16(-3000));
+	TestEqual(TEXT("nonzero positive distance remains supported"), Out[4], int16(-1024));
+	TestEqual(TEXT("explicit present zero composes"), Out[5], int16(0));
+	if (!TestTrue(TEXT("legacy overload composes zero"),
+			ChunkCarve::TryCarve(Baseline, FIntVector(6, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, false, true,
+				Plans, Allowed, Allowed, Protected, Pockets, 12, 12, NotCancelled, Out))
+		|| Out.Num() != 6)
+	{
+		return false;
+	}
+	TestEqual(TEXT("legacy zero remains present"), Out[0], int16(0));
+	Out = {777};
+	Presence.Pop();
+	TestFalse(TEXT("missing presence fails"),
+		ChunkCarve::TryCarve(Baseline, FIntVector(6, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, false, true, Plans,
+			Allowed, Allowed, Protected, Presence, Pockets, 12, 12, NotCancelled, Out));
+	TestTrue(TEXT("missing presence retains output"), Out == TArray<int16>({777}));
+	Presence.Add(2);
+	TestFalse(TEXT("invalid presence fails"),
+		ChunkCarve::TryCarve(Baseline, FIntVector(6, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, false, true, Plans,
+			Allowed, Allowed, Protected, Presence, Pockets, 12, 12, NotCancelled, Out));
+	TestTrue(TEXT("invalid presence retains output"), Out == TArray<int16>({777}));
+	Presence[5] = 1;
+	Protected[4] = 2;
+	TestFalse(TEXT("invalid protection fails"),
+		ChunkCarve::TryCarve(Baseline, FIntVector(6, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, false, true, Plans,
+			Allowed, Allowed, Protected, Presence, Pockets, 12, 12, NotCancelled, Out));
+	TestTrue(TEXT("failure retains output"), Out == TArray<int16>({777}));
 	return true;
 }
 #endif

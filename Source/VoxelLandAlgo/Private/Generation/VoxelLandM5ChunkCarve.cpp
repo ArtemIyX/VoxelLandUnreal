@@ -6,12 +6,23 @@
 
 namespace VoxelLand::M5::ChunkCarve
 {
-bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVoxelLandM5PointCm& OriginCm,
-	int64 SpacingCm, int32 VoxelSizeCm, bool bNetworkEnabled, bool bPocketEnabled,
+class FVoxelLandM5ChunkCarveInternals final
+{
+public:
+	static bool TryCarveInternal(TConstArrayView<int16> Baseline, const FIntVector& Size,
+		const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm, int32 VoxelSizeCm, bool bNetworkEnabled,
+		bool bPocketEnabled, TConstArrayView<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans,
+		TConstArrayView<uint8> NetworkAllowed, TConstArrayView<uint8> PocketAllowed, TConstArrayView<uint8> Protected,
+		bool bExplicitPresence, TConstArrayView<uint8> PocketPresent, TConstArrayView<int64> PocketDistanceQ8,
+		int64 MaxScratchBytes, int64 MaxWork, TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples);
+};
+
+bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Baseline, const FIntVector& Size,
+	const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm, int32 VoxelSizeCm, bool bNetworkEnabled, bool bPocketEnabled,
 	TConstArrayView<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans,
 	TConstArrayView<uint8> NetworkAllowed, TConstArrayView<uint8> PocketAllowed, TConstArrayView<uint8> Protected,
-	TConstArrayView<int64> PocketDistanceQ8, int64 MaxScratchBytes, int64 MaxWork, TFunctionRef<bool()> IsCancelled,
-	TArray<int16>& OutSamples)
+	bool bExplicitPresence, TConstArrayView<uint8> PocketPresent, TConstArrayView<int64> PocketDistanceQ8,
+	int64 MaxScratchBytes, int64 MaxWork, TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples)
 {
 	using namespace CheckedMath;
 	if (IsCancelled() || Size.X <= 0 || Size.Y <= 0 || Size.Z <= 0 || MaxScratchBytes < 0 || MaxWork < 0)
@@ -33,7 +44,9 @@ bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVo
 	{
 		if (SpacingCm <= 0 || VoxelSizeCm <= 0 || Protected.Num() != Count
 			|| (bNetworkEnabled && (Plans.IsEmpty() || NetworkAllowed.Num() != Count))
-			|| (bPocketEnabled && (PocketDistanceQ8.Num() != Count || PocketAllowed.Num() != Count)))
+			|| (bPocketEnabled
+				&& (PocketDistanceQ8.Num() != Count || PocketAllowed.Num() != Count
+					|| (bExplicitPresence && PocketPresent.Num() != Count))))
 		{
 			return false;
 		}
@@ -98,7 +111,8 @@ bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVo
 				{
 					if ((Index % 64 == 0 && IsCancelled()) || Protected[Index] > 1
 						|| (bNetworkEnabled && NetworkAllowed[Index] > 1)
-						|| (bPocketEnabled && PocketAllowed[Index] > 1))
+						|| (bPocketEnabled
+							&& (PocketAllowed[Index] > 1 || (bExplicitPresence && PocketPresent[Index] > 1))))
 					{
 						return false;
 					}
@@ -121,7 +135,8 @@ bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVo
 					}
 					if (bPocketEnabled
 						&& !Composition::TryCompose(Value, EmptyPlan, P, VoxelSizeCm, true, PocketAllowed[Index] != 0,
-							Protected[Index] != 0, true, PocketDistanceQ8[Index], IsCancelled, Value))
+							Protected[Index] != 0, !bExplicitPresence || PocketPresent[Index] != 0,
+							PocketDistanceQ8[Index], IsCancelled, Value))
 					{
 						return false;
 					}
@@ -136,5 +151,29 @@ bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVo
 	}
 	OutSamples = MoveTemp(Scratch);
 	return true;
+}
+
+bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVoxelLandM5PointCm& OriginCm,
+	int64 SpacingCm, int32 VoxelSizeCm, bool bNetworkEnabled, bool bPocketEnabled,
+	TConstArrayView<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans,
+	TConstArrayView<uint8> NetworkAllowed, TConstArrayView<uint8> PocketAllowed, TConstArrayView<uint8> Protected,
+	TConstArrayView<int64> PocketDistanceQ8, int64 MaxScratchBytes, int64 MaxWork, TFunctionRef<bool()> IsCancelled,
+	TArray<int16>& OutSamples)
+{
+	return FVoxelLandM5ChunkCarveInternals::TryCarveInternal(Baseline, Size, OriginCm, SpacingCm, VoxelSizeCm,
+		bNetworkEnabled, bPocketEnabled, Plans, NetworkAllowed, PocketAllowed, Protected, false, {}, PocketDistanceQ8,
+		MaxScratchBytes, MaxWork, IsCancelled, OutSamples);
+}
+
+bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVoxelLandM5PointCm& OriginCm,
+	int64 SpacingCm, int32 VoxelSizeCm, bool bNetworkEnabled, bool bPocketEnabled,
+	TConstArrayView<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans,
+	TConstArrayView<uint8> NetworkAllowed, TConstArrayView<uint8> PocketAllowed, TConstArrayView<uint8> Protected,
+	TConstArrayView<uint8> PocketPresent, TConstArrayView<int64> PocketDistanceQ8, int64 MaxScratchBytes, int64 MaxWork,
+	TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples)
+{
+	return FVoxelLandM5ChunkCarveInternals::TryCarveInternal(Baseline, Size, OriginCm, SpacingCm, VoxelSizeCm,
+		bNetworkEnabled, bPocketEnabled, Plans, NetworkAllowed, PocketAllowed, Protected, true, PocketPresent,
+		PocketDistanceQ8, MaxScratchBytes, MaxWork, IsCancelled, OutSamples);
 }
 }

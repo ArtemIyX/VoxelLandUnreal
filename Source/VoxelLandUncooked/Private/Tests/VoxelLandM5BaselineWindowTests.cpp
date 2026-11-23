@@ -18,7 +18,7 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 	FString Failure;
 	bool bAnalytic = false, bExactChunk = false, bAtomic = false, bBudget = false, bCancelled = false;
 	bool bLocalMatches = false, bMidCancellation = false, bBoundary = false, bNonuniformSmooth = false;
-	bool bFixedLocalMatches = false;
+	bool bFixedLocalMatches = false, bSampleLimits = false;
 	const bool bCompleted = Async(EAsyncExecution::ThreadPool, [&]() {
 		FVoxelLandProgramDraft Draft;
 		Draft.RegisterCount = 1;
@@ -105,6 +105,24 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 		const FVoxelLandM5Diagnostic Invalid = FVoxelLandM5BaselineWindow::Build(
 			Generator.ToSharedRef(), Min, Max, 7, Budget.ToSharedRef(), [] { return false; }, Window);
 		bAtomic = Invalid.Code == EVoxelLandM5ErrorCode::OutOfDomain && Window == Previous;
+		int64 LimitLiveBefore = 0, LimitPeakBefore = 0, LimitWorkBefore = 0;
+		Budget->GetUsage(LimitLiveBefore, LimitPeakBefore, LimitWorkBefore);
+		const FVoxelLandM5Diagnostic PositiveLimit = FVoxelLandM5BaselineWindow::Build(
+			Generator.ToSharedRef(), FIntVector(327, 0, 0), FIntVector(328, 1, 1), 1, Budget.ToSharedRef(),
+			[] { return false; }, Window);
+		const FVoxelLandM5Diagnostic NegativeLimit = FVoxelLandM5BaselineWindow::Build(
+			Generator.ToSharedRef(), FIntVector(-328, 0, 0), FIntVector(-327, 1, 1), 1, Budget.ToSharedRef(),
+			[] { return false; }, Window);
+		const FVoxelLandM5Diagnostic InvalidExtreme = FVoxelLandM5BaselineWindow::Build(
+			Generator.ToSharedRef(), FIntVector(MIN_int32, 0, 0), FIntVector(MIN_int32, 1, 1), 1, Budget.ToSharedRef(),
+			[] { return false; }, Window);
+		int64 LimitLiveAfter = 0, LimitPeakAfter = 0, LimitWorkAfter = 0;
+		Budget->GetUsage(LimitLiveAfter, LimitPeakAfter, LimitWorkAfter);
+		bSampleLimits = PositiveLimit.Code == EVoxelLandM5ErrorCode::OutOfDomain
+					 && NegativeLimit.Code == EVoxelLandM5ErrorCode::OutOfDomain
+					 && InvalidExtreme.Code == EVoxelLandM5ErrorCode::OutOfDomain && Window == Previous
+					 && LimitLiveBefore == LimitLiveAfter && LimitPeakBefore == LimitPeakAfter
+					 && LimitWorkBefore == LimitWorkAfter;
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Tiny;
 		FVoxelLandM5Budget::TryCreate(1, 10000000, Tiny);
 		const FVoxelLandM5Diagnostic Limited = FVoxelLandM5BaselineWindow::Build(
@@ -359,6 +377,7 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("local-mode samples match direct M4 chunk"), bLocalMatches);
 	TestTrue(TEXT("fixed-lattice local samples match direct M4 chunk"), bFixedLocalMatches);
 	TestTrue(TEXT("finite boundary checked before scratch allocation"), bBoundary);
+	TestTrue(TEXT("positive, negative and empty extreme windows fail before admission"), bSampleLimits);
 	TestTrue(TEXT("nonuniform smoothed neighboring halos agree"), bNonuniformSmooth);
 	return bCompleted;
 }

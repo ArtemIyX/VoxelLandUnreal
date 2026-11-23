@@ -1,6 +1,9 @@
 #include "Generation/VoxelLandM5BaselineWindow.h"
 
+#include "Data/Structs/VoxelLandChunkKey.h"
+#include "Data/Structs/VoxelLandM5ChunkFootprint.h"
 #include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM5ChunkFootprint.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
@@ -86,19 +89,38 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
 		const int64 Count = int64(MaxChunk[Axis]) - int64(MinChunk[Axis]);
-		int64 MinSample = 0, MaxSample = 0, Last = 0;
 		if (Count < 1 || Count > MaxChunks || !TryMultiplyNonNegative(ChunkCount, Count, ChunkCount)
 			|| ChunkCount > MaxChunks || !TryMultiply(Count, 32, Sizes[Axis]) || !TryAdd(Sizes[Axis], 3, Sizes[Axis])
-			|| Sizes[Axis] > MAX_int32 || !TryMultiplyNonNegative(Samples, Sizes[Axis], Samples) || Samples > MAX_int32
-			|| !TryMultiply(int64(MinChunk[Axis]), 32, MinSample) || !TrySubtract(MinSample, 1, MinSample)
-			|| !TryMultiply(int64(MaxChunk[Axis]) - 1, 32, MaxSample) || !TryAdd(MaxSample, 33, MaxSample)
-			|| !TryMultiply(MinSample, Spacing, Origins[Axis]) || !TryMultiply(MaxSample, Spacing, Last)
-			|| Origins[Axis] < -1048576 || Last > 1048576)
+			|| Sizes[Axis] > MAX_int32 || !TryMultiplyNonNegative(Samples, Sizes[Axis], Samples) || Samples > MAX_int32)
 		{
 			return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
 				E::OutOfDomain, TEXT("Chunk rectangle or sample footprint is unsupported"));
 		}
 		ChunkCounts[Axis] = Count;
+	}
+	FVoxelLandChunkKey FirstKey;
+	FirstKey.Coordinate = MinChunk;
+	FVoxelLandChunkKey LastKey;
+	LastKey.Coordinate = FIntVector(MaxChunk.X - 1, MaxChunk.Y - 1, MaxChunk.Z - 1);
+	FVoxelLandM5ChunkFootprint FirstFootprint;
+	FVoxelLandM5ChunkFootprint LastFootprint;
+	if (!VoxelLand::M5::ChunkFootprint::TryBuild(FirstKey, Spacing, false, false, FirstFootprint)
+		|| !VoxelLand::M5::ChunkFootprint::TryBuild(LastKey, Spacing, false, false, LastFootprint))
+	{
+		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+			E::OutOfDomain, TEXT("Chunk rectangle or sample footprint is unsupported"));
+	}
+	Origins[0] = FirstFootprint.StoredMin.X;
+	Origins[1] = FirstFootprint.StoredMin.Y;
+	Origins[2] = FirstFootprint.StoredMin.Z;
+	const int64 Lasts[] = {LastFootprint.StoredMax.X, LastFootprint.StoredMax.Y, LastFootprint.StoredMax.Z};
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		if (Origins[Axis] < -1048576 || Lasts[Axis] > 1048576)
+		{
+			return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+				E::OutOfDomain, TEXT("Chunk rectangle or sample footprint is unsupported"));
+		}
 	}
 	int64 OutputBytes = 0, ScratchBytes = 0, Work = 0;
 	if (!TryMultiplyNonNegative(Samples, int64(sizeof(int16)), OutputBytes) || !TryAdd(OutputBytes, 4096, OutputBytes)

@@ -39,6 +39,18 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowFinalField::Build(const FVoxelLandM5
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe>& OutField)
 {
+	return Build(Settings, Manifest, WorldSeed, Window,
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>(Candidate), Protection,
+		Start, Count, Budget, IsCancelled, OutField);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::WindowFinalField::Build(const FVoxelLandM5CaveSettings& Settings,
+	const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed, const FVoxelLandM5BaselineWindow& Window,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe>& OutField)
+{
 	using namespace VoxelLand::M5::CheckedMath;
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
@@ -118,10 +130,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowFinalField::Build(const FVoxelLandM5
 			}
 		}
 	}
-	TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe> Plan =
-		MakeShareable(&Candidate->GetPlan(), FVoxelLandM5WindowFinalFieldInternals::FBorrowedPlanDeleter{});
 	TArray<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans;
-	Plans.Add(Plan);
+	if (Candidate)
+	{
+		Plans.Add(MakeShareable(&Candidate->GetPlan(), FVoxelLandM5WindowFinalFieldInternals::FBorrowedPlanDeleter{}));
+	}
 	FVoxelLandM5FinalFieldInputs Inputs;
 	Inputs.Size = Count;
 	Inputs.OriginCm = Origin;

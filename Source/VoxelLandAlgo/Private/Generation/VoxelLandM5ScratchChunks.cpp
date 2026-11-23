@@ -5,6 +5,7 @@
 #include "Generation/VoxelLandM5BaselineWindow.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5ChunkFootprint.h"
 #include "Generation/VoxelLandM5FinalField.h"
@@ -43,12 +44,24 @@ bool FVoxelLandM5ScratchChunks::MatchesDependencies(const FVoxelLandM5BaselineWi
 	const FVoxelLandM5CandidateResult& Candidate, const FVoxelLandM5ProtectionGrid* Protection,
 	int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest) const
 {
-	return SourceWindow.Get() == &Window && SourceCandidate.Get() == &Candidate && SourceProtection.Get() == Protection
+	return MatchesDependencies(Window, &Candidate, Protection, WorldSeed, Manifest);
+}
+
+bool FVoxelLandM5ScratchChunks::MatchesDependencies(const FVoxelLandM5BaselineWindow& Window,
+	const FVoxelLandM5CandidateResult* Candidate, const FVoxelLandM5ProtectionGrid* Protection,
+	int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest) const
+{
+	return SourceWindow.Get() == &Window && SourceCandidate.Get() == Candidate && SourceProtection.Get() == Protection
 		&& SourceWorldSeed == WorldSeed && SourceManifest.Descriptor == Manifest.Descriptor
 		&& SourceManifest.Seed == Manifest.Seed && SourceManifest.Topology == Manifest.Topology
 		&& SourceManifest.Geometry == Manifest.Geometry && SourceManifest.RegionalOwnership == Manifest.RegionalOwnership
 		&& SourceManifest.PocketNoise == Manifest.PocketNoise && SourceManifest.SurfaceValidation == Manifest.SurfaceValidation
 		&& SourceManifest.Composition == Manifest.Composition;
+}
+
+bool FVoxelLandM5ScratchChunks::MatchesSettings(const FVoxelLandM5CaveSettings& Settings) const
+{
+	return FVoxelLandM5CandidateResult::SameSettings(SourceSettings, Settings);
 }
 
 bool FVoxelLandM5ScratchChunks::MatchesProtectionInputs(const FVoxelLandM5BaselineWindow& Window,
@@ -62,6 +75,20 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 	const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed,
 	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Window,
 	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
+	const FIntVector& MinInclusive, const FIntVector& MaxExclusive, int32 MaxChunks,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe>& OutChunks)
+{
+	return Build(Settings, Manifest, WorldSeed, Window,
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>(Candidate), Protection,
+		MinInclusive, MaxExclusive, MaxChunks, Budget, IsCancelled, OutChunks);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSettings& Settings,
+	const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed,
+	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Window,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
 	const FIntVector& MinInclusive, const FIntVector& MaxExclusive,
 	int32 MaxChunks, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
@@ -135,11 +162,12 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 		return FVoxelLandM5ScratchChunksInternals::Error(E::BudgetExceeded, TEXT("Scratch chunk memory exhausted"));
 	}
 	const FVoxelLandM5StageManifest CapturedManifest = Manifest;
+	const FVoxelLandM5CaveSettings CapturedSettings = Settings;
 	const bool bCapturedRequireMask = Settings.Protection.bRequireMask;
 	const bool bCapturedProtectAll = Settings.Protection.bProtectAll;
 	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe> Field;
 	const FVoxelLandM5Diagnostic Diagnostic = VoxelLand::M5::WindowFinalField::Build(
-		Settings, CapturedManifest, WorldSeed, Window.Get(), Candidate, Protection.Get(), Start, Count, Budget, IsCancelled, Field);
+		CapturedSettings, CapturedManifest, WorldSeed, Window.Get(), Candidate, Protection.Get(), Start, Count, Budget, IsCancelled, Field);
 	if (Diagnostic.Code != E::None)
 	{
 		return Diagnostic;
@@ -159,6 +187,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 	Result->bSourceProtectAll = bCapturedProtectAll;
 	Result->SourceWorldSeed = WorldSeed;
 	Result->SourceManifest = CapturedManifest;
+	Result->SourceSettings = CapturedSettings;
 	Result->MinInclusive = MinInclusive;
 	Result->MaxExclusive = MaxExclusive;
 	Result->VoxelSizeCm = Window->GetVoxelSizeCm();

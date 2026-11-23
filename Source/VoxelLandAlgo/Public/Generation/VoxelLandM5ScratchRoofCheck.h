@@ -20,8 +20,16 @@ namespace VoxelLand::M5::ScratchRoofCheck
 // before a roof cell is exempted. The baseline window must cover the full
 // search and comparison halo; uniform-sign neighborhoods have no local roof.
 // Caller must establish that this covers the complete relevant surface domain.
-// Exact immediate inputs and budget must match. This does not prove surface provenance, opening authorization,
+// Pocket-only checks have no candidate openings. Exact immediate inputs and budget must match. This does not prove surface provenance, opening authorization,
 // mesher/filter influence, water, geometry safety, or publication readiness.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic Check(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5StageManifest& Manifest,
+	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Baseline,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
+	TSharedRef<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Chunks,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);
+// Compatibility overload for network candidates.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Check(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	const FVoxelLandM5StageManifest& Manifest,
 	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Baseline,

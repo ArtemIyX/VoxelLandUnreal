@@ -4,6 +4,7 @@
 #include "Data/Structs/VoxelLandChunkData.h"
 #include "Data/Structs/VoxelLandM5Diagnostic.h"
 #include "Data/Structs/VoxelLandM5StageManifest.h"
+#include "Data/Structs/VoxelLandM5CaveSettings.h"
 #include "Templates/Function.h"
 
 struct FVoxelLandM5CaveSettings;
@@ -28,10 +29,15 @@ public:
 
 	// Exact immediate input identities and all manifest versions, not proof of
 	// source freshness, complete influence, final safety, or world identity.
-	// Candidate::MatchesSource separately compares authored settings and region.
+	// MatchesSettings compares every captured setting, including pocket-only inputs.
+	// Candidate::MatchesSource separately compares network settings and region.
+	bool MatchesDependencies(const FVoxelLandM5BaselineWindow& Window,
+		const FVoxelLandM5CandidateResult* Candidate, const FVoxelLandM5ProtectionGrid* Protection,
+		int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest) const;
 	bool MatchesDependencies(const FVoxelLandM5BaselineWindow& Window,
 		const FVoxelLandM5CandidateResult& Candidate, const FVoxelLandM5ProtectionGrid* Protection,
 		int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest) const;
+	bool MatchesSettings(const FVoxelLandM5CaveSettings& Settings) const;
 	// Exact protection inputs used to compose these chunks. This does not prove
 	// current world identity, complete influence, or final-field safety.
 	bool MatchesProtectionInputs(const FVoxelLandM5BaselineWindow& Window,
@@ -49,11 +55,20 @@ public:
 	static FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings,
 		const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed,
 		TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Window,
-		TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
 		const FIntVector& MinInclusive, const FIntVector& MaxExclusive,
 		int32 MaxChunks, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe>& OutChunks);
+	// Compatibility overload for network candidates.
+	static FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings,
+		const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed,
+		TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Window,
+		TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
+		const FIntVector& MinInclusive, const FIntVector& MaxExclusive, int32 MaxChunks,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe>& OutChunks);
 
 private:
 #if WITH_DEV_AUTOMATION_TESTS
@@ -70,6 +85,7 @@ private:
 	bool bSourceProtectAll = false;
 	int64 SourceWorldSeed = 0;
 	FVoxelLandM5StageManifest SourceManifest;
+	FVoxelLandM5CaveSettings SourceSettings;
 	FIntVector MinInclusive = FIntVector::ZeroValue;
 	FIntVector MaxExclusive = FIntVector::ZeroValue;
 	int32 VoxelSizeCm = 0;

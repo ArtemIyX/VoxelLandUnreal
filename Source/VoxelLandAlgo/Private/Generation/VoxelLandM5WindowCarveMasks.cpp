@@ -31,14 +31,32 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::Build(const FVoxelLandM5
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks)
 {
+	return Build(Settings, WorldSeed, Window,
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>(Candidate), Protection,
+		Start, Count, Budget, IsCancelled, OutMasks);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::Build(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5BaselineWindow& Window,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks)
+{
 	using namespace VoxelLand::M5::CheckedMath;
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
 	{
 		return FVoxelLandM5WindowCarveMasksInternals::Error(E::Cancelled, TEXT("Window mask assembly cancelled"));
 	}
-	if (Settings.PlanningMode != EVoxelLandM5PlanningMode::Finite || !Window.IsOwnedBy(*Budget)
-		|| !Candidate->UsesBudget(*Budget) || (Protection && !Protection->IsOwnedBy(*Budget)))
+	int64 MaxBytes = 0, MaxWork = 0;
+	Budget->GetLimits(MaxBytes, MaxWork);
+	if (Settings.PlanningMode != EVoxelLandM5PlanningMode::Finite || !Settings.StageId.IsValid()
+		|| Settings.bEnabled != Candidate.IsValid() || (!Settings.bEnabled && !Settings.Pockets.bEnabled)
+		|| Settings.Limits.MaxBytes < 1 || Settings.Limits.MaxValidationWork < 1
+		|| MaxBytes > Settings.Limits.MaxBytes || MaxWork > Settings.Limits.MaxValidationWork
+		|| !Window.IsOwnedBy(*Budget)
+		|| (Candidate && !Candidate->UsesBudget(*Budget)) || (Protection && !Protection->IsOwnedBy(*Budget)))
 	{
 		return FVoxelLandM5WindowCarveMasksInternals::Error(E::InvalidInput, TEXT("Invalid finite mask inputs or budget ownership"));
 	}
@@ -118,32 +136,35 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::Build(const FVoxelLandM5
 			}
 		}
 	}
-	TArray<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates;
-	Candidates.Add(Candidate);
-	TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe> Entrance;
-	const FVoxelLandM5Diagnostic EntranceResult = FVoxelLandM5EntranceMask::Build(Size, Window.GetOriginCm(), Spacing,
-		Start, Count, SelectedProtection, Settings, WorldSeed, Candidates, Budget, IsCancelled, Entrance);
-	if (EntranceResult.Code != E::None)
+	if (Candidate)
 	{
-		return EntranceResult;
-	}
-	if (!Entrance || Entrance->GetAuthorized().Num() != Outputs)
-	{
-		return FVoxelLandM5WindowCarveMasksInternals::Error(E::Unproven, TEXT("Entrance mask output missing"));
-	}
-	OutputIndex = 0;
-	for (int64 Z = 0; Z < Count.Z; ++Z)
-	{
-		for (int64 Y = 0; Y < Count.Y; ++Y)
+		TArray<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates;
+		Candidates.Add(Candidate);
+		TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe> Entrance;
+		const FVoxelLandM5Diagnostic EntranceResult = FVoxelLandM5EntranceMask::Build(Size, Window.GetOriginCm(), Spacing,
+			Start, Count, SelectedProtection, Settings, WorldSeed, Candidates, Budget, IsCancelled, Entrance);
+		if (EntranceResult.Code != E::None)
 		{
-			for (int64 X = 0; X < Count.X; ++X, ++OutputIndex)
+			return EntranceResult;
+		}
+		if (!Entrance || Entrance->GetAuthorized().Num() != Outputs)
+		{
+			return FVoxelLandM5WindowCarveMasksInternals::Error(E::Unproven, TEXT("Entrance mask output missing"));
+		}
+		OutputIndex = 0;
+		for (int64 Z = 0; Z < Count.Z; ++Z)
+		{
+			for (int64 Y = 0; Y < Count.Y; ++Y)
 			{
-				if ((OutputIndex & 1023) == 0 && IsCancelled())
+				for (int64 X = 0; X < Count.X; ++X, ++OutputIndex)
 				{
-					return FVoxelLandM5WindowCarveMasksInternals::Error(E::Cancelled, TEXT("Window mask assembly cancelled"));
+					if ((OutputIndex & 1023) == 0 && IsCancelled())
+					{
+						return FVoxelLandM5WindowCarveMasksInternals::Error(E::Cancelled, TEXT("Window mask assembly cancelled"));
+					}
+					const int64 Index = Start.X + X + int64(Size.X) * (Start.Y + Y) + XY * (Start.Z + Z);
+					FullEntrance[int32(Index)] = Entrance->GetAuthorized()[OutputIndex];
 				}
-				const int64 Index = Start.X + X + int64(Size.X) * (Start.Y + Y) + XY * (Start.Z + Z);
-				FullEntrance[int32(Index)] = Entrance->GetAuthorized()[OutputIndex];
 			}
 		}
 	}

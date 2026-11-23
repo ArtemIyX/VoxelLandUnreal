@@ -17,6 +17,8 @@ public:
 	FVoxelLandM5CandidateResult(const FVoxelLandM5CandidateResult&) = delete;
 	FVoxelLandM5CandidateResult& operator=(const FVoxelLandM5CandidateResult&) = delete;
 	bool UsesBudget(const FVoxelLandM5Budget& Other) const { return &Budget.Get() == &Other; }
+	// Exact fixed-size settings comparison, also used when no network exists.
+	static bool SameSettings(const FVoxelLandM5CaveSettings& A, const FVoxelLandM5CaveSettings& B);
 	// Exact field-by-field snapshot comparison; no digest collision is possible.
 	bool MatchesSource(
 		const FVoxelLandM5CaveSettings& Settings, int64 Seed, const FVoxelLandM5RegionCoord& Region) const;

@@ -57,6 +57,19 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 	TSharedRef<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Chunks,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
 {
+	return Check(Settings, WorldSeed, Manifest, Baseline,
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>(Candidate), Protection,
+		Chunks, Budget, IsCancelled);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest,
+	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Baseline,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
+	TSharedRef<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Chunks,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
 	using namespace VoxelLand::M5::CheckedMath;
 	using E = EVoxelLandM5ErrorCode;
 	using I = FVoxelLandM5ScratchRoofCheckInternals;
@@ -67,7 +80,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 	const int64 Spacing = Baseline->GetVoxelSizeCm();
 	if (Settings.PlanningMode != EVoxelLandM5PlanningMode::Finite || Settings.RoofThicknessCm < 0
 		|| Spacing <= 0 || Chunks->GetVoxelSizeCm() != Spacing || !Baseline->IsOwnedBy(*Budget)
-		|| !Chunks->IsOwnedBy(*Budget) || !Candidate->UsesBudget(*Budget)
+		|| !Chunks->IsOwnedBy(*Budget) || (Candidate && !Candidate->UsesBudget(*Budget))
+		|| Settings.bEnabled != Candidate.IsValid() || (!Settings.bEnabled && !Settings.Pockets.bEnabled)
 		|| (Protection && !Protection->IsOwnedBy(*Budget)))
 	{
 		return I::Error(E::InvalidInput, TEXT("Invalid roof inputs or budget ownership"));
@@ -81,13 +95,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 	{
 		return I::Error(E::BudgetExceeded, TEXT("Roof source validation work exhausted"));
 	}
-	const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
 	if (!Chunks->MatchesDependencies(Baseline.Get(), Candidate.Get(), Protection.Get(), WorldSeed, Manifest)
-		|| !Candidate->MatchesSource(Settings, WorldSeed, Plan.Region))
+		|| !Chunks->MatchesSettings(Settings)
+		|| (Candidate && !Candidate->MatchesSource(Settings, WorldSeed, Candidate->GetPlan().Region)))
 	{
 		return I::Error(E::InvalidInput, TEXT("Roof sources do not match scratch composition"));
 	}
-	if (Plan.Entrances.Num() > 4096 || Plan.Entrances.Num() != Settings.Topology.EntranceCount)
+	const TConstArrayView<FVoxelLandM5Entrance> Entrances = Candidate
+		? TConstArrayView<FVoxelLandM5Entrance>(Candidate->GetPlan().Entrances) : TConstArrayView<FVoxelLandM5Entrance>();
+	if (Entrances.Num() > 4096 || (Candidate && Entrances.Num() != Settings.Topology.EntranceCount))
 	{
 		return I::Error(E::Unproven, TEXT("Candidate entrance set is incomplete"));
 	}
@@ -105,7 +121,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 	if (!TryMultiplyNonNegative(Radius, 2, Side) || !TryAdd(Side, 1, Side)
 		|| !TryMultiplyNonNegative(Side, Side, NeighborXY) || !TryMultiplyNonNegative(NeighborXY, Side, Neighbors)
 		|| !TryMultiplyNonNegative(Neighbors, 10, Scan)
-		|| !TryMultiplyNonNegative(Plan.Entrances.Num(), 16, Openings)
+		|| !TryMultiplyNonNegative(Entrances.Num(), 16, Openings)
 		|| !TryAdd(Scan, Openings, PerCell) || !TryAdd(PerCell, 80, PerCell)
 		|| !TryMultiplyNonNegative(PerCell, Cells, Work) || !TryAdd(Work, Samples + 1, Work)
 		|| !TryMultiplyNonNegative(Work, ChunkView.Num(), Work))
@@ -116,7 +132,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 	{
 		return I::Error(E::BudgetExceeded, TEXT("Roof check work exhausted"));
 	}
-	for (const FVoxelLandM5Entrance& Entrance : Plan.Entrances)
+	for (const FVoxelLandM5Entrance& Entrance : Entrances)
 	{
 		if (IsCancelled())
 		{
@@ -246,7 +262,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 							return I::Error(E::ArithmeticOverflow, TEXT("Roof influence coordinates overflow"));
 						}
 					}
-					for (const FVoxelLandM5Entrance& Opening : Plan.Entrances)
+					for (const FVoxelLandM5Entrance& Opening : Entrances)
 					{
 						bool bContains = true;
 						for (int32 A = 0; A < 3; ++A)

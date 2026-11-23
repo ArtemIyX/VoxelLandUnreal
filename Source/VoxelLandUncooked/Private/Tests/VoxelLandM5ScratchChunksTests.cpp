@@ -10,6 +10,7 @@
 #include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5ProtectionGrid.h"
 #include "Generation/VoxelLandM5ScratchChunks.h"
+#include "Generation/VoxelLandM5ScratchRoofCheck.h"
 #include "Hash/xxhash.h"
 #include "Misc/AutomationTest.h"
 
@@ -20,6 +21,7 @@ bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 {
 	bool bSuccess = false, bHalos = false, bHashes = false, bBounds = false, bLimit = false;
 	bool bCancelled = false, bForeign = false, bDependencies = false, bLifetime = false;
+	bool bPocketChunks = false, bPocketSettings = false, bPocketRoof = false;
 	const bool bSetup = Async(EAsyncExecution::ThreadPool, [&]() {
 		const auto Never = [] { return false; };
 		FVoxelLandProgramDraft Draft;
@@ -195,6 +197,30 @@ bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 			++(Changed.*Version);
 			bDependencies &= !Out->MatchesDependencies(*Window, *Candidate, Protection.Get(), 42, Changed);
 		}
+		// Pocket-only stages carry no invented network candidate or openings.
+		FVoxelLandM5CaveSettings Pocket = Settings;
+		Pocket.bEnabled = false;
+		Pocket.Topology.EntranceCount = 1; // Inactive network topology must not create openings.
+		Pocket.Pockets.bEnabled = true;
+		Pocket.Pockets.AmplitudeCm = 0;
+		Pocket.Pockets.MinDepthCm = 0;
+		Pocket.Pockets.MaxDepthCm = 5000;
+		TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> PocketChunks;
+		D = FVoxelLandM5ScratchChunks::Build(Pocket, Manifest, 42, Window.ToSharedRef(), nullptr, Protection,
+			FIntVector(0, 0, 0), FIntVector(1, 1, 1), 1, Budget.ToSharedRef(), Never, PocketChunks);
+		bPocketChunks = D.Code == EVoxelLandM5ErrorCode::None && PocketChunks
+			&& PocketChunks->GetChunks().Num() == 1
+			&& PocketChunks->MatchesDependencies(*Window, static_cast<const FVoxelLandM5CandidateResult*>(nullptr),
+				Protection.Get(), 42, Manifest);
+		if (bPocketChunks)
+		{
+			FVoxelLandM5CaveSettings ChangedPocket = Pocket;
+			++ChangedPocket.Pockets.Salt;
+			bPocketSettings = PocketChunks->MatchesSettings(Pocket) && !PocketChunks->MatchesSettings(ChangedPocket);
+			bPocketRoof = VoxelLand::M5::ScratchRoofCheck::Check(Pocket, 42, Manifest, Window.ToSharedRef(), nullptr,
+				Protection, PocketChunks.ToSharedRef(), Budget.ToSharedRef(), Never).Code == EVoxelLandM5ErrorCode::None;
+		}
+		PocketChunks.Reset();
 		TWeakPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> WeakWindow = Window;
 		TWeakPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> WeakCandidate = Candidate;
 		TWeakPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> WeakProtection = Protection;
@@ -217,6 +243,9 @@ bool FVoxelLandM5ScratchChunksTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("foreign budget preserves output"), bForeign);
 	TestTrue(TEXT("dependency identities, seed and every version match"), bDependencies);
 	TestTrue(TEXT("scratch chunks retain and release their immediate inputs"), bLifetime);
+	TestTrue(TEXT("pocket-only chunks have no network candidate"), bPocketChunks);
+	TestTrue(TEXT("pocket-only settings are bound exactly"), bPocketSettings);
+	TestTrue(TEXT("pocket-only roof check has no network openings"), bPocketRoof);
 	return bSetup;
 }
 

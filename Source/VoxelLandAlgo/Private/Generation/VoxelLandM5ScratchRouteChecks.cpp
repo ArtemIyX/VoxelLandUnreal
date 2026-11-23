@@ -48,7 +48,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRouteChecks::CheckAll(const FVoxelL
 	}
 	const FVoxelLandM5RegionCoord& Region = Candidate->GetPlan().Region;
 	if (!Chunks->MatchesDependencies(Window.Get(), Candidate.Get(), Protection.Get(), WorldSeed, Manifest)
-		|| !Candidate->MatchesSource(Settings, WorldSeed, Region))
+		|| !Chunks->MatchesSettings(Settings) || !Candidate->MatchesSource(Settings, WorldSeed, Region))
 	{
 		return FVoxelLandM5ScratchRouteChecksInternals::Error(E::InvalidInput, TEXT("Scratch route sources do not match"));
 	}

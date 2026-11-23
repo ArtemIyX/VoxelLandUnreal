@@ -200,11 +200,13 @@ public:
 bool FVoxelLandM5CandidateResult::MatchesSource(
 	const FVoxelLandM5CaveSettings& S, int64 Seed, const FVoxelLandM5RegionCoord& Region) const
 {
-	const auto& A = SourceSettings;
-	const auto M5CandidateSamePoint = [](const FVoxelLandM5PointCm& X, const FVoxelLandM5PointCm& Y) {
-		return X.X == Y.X && X.Y == Y.Y && X.Z == Y.Z;
-	};
-	return SourceSeed == Seed && SourceRegion.X == Region.X && SourceRegion.Y == Region.Y && A.bEnabled == S.bEnabled
+	return SourceSeed == Seed && SourceRegion.X == Region.X && SourceRegion.Y == Region.Y
+		&& SameSettings(SourceSettings, S);
+}
+
+bool FVoxelLandM5CandidateResult::SameSettings(const FVoxelLandM5CaveSettings& A, const FVoxelLandM5CaveSettings& S)
+{
+	return A.bEnabled == S.bEnabled
 		&& A.StageId == S.StageId && A.Salt == S.Salt && A.PlanningMode == S.PlanningMode
 		&& FVoxelLandM5CandidatePlannerInternals::M5CandidateSamePoint(A.Bounds.MinInclusive, S.Bounds.MinInclusive)
 		&& FVoxelLandM5CandidatePlannerInternals::M5CandidateSamePoint(A.Bounds.MaxExclusive, S.Bounds.MaxExclusive)

@@ -33,6 +33,16 @@ bool FVoxelLandM5CaptureTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("base seed captured"), Snapshot.Base.Seed, Config->Seed);
 	TestEqual(TEXT("bounds copied"), Snapshot.Caves.Bounds.MaxExclusive.X, int64(3000));
 	TestTrue(TEXT("M5 snapshot matches"), Config->MatchesM5Snapshot(Snapshot));
+	TestEqual(TEXT("legacy water uses descriptor v1"), Snapshot.Manifest.Descriptor, 1);
+	Config->Caves.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
+	FVoxelLandM5WorldSnapshot DrySnapshot;
+	TestTrue(TEXT("dry declaration captured"), Config->CaptureM5Snapshot(DrySnapshot, Error));
+	TestEqual(TEXT("dry declaration uses descriptor v2"), DrySnapshot.Manifest.Descriptor, 2);
+	TestTrue(TEXT("dry snapshot matches"), Config->MatchesM5Snapshot(DrySnapshot));
+	DrySnapshot.Manifest.Descriptor = 1;
+	TestFalse(TEXT("dry snapshot rejects legacy descriptor"), Config->MatchesM5Snapshot(DrySnapshot));
+	Config->Caves.Water.Policy = EVoxelLandM5WaterPolicy::Ignore;
+	TestTrue(TEXT("legacy snapshot remains fresh after restoring policy"), Config->MatchesM5Snapshot(Snapshot));
 	FVoxelLandM4WorldSnapshot M4Snapshot;
 	TestFalse(TEXT("M4 path still rejects enabled cave"), Config->CaptureSnapshot(M4Snapshot, Error));
 

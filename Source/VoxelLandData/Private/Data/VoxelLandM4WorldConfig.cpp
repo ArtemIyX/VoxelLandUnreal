@@ -535,6 +535,10 @@ bool UVoxelLandM4WorldConfig::CaptureM5Snapshot(FVoxelLandM5WorldSnapshot& OutSn
 	}
 	FVoxelLandM5WorldSnapshot S;
 	S.Caves = Caves;
+	if (S.Caves.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld)
+	{
+		S.Manifest.Descriptor = 2;
+	}
 	if (!CaptureSnapshotInternal(S.Base, OutError, true))
 	{
 		return false;
@@ -741,7 +745,11 @@ bool UVoxelLandM4WorldConfig::MatchesM5SnapshotInternal(
 	{
 		return false;
 	}
-	const FVoxelLandM5StageManifest CurrentManifest;
+	FVoxelLandM5StageManifest CurrentManifest;
+	if (Caves.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld)
+	{
+		CurrentManifest.Descriptor = 2;
+	}
 	return FVoxelLandM5StageManifest::StaticStruct()->CompareScriptStruct(&S.Manifest, &CurrentManifest, 0)
 		&& FVoxelLandM5CaveSettings::StaticStruct()->CompareScriptStruct(&Caves, &S.Caves, 0)
 		&& MatchesSnapshotInternal(S.Base, bCompareBakedCurves, true);

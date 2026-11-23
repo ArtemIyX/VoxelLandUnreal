@@ -49,7 +49,7 @@ bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5World
 	const auto& T = C.Topology;
 	const auto& N = C.Pockets;
 	const auto& L = C.Limits;
-	if (S.FormatVersion != 1 || M.Descriptor != 1 || M.Seed != 1 || M.Topology != 1 || M.Geometry != 1
+	if (S.FormatVersion != 1 || (M.Descriptor != 1 && M.Descriptor != 2) || M.Seed != 1 || M.Topology != 1 || M.Geometry != 1
 		|| M.RegionalOwnership != 1 || M.PocketNoise != 1 || M.SurfaceValidation != 1 || M.Composition != 1)
 	{
 		Error = TEXT("Unsupported M5 snapshot or algorithm version");
@@ -83,11 +83,13 @@ bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5World
 		Error = TEXT("Invalid or out-of-range M5 identity inputs");
 		return false;
 	}
-	// No supplied mask/provider representation or water classification execution is
-	// retained yet. Never encode those as though their data were captured.
-	if (C.Protection.bRequireMask || C.Water.Policy != EVoxelLandM5WaterPolicy::Ignore)
+	// Descriptor 2 binds the owner's whole-world dry declaration. Descriptor 1
+	// retains its pre-existing Ignore encoding; neither encodes a supplied mask.
+	const bool bLegacyWater = M.Descriptor == 1 && C.Water.Policy == EVoxelLandM5WaterPolicy::Ignore;
+	const bool bDryWorld = M.Descriptor == 2 && C.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld;
+	if (C.Protection.bRequireMask || (!bLegacyWater && !bDryWorld))
 	{
-		Error = TEXT("M5 identity does not yet support supplied protection masks or water policies");
+		Error = TEXT("M5 identity does not support this mask or descriptor/water policy combination");
 		return false;
 	}
 	if (C.bEnabled

@@ -8,5 +8,7 @@ enum class EVoxelLandM5WaterPolicy : uint8
 {
 	Ignore,
 	RejectFlooded,
-	AllowAndMark
+	AllowAndMark,
+	// Authoritative world input: no water exists anywhere in the declared world.
+	DryWorld
 };

@@ -74,6 +74,7 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 	bool bFixture = false, bCapture = false, bMatch = false, bBaseIncluded = false, bAllFields = true;
 	bool bBadVersion = false, bCorrupt = false, bAtomic = false, bDisabled = false, bPocketOnly = false;
 	bool bUnsupportedMask = false, bUnsupportedWater = false, bInvalidBounds = false, bBaseRevalidated = false;
+	bool bDryIdentity = false, bDryMismatchAtomic = false, bV2IgnoreAtomic = false;
 	bool bBadCandidateLimit = false, bBadAttempts = false, bBadRadii = false, bBadPeriod = false;
 	bool bBadAmplitudeNegative = false, bBadAmplitudeHigh = false;
 	bool bRegionalCapture = false, bBadAlignment = false, bBadRegionVoxelMultiple = false, bZeroVoxel = false;
@@ -263,6 +264,20 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 		X.Caves.Water.Policy = EVoxelLandM5WaterPolicy::RejectFlooded;
 		bUnsupportedWater = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error);
 		X = S;
+		X.Caves.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
+		X.Manifest.Descriptor = 2;
+		FVoxelLandM5IdentityRecord Dry;
+		bDryIdentity = VoxelLandM5WorldIdentity::Capture(X, Dry, Error)
+			&& Dry.CanonicalBytes != Identity.CanonicalBytes && VoxelLandM5WorldIdentity::Matches(Dry, X, Error);
+		Retained = Identity;
+		X.Manifest.Descriptor = 1;
+		bDryMismatchAtomic = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error)
+			&& Retained.CanonicalBytes == Identity.CanonicalBytes && Retained.FingerprintBits == Identity.FingerprintBits;
+		X = S;
+		X.Manifest.Descriptor = 2;
+		bV2IgnoreAtomic = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error)
+			&& Retained.CanonicalBytes == Identity.CanonicalBytes && Retained.FingerprintBits == Identity.FingerprintBits;
+		X = S;
 		X.Caves.Bounds.MaxExclusive.X = X.Caves.Bounds.MinInclusive.X;
 		bInvalidBounds = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error);
 		X = S;
@@ -332,6 +347,9 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("pocket-only settings select M5 identity"), bPocketOnly);
 	TestTrue(TEXT("missing protection mask rejected"), bUnsupportedMask);
 	TestTrue(TEXT("unsupported water policy rejected"), bUnsupportedWater);
+	TestTrue(TEXT("dry identity is distinct and matches"), bDryIdentity);
+	TestTrue(TEXT("dry v1 mismatch preserves identity"), bDryMismatchAtomic);
+	TestTrue(TEXT("ignore v2 mismatch preserves identity"), bV2IgnoreAtomic);
 	TestTrue(TEXT("invalid bounds rejected"), bInvalidBounds);
 	TestTrue(TEXT("candidate limit below chamber count rejected"), bBadCandidateLimit);
 	TestTrue(TEXT("route and junction resource caps enforce both bounds"), bInvalidRouteLimits);

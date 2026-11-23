@@ -24,6 +24,7 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	bool bInvalidAtomic = false;
 	bool bMismatchAtomic = false;
 	bool bPolicyAtomic = false;
+	bool bDryIdentity = false, bDryMismatchAtomic = false;
 	bool bCancelledAtomic = false;
 	bool bBudgetAtomic = false;
 	bool bHeld = false;
@@ -109,6 +110,28 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 			  && Identity->GetIdentity().FingerprintBits == Expected.FingerprintBits
 			  && Identity->GetIdentity().FormatVersion == Expected.FormatVersion;
 		const FVoxelLandM5MeteredIdentity* Before = Identity.Get();
+		Snapshot.Caves.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
+		Snapshot.Manifest.Descriptor = 2;
+		FVoxelLandM5IdentityRecord DryExpected;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> DryBudget;
+		TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe> DryIdentity;
+		if (VoxelLandM5WorldIdentity::Capture(Snapshot, DryExpected, Error)
+			&& FVoxelLandM5Budget::TryCreate(64ll * 1024 * 1024, 100000000, DryBudget))
+		{
+			const FVoxelLandM5Diagnostic DryResult = FVoxelLandM5MeteredIdentity::Capture(
+				Snapshot, DryBudget.ToSharedRef(), [] { return false; }, DryIdentity);
+			bDryIdentity = DryResult.Code == EVoxelLandM5ErrorCode::None && DryIdentity.IsValid()
+				&& DryIdentity->GetIdentity().CanonicalBytes == DryExpected.CanonicalBytes
+				&& DryExpected.CanonicalBytes != Expected.CanonicalBytes;
+			const FVoxelLandM5MeteredIdentity* DryBefore = DryIdentity.Get();
+			Snapshot.Manifest.Descriptor = 1;
+			const FVoxelLandM5Diagnostic DryMismatch = FVoxelLandM5MeteredIdentity::Capture(
+				Snapshot, DryBudget.ToSharedRef(), [] { return false; }, DryIdentity);
+			bDryMismatchAtomic = DryBefore && DryMismatch.Code == EVoxelLandM5ErrorCode::InvalidInput
+				&& DryIdentity.Get() == DryBefore;
+		}
+		Snapshot.Manifest.Descriptor = 1;
+		Snapshot.Caves.Water.Policy = EVoxelLandM5WaterPolicy::Ignore;
 		Snapshot.Caves.Salt++;
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ChangedBudget;
 		if (!FVoxelLandM5Budget::TryCreate(64ll * 1024 * 1024, 100000000, ChangedBudget))
@@ -169,6 +192,8 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("invalid version preserves output"), bInvalidAtomic);
 	TestTrue(TEXT("mismatched M4 input preserves output"), bMismatchAtomic);
 	TestTrue(TEXT("unimplemented water and masks reject atomically"), bPolicyAtomic);
+	TestTrue(TEXT("metered dry identity matches unmetered identity"), bDryIdentity);
+	TestTrue(TEXT("metered dry descriptor mismatch preserves output"), bDryMismatchAtomic);
 	TestTrue(TEXT("cancellation preserves output"), bCancelledAtomic);
 	TestTrue(TEXT("budget exhaustion preserves output"), bBudgetAtomic);
 	TestTrue(TEXT("identity lease survives reader"), bHeld);

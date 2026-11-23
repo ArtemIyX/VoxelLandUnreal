@@ -312,6 +312,13 @@ bool FVoxelLandM5EntranceFailureTest::RunTest(const FString& Parameters)
 	S.Water.Policy = EVoxelLandM5WaterPolicy::RejectFlooded;
 	TestTrue(TEXT("flooding rejected"),
 		M5RunEntrance(S, 42, Input, Wet, [] { return false; }, Out).Code == EVoxelLandM5ErrorCode::Blocked);
+	S.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
+	TestTrue(TEXT("flooding contradicts dry declaration"),
+		M5RunEntrance(S, 42, Input, Wet, [] { return false; }, Out).Code == EVoxelLandM5ErrorCode::Unproven);
+	TestEqual(TEXT("dry contradiction preserves output"), Out.Region.X, int64(733));
+	FVoxelLandM5CavePlan DryOut;
+	TestTrue(TEXT("dry declaration accepts dry surface"),
+		M5RunEntrance(S, 42, Input, M5FlatSurface, [] { return false; }, DryOut).Code == EVoxelLandM5ErrorCode::None);
 	S.Water.Policy = EVoxelLandM5WaterPolicy::AllowAndMark;
 	FVoxelLandM5CavePlan WetOut;
 	if (TestTrue(TEXT("flooding allowed"), M5RunEntrance(

@@ -176,7 +176,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 		|| 2 * int64(T.MaxTunnelRadiusCm) < int64(Capsule.StandingHeightCm) + 2 * int64(Capsule.ClearanceMarginCm)
 		|| (S.Water.Policy != EVoxelLandM5WaterPolicy::Ignore
 			&& S.Water.Policy != EVoxelLandM5WaterPolicy::RejectFlooded
-			&& S.Water.Policy != EVoxelLandM5WaterPolicy::AllowAndMark))
+			&& S.Water.Policy != EVoxelLandM5WaterPolicy::AllowAndMark
+			&& S.Water.Policy != EVoxelLandM5WaterPolicy::DryWorld))
 	{
 		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance settings or candidate plan"));
@@ -342,6 +343,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			if (SurfaceError.Code != EVoxelLandM5ErrorCode::None)
 			{
 				return SurfaceError;
+			}
+			if (bFlooded && S.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld)
+			{
+				return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+					EVoxelLandM5ErrorCode::Unproven, TEXT("Water observation contradicts the dry-world declaration"));
 			}
 			if (Slope < 0 || Slope > 90 || Surface.Z < -FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit
 				|| Surface.Z > FVoxelLandM5EntrancePlannerInternals::M5EntranceCoordinateLimit

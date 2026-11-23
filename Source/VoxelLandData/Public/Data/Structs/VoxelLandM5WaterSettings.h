@@ -4,13 +4,15 @@
 #include "Data/Enums/VoxelLandM5WaterPolicy.h"
 #include "VoxelLandM5WaterSettings.generated.h"
 
-// Classification policy only; no water or fluid simulation is implied.
+// DryWorld is an authoritative owner declaration for the entire generated world.
+// The owner must ensure no water exists there. Other policies do not declare a dry world.
+// This record does not simulate or inspect water.
 USTRUCT()
 struct VOXELLANDDATA_API FVoxelLandM5WaterSettings
 {
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = "Water",
-		meta = (ToolTip = "Policy for planned caves and pockets below the water level."))
+		meta = (ToolTip = "DryWorld declares the entire generated world water-free; other policies do not certify dry caves."))
 	EVoxelLandM5WaterPolicy Policy = EVoxelLandM5WaterPolicy::Ignore;
 	UPROPERTY(EditAnywhere, Category = "Water", meta = (ToolTip = "Logical world water level in centimetres."))
 	int64 LevelCm = 0;

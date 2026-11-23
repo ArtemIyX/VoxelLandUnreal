@@ -386,6 +386,7 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 	Definition->Common.Peaks = Config->Peaks;
 	Definition->Common.Seed = -12345;
 	Definition->Common.Caves.bEnabled = true;
+	Definition->Common.Caves.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
 	Definition->Common.Caves.StageId = FGuid(11, 22, 33, 44);
 	Definition->Finite.bGlobalErosion = false;
 	Definition->Finite.CellsX = Definition->Finite.CellsY = 4;
@@ -435,7 +436,8 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 			&& Snapshot.Caves.Bounds.MinInclusive.Z == -9000 && Snapshot.Caves.Bounds.MaxExclusive.Z == 11000);
 	TestTrue(TEXT("enabled settings and version retained"),
 		Snapshot.Caves.bEnabled && Snapshot.Caves.StageId == Definition->Common.Caves.StageId
-			&& Snapshot.FormatVersion == 1 && Snapshot.Manifest.Descriptor == 1 && Snapshot.Manifest.Composition == 1);
+			&& Snapshot.Caves.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld
+			&& Snapshot.FormatVersion == 1 && Snapshot.Manifest.Descriptor == 2 && Snapshot.Manifest.Composition == 1);
 	TestTrue(TEXT("control payload retained"),
 		Snapshot.Base.Continental.Payload.ProgramFingerprint == Control.Payload.ProgramFingerprint);
 

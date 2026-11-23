@@ -53,6 +53,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::Build(const FVoxelLandM5
 	Budget->GetLimits(MaxBytes, MaxWork);
 	if (Settings.PlanningMode != EVoxelLandM5PlanningMode::Finite || !Settings.StageId.IsValid()
 		|| Settings.bEnabled != Candidate.IsValid() || (!Settings.bEnabled && !Settings.Pockets.bEnabled)
+		|| (Settings.Pockets.bEnabled && (Settings.Pockets.AmplitudeCm < 0 || Settings.Pockets.AmplitudeCm > 1048576))
 		|| Settings.Limits.MaxBytes < 1 || Settings.Limits.MaxValidationWork < 1
 		|| MaxBytes > Settings.Limits.MaxBytes || MaxWork > Settings.Limits.MaxValidationWork
 		|| !Window.IsOwnedBy(*Budget)
@@ -169,6 +170,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::Build(const FVoxelLandM5
 		}
 	}
 	return FVoxelLandM5CarveMasks::Build(Size, Window.GetOriginCm(), Spacing, Start, Count, Window.GetDensity(),
-		FullProtection, FullEntrance, Settings.RoofThicknessCm, Settings.Pockets.bEnabled,
+		FullProtection, FullEntrance, Settings.RoofThicknessCm,
+		Settings.Pockets.bEnabled && Settings.Pockets.AmplitudeCm != 0,
 		Settings.Pockets.MinDepthCm, Settings.Pockets.MaxDepthCm, true, Budget, IsCancelled, OutMasks);
 }

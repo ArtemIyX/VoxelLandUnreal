@@ -21,6 +21,7 @@ bool FVoxelLandM5WindowFinalFieldTest::RunTest(const FString& Parameters)
 	bool bPocketOnly = false, bPocketCandidateRejected = false, bBothDisabledRejected = false;
 	bool bNetworkCandidateMissing = false;
 	bool bPocketVersionRejected = false, bPocketCancel = false, bPocketMaskMissing = false;
+	bool bZeroPocket = false, bZeroVersion = false, bNegativeAmplitude = false;
 	const bool bSetup = Async(EAsyncExecution::ThreadPool, [&]() {
 		const auto Never = [] { return false; };
 		FVoxelLandProgramDraft Draft;
@@ -153,6 +154,41 @@ bool FVoxelLandM5WindowFinalFieldTest::RunTest(const FString& Parameters)
 		D = VoxelLand::M5::WindowFinalField::Build(Pocket, Manifest, -1, *HighWindow,
 			nullptr, nullptr, PocketStart, One, Budget.ToSharedRef(), [] { return true; }, PocketField);
 		bPocketCancel = D.Code == EVoxelLandM5ErrorCode::Cancelled && PocketField == PocketOriginal;
+
+		// A zero-height M4 field has an exact zero-valued sample at the origin.
+		// An enabled zero-amplitude pocket must not require a strict depth crossing.
+		TArray<int32> ZeroHeights;
+		ZeroHeights.Init(0, 81 * 81);
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> ZeroGrid;
+		if (!FVoxelLandM4HeightGrid::Create(-4000, -4000, 80, 80, 100, ZeroHeights, ZeroGrid)) { return false; }
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> ZeroGenerator;
+		if (FVoxelLandGenerator::CreateM4HeightField(GeneratorSettings, ZeroGrid, false, ZeroGenerator) || !ZeroGenerator)
+		{ return false; }
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> ZeroWindow;
+		if (FVoxelLandM5BaselineWindow::Build(ZeroGenerator.ToSharedRef(), FIntVector(-1, -1, -1),
+				FIntVector(1, 1, 1), 8, Budget.ToSharedRef(), Never, ZeroWindow).Code != EVoxelLandM5ErrorCode::None
+			|| !ZeroWindow) { return false; }
+		const auto ZeroOrigin = ZeroWindow->GetOriginCm();
+		const FIntVector ZeroStart(int32(-ZeroOrigin.X / 100), int32(-ZeroOrigin.Y / 100), int32(-ZeroOrigin.Z / 100));
+		const FIntVector ZeroSize = ZeroWindow->GetSize();
+		const int32 ZeroIndex = ZeroStart.X + ZeroSize.X * (ZeroStart.Y + ZeroSize.Y * ZeroStart.Z);
+		const int16 BaselineAtOrigin = ZeroWindow->GetDensity()[ZeroIndex];
+		Pocket.Pockets.AmplitudeCm = 0;
+		TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe> ZeroField;
+		D = VoxelLand::M5::WindowFinalField::Build(Pocket, Manifest, -1, *ZeroWindow,
+			nullptr, nullptr, ZeroStart, One, Budget.ToSharedRef(), Never, ZeroField);
+		bZeroPocket = BaselineAtOrigin == 0 && D.Code == EVoxelLandM5ErrorCode::None && ZeroField
+			&& ZeroField->GetDensity().Num() == 1 && ZeroField->GetDensity()[0] == BaselineAtOrigin;
+		const auto ZeroOriginal = ZeroField;
+		Manifest.PocketNoise = 2;
+		D = VoxelLand::M5::WindowFinalField::Build(Pocket, Manifest, -1, *ZeroWindow,
+			nullptr, nullptr, ZeroStart, One, Budget.ToSharedRef(), Never, ZeroField);
+		bZeroVersion = D.Code == EVoxelLandM5ErrorCode::UnsupportedVersion && ZeroField == ZeroOriginal;
+		Manifest.PocketNoise = 1;
+		Pocket.Pockets.AmplitudeCm = -1;
+		D = VoxelLand::M5::WindowFinalField::Build(Pocket, Manifest, -1, *ZeroWindow,
+			nullptr, nullptr, ZeroStart, One, Budget.ToSharedRef(), Never, ZeroField);
+		bNegativeAmplitude = D.Code == EVoxelLandM5ErrorCode::InvalidInput && ZeroField == ZeroOriginal;
 		return true;
 	}).Get();
 	TestTrue(TEXT("fixture setup"), bSetup);
@@ -168,6 +204,9 @@ bool FVoxelLandM5WindowFinalFieldTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("pocket version preserves output"), bPocketVersionRejected);
 	TestTrue(TEXT("pocket stage requires authored mask when requested"), bPocketMaskMissing);
 	TestTrue(TEXT("pocket cancellation preserves output"), bPocketCancel);
+	TestTrue(TEXT("zero-amplitude pocket preserves zero-crossing baseline"), bZeroPocket);
+	TestTrue(TEXT("zero-amplitude pocket still validates version"), bZeroVersion);
+	TestTrue(TEXT("negative pocket amplitude is rejected atomically"), bNegativeAmplitude);
 	return bSetup;
 }
 

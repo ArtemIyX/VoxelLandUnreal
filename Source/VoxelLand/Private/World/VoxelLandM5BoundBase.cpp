@@ -216,6 +216,56 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 	return {};
 }
 
+FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::CheckFiniteProtectionCurrent(
+	const UVoxelLandFiniteWorld& Definition, bool& bOutCurrent) const
+{
+	if (!IsInGameThread() || !IsValid(&Definition))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Protection freshness requires a valid finite world and the game thread"));
+	}
+	const UVoxelLandM5ProtectionAsset* Mask = Definition.ProtectionMask.Get();
+	if (Mask && !IsValid(Mask))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid finite protection asset"));
+	}
+	if (!Budget->TryChargeWork(1))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Protection freshness work budget exhausted"));
+	}
+	const bool bCurrentRequired = Definition.Common.Caves.Protection.bRequireMask || Mask != nullptr;
+	if (bCurrentRequired != Snapshot.Caves.Protection.bRequireMask || (Mask != nullptr) != ProtectionGrid.IsValid())
+	{
+		bOutCurrent = false;
+		return {};
+	}
+	if (!Mask)
+	{
+		// A required mask without a source is never current.
+		bOutCurrent = !bCurrentRequired;
+		return {};
+	}
+	const FVoxelLandM5PointCm& Origin = ProtectionGrid->GetOriginCm();
+	const TConstArrayView<uint8> Cells = ProtectionGrid->GetCells();
+	if (Mask->CellCounts != ProtectionGrid->GetSize() || Mask->OriginCm.X != Origin.X
+		|| Mask->OriginCm.Y != Origin.Y || Mask->OriginCm.Z != Origin.Z
+		|| Mask->SpacingCm != ProtectionGrid->GetSpacingCm() || Mask->Cells.Num() != Cells.Num())
+	{
+		bOutCurrent = false;
+		return {};
+	}
+	if (!Budget->TryChargeWork(Cells.Num()))
+	{
+		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Protection freshness work budget exhausted"));
+	}
+	// No callbacks or event pumping while the game-thread asset is borrowed.
+	bOutCurrent = FMemory::Memcmp(Mask->Cells.GetData(), Cells.GetData(), Cells.Num()) == 0;
+	return {};
+}
+
 TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> FVoxelLandM5BaseCapture::ClaimGridLease() const
 {
 	FScopeLock Lock(&GridLeaseMutex);

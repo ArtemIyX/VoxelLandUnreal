@@ -446,7 +446,14 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 		Snapshot.Base.Continental.Payload.ProgramFingerprint == Control.Payload.ProgramFingerprint);
 
 	const TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Prior = Capture;
+	bool bProtectionCurrent = false;
+	const auto NoMaskCurrent = Capture->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+	TestTrue(TEXT("omitted optional protection remains current"),
+		NoMaskCurrent.Code == EVoxelLandM5ErrorCode::None && bProtectionCurrent);
 	Definition->Common.Caves.Protection.bRequireMask = true;
+	const auto RequiredNow = Capture->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+	TestTrue(TEXT("new required mask is stale"),
+		RequiredNow.Code == EVoxelLandM5ErrorCode::None && !bProtectionCurrent);
 	const auto MissingMask = FVoxelLandM5BaseCapture::Capture(*Definition.Get(), Budget.ToSharedRef(), Capture);
 	if (MissingMask.Code == EVoxelLandM5ErrorCode::BudgetExceeded)
 	{
@@ -482,6 +489,30 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 			MaskCapture.Code == EVoxelLandM5ErrorCode::None && WithMask.IsValid()
 				&& WithMask->GetProtectionGrid().IsValid() && WithMask->GetSnapshot().Caves.Protection.bRequireMask))
 		{
+			bProtectionCurrent = false;
+			const auto InitiallyCurrent = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("captured protection matches authoring"),
+				InitiallyCurrent.Code == EVoxelLandM5ErrorCode::None && bProtectionCurrent);
+			Mask->Cells[0] = 0;
+			const auto Edited = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("edited protection is stale"), Edited.Code == EVoxelLandM5ErrorCode::None && !bProtectionCurrent);
+			Mask->Cells[0] = 1;
+			UVoxelLandM5ProtectionAsset* Replacement = NewObject<UVoxelLandM5ProtectionAsset>(Definition.Get());
+			Replacement->CellCounts = Mask->CellCounts;
+			Replacement->OriginCm = Mask->OriginCm;
+			Replacement->SpacingCm = Mask->SpacingCm;
+			Replacement->Cells = Mask->Cells;
+			Definition->ProtectionMask = Replacement;
+			const auto Identical = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("equivalent replacement has the same protection content"),
+				Identical.Code == EVoxelLandM5ErrorCode::None && bProtectionCurrent);
+			Replacement->OriginCm.X++;
+			const auto Moved = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("changed geometry is stale"), Moved.Code == EVoxelLandM5ErrorCode::None && !bProtectionCurrent);
+			Definition->ProtectionMask = nullptr;
+			const auto Removed = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("removed protection is stale"), Removed.Code == EVoxelLandM5ErrorCode::None && !bProtectionCurrent);
+			Definition->ProtectionMask = Mask;
 			Mask->Cells[0] = 0;
 			FVoxelLandM5PointCm SampleOrigin;
 			SampleOrigin.X = SampleOrigin.Y = SampleOrigin.Z = 10;
@@ -491,6 +522,22 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("captured protection remains immutable after asset edit"),
 				Projected.Code == EVoxelLandM5ErrorCode::None && Samples.IsValid()
 					&& Samples->GetSamples().Num() == 1 && Samples->GetSamples()[0] == 1);
+			FVoxelLandM5Diagnostic WrongThread;
+			bProtectionCurrent = true;
+			Async(EAsyncExecution::ThreadPool, [&WithMask, &Definition, &WrongThread, &bProtectionCurrent] {
+				WrongThread = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			}).Wait();
+			TestTrue(TEXT("wrong thread preserves result"),
+				WrongThread.Code == EVoxelLandM5ErrorCode::InvalidInput && bProtectionCurrent);
+			Mask->Cells[0] = 1;
+			int64 MaxBytes = 0, MaxWork = 0, LiveBytes = 0, PeakBytes = 0, Work = 0;
+			Budget->GetLimits(MaxBytes, MaxWork);
+			Budget->GetUsage(LiveBytes, PeakBytes, Work);
+			TestTrue(TEXT("consume remaining work"), Budget->TryChargeWork(MaxWork - Work));
+			bProtectionCurrent = false;
+			const auto Exhausted = WithMask->CheckFiniteProtectionCurrent(*Definition.Get(), bProtectionCurrent);
+			TestTrue(TEXT("exhausted work preserves result"),
+				Exhausted.Code == EVoxelLandM5ErrorCode::BudgetExceeded && !bProtectionCurrent);
 		}
 		Definition->ProtectionMask = nullptr;
 	}

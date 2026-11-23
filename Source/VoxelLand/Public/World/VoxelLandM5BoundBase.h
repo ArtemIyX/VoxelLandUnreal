@@ -39,13 +39,17 @@ public:
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture);
 	const FVoxelLandM5WorldSnapshot& GetSnapshot() const { return Snapshot; }
-	// The immutable mask is not yet bound into identity or freshness checks.
-	// A present mask forces the captured effective bRequireMask flag so existing
-	// identity validation fails closed until that binding is implemented.
+	// Descriptor 3 metered identity can bind this immutable grid. Publication
+	// still requires source freshness and final-field safety checks.
 	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> GetProtectionGrid() const
 	{
 		return ProtectionGrid;
 	}
+	// Game thread only. Compares only the finite protection dependency, not the
+	// rest of the world definition or any publication certificate. Charges this
+	// capture's shared work budget before scanning. A changed dependency returns
+	// success with false; invalid input or exhausted budget leaves output alone.
+	FVoxelLandM5Diagnostic CheckFiniteProtectionCurrent(const UVoxelLandFiniteWorld& Definition, bool& bOutCurrent) const;
 
 private:
 	friend class FVoxelLandM5BoundBase;

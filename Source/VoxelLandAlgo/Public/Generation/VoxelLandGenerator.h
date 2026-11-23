@@ -41,6 +41,7 @@ public:
 	const TArray<TSharedPtr<const IVoxelLandOperator, ESPMode::ThreadSafe>>& GetOperators() const { return Operators; }
 
 private:
+	friend class FVoxelLandGenerator;
 	static FVoxelLandError ValidateInternal(const FVoxelLandProgramDraft& Draft,
 		const FVoxelLandOperatorRegistrySnapshot& Providers, TFunctionRef<bool()> IsCancelled, bool bMetered,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease,
@@ -60,6 +61,13 @@ class VOXELLANDALGO_API FVoxelLandGenerator : public TSharedFromThis<FVoxelLandG
 {
 public:
 	static FVoxelLandError Create(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	// Worker thread only. The program must be metered against Budget and all
+	// settings must remain immutable during the call. This admits logical setup
+	// allocations/work only; workers, native providers, input storage and allocator
+	// overhead require separate admission. Failure or cancellation preserves output.
+	static FVoxelLandM5Diagnostic CreateMetered(const FVoxelLandGeneratorSettings& Settings,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	// Transitional explicit height-field source. The VM's pure code is not run;
 	// only its optional built-in Smooth Density stage is retained. External operators and filters
@@ -127,7 +135,8 @@ private:
 	static FVoxelLandError CreateInternal(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		const FVoxelLandM4OverhangConfig* Overhang,
-		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
+		TFunctionRef<bool()>* IsCancelled = nullptr);
 	FVoxelLandError GenerateM4Density(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset,
 		FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const;
@@ -142,6 +151,8 @@ private:
 	FVoxelLandGenerator() = default;
 	FVoxelLandGenerator(const FVoxelLandGenerator&) = delete;
 	FVoxelLandGenerator& operator=(const FVoxelLandGenerator&) = delete;
+	// Declared first so its admission outlives all generator-owned allocations.
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> M5Lease;
 	TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> M4HeightGrid;
 	TSharedPtr<const FVoxelLandM4UnlimitedConfig, ESPMode::ThreadSafe> M4Unlimited;

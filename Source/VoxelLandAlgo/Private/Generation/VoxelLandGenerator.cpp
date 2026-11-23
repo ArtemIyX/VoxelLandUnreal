@@ -6,6 +6,8 @@
 #include "Generation/VoxelLandM4Overhang.h"
 #include "Generation/VoxelLandM4Unlimited.h"
 #include "Generation/VoxelLandM5ChunkFootprint.h"
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
 #include "Data/Structs/VoxelLandM5ChunkFootprint.h"
 #include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
@@ -125,6 +127,138 @@ FVoxelLandError FVoxelLandGenerator::Create(const FVoxelLandGeneratorSettings& S
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
 	return CreateInternal(Settings, nullptr, false, nullptr, OutGenerator);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandGenerator::CreateMetered(const FVoxelLandGeneratorSettings& Settings,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	using E = EVoxelLandM5ErrorCode;
+	FVoxelLandM5Diagnostic Failure;
+	Failure.Stage = TEXT("M5.GeneratorSetup");
+	if (IsCancelled())
+	{
+		Failure.Code = E::Cancelled;
+		Failure.Message = TEXT("Generator setup cancelled");
+		return Failure;
+	}
+	if (IsInGameThread() || !Settings.Program.IsValid() || !Settings.Program->M5Lease.IsValid()
+		|| !Budget->OwnsLease(*Settings.Program->M5Lease))
+	{
+		Failure.Code = E::InvalidInput;
+		Failure.Message = TEXT("Generator requires a same-budget metered program and a worker thread");
+		return Failure;
+	}
+	const FVoxelLandProgramDraft& Draft = Settings.Program->GetData();
+	const int64 Parameters = Draft.Parameters.Num();
+	const int64 Seeds = Draft.Seeds.Num();
+	const int64 Noise = Draft.Noise.Num();
+	const int64 Overrides = int64(Settings.Profile.FloatOverrides.Num()) + Settings.Profile.IntOverrides.Num()
+		+ Settings.Profile.BoolOverrides.Num();
+	// These limits match metered program validation.
+	if (Parameters > 4096 || Seeds > 4096 || Noise > 4096 || Overrides > 4096
+		|| !Draft.ExternalOperators.IsEmpty() || Draft.ExternalFilterIndex != INDEX_NONE)
+	{
+		Failure.Code = E::InvalidInput;
+		Failure.Message = TEXT("Generator setup exceeds supported metered inputs");
+		return Failure;
+	}
+	if (!Budget->TryChargeWork(Overrides + 1))
+	{
+		Failure.Code = E::BudgetExceeded;
+		Failure.Message = TEXT("Generator input inspection budget exhausted");
+		return Failure;
+	}
+	// Inspect lengths without copying names. NameOf later validates each character.
+	for (const TPair<FString, float>& Entry : Settings.Profile.FloatOverrides)
+	{
+		if (IsCancelled())
+		{
+			Failure.Code = E::Cancelled;
+			Failure.Message = TEXT("Generator setup cancelled");
+			return Failure;
+		}
+		if (Entry.Key.Len() > 256)
+		{
+			Failure.Code = E::InvalidInput;
+			Failure.Message = TEXT("Generator override name too long");
+			return Failure;
+		}
+	}
+	for (const TPair<FString, int32>& Entry : Settings.Profile.IntOverrides)
+	{
+		if (IsCancelled())
+		{
+			Failure.Code = E::Cancelled;
+			Failure.Message = TEXT("Generator setup cancelled");
+			return Failure;
+		}
+		if (Entry.Key.Len() > 256)
+		{
+			Failure.Code = E::InvalidInput;
+			Failure.Message = TEXT("Generator override name too long");
+			return Failure;
+		}
+	}
+	for (const TPair<FString, bool>& Entry : Settings.Profile.BoolOverrides)
+	{
+		if (IsCancelled())
+		{
+			Failure.Code = E::Cancelled;
+			Failure.Message = TEXT("Generator setup cancelled");
+			return Failure;
+		}
+		if (Entry.Key.Len() > 256)
+		{
+			Failure.Code = E::InvalidInput;
+			Failure.Message = TEXT("Generator override name too long");
+			return Failure;
+		}
+	}
+	// Bounded counts make all terms representable. Work includes worst-case
+	// quadratic hash-table comparisons of bounded names; bytes cover retained
+	// profile/arrays and temporary maps, excluding allocator overhead.
+	const int64 Names = Parameters + Overrides + 1;
+	const int64 Work = 65536 + Names * Names * 512 + Seeds * 64 + Noise * 64;
+	const int64 Bytes = 65536 + Names * 8192 + Seeds * 64 + Noise * 64;
+	if (!Budget->TryChargeWork(Work))
+	{
+		Failure.Code = E::BudgetExceeded;
+		Failure.Message = TEXT("Generator setup work budget exhausted");
+		return Failure;
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	if (!Budget->TryReserveBytes(Bytes, Lease))
+	{
+		Failure.Code = E::BudgetExceeded;
+		Failure.Message = TEXT("Generator setup memory budget exhausted");
+		return Failure;
+	}
+	if (IsCancelled())
+	{
+		Failure.Code = E::Cancelled;
+		Failure.Message = TEXT("Generator setup cancelled");
+		return Failure;
+	}
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
+	const FVoxelLandError Error = CreateInternal(Settings, nullptr, false, nullptr, Result, &IsCancelled);
+	if (Error || !Result.IsValid())
+	{
+		Failure.Code = Error.Code == EVoxelLandErrorCode::Cancelled ? E::Cancelled : E::InvalidInput;
+		Failure.Message = Error.Message;
+		return Failure;
+	}
+	if (IsCancelled())
+	{
+		Failure.Code = E::Cancelled;
+		Failure.Message = TEXT("Generator setup cancelled");
+		return Failure;
+	}
+	// Create produces an unpublished mutable object. Install the lease before
+	// publishing so it outlives all generator-owned allocations.
+	ConstCastSharedPtr<FVoxelLandGenerator>(Result)->M5Lease = MoveTemp(Lease);
+	OutGenerator = MoveTemp(Result);
+	return {};
 }
 
 FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,
@@ -339,7 +473,7 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSettings& Settings,
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 	const FVoxelLandM4OverhangConfig* Overhang,
-	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, TFunctionRef<bool()>* IsCancelled)
 {
 	OutGenerator.Reset();
 	if (IsInGameThread())
@@ -372,7 +506,16 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 			uint32(VoxelLandDeterminism::DeriveNodeSeed(Settings.WorldSeed, Overhang->NodeId, Overhang->Salt));
 		Result->M4OverhangSeed = Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll);
 	}
-	Result->Profile = Profile;
+	if (IsCancelled)
+	{
+		// Copy each override during its validation loop so cancellation is
+		// observed between bounded entries, rather than after a bulk map copy.
+		Result->Profile.VoxelSizeCm = Profile.VoxelSizeCm;
+	}
+	else
+	{
+		Result->Profile = Profile;
+	}
 	Result->Options = Options;
 	const FVoxelLandProgramDraft& D = Program->GetData();
 	TMap<FString, int32> Slots;
@@ -380,6 +523,10 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	Result->IntParameters.SetNumZeroed(D.Parameters.Num());
 	for (int32 ParameterIndex = 0; ParameterIndex < D.Parameters.Num(); ++ParameterIndex)
 	{
+		if (IsCancelled && (*IsCancelled)())
+		{
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Generator setup cancelled"));
+		}
 		const FVoxelLandParameterSlot& P = D.Parameters[ParameterIndex];
 		Slots.Add(P.Name, ParameterIndex);
 		Result->FloatParameters[ParameterIndex] = P.FloatDefault;
@@ -388,6 +535,10 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	TSet<FString> Seen;
 	for (const TPair<FString, float>& Entry : Profile.FloatOverrides)
 	{
+		if (IsCancelled && (*IsCancelled)())
+		{
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Generator setup cancelled"));
+		}
 		FString Name;
 		if (!FVoxelLandGeneratorValidation::NameOf(Entry.Key, Name) || Seen.Contains(Name))
 		{
@@ -402,9 +553,17 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 				TEXT("Unknown, wrong type, or non-finite float override"), Entry.Key);
 		}
 		Result->FloatParameters[*Slot] = Entry.Value;
+		if (IsCancelled)
+		{
+			Result->Profile.FloatOverrides.Add(Entry.Key, Entry.Value);
+		}
 	}
 	for (const TPair<FString, int32>& Entry : Profile.IntOverrides)
 	{
+		if (IsCancelled && (*IsCancelled)())
+		{
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Generator setup cancelled"));
+		}
 		FString Name;
 		if (!FVoxelLandGeneratorValidation::NameOf(Entry.Key, Name) || Seen.Contains(Name))
 		{
@@ -419,9 +578,17 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 				EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type int override"), Entry.Key);
 		}
 		Result->IntParameters[*Slot] = Entry.Value;
+		if (IsCancelled)
+		{
+			Result->Profile.IntOverrides.Add(Entry.Key, Entry.Value);
+		}
 	}
 	for (const TPair<FString, bool>& Entry : Profile.BoolOverrides)
 	{
+		if (IsCancelled && (*IsCancelled)())
+		{
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Generator setup cancelled"));
+		}
 		FString Name;
 		if (!FVoxelLandGeneratorValidation::NameOf(Entry.Key, Name) || Seen.Contains(Name))
 		{
@@ -436,9 +603,17 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 				EVoxelLandErrorCode::InvalidParameter, TEXT("Unknown or wrong type bool override"), Entry.Key);
 		}
 		Result->IntParameters[*Slot] = Entry.Value ? 1 : 0;
+		if (IsCancelled)
+		{
+			Result->Profile.BoolOverrides.Add(Entry.Key, Entry.Value);
+		}
 	}
 	for (const FVoxelLandSeedSlot& Seed : D.Seeds)
 	{
+		if (IsCancelled && (*IsCancelled)())
+		{
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Generator setup cancelled"));
+		}
 		const uint64 FullSeed = VoxelLandDeterminism::DeriveNodeSeed(WorldSeed, Seed.NodeId, Seed.Salt);
 		Result->FullSeeds.Add(FullSeed);
 		const uint32 Bits = uint32(FullSeed);
@@ -453,6 +628,10 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	};
 	for (const FVoxelLandNoiseConfig& N : D.Noise)
 	{
+		if (IsCancelled && (*IsCancelled)())
+		{
+			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::Cancelled, TEXT("Generator setup cancelled"));
+		}
 		const float Frequency = FloatValue(N.Frequency), Gain = FloatValue(N.Gain),
 					Lacunarity = FloatValue(N.Lacunarity);
 		const int32 Octaves = IntValue(N.Octaves);

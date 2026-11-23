@@ -5,7 +5,12 @@
 #include "Data/Structs/VoxelLandM4IdentityRecord.h"
 #include "Data/Structs/VoxelLandM5IdentityRecord.h"
 #include "Data/Structs/VoxelLandM5WorldSnapshot.h"
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5CheckedMath.h"
 #include "Hash/xxhash.h"
+#include "World/VoxelLandM5MeteredIdentity.h"
+#include "World/VoxelLandM5MeteredM4Identity.h"
 #include "World/VoxelLandM4WorldIdentity.h"
 #include "World/VoxelLandM5CanonicalSettings.h"
 
@@ -17,6 +22,9 @@ public:
 	static int64 M5IdentityHash(const TArray<uint8>& Bytes);
 	static bool M5ValidAxis(int64 Min, int64 Max);
 	static bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error);
+	static bool Serialize(const FVoxelLandM5WorldSnapshot& S, const FVoxelLandM4IdentityRecord& Base,
+		FVoxelLandM5IdentityRecord& Out, FString& Error);
+	static FVoxelLandM5Diagnostic MeteredError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
 };
 
 int64 FVoxelLandM5WorldIdentityInternals::M5IdentityHash(const TArray<uint8>& Bytes)
@@ -118,6 +126,12 @@ bool VoxelLandM5WorldIdentity::Capture(
 	{
 		return false;
 	}
+	return FVoxelLandM5WorldIdentityInternals::Serialize(S, Base, Out, Error);
+}
+
+bool FVoxelLandM5WorldIdentityInternals::Serialize(const FVoxelLandM5WorldSnapshot& S,
+	const FVoxelLandM4IdentityRecord& Base, FVoxelLandM5IdentityRecord& Out, FString& Error)
+{
 	const auto& C = S.Caves;
 	const auto& M = S.Manifest;
 	FCanonicalWriter W;
@@ -148,6 +162,113 @@ bool VoxelLandM5WorldIdentity::Capture(
 	Result.FingerprintBits = FVoxelLandM5WorldIdentityInternals::M5IdentityHash(Result.CanonicalBytes);
 	Out = MoveTemp(Result);
 	return true;
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5WorldIdentityInternals::MeteredError(
+	EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+{
+	FVoxelLandM5Diagnostic Result;
+	Result.Code = Code;
+	Result.Stage = TEXT("M5.MeteredIdentity");
+	Result.Message = Message;
+	return Result;
+}
+
+FVoxelLandM5MeteredIdentity::FVoxelLandM5MeteredIdentity(
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
+	: Lease(MoveTemp(InLease))
+{
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::Capture(const FVoxelLandM5WorldSnapshot& Snapshot,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe>& OutIdentity)
+{
+	using E = EVoxelLandM5ErrorCode;
+	using namespace VoxelLand::M5::CheckedMath;
+	if (IsCancelled())
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::Cancelled, TEXT("M5 identity cancelled"));
+	}
+	if (IsInGameThread())
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::InvalidInput, TEXT("M5 identity requires a worker thread"));
+	}
+	int64 LimitBytes = 0;
+	int64 LimitWork = 0;
+	Budget->GetLimits(LimitBytes, LimitWork);
+	if (LimitBytes > Snapshot.Caves.Limits.MaxBytes || LimitWork > Snapshot.Caves.Limits.MaxValidationWork)
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::InvalidInput, TEXT("M5 budget exceeds settings limits"));
+	}
+	if (!Budget->TryChargeWork(1))
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::BudgetExceeded, TEXT("M5 identity validation budget exhausted"));
+	}
+	FString Reason;
+	if (!FVoxelLandM5WorldIdentityInternals::M5ValidSettings(Snapshot, Reason))
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::InvalidInput, *Reason);
+	}
+	TSharedPtr<const FVoxelLandM5MeteredM4Identity, ESPMode::ThreadSafe> Base;
+	FVoxelLandM5Diagnostic Diagnostic =
+		FVoxelLandM5MeteredM4Identity::Capture(Snapshot.Base, Budget, IsCancelled, Base);
+	if (Diagnostic.Code != E::None)
+	{
+		return Diagnostic;
+	}
+	if (!Base.IsValid())
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::Unproven, TEXT("M4 identity missing"));
+	}
+	constexpr int64 EncodingAllowance = 4096;
+	int64 Upper = 0;
+	int64 Bytes = 0;
+	int64 Work = 0;
+	if (!TryAdd(Base->GetIdentity().CanonicalBytes.Num(), EncodingAllowance, Upper)
+		|| Upper > FVoxelLandM5WorldIdentityInternals::M5IdentityMaxBytes || !TryMultiplyNonNegative(Upper, 4, Bytes)
+		|| !TryMultiplyNonNegative(Upper, 8, Work))
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::BudgetExceeded, TEXT("M5 identity exceeds admission limits"));
+	}
+	if (!Budget->TryChargeWork(Work))
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::BudgetExceeded, TEXT("M5 identity work budget exhausted"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	if (!Budget->TryReserveBytes(Bytes, Lease))
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::BudgetExceeded, TEXT("M5 identity memory budget exhausted"));
+	}
+	if (IsCancelled())
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::Cancelled, TEXT("M5 identity cancelled"));
+	}
+	FVoxelLandM5IdentityRecord Identity;
+	if (!FVoxelLandM5WorldIdentityInternals::Serialize(Snapshot, Base->GetIdentity(), Identity, Reason))
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::InvalidInput, *Reason);
+	}
+	if (IsCancelled())
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::Cancelled, TEXT("M5 identity cancelled"));
+	}
+	if (Identity.CanonicalBytes.Num() > Upper)
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::Unproven, TEXT("M5 identity exceeded admitted size"));
+	}
+	TSharedPtr<FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe> Output =
+		MakeShareable(new FVoxelLandM5MeteredIdentity(MoveTemp(Lease)));
+	Output->Identity = MoveTemp(Identity);
+	OutIdentity = MoveTemp(Output);
+	return {};
 }
 
 bool VoxelLandM5WorldIdentity::Matches(

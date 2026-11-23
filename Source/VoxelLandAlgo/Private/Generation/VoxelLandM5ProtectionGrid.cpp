@@ -39,6 +39,11 @@ FVoxelLandM5ProtectionSamples::FVoxelLandM5ProtectionSamples(
 {
 }
 
+bool FVoxelLandM5ProtectionGrid::IsOwnedBy(const FVoxelLandM5Budget& Budget) const
+{
+	return Lease.IsValid() && Budget.OwnsLease(*Lease);
+}
+
 FVoxelLandM5Diagnostic FVoxelLandM5ProtectionGrid::Capture(FIntVector Size,
 	const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm, TConstArrayView<uint8> Cells,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,

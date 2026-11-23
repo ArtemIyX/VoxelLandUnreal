@@ -6,6 +6,7 @@
 #include "Data/Structs/VoxelLandM5WorldSnapshot.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5ProtectionGrid.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Hash/xxhash.h"
@@ -25,6 +26,8 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	bool bMismatchAtomic = false;
 	bool bPolicyAtomic = false;
 	bool bDryIdentity = false, bDryMismatchAtomic = false;
+	bool bMaskIdentity = false, bMaskCellChanged = false, bMaskGeometryChanged = false;
+	bool bMaskMissing = false, bMaskForeign = false, bMaskWater = false, bMaskCancelled = false;
 	bool bCancelledAtomic = false;
 	bool bBudgetAtomic = false;
 	bool bHeld = false;
@@ -130,6 +133,69 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 			bDryMismatchAtomic = DryBefore && DryMismatch.Code == EVoxelLandM5ErrorCode::InvalidInput
 				&& DryIdentity.Get() == DryBefore;
 		}
+		// Descriptor 3 retains the full mask rather than only its hash.
+		Snapshot.Manifest.Descriptor = 3;
+		Snapshot.Caves.Protection.bRequireMask = true;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> MaskBudget;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ForeignBudget;
+		if (!FVoxelLandM5Budget::TryCreate(64ll * 1024 * 1024, 100000000, MaskBudget)
+			|| !FVoxelLandM5Budget::TryCreate(64ll * 1024 * 1024, 100000000, ForeignBudget))
+		{
+			return;
+		}
+		TArray<uint8> Cells;
+		Cells.Init(0, 8);
+		FVoxelLandM5PointCm MaskOrigin;
+		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Grid;
+		if (FVoxelLandM5ProtectionGrid::Capture(FIntVector(2, 2, 2), MaskOrigin, 100, Cells,
+				MaskBudget.ToSharedRef(), [] { return false; }, Grid).Code != EVoxelLandM5ErrorCode::None)
+		{
+			return;
+		}
+		TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe> MaskIdentity;
+		const auto MaskOk = FVoxelLandM5MeteredIdentity::Capture(
+			Snapshot, *Grid, MaskBudget.ToSharedRef(), [] { return false; }, MaskIdentity);
+		bMaskIdentity = MaskOk.Code == EVoxelLandM5ErrorCode::None && MaskIdentity.IsValid()
+			&& MaskIdentity->GetIdentity().CanonicalBytes != DryExpected.CanonicalBytes;
+		const FVoxelLandM5MeteredIdentity* MaskBefore = MaskIdentity.Get();
+		const auto Missing = FVoxelLandM5MeteredIdentity::Capture(
+			Snapshot, MaskBudget.ToSharedRef(), [] { return false; }, MaskIdentity);
+		bMaskMissing = MaskBefore && Missing.Code == EVoxelLandM5ErrorCode::InvalidInput && MaskIdentity.Get() == MaskBefore;
+		const auto Foreign = FVoxelLandM5MeteredIdentity::Capture(
+			Snapshot, *Grid, ForeignBudget.ToSharedRef(), [] { return false; }, MaskIdentity);
+		bMaskForeign = Foreign.Code == EVoxelLandM5ErrorCode::InvalidInput && MaskIdentity.Get() == MaskBefore;
+		const auto CancelMask = FVoxelLandM5MeteredIdentity::Capture(
+			Snapshot, *Grid, MaskBudget.ToSharedRef(), [] { return true; }, MaskIdentity);
+		bMaskCancelled = CancelMask.Code == EVoxelLandM5ErrorCode::Cancelled && MaskIdentity.Get() == MaskBefore;
+		Snapshot.Caves.Water.Policy = EVoxelLandM5WaterPolicy::Ignore;
+		const auto WrongWater = FVoxelLandM5MeteredIdentity::Capture(
+			Snapshot, *Grid, MaskBudget.ToSharedRef(), [] { return false; }, MaskIdentity);
+		bMaskWater = WrongWater.Code == EVoxelLandM5ErrorCode::InvalidInput && MaskIdentity.Get() == MaskBefore;
+		Snapshot.Caves.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
+		Cells[7] = 1;
+		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> ChangedGrid;
+		TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe> MaskChanged;
+		if (FVoxelLandM5ProtectionGrid::Capture(FIntVector(2, 2, 2), MaskOrigin, 100, Cells,
+				MaskBudget.ToSharedRef(), [] { return false; }, ChangedGrid).Code == EVoxelLandM5ErrorCode::None)
+		{
+			const auto ChangedMask = FVoxelLandM5MeteredIdentity::Capture(
+				Snapshot, *ChangedGrid, MaskBudget.ToSharedRef(), [] { return false; }, MaskChanged);
+			bMaskCellChanged = MaskBefore && ChangedMask.Code == EVoxelLandM5ErrorCode::None && MaskChanged.IsValid()
+				&& MaskChanged->GetIdentity().CanonicalBytes != MaskIdentity->GetIdentity().CanonicalBytes;
+		}
+		Cells[7] = 0;
+		MaskOrigin.X = -100;
+		TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> ShiftedGrid;
+		TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe> MaskShifted;
+		if (FVoxelLandM5ProtectionGrid::Capture(FIntVector(2, 2, 2), MaskOrigin, 100, Cells,
+				MaskBudget.ToSharedRef(), [] { return false; }, ShiftedGrid).Code == EVoxelLandM5ErrorCode::None)
+		{
+			const auto ShiftedMask = FVoxelLandM5MeteredIdentity::Capture(
+				Snapshot, *ShiftedGrid, MaskBudget.ToSharedRef(), [] { return false; }, MaskShifted);
+			bMaskGeometryChanged = MaskBefore && ShiftedMask.Code == EVoxelLandM5ErrorCode::None && MaskShifted.IsValid()
+				&& MaskShifted->GetIdentity().CanonicalBytes != MaskIdentity->GetIdentity().CanonicalBytes;
+		}
+		Snapshot.Caves.Protection.bRequireMask = false;
 		Snapshot.Manifest.Descriptor = 1;
 		Snapshot.Caves.Water.Policy = EVoxelLandM5WaterPolicy::Ignore;
 		Snapshot.Caves.Salt++;
@@ -194,6 +260,13 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("unimplemented water and masks reject atomically"), bPolicyAtomic);
 	TestTrue(TEXT("metered dry identity matches unmetered identity"), bDryIdentity);
 	TestTrue(TEXT("metered dry descriptor mismatch preserves output"), bDryMismatchAtomic);
+	TestTrue(TEXT("dry mask descriptor has an identity"), bMaskIdentity);
+	TestTrue(TEXT("mask cell changes identity"), bMaskCellChanged);
+	TestTrue(TEXT("mask origin changes identity"), bMaskGeometryChanged);
+	TestTrue(TEXT("missing mask rejects atomically"), bMaskMissing);
+	TestTrue(TEXT("foreign mask budget rejects atomically"), bMaskForeign);
+	TestTrue(TEXT("mask requires dry policy"), bMaskWater);
+	TestTrue(TEXT("mask identity cancellation preserves output"), bMaskCancelled);
 	TestTrue(TEXT("cancellation preserves output"), bCancelledAtomic);
 	TestTrue(TEXT("budget exhaustion preserves output"), bBudgetAtomic);
 	TestTrue(TEXT("identity lease survives reader"), bHeld);

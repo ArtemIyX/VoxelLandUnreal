@@ -207,7 +207,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 	}
 	if (Snapshot.Caves.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld)
 	{
-		Snapshot.Manifest.Descriptor = 2;
+		Snapshot.Manifest.Descriptor = ProtectionGrid ? 3 : 2;
 	}
 	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandM5BaseCapture(
 		InBudget, MoveTemp(Metadata), MoveTemp(GridLease), MoveTemp(ValidationLease), MoveTemp(Snapshot),

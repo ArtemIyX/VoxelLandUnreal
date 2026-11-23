@@ -16,6 +16,13 @@ public:
 	FVoxelLandM5ProtectionGrid(const FVoxelLandM5ProtectionGrid&) = delete;
 	FVoxelLandM5ProtectionGrid& operator=(const FVoxelLandM5ProtectionGrid&) = delete;
 
+	// Views remain valid only while this immutable grid is retained.
+	FIntVector GetSize() const { return Size; }
+	const FVoxelLandM5PointCm& GetOriginCm() const { return OriginCm; }
+	int64 GetSpacingCm() const { return SpacingCm; }
+	TConstArrayView<uint8> GetCells() const { return Cells; }
+	bool IsOwnedBy(const FVoxelLandM5Budget& Budget) const;
+
 	// Input must remain immutable during capture. Size is a cell count, origin is
 	// its minimum corner, and spacing is positive whole centimetres. A 1 marks
 	// the whole cell protected. The supplied box must include every relevant

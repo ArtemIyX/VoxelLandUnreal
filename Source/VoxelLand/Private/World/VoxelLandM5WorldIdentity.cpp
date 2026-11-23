@@ -8,6 +8,7 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
+#include "Generation/VoxelLandM5ProtectionGrid.h"
 #include "Hash/xxhash.h"
 #include "World/VoxelLandM5MeteredIdentity.h"
 #include "World/VoxelLandM5MeteredM4Identity.h"
@@ -21,9 +22,12 @@ public:
 	static constexpr int32 M5IdentityMaxBytes = 8 * 1024 * 1024 + 4096;
 	static int64 M5IdentityHash(const TArray<uint8>& Bytes);
 	static bool M5ValidAxis(int64 Min, int64 Max);
-	static bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error);
+	static bool M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, bool bHasMask, FString& Error);
 	static bool Serialize(const FVoxelLandM5WorldSnapshot& S, const FVoxelLandM4IdentityRecord& Base,
+		const FVoxelLandM5ProtectionGrid* Mask, TFunctionRef<bool()> IsCancelled, bool& bInterrupted,
 		FVoxelLandM5IdentityRecord& Out, FString& Error);
+	static bool NeverCancelled() { return false; }
+	static void U64(FCanonicalWriter& W, uint64 Value) { W.U32(uint32(Value)); W.U32(uint32(Value >> 32)); }
 	static FVoxelLandM5Diagnostic MeteredError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
 };
 
@@ -40,7 +44,7 @@ bool FVoxelLandM5WorldIdentityInternals::M5ValidAxis(int64 Min, int64 Max)
 	return Min >= -M5IdentityCoordinateLimit && Max <= M5IdentityCoordinateLimit + 1 && Min < Max;
 }
 
-bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, FString& Error)
+bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5WorldSnapshot& S, bool bHasMask, FString& Error)
 {
 	const auto& C = S.Caves;
 	const auto& M = S.Manifest;
@@ -49,7 +53,7 @@ bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5World
 	const auto& T = C.Topology;
 	const auto& N = C.Pockets;
 	const auto& L = C.Limits;
-	if (S.FormatVersion != 1 || (M.Descriptor != 1 && M.Descriptor != 2) || M.Seed != 1 || M.Topology != 1 || M.Geometry != 1
+	if (S.FormatVersion != 1 || (M.Descriptor != 1 && M.Descriptor != 2 && M.Descriptor != 3) || M.Seed != 1 || M.Topology != 1 || M.Geometry != 1
 		|| M.RegionalOwnership != 1 || M.PocketNoise != 1 || M.SurfaceValidation != 1 || M.Composition != 1)
 	{
 		Error = TEXT("Unsupported M5 snapshot or algorithm version");
@@ -83,11 +87,15 @@ bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5World
 		Error = TEXT("Invalid or out-of-range M5 identity inputs");
 		return false;
 	}
-	// Descriptor 2 binds the owner's whole-world dry declaration. Descriptor 1
-	// retains its pre-existing Ignore encoding; neither encodes a supplied mask.
-	const bool bLegacyWater = M.Descriptor == 1 && C.Water.Policy == EVoxelLandM5WaterPolicy::Ignore;
-	const bool bDryWorld = M.Descriptor == 2 && C.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld;
-	if (C.Protection.bRequireMask || (!bLegacyWater && !bDryWorld))
+	// Descriptors 1 and 2 retain their original no-mask encodings. Descriptor 3
+	// requires both a supplied grid and the owner-declared dry-world policy.
+	const bool bLegacyWater = M.Descriptor == 1 && C.Water.Policy == EVoxelLandM5WaterPolicy::Ignore
+		&& !C.Protection.bRequireMask && !bHasMask;
+	const bool bDryWorld = M.Descriptor == 2 && C.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld
+		&& !C.Protection.bRequireMask && !bHasMask;
+	const bool bDryMask = M.Descriptor == 3 && C.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld
+		&& C.Protection.bRequireMask && bHasMask;
+	if (!bLegacyWater && !bDryWorld && !bDryMask)
 	{
 		Error = TEXT("M5 identity does not support this mask or descriptor/water policy combination");
 		return false;
@@ -119,7 +127,7 @@ bool VoxelLandM5WorldIdentity::Capture(
 	const FVoxelLandM5WorldSnapshot& S, FVoxelLandM5IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if (!FVoxelLandM5WorldIdentityInternals::M5ValidSettings(S, Error))
+	if (!FVoxelLandM5WorldIdentityInternals::M5ValidSettings(S, false, Error))
 	{
 		return false;
 	}
@@ -128,11 +136,14 @@ bool VoxelLandM5WorldIdentity::Capture(
 	{
 		return false;
 	}
-	return FVoxelLandM5WorldIdentityInternals::Serialize(S, Base, Out, Error);
+	bool bInterrupted = false;
+	return FVoxelLandM5WorldIdentityInternals::Serialize(S, Base, nullptr,
+		FVoxelLandM5WorldIdentityInternals::NeverCancelled, bInterrupted, Out, Error);
 }
 
 bool FVoxelLandM5WorldIdentityInternals::Serialize(const FVoxelLandM5WorldSnapshot& S,
-	const FVoxelLandM4IdentityRecord& Base, FVoxelLandM5IdentityRecord& Out, FString& Error)
+	const FVoxelLandM4IdentityRecord& Base, const FVoxelLandM5ProtectionGrid* Mask, TFunctionRef<bool()> IsCancelled,
+	bool& bInterrupted, FVoxelLandM5IdentityRecord& Out, FString& Error)
 {
 	const auto& C = S.Caves;
 	const auto& M = S.Manifest;
@@ -153,6 +164,32 @@ bool FVoxelLandM5WorldIdentityInternals::Serialize(const FVoxelLandM5WorldSnapsh
 	W.U32(uint32(Base.CanonicalBytes.Num()));
 	W.Bytes.Append(Base.CanonicalBytes);
 	VoxelLandM5CanonicalSettings::Write(W, C);
+	if (Mask)
+	{
+		const FIntVector Size = Mask->GetSize();
+		const FVoxelLandM5PointCm& Origin = Mask->GetOriginCm();
+		W.U32(uint32(Size.X));
+		W.U32(uint32(Size.Y));
+		W.U32(uint32(Size.Z));
+		U64(W, uint64(Origin.X));
+		U64(W, uint64(Origin.Y));
+		U64(W, uint64(Origin.Z));
+		U64(W, uint64(Mask->GetSpacingCm()));
+		const TConstArrayView<uint8> Cells = Mask->GetCells();
+		W.U32(uint32(Cells.Num()));
+		for (int32 Offset = 0; Offset < Cells.Num();)
+		{
+			if (IsCancelled())
+			{
+				bInterrupted = true;
+				Error = TEXT("M5 identity cancelled");
+				return false;
+			}
+			const int32 Count = FMath::Min(4096, Cells.Num() - Offset);
+			W.Bytes.Append(Cells.GetData() + Offset, Count);
+			Offset += Count;
+		}
+	}
 	if (W.Bytes.Num() > FVoxelLandM5WorldIdentityInternals::M5IdentityMaxBytes)
 	{
 		Error = TEXT("M5 identity exceeds its supported size");
@@ -186,6 +223,20 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::Capture(const FVoxelLandM5Wo
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe>& OutIdentity)
 {
+	return CaptureInternal(Snapshot, nullptr, Budget, IsCancelled, OutIdentity);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::Capture(const FVoxelLandM5WorldSnapshot& Snapshot,
+	const FVoxelLandM5ProtectionGrid& ProtectionGrid, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe>& OutIdentity)
+{
+	return CaptureInternal(Snapshot, &ProtectionGrid, Budget, IsCancelled, OutIdentity);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::CaptureInternal(const FVoxelLandM5WorldSnapshot& Snapshot,
+	const FVoxelLandM5ProtectionGrid* ProtectionGrid, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5MeteredIdentity, ESPMode::ThreadSafe>& OutIdentity)
+{
 	using E = EVoxelLandM5ErrorCode;
 	using namespace VoxelLand::M5::CheckedMath;
 	if (IsCancelled())
@@ -196,6 +247,11 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::Capture(const FVoxelLandM5Wo
 	{
 		return FVoxelLandM5WorldIdentityInternals::MeteredError(
 			E::InvalidInput, TEXT("M5 identity requires a worker thread"));
+	}
+	if (ProtectionGrid && !ProtectionGrid->IsOwnedBy(*Budget))
+	{
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			E::InvalidInput, TEXT("Protection grid belongs to a different budget"));
 	}
 	int64 LimitBytes = 0;
 	int64 LimitWork = 0;
@@ -211,7 +267,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::Capture(const FVoxelLandM5Wo
 			E::BudgetExceeded, TEXT("M5 identity validation budget exhausted"));
 	}
 	FString Reason;
-	if (!FVoxelLandM5WorldIdentityInternals::M5ValidSettings(Snapshot, Reason))
+	if (!FVoxelLandM5WorldIdentityInternals::M5ValidSettings(Snapshot, ProtectionGrid != nullptr, Reason))
 	{
 		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::InvalidInput, *Reason);
 	}
@@ -231,6 +287,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::Capture(const FVoxelLandM5Wo
 	int64 Bytes = 0;
 	int64 Work = 0;
 	if (!TryAdd(Base->GetIdentity().CanonicalBytes.Num(), EncodingAllowance, Upper)
+		|| (ProtectionGrid && !TryAdd(Upper, ProtectionGrid->GetCells().Num(), Upper))
 		|| Upper > FVoxelLandM5WorldIdentityInternals::M5IdentityMaxBytes || !TryMultiplyNonNegative(Upper, 4, Bytes)
 		|| !TryMultiplyNonNegative(Upper, 8, Work))
 	{
@@ -253,9 +310,12 @@ FVoxelLandM5Diagnostic FVoxelLandM5MeteredIdentity::Capture(const FVoxelLandM5Wo
 		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::Cancelled, TEXT("M5 identity cancelled"));
 	}
 	FVoxelLandM5IdentityRecord Identity;
-	if (!FVoxelLandM5WorldIdentityInternals::Serialize(Snapshot, Base->GetIdentity(), Identity, Reason))
+	bool bInterrupted = false;
+	if (!FVoxelLandM5WorldIdentityInternals::Serialize(
+			Snapshot, Base->GetIdentity(), ProtectionGrid, IsCancelled, bInterrupted, Identity, Reason))
 	{
-		return FVoxelLandM5WorldIdentityInternals::MeteredError(E::InvalidInput, *Reason);
+		return FVoxelLandM5WorldIdentityInternals::MeteredError(
+			bInterrupted ? E::Cancelled : E::InvalidInput, *Reason);
 	}
 	if (IsCancelled())
 	{

@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Generation/VoxelLandM5CandidatePlanner.h"
+#include "Generation/VoxelLandM5EntrancePlanner.h"
 #include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Misc/AutomationTest.h"
@@ -23,6 +24,7 @@ FVoxelLandM5CaveSettings M5CandidateSettings()
 	S.Topology.MaxChambers = 3;
 	S.Topology.MinLoops = 0;
 	S.Topology.MaxLoops = 0;
+	S.Topology.EntranceCount = 0;
 	S.Topology.MinTunnelRadiusCm = 1;
 	S.Topology.MaxTunnelRadiusCm = 1;
 	S.Topology.MinChamberRadiusCm = 2;
@@ -420,6 +422,89 @@ bool FVoxelLandM5CandidateSharedBudgetTest::RunTest(const FString& Parameters)
 	}
 	E = VoxelLand::M5::CandidatePlanner::Build(S, 42, {}, StageBudget.ToSharedRef(), [] { return false; }, Unchanged);
 	TestTrue(TEXT("stage work exact bound succeeds"), M5CandidateSuccess(E));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5CandidateOptionalLoopsTest, "VoxelLand.M5.Candidates.OptionalLoopCapacity", M5CandidateFlags)
+bool FVoxelLandM5CandidateOptionalLoopsTest::RunTest(const FString& Parameters)
+{
+	FVoxelLandM5CaveSettings S = M5CandidateSettings();
+	S.Topology.MaxLoops = MAX_int32;
+	FM5CandidateHandle Roomy;
+	const FVoxelLandM5Diagnostic RoomyError = M5CandidateBuild(S, 42, {}, [] { return false; }, Roomy);
+	if (!TestTrue(TEXT("roomy candidate succeeds"), M5CandidateSuccess(RoomyError))
+		|| !TestTrue(TEXT("roomy candidate returned"), Roomy.IsValid())
+		|| !TestEqual(TEXT("seed selects the available loop"), Roomy->GetPlan().Connections.Num(), 3))
+	{
+		return false;
+	}
+	S.Limits.MaxSegments = 2;
+	FM5CandidateHandle Out;
+	const FVoxelLandM5Diagnostic Error = M5CandidateBuild(S, 42, {}, [] { return false; }, Out);
+	if (!TestTrue(TEXT("optional loops yield to the spanning tree"), M5CandidateSuccess(Error))
+		|| !TestTrue(TEXT("candidate returned"), Out.IsValid()))
+	{
+		return false;
+	}
+	if (!TestEqual(TEXT("spanning tree retained"), Out->GetPlan().Connections.Num(), 2))
+	{
+		return false;
+	}
+	TestFalse(TEXT("first edge is required"), Out->GetPlan().Connections[0].bLoop);
+	TestFalse(TEXT("second edge is required"), Out->GetPlan().Connections[1].bLoop);
+	const FVoxelLandM5CandidateResult* Before = Out.Get();
+	S.Topology.MinLoops = 1;
+	const FVoxelLandM5Diagnostic Required = M5CandidateBuild(S, 42, {}, [] { return false; }, Out);
+	TestTrue(TEXT("required loop fails when capacity is exhausted"),
+		Required.Code == EVoxelLandM5ErrorCode::BudgetExceeded);
+	TestTrue(TEXT("required loop failure preserves output"), Out.Get() == Before);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5CandidateEntranceCapacityTest, "VoxelLand.M5.Candidates.EntranceCapacity", M5CandidateFlags)
+bool FVoxelLandM5CandidateEntranceCapacityTest::RunTest(const FString& Parameters)
+{
+	FVoxelLandM5CaveSettings S = M5CandidateSettings();
+	S.Bounds.MinInclusive.X = S.Bounds.MinInclusive.Y = S.Bounds.MinInclusive.Z = -1000;
+	S.Bounds.MaxExclusive.X = S.Bounds.MaxExclusive.Y = S.Bounds.MaxExclusive.Z = 1000;
+	S.Topology.EntranceCount = 1;
+	S.Topology.MaxLoops = MAX_int32;
+	S.Topology.MinTunnelRadiusCm = S.Topology.MaxTunnelRadiusCm = 100;
+	S.Topology.MinChamberRadiusCm = S.Topology.MaxChamberRadiusCm = 200;
+	S.Capsule.ClearanceMarginCm = 0;
+	S.Limits.MaxEdges = 3;
+	S.Limits.MaxSegments = 4;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("create budget"), FVoxelLandM5Budget::TryCreate(
+			S.Limits.MaxBytes, S.Limits.MaxValidationWork, Budget)))
+	{
+		return false;
+	}
+	FM5CandidateHandle Candidate;
+	const FVoxelLandM5Diagnostic Built = VoxelLand::M5::CandidatePlanner::Build(
+		S, 42, {}, Budget.ToSharedRef(), [] { return false; }, Candidate);
+	if (!TestTrue(TEXT("candidate reserves entrance capacity"), M5CandidateSuccess(Built))
+		|| !TestTrue(TEXT("candidate returned"), Candidate.IsValid())
+		|| !TestEqual(TEXT("only tree edges remain"), Candidate->GetPlan().Connections.Num(), 2))
+	{
+		return false;
+	}
+	int32 QueryCount = 0;
+	const auto Query = [&QueryCount](TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, int64, int64, int32,
+		int64&, int64&, int64&, int32&, bool&, bool&) {
+		++QueryCount;
+		FVoxelLandM5Diagnostic Error;
+		Error.Code = EVoxelLandM5ErrorCode::Unproven;
+		return Error;
+	};
+	FM5CandidateHandle Out = Candidate;
+	const FVoxelLandM5Diagnostic Entrance = VoxelLand::M5::EntrancePlanner::Build(
+		S, 42, Candidate.ToSharedRef(), Budget.ToSharedRef(), Query, [] { return false; }, Out);
+	TestTrue(TEXT("entrance reaches surface query"), QueryCount > 0);
+	TestTrue(TEXT("surface diagnostic propagates"), Entrance.Code == EVoxelLandM5ErrorCode::Unproven);
+	TestTrue(TEXT("entrance failure preserves output"), Out.Get() == Candidate.Get());
 	return true;
 }
 

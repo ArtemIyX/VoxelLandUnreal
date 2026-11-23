@@ -567,11 +567,25 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 			Cancelled() ? EVoxelLandM5ErrorCode::Cancelled : EVoxelLandM5ErrorCode::Blocked,
 			TEXT("Could not select loop count"));
 	}
-	if (LoopCount > Edges.Num() - TreeEdges || int64(TreeEdges) + LoopCount > L.MaxSegments)
+	int64 EntranceSegments = 0;
+	int64 ReservedSegments = 0;
+	int64 ReservedEdges = 0;
+	if (!TryMultiplyNonNegative(int64(T.EntranceCount), 2, EntranceSegments)
+		|| !TryAdd(int64(TreeEdges), EntranceSegments, ReservedSegments)
+		|| !TryAdd(int64(TreeEdges), int64(T.EntranceCount), ReservedEdges))
 	{
 		return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
-			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Loop or segment budget exceeded"));
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid entrance capacity"));
 	}
+	const int64 AvailableLoops = FMath::Min(int64(Edges.Num() - TreeEdges),
+		FMath::Min(int64(L.MaxSegments) - ReservedSegments, int64(L.MaxEdges) - ReservedEdges));
+	if (AvailableLoops < T.MinLoops)
+	{
+		return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Required loops or spanning tree exceed available capacity"));
+	}
+	// Optional loops cannot prevent construction of the required connected tree.
+	LoopCount = FMath::Min(LoopCount, AvailableLoops);
 	for (FVoxelLandM5CandidatePlannerInternals::FCandidateEdge& Edge : Edges)
 	{
 		if (Cancelled())

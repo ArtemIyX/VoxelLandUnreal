@@ -58,6 +58,11 @@ FVoxelLandM5BaselineWindow::FVoxelLandM5BaselineWindow(
 {
 }
 
+bool FVoxelLandM5BaselineWindow::IsOwnedBy(const FVoxelLandM5Budget& Budget) const
+{
+	return Lease.IsValid() && Budget.OwnsLease(*Lease);
+}
+
 FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator, const FIntVector& MinChunk,
 	const FIntVector& MaxChunk, int32 MaxChunks, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,

@@ -21,6 +21,7 @@ public:
 	int32 GetVoxelSizeCm() const { return VoxelSizeCm; }
 	TConstArrayView<int16> GetDensity() const { return Density; }
 	const FVoxelLandGenerator& GetGenerator() const { return *Generator; }
+	bool IsOwnedBy(const FVoxelLandM5Budget& Budget) const;
 
 	// Worker-thread only. Builds every LOD-zero chunk in [MinChunk,MaxChunk),
 	// validates every M4 chunk footprint before allocation, verifies all duplicate

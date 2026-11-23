@@ -95,6 +95,11 @@ bool FVoxelLandM5Budget::TryReserveBytes(
 	return true;
 }
 
+bool FVoxelLandM5Budget::OwnsLease(const FVoxelLandM5BudgetLease& Lease) const
+{
+	return &State.Get() == &Lease.State.Get();
+}
+
 void FVoxelLandM5Budget::GetLimits(int64& MaxBytes, int64& MaxWork) const
 {
 	MaxBytes = State->MaxBytes;

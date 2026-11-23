@@ -20,6 +20,7 @@
 #include "Data/Structs/VoxelLandM4WorldSnapshot.h"
 #include "Data/Structs/VoxelLandM4SavedWorld.h"
 #include "Data/Structs/VoxelLandM4OverhangConfig.h"
+#include "Data/Structs/VoxelLandMeshData.h"
 #include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandWorldState.h"
 #include "Engine/World.h"
@@ -109,6 +110,8 @@ public:
 		virtual ~FInitializationRequest() = default;
 		virtual bool IsCurrent() const = 0;
 		virtual TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld&) const { return {}; }
+		virtual void ApplyDemand(AVoxelLandWorld&) const = 0;
+		virtual bool ValidateStartup(const FVoxelLandGenerator&, FString&) const { return true; }
 		virtual bool PublishStartup(AVoxelLandWorld&) const { return true; }
 #if WITH_EDITOR
 		virtual bool References(const UObject* Object) const = 0;
@@ -141,7 +144,28 @@ public:
 		{
 		}
 
-		bool IsCurrent() const
+		void ApplyDemand(AVoxelLandWorld& World) const override
+		{
+			World.HorizontalRadius = HorizontalRadius;
+			World.VerticalRadius = VerticalRadius;
+		}
+
+		TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld& World) const override
+		{
+#if !UE_SERVER
+			if (!World.bDataOnly && World.GetNetMode() != NM_DedicatedServer)
+			{
+				TStrongObjectPtr<UVoxelLandWorldSettings> Settings(WeakSettings.Get());
+				if (Settings.IsValid())
+				{
+					return TWeakObjectPtr<UMaterialInterface>(ResolveTerrainMaterial(*Settings));
+				}
+			}
+#endif
+			return {};
+		}
+
+		bool IsCurrent() const override
 		{
 			UVoxelLandWorldSettings* Current = WeakSettings.Get();
 			FVoxelLandGraphSnapshot CurrentSnapshot;
@@ -457,6 +481,30 @@ public:
 			return true;
 		}
 
+		void ApplyDemand(AVoxelLandWorld& World) const override
+		{
+			World.HorizontalRadius = Snapshot.HorizontalRadius;
+			World.VerticalRadius = Snapshot.VerticalRadius;
+		}
+
+		bool ValidateStartup(const FVoxelLandGenerator& Generator, FString& OutError) const override
+		{
+			FVoxelLandChunkKey Key;
+			Key.Coordinate = Startup;
+			if (!VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
+					Startup, Generator.GetProfile().VoxelSizeCm, Generator.IsM4Unlimited()))
+			{
+				OutError = TEXT("Startup chunk exceeds the supported coordinate range.");
+				return false;
+			}
+			if (const FVoxelLandError Error = Generator.ValidateM4ChunkDemand(Key))
+			{
+				OutError = FString::Printf(TEXT("Startup chunk is invalid: %s"), *Error.Message);
+				return false;
+			}
+			return true;
+		}
+
 		bool PublishStartup(AVoxelLandWorld& World) const override
 		{
 			FVoxelLandChunkKey Key;
@@ -601,7 +649,9 @@ public:
 	static UMaterialInterface* ResolveTerrainMaterial(const UVoxelLandWorldSettings& Settings)
 	{
 		const UVoxelLandMaterialSetup* Setup = Settings.MaterialSetup.LoadSynchronous();
-		UMaterialInterface* Material = Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr;
+		const TSoftObjectPtr<UMaterialInterface> MaterialPath =
+			Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
+		UMaterialInterface* Material = MaterialPath.LoadSynchronous();
 		if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
 		{
 			UE_LOG(LogTemp, Warning,
@@ -1031,7 +1081,6 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
 		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
 		return false;
 	}
-	Shutdown();
 	LastInitializationError.Reset();
 	if (!Settings || !Settings->ValidateSettings(LastInitializationError))
 	{
@@ -1041,25 +1090,31 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
 		}
 		return false;
 	}
+	StopDemo();
+	StopPendingInitialization();
+	++ConfigurationEpoch;
+	TStrongObjectPtr<UVoxelLandWorldSettings> SettingsGuard(Settings);
+	TStrongObjectPtr<UVoxelLandTerrainGraph> GraphGuard(Settings->Graph.Get());
+	const uint64 CaptureEpoch = ConfigurationEpoch;
 	FVoxelLandGraphSnapshot Snapshot;
-	if (!Settings->Graph->CaptureSnapshot(Snapshot, LastInitializationError))
+	FString CaptureError;
+	const bool bCaptured = GraphGuard->CaptureSnapshot(Snapshot, CaptureError);
+	if (ConfigurationEpoch != CaptureEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+		|| GetWorld()->bIsTearingDown)
 	{
 		return false;
 	}
-	const FVoxelLandSerializedProgram Payload = Settings->Graph->CompiledProgram;
+	if (!bCaptured || Settings->Graph != GraphGuard.Get())
+	{
+		LastInitializationError = bCaptured ? TEXT("World graph changed during capture.") : MoveTemp(CaptureError);
+		return false;
+	}
+	const FVoxelLandSerializedProgram Payload = GraphGuard->CompiledProgram;
 	FVoxelLandZoneProfile Profile;
 	FVoxelLandWorldSettingsInitInternals::CopyOverrides(*Settings, Payload, Profile);
 	const TSharedRef<FVoxelLandWorldSettingsInitInternals::FSettingsInitializationRequest, ESPMode::ThreadSafe>
 		Request = MakeShared<FVoxelLandWorldSettingsInitInternals::FSettingsInitializationRequest, ESPMode::ThreadSafe>(
 			*Settings, MoveTemp(Snapshot), Payload, MoveTemp(Profile));
-	HorizontalRadius = Settings->HorizontalRadius;
-	VerticalRadius = Settings->VerticalRadius;
-#if !UE_SERVER
-	if (!bDataOnly && GetNetMode() != NM_DedicatedServer)
-	{
-		SetTerrainMaterial(FVoxelLandWorldSettingsInitInternals::ResolveTerrainMaterial(*Settings));
-	}
-#endif
 	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
 		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
 	PendingInitialization = Job;
@@ -1114,13 +1169,15 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
 		return false;
 	}
-	Shutdown();
 	LastInitializationError.Reset();
 	if (!Settings)
 	{
 		LastInitializationError = TEXT("M4 world settings are missing");
 		return false;
 	}
+	StopDemo();
+	StopPendingInitialization();
+	++ConfigurationEpoch;
 	// Finite requests must be able to join an existing prepass before a new
 	// 128 MiB producer reservation is attempted. Input capture is independently
 	// bounded by the asset's preflight limits. Unlimited mode has no shared
@@ -1164,8 +1221,6 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		LastInitializationError = MoveTemp(CaptureError);
 		return false;
 	}
-	HorizontalRadius = Snapshot.HorizontalRadius;
-	VerticalRadius = Snapshot.VerticalRadius;
 	const TSharedRef<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe> Request =
 		MakeShared<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe>(
 			*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease));
@@ -1207,13 +1262,15 @@ bool AVoxelLandWorld::InitializeM4FromSavedWorld(const FVoxelLandM4SavedWorld& S
 		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
 		return false;
 	}
-	Shutdown();
 	LastInitializationError.Reset();
 	// Bound all copied metadata before acquiring a job or duplicating the record.
 	if (!VoxelLandM4SavedWorldPreflight::Validate(Saved, LastInitializationError))
 	{
 		return false;
 	}
+	StopDemo();
+	StopPendingInitialization();
+	++ConfigurationEpoch;
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
 	if (Saved.Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
 	{
@@ -1235,8 +1292,6 @@ bool AVoxelLandWorld::InitializeM4FromSavedWorld(const FVoxelLandM4SavedWorld& S
 		LastInitializationError = TEXT("M4 snapshot validation capacity is exhausted");
 		return false;
 	}
-	HorizontalRadius = Saved.Snapshot.HorizontalRadius;
-	VerticalRadius = Saved.Snapshot.VerticalRadius;
 	const TSharedRef<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe> Request =
 		MakeShared<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe>(
 			Saved, StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease));
@@ -1315,14 +1370,14 @@ void AVoxelLandWorld::PollInitialization()
 	if (!bSourceCurrent)
 	{
 		LastInitializationError = TEXT("Initialization result was superseded by changed settings or graph");
-		SetActorTickEnabled(false);
+		SetActorTickEnabled(State.IsValid());
 		OnInitializationFinished.Broadcast(false);
 		return;
 	}
 	if (!Job->Generator)
 	{
 		LastInitializationError = Job->Error.IsEmpty() ? TEXT("Generator initialization failed") : Job->Error;
-		SetActorTickEnabled(false);
+		SetActorTickEnabled(State.IsValid());
 		OnInitializationFinished.Broadcast(false);
 		return;
 	}
@@ -1351,21 +1406,40 @@ void AVoxelLandWorld::PollInitialization()
 	if (!bStillCurrent)
 	{
 		LastInitializationError = TEXT("Initialization result was superseded during presentation setup");
-		SetActorTickEnabled(false);
+		SetActorTickEnabled(State.IsValid());
+		OnInitializationFinished.Broadcast(false);
+		return;
+	}
+	FString StartupError;
+	if (!Job->Request->ValidateStartup(*Job->Generator, StartupError))
+	{
+		LastInitializationError = MoveTemp(StartupError);
+		SetActorTickEnabled(State.IsValid());
+		OnInitializationFinished.Broadcast(false);
+		return;
+	}
+	const uint64 StartupEpoch = ConfigurationEpoch;
+	if (!TryInitialize(Job->Generator))
+	{
+		if (ConfigurationEpoch != StartupEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+			|| GetWorld()->bIsTearingDown)
+		{
+			return;
+		}
+		OnInitializationFinished.Broadcast(false);
+		return;
+	}
+	Job->Request->ApplyDemand(*this);
+	if (!Job->Request->PublishStartup(*this))
+	{
+		Shutdown();
+		LastInitializationError = TEXT("Unable to publish startup demand");
 		OnInitializationFinished.Broadcast(false);
 		return;
 	}
 	if (Presentation.IsSet())
 	{
 		SetTerrainMaterial(Presentation->Get());
-	}
-	Initialize(Job->Generator);
-	if (!State || State->Threads.IsEmpty() || !Job->Request->PublishStartup(*this))
-	{
-		Shutdown();
-		LastInitializationError = TEXT("Unable to start terrain workers");
-		OnInitializationFinished.Broadcast(false);
-		return;
 	}
 	LastInitializationError.Reset();
 	OnInitializationFinished.Broadcast(true);

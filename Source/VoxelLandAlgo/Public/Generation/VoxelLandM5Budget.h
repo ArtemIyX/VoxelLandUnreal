@@ -34,6 +34,9 @@ public:
 	// release its old reservation after the new reservation has been admitted.
 	bool TryReserveBytes(int64 Bytes, TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>& OutLease);
 
+	// Checks reservation provenance, not whether its size covers an allocation.
+	bool OwnsLease(const FVoxelLandM5BudgetLease& Lease) const;
+
 	// Returns the immutable configured maxima, not currently available capacity.
 	void GetLimits(int64& MaxBytes, int64& MaxWork) const;
 

@@ -18,7 +18,10 @@ bool UVoxelLandInfiniteWorld::CaptureSnapshot(FVoxelLandInfiniteWorldSnapshot& O
 		return false;
 	}
 	FVoxelLandInfiniteWorldSnapshot Scratch;
-	if (!CaptureCommon(EVoxelLandWorldKind::Infinite, Scratch.Common, OutError))
+	const auto IsModeCurrent = [this, &Authored]() {
+		return FVoxelLandInfiniteWorldSettings::StaticStruct()->CompareScriptStruct(&Infinite, &Authored, 0);
+	};
+	if (!CaptureCommon(EVoxelLandWorldKind::Infinite, IsModeCurrent, Scratch.Common, OutError))
 	{
 		return false;
 	}

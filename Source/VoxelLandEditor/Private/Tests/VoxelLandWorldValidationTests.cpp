@@ -208,6 +208,19 @@ bool FVoxelLandWorldEditorValidationTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("infinite world accepts local control graphs"),
 			VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Infinite, Providers,
 				WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+		TestFalse(TEXT("unknown world kind is rejected"),
+			VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, static_cast<EVoxelLandWorldKind>(255), Providers,
+				WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+		TestTrue(TEXT("unknown world kind has an explicit diagnostic"), Error.Contains(TEXT("Unsupported world kind")));
+		Snapshot.Mountain.Overrides.AddDefaulted();
+		for (const EVoxelLandWorldKind Kind : {EVoxelLandWorldKind::Finite, EVoxelLandWorldKind::Infinite})
+		{
+			TestFalse(TEXT("unknown override is rejected in both modes"),
+				VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, Kind, Providers,
+					WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+			TestTrue(TEXT("override diagnostic identifies the control"), Error.Contains(TEXT("Mountain control overrides")));
+		}
+		Snapshot.Mountain.Overrides.Reset();
 		const TCHAR* ChannelNames[] = {TEXT("Continental"), TEXT("Mountain"), TEXT("Peaks")};
 		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Channels); ++Index)
 		{
@@ -216,6 +229,10 @@ bool FVoxelLandWorldEditorValidationTest::RunTest(const FString& Parameters)
 				VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Infinite, Providers,
 					WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
 			TestTrue(TEXT("diagnostic names affected control"), Error.Contains(ChannelNames[Index]));
+			TestTrue(TEXT("diagnostic names containing function"),
+				Error.Contains(TEXT("/Game/Test/WorldEditorFunction.WorldEditorFunction")));
+			TestTrue(TEXT("diagnostic identifies authored node"),
+				Error.Contains(*FGuid(0x7a90, 1, 2, 2).ToString()));
 			Channels[Index]->Source = WorldEditorValidationLocalGraph();
 		}
 		Snapshot.Peaks.CurveKeys[1].InputQ16 = 0;

@@ -411,12 +411,37 @@ bool FVoxelLandM5ProgramLoaderFunctionsTest::RunTest(const FString& Parameters)
 				FVoxelLandM5ProgramLoader::Load(TooManyPins, Payload, Budget.ToSharedRef(), NeverCancel, Program).Code),
 			int32(EVoxelLandM5ErrorCode::InvalidInput));
 		FVoxelLandGraphSnapshot InputInterface = Source;
-		InputInterface.Functions[0].Inputs.AddDefaulted();
-		TestEqual(TEXT("uncaptured tooltip remains unsupported"),
-			int32(FVoxelLandM5ProgramLoader::Load(InputInterface, Payload, Budget.ToSharedRef(), NeverCancel, Program)
-					.Code),
-			int32(EVoxelLandM5ErrorCode::Unproven));
-		TestTrue(TEXT("unsupported interface preserves program"), Program.Get() == Previous);
+		FVoxelLandGraphParameter& Input = InputInterface.Functions[0].Inputs.AddDefaulted_GetRef();
+		Input.Id = FGuid(44, 1, 2, 3);
+		Input.Name = TEXT("amplitude");
+		Input.FloatDefault = 2.5f;
+		Input.Tooltip = FText::FromString(TEXT("authoring text excluded from the fingerprint"));
+		const uint64 InputHash = FVoxelLandProgramCodec::SourceFingerprint(InputInterface);
+		FMemory::Memcpy(&Payload.SourceFingerprint, &InputHash, sizeof(InputHash));
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> InputBudget;
+		if (!FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 200000000, InputBudget))
+		{
+			return false;
+		}
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> InputProgram;
+		TestEqual(TEXT("parameterized function loads"),
+			int32(FVoxelLandM5ProgramLoader::Load(InputInterface, Payload, InputBudget.ToSharedRef(), NeverCancel,
+				InputProgram).Code), int32(EVoxelLandM5ErrorCode::None));
+		if (!TestTrue(TEXT("parameterized function yields program"), InputProgram.IsValid()))
+		{
+			return false;
+		}
+		Input.Tooltip = FText::FromString(TEXT("different presentation text"));
+		TestEqual(TEXT("tooltip changes do not invalidate compiled input"),
+			int32(FVoxelLandM5ProgramLoader::Load(InputInterface, Payload, InputBudget.ToSharedRef(), NeverCancel,
+				InputProgram).Code), int32(EVoxelLandM5ErrorCode::None));
+		const FVoxelLandProgram* PreviousInputProgram = InputProgram.Get();
+		Input.FloatDefault = 3.5f;
+		TestEqual(TEXT("changed function input rejects stale program"),
+			int32(FVoxelLandM5ProgramLoader::Load(InputInterface, Payload, InputBudget.ToSharedRef(), NeverCancel,
+				InputProgram).Code), int32(EVoxelLandM5ErrorCode::InvalidInput));
+		TestTrue(TEXT("stale interface preserves program"), InputProgram.Get() == PreviousInputProgram);
+		FMemory::Memcpy(&Payload.SourceFingerprint, &SourceHash, sizeof(SourceHash));
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> NoWork;
 		FVoxelLandM5Budget::TryCreate(1024 * 1024, 1, NoWork);
 		TestEqual(TEXT("dependency work exhausted"),

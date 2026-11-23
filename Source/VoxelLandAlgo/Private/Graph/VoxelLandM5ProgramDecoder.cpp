@@ -53,9 +53,8 @@ bool FVoxelLandM5ProgramDecoderInternals::M5DecoderInstructionRange(const FVoxel
 		&& Record.E <= 65535 && Record.F >= 0 && Record.F <= 65535;
 }
 
-// Reproduce the legacy function-source size/version checks without copying the
-// graphs or materializing FText. Function interfaces with inputs need bounded
-// native tooltip capture and are rejected before reading any tooltip.
+// Check function-source bounds without copying graphs or accessing tooltip text.
+// SourceFingerprint reads parameter fields by reference and excludes FText.
 FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoderInternals::M5DecoderValidateFunctionBounds(
 	const FVoxelLandGraphSnapshot& Source, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 	TFunctionRef<bool()> IsCancelled)
@@ -90,11 +89,6 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProgramDecoderInternals::M5DecoderValidateFun
 			|| !TryAdd(TotalLinks, Function.Links.Num(), TotalLinks) || TotalNodes > 4096 || TotalLinks > 16384)
 		{
 			return M5DecoderError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Captured function exceeds legacy limits"));
-		}
-		if (!Function.Inputs.IsEmpty())
-		{
-			return M5DecoderError(
-				EVoxelLandM5ErrorCode::Unproven, TEXT("Function input tooltip capture is not metered"));
 		}
 	}
 	int64 TotalConfiguration = 0;

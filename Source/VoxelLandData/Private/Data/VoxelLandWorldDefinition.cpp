@@ -388,13 +388,16 @@ public:
 				}
 				if (!Function.Get())
 				{
-					return Fail(TEXT("Control graph function is unavailable."));
+					*Error = FString::Printf(TEXT("Control graph function is unavailable: %s."),
+						*Node.FunctionPath.ToString());
+					return false;
 				}
 				const FString Path = Function->GetPathName();
 				Node.FunctionPath = FSoftObjectPath(Function.Get());
 				if (Visiting.Contains(Path))
 				{
-					return Fail(TEXT("Recursive control graph function dependency."));
+					*Error = FString::Printf(TEXT("Recursive control graph function dependency: %s."), *Path);
+					return false;
 				}
 				if (const int32* ExistingHeight = Heights.Find(Path))
 				{
@@ -409,12 +412,10 @@ public:
 				{
 					return Fail(TEXT("Control graph function count exceeds capture limits."));
 				}
-				// Legacy function capture materializes arbitrary FText histories on
-				// the game thread. Until a bounded native interface capture exists,
-				// reject function inputs rather than claim a bounded capture.
-				if (!Function->Parameters.IsEmpty())
+				constexpr int32 MaxFunctionInputs = 63;
+				if (Function->Parameters.Num() > MaxFunctionInputs)
 				{
-					return Fail(TEXT("Function inputs require bounded interface capture, which is not yet available."));
+					return Fail(TEXT("Function input count exceeds capture limits."));
 				}
 				if (!AddGraph(*Function.Get()))
 				{
@@ -627,7 +628,8 @@ public:
 };
 
 bool UVoxelLandWorldDefinition::CaptureCommon(
-	EVoxelLandWorldKind Kind, FVoxelLandWorldCommonSnapshot& OutSnapshot, FString& OutError) const
+	EVoxelLandWorldKind Kind, TFunctionRef<bool()> IsModeCurrent, FVoxelLandWorldCommonSnapshot& OutSnapshot,
+	FString& OutError) const
 {
 	OutError.Reset();
 	if (!IsInGameThread())
@@ -641,33 +643,46 @@ bool UVoxelLandWorldDefinition::CaptureCommon(
 		return false;
 	}
 	TStrongObjectPtr<UVoxelLandWorldDefinition> Owner(const_cast<UVoxelLandWorldDefinition*>(this));
-	FVoxelLandSerializedProgram Programs[3];
-	if (!FVoxelLandWorldDefinitionValidation::WorldDefinitionPreflightControl(
-			Common.Continental, EVoxelLandM4ControlChannel::Continental, Programs[0], OutError)
-		|| !FVoxelLandWorldDefinitionValidation::WorldDefinitionPreflightControl(
-			Common.Mountain, EVoxelLandM4ControlChannel::Mountain, Programs[1], OutError)
-		|| !FVoxelLandWorldDefinitionValidation::WorldDefinitionPreflightControl(
-			Common.Peaks, EVoxelLandM4ControlChannel::Peaks, Programs[2], OutError))
+	const FSoftObjectPath& MaterialPath = Common.MaterialSetup.ToSoftObjectPath();
+	const FTopLevelAssetPath MaterialAssetPath = MaterialPath.GetAssetPath();
+	const uint64 MaterialPathLength = uint64(MaterialAssetPath.GetPackageName().GetStringLength())
+		+ uint64(MaterialAssetPath.GetAssetName().GetStringLength())
+		+ uint64(MaterialPath.GetSubPathUtf8String().Len()) + 2;
+	if (MaterialPathLength > 2048)
 	{
+		OutError = TEXT("Material setup path exceeds capture limits.");
 		return false;
+	}
+	const FVoxelLandM4ControlConfig* LiveControls[] = {&Common.Continental, &Common.Mountain, &Common.Peaks};
+	const EVoxelLandM4ControlChannel Channels[] = {EVoxelLandM4ControlChannel::Continental,
+		EVoxelLandM4ControlChannel::Mountain, EVoxelLandM4ControlChannel::Peaks};
+	const TCHAR* ChannelNames[] = {TEXT("Continental"), TEXT("Mountain"), TEXT("Peaks")};
+	FVoxelLandSerializedProgram Programs[3];
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		if (!FVoxelLandWorldDefinitionValidation::WorldDefinitionPreflightControl(
+				*LiveControls[Index], Channels[Index], Programs[Index], OutError))
+		{
+			OutError = FString::Printf(TEXT("%s control: %s"), ChannelNames[Index], *OutError);
+			return false;
+		}
 	}
 	const FVoxelLandWorldCommonSettings Authored = Common;
 	TStrongObjectPtr<UVoxelLandTerrainGraph> ContinentalGraph(Authored.Continental.Graph.Get());
 	TStrongObjectPtr<UVoxelLandTerrainGraph> MountainGraph(Authored.Mountain.Graph.Get());
 	TStrongObjectPtr<UVoxelLandTerrainGraph> PeaksGraph(Authored.Peaks.Graph.Get());
 	const FVoxelLandM4ControlConfig* Controls[] = {&Authored.Continental, &Authored.Mountain, &Authored.Peaks};
-	const EVoxelLandM4ControlChannel Channels[] = {EVoxelLandM4ControlChannel::Continental,
-		EVoxelLandM4ControlChannel::Mountain, EVoxelLandM4ControlChannel::Peaks};
 	FVoxelLandWorldDefinitionValidation::FWorldDefinitionFunctionPreflight Preflights[3];
 	for (int32 Index = 0; Index < 3; ++Index)
 	{
 		if (!Preflights[Index].PrepareRoot(*Controls[Index]->Graph.Get(), OutError))
 		{
+			OutError = FString::Printf(TEXT("%s control: %s"), ChannelNames[Index], *OutError);
 			return false;
 		}
 	}
-	const auto IsCaptureCurrent = [this, &Authored, &Controls, &Channels, &Programs, &Preflights]() {
-		if (!FVoxelLandWorldCommonSettings::StaticStruct()->CompareScriptStruct(&Common, &Authored, 0))
+	const auto IsCaptureCurrent = [this, &Authored, &Controls, &Channels, &Programs, &Preflights, &IsModeCurrent]() {
+		if (!IsModeCurrent() || !FVoxelLandWorldCommonSettings::StaticStruct()->CompareScriptStruct(&Common, &Authored, 0))
 		{
 			return false;
 		}
@@ -692,6 +707,7 @@ bool UVoxelLandWorldDefinition::CaptureCommon(
 	{
 		if (!Preflights[Index].Run(IsCaptureCurrent))
 		{
+			OutError = FString::Printf(TEXT("%s control: %s"), ChannelNames[Index], *OutError);
 			return false;
 		}
 	}
@@ -739,14 +755,15 @@ bool UVoxelLandWorldDefinition::CaptureCommon(
 		Scratch.HeightStage.MountainInputId = Node->Pins[1].Id;
 		Scratch.HeightStage.PeaksInputId = Node->Pins[2].Id;
 	}
-	if (!FVoxelLandWorldDefinitionValidation::WorldDefinitionCaptureControl(Authored.Continental, Channels[0],
-			Programs[0], Preflights[0].GetCaptured(), IsCaptureCurrent, Scratch.Continental, OutError)
-		|| !FVoxelLandWorldDefinitionValidation::WorldDefinitionCaptureControl(Authored.Mountain, Channels[1],
-			Programs[1], Preflights[1].GetCaptured(), IsCaptureCurrent, Scratch.Mountain, OutError)
-		|| !FVoxelLandWorldDefinitionValidation::WorldDefinitionCaptureControl(Authored.Peaks, Channels[2], Programs[2],
-			Preflights[2].GetCaptured(), IsCaptureCurrent, Scratch.Peaks, OutError))
+	FVoxelLandM4ControlSnapshot* CapturedControls[] = {&Scratch.Continental, &Scratch.Mountain, &Scratch.Peaks};
+	for (int32 Index = 0; Index < 3; ++Index)
 	{
-		return false;
+		if (!FVoxelLandWorldDefinitionValidation::WorldDefinitionCaptureControl(*Controls[Index], Channels[Index],
+				Programs[Index], Preflights[Index].GetCaptured(), IsCaptureCurrent, *CapturedControls[Index], OutError))
+		{
+			OutError = FString::Printf(TEXT("%s control: %s"), ChannelNames[Index], *OutError);
+			return false;
+		}
 	}
 	if (!IsCaptureCurrent())
 	{

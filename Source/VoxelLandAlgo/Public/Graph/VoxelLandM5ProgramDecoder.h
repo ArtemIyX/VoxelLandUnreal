@@ -9,10 +9,9 @@ class FVoxelLandM5DecodedDraft;
 struct FVoxelLandGraphSnapshot;
 struct FVoxelLandSerializedProgram;
 
-// Bounded decoder for the current version-2 built-in-only program envelope. Captured
-// zero-input function dependencies are supported. Functions with interface
-// inputs remain Unproven until their FText tooltips have bounded native capture;
-// non-ASCII names and external operators are also rejected as Unproven.
+// Bounded decoder for the current version-2 built-in-only program envelope.
+// Captured function inputs are fingerprinted by reference without accessing
+// tooltip text. Non-ASCII names and external operators remain unsupported.
 // Successful decoding is NOT program validation or authorization to execute:
 // register/type/dependency checks and program fingerprint must still be checked
 // by a separately metered validator. OutDraft is unchanged on every failure.

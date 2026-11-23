@@ -10,8 +10,8 @@ struct FVoxelLandGraphSnapshot;
 struct FVoxelLandSerializedProgram;
 
 // Loads the bounded, built-in-only subset of current v2 payloads on a worker
-// thread. Captured zero-input functions are supported; functions with interface
-// inputs, external providers and non-ASCII names remain unsupported. Both source
+// thread. Captured functions with inputs are supported without accessing tooltip
+// text; external providers and non-ASCII names remain unsupported. Both source
 // and program fingerprints must match. Nothing is recompiled or substituted.
 // The returned program retains its admitted memory
 // lease. Caller retains immutable input/provider ownership and accounts for

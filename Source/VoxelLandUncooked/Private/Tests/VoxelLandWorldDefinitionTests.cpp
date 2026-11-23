@@ -93,6 +93,17 @@ bool FVoxelLandWorldDefinitionCaptureTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("unordered control curve rejected"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
 	TestEqual(TEXT("control failure leaves prior snapshot"), FiniteSnapshot.Common.Seed, int64(7654));
 	Finite->Common.Continental.CurveKeys[1].InputQ16 = 65535;
+	Finite->Common.Peaks.CurveKeys[1].InputQ16 = 0;
+	TestFalse(TEXT("invalid peaks curve rejected"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestTrue(TEXT("capture diagnostic names failing control"), Error.Contains(TEXT("Peaks control")));
+	TestEqual(TEXT("peaks failure leaves prior snapshot"), FiniteSnapshot.Common.Seed, int64(7654));
+	Finite->Common.Peaks.CurveKeys[1].InputQ16 = 65535;
+	const FString LongMaterialPath = TEXT("/Game/Test/Material.Material:") + FString::ChrN(2050, TEXT('A'));
+	Finite->Common.MaterialSetup = TSoftObjectPtr<UVoxelLandMaterialSetup>(FSoftObjectPath(LongMaterialPath));
+	TestFalse(TEXT("oversized material path rejected"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestTrue(TEXT("material path failure identifies capture limit"), Error.Contains(TEXT("Material setup path")));
+	TestEqual(TEXT("material path failure leaves prior snapshot"), FiniteSnapshot.Common.Seed, int64(7654));
+	Finite->Common.MaterialSetup.Reset();
 
 	// Provider records and node configuration are captured as bounded input;
 	// the selected world's compiler must still resolve and validate them.
@@ -134,13 +145,38 @@ bool FVoxelLandWorldDefinitionCaptureTest::RunTest(const FString& Parameters)
 	FunctionNode.OperatorId = VoxelLandGraphFunctionCallId();
 	FunctionNode.FunctionPath = FSoftObjectPath(Function.Get());
 	Graph->Nodes.Add(FunctionNode);
-	Function->Parameters.AddDefaulted();
+	FVoxelLandGraphParameter Input;
+	Input.Id = FGuid(17, 18, 19, 20);
+	Input.Name = TEXT("amplitude");
+	Input.FloatDefault = 2.5f;
+	Input.Tooltip = FText::FromString(TEXT("Authoring-only description"));
+	Function->Parameters.Add(Input);
+	if (!TestTrue(
+			TEXT("typed world captures a parameterized function"), Finite->CaptureSnapshot(FiniteSnapshot, Error)))
+	{
+		AddError(Error);
+		return false;
+	}
+	const TArray<FVoxelLandGraphFunctionSnapshot>& Functions = FiniteSnapshot.Common.Continental.Source.Functions;
+	if (!TestEqual(TEXT("one function dependency captured"), Functions.Num(), 1)
+		|| !TestEqual(TEXT("one function input captured"), Functions[0].Inputs.Num(), 1))
+	{
+		return false;
+	}
+	const FVoxelLandGraphParameter& CapturedInput = Functions[0].Inputs[0];
+	TestEqual(TEXT("function input identity preserved"), CapturedInput.Id, Input.Id);
+	TestEqual(TEXT("function input default preserved"), CapturedInput.FloatDefault, 2.5f);
+	TestTrue(TEXT("worker input omits authoring text history"), CapturedInput.Tooltip.IsEmpty());
+	TestFalse(TEXT("function retains authoring tooltip"), Function->Parameters[0].Tooltip.IsEmpty());
 	FiniteSnapshot.Common.Seed = 54321;
-	TestFalse(TEXT("function inputs fail closed until bounded interface capture exists"),
-		Finite->CaptureSnapshot(FiniteSnapshot, Error));
-	TestTrue(
-		TEXT("unsupported function explains the interface restriction"), Error.Contains(TEXT("bounded interface")));
-	TestEqual(TEXT("unsupported function retains previous snapshot"), FiniteSnapshot.Common.Seed, int64(54321));
+	FVoxelLandGraphNodeRecord RecursiveNode = FunctionNode;
+	RecursiveNode.Id = FGuid(21, 22, 23, 24);
+	Function->Nodes.Add(RecursiveNode);
+	TestFalse(TEXT("recursive function is rejected"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestTrue(TEXT("recursive diagnostic identifies function"), Error.Contains(Function->GetPathName()));
+	TestTrue(TEXT("recursive diagnostic identifies control"), Error.Contains(TEXT("Continental control")));
+	TestEqual(TEXT("recursive failure retains previous snapshot"), FiniteSnapshot.Common.Seed, int64(54321));
+	Function->Nodes.Reset();
 	Function->Parameters.Reset();
 	TStrongObjectPtr<UVoxelLandGraphFunction> Nested(NewObject<UVoxelLandGraphFunction>());
 	FVoxelLandGraphNodeRecord NestedNode;
@@ -162,7 +198,35 @@ bool FVoxelLandWorldDefinitionCaptureTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("reentrant mutation reports freshness failure"), Error.Contains(TEXT("changed")));
 	VoxelLandWorldDefinitionSetBeforeLoadHook(TFunction<void()>());
 
+	Graph->Nodes.Add(FunctionNode);
+	Function->Parameters.Reset();
+	LoadCount = 0;
+	VoxelLandWorldDefinitionSetBeforeLoadHook([Finite, &LoadCount]() {
+		if (++LoadCount == 1)
+		{
+			++Finite->Finite.CellsX;
+		}
+	});
+	TestFalse(TEXT("reentrant finite settings mutation rejects capture"), Finite->CaptureSnapshot(FiniteSnapshot, Error));
+	TestEqual(TEXT("finite mutation stops before nested load"), LoadCount, 1);
+	TestEqual(TEXT("finite mutation retains previous snapshot"), FiniteSnapshot.Common.Seed, int64(54321));
+	VoxelLandWorldDefinitionSetBeforeLoadHook(TFunction<void()>());
+	--Finite->Finite.CellsX;
+
 	InfiniteSnapshot.Common.Seed = 9876;
+	LoadCount = 0;
+	VoxelLandWorldDefinitionSetBeforeLoadHook([Infinite, &LoadCount]() {
+		if (++LoadCount == 1)
+		{
+			++Infinite->Infinite.RegionOriginXCm;
+		}
+	});
+	TestFalse(TEXT("reentrant infinite settings mutation rejects capture"),
+		Infinite->CaptureSnapshot(InfiniteSnapshot, Error));
+	TestEqual(TEXT("infinite mutation stops before nested load"), LoadCount, 1);
+	TestEqual(TEXT("infinite mutation retains previous snapshot"), InfiniteSnapshot.Common.Seed, int64(9876));
+	VoxelLandWorldDefinitionSetBeforeLoadHook(TFunction<void()>());
+	--Infinite->Infinite.RegionOriginXCm;
 	Infinite->Infinite.RegionSizeCm = 101;
 	TestFalse(TEXT("region width must be voxel aligned"), Infinite->CaptureSnapshot(InfiniteSnapshot, Error));
 	TestEqual(TEXT("infinite failure leaves prior snapshot"), InfiniteSnapshot.Common.Seed, int64(9876));

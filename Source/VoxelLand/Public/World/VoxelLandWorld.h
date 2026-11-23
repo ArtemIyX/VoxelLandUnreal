@@ -58,6 +58,7 @@ public:
 	virtual void Destroyed() override;
 	virtual void BeginDestroy() override;
 	// Generator snapshots must have been created on a worker thread. Replacing one invalidates prior jobs.
+	// A null generator leaves the current world and its work intact.
 	void Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator);
 	// Copies settings on the game thread and initializes asynchronously. No work starts in BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
@@ -119,6 +120,7 @@ public:
 	int32 GetDemandedChunkCount() const;
 	bool IsChunkDemanded(FIntVector Coordinate) const;
 	bool HasWorldStateForTests() const { return State.IsValid(); }
+	void SetFailWorkerStartForTests(bool bFail) { bFailWorkerStartForTests = bFail; }
 	void SetPresentationHookForTests(TFunction<void()>&& Hook) { PresentationHookForTests = MoveTemp(Hook); }
 #if WITH_EDITOR
     void SetInitReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { InitReloadBarrierForTests = MoveTemp(Barrier); }
@@ -148,6 +150,7 @@ public:
 	TObjectPtr<UMaterialInterface> TerrainMaterial;
 
 private:
+	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator);
 	void UpdateDemand();
 	void RetireChunk(const FVoxelLandChunkKey& Key);
 	void PumpCompletions();
@@ -179,6 +182,7 @@ private:
 	FDelegateHandle WorldTearDownHandle;
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<void()> PresentationHookForTests;
+	bool bFailWorkerStartForTests = false;
 #endif
 	TUniquePtr<FVoxelLandWorldState> State;
 	UPROPERTY(Transient)

@@ -308,38 +308,78 @@ void AVoxelLandWorld::UnbindWorldTearDown()
 
 void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator)
 {
+	TryInitialize(MoveTemp(Generator));
+}
+
+bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator)
+{
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
 	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
 	    || World->bIsTearingDown)
 	{
-		return;
+		return false;
 	}
-	Shutdown();
 	if (!Generator)
 	{
-		return;
+		LastInitializationError = TEXT("Generator is missing.");
+		return false;
 	}
-	BindWorldTearDown();
-	State = MakeUnique<FVoxelLandWorldState>();
-	State->Generator = Generator;
-	State->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
-	State->RegionDimensions = FIntVector(
+	TUniquePtr<FVoxelLandWorldState> Candidate = MakeUnique<FVoxelLandWorldState>();
+	Candidate->Generator = Generator;
+	Candidate->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
+	Candidate->RegionDimensions = FIntVector(
 		FMath::Clamp(RegionSize.X, 1, 32), FMath::Clamp(RegionSize.Y, 1, 32), FMath::Clamp(RegionSize.Z, 1, 8));
 	const int32 Count = FMath::Clamp(WorkerCount, 1, FWorker::MaxWorkers);
 	for (int32 I = 0; I < Count; ++I)
 	{
-		auto Worker = MakeUnique<FWorker>(State->Work);
-		FRunnableThread* Thread = FRunnableThread::Create(Worker.Get(), *FString::Printf(TEXT("VoxelLandWorker%d"), I));
+		auto Worker = MakeUnique<FWorker>(Candidate->Work);
+		FRunnableThread* Thread = nullptr;
+#if WITH_DEV_AUTOMATION_TESTS
+		if (!bFailWorkerStartForTests)
+#endif
+		{
+			Thread = FRunnableThread::Create(Worker.Get(), *FString::Printf(TEXT("VoxelLandWorker%d"), I));
+		}
 		if (!Thread)
 		{
-			UE_LOG(LogTemp, Error, TEXT("VoxelLand: unable to start worker"));
+#if WITH_DEV_AUTOMATION_TESTS
+			if (!bFailWorkerStartForTests)
+#endif
+			{
+				UE_LOG(LogTemp, Error, TEXT("VoxelLand: unable to start worker"));
+			}
 			continue;
 		}
-		State->Workers.Add(MoveTemp(Worker));
-		State->Threads.Add(Thread);
+		Candidate->Workers.Add(MoveTemp(Worker));
+		Candidate->Threads.Add(Thread);
 	}
+	if (Candidate->Threads.IsEmpty())
+	{
+		LastInitializationError = TEXT("Unable to start terrain workers");
+		return false;
+	}
+	const uint64 PreviousEpoch = ConfigurationEpoch;
+	Shutdown();
+	if (ConfigurationEpoch != PreviousEpoch + 1 || bLifecycleEnded || IsActorBeingDestroyed()
+		|| !GetWorld() || GetWorld()->bIsTearingDown)
+	{
+		Candidate->Work->bStop.Store(true);
+		for (int32 Index = 0; Index < Candidate->Threads.Num(); ++Index)
+		{
+			Candidate->Work->Wake->Trigger();
+		}
+		for (FRunnableThread* Thread : Candidate->Threads)
+		{
+			Thread->WaitForCompletion();
+			delete Thread;
+		}
+		return false;
+	}
+	BindWorldTearDown();
+	State = MoveTemp(Candidate);
 	SetActorTickEnabled(true);
+	return true;
 }
 
 void AVoxelLandWorld::Shutdown()

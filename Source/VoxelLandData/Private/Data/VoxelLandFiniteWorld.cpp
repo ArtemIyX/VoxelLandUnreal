@@ -30,7 +30,10 @@ bool UVoxelLandFiniteWorld::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSn
 		return false;
 	}
 	FVoxelLandFiniteWorldSnapshot Scratch;
-	if (!CaptureCommon(EVoxelLandWorldKind::Finite, Scratch.Common, OutError))
+	const auto IsModeCurrent = [this, &Authored]() {
+		return FVoxelLandFiniteWorldSettings::StaticStruct()->CompareScriptStruct(&Finite, &Authored, 0);
+	};
+	if (!CaptureCommon(EVoxelLandWorldKind::Finite, IsModeCurrent, Scratch.Common, OutError))
 	{
 		return false;
 	}

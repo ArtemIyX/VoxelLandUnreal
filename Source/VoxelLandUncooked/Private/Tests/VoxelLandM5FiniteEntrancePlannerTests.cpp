@@ -10,6 +10,33 @@
 #include "Generation/VoxelLandM5FiniteEntrancePlanner.h"
 #include "Misc/AutomationTest.h"
 
+// Automation-only controlled candidate; production has no import path.
+class FVoxelLandM5FiniteEntranceFixtureFactory
+{
+public:
+	static TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Create(
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, const FVoxelLandM5CaveSettings& Settings)
+	{
+		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+		if (!Budget->TryReserveBytes(65536, Lease))
+		{
+			return nullptr;
+		}
+		FVoxelLandM5CavePlan Plan;
+		Plan.Bounds = Settings.Bounds;
+		FVoxelLandM5Chamber Chamber;
+		Chamber.bHasId = true;
+		Chamber.Id = 0;
+		// The existing analytic fixture uses -190 cm beneath a 0 cm surface.
+		// This real M4 window has a 50 cm surface, so shift the chamber by 50 cm.
+		Chamber.CenterCm.Z = -140;
+		Chamber.RadiusCm = 200;
+		Plan.Chambers.Add(Chamber);
+		return MakeShareable(new FVoxelLandM5CandidateResult(
+			Budget, Settings, 42, Plan.Region, MoveTemp(Plan), MoveTemp(Lease)));
+	}
+};
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5FiniteEntrancePlannerTest, "VoxelLand.M5.FiniteEntrancePlanner.Window",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
@@ -18,6 +45,7 @@ bool FVoxelLandM5FiniteEntrancePlannerTest::RunTest(const FString& Parameters)
 	bool bZeroEntrances = false, bQueryReached = false, bProtected = false;
 	bool bWaterRejected = false, bMaskRejected = false, bModeRejected = false;
 	bool bForeignBudget = false, bCancelled = false, bNegativeWork = false;
+	bool bRealEntrance = false, bInputUnchanged = false;
 	const bool bSetup = Async(EAsyncExecution::ThreadPool, [&]() {
 		const auto Never = [] { return false; };
 		FVoxelLandProgramDraft Draft;
@@ -141,6 +169,40 @@ bool FVoxelLandM5FiniteEntrancePlannerTest::RunTest(const FString& Parameters)
 			Changed, 42, NoEntrance.ToSharedRef(), *Window, nullptr, Budget.ToSharedRef(), 1000000, Never, Out);
 		bZeroEntrances = D.Code == EVoxelLandM5ErrorCode::None && Out.IsValid()
 			&& Out->GetPlan().Entrances.IsEmpty();
+
+		// Reuse the analytic entrance fixture's known geometry and seed, but query
+		// the actual post-filter M4 window. Shift only Z to retain the same geometry
+		// relative to its 50 cm midpoint surface.
+		FVoxelLandM5CaveSettings Flat = Settings;
+		Flat.Bounds.MinInclusive.Z = -950;
+		Flat.Bounds.MaxExclusive.Z = 1050;
+		Flat.Topology.MinChambers = Flat.Topology.MaxChambers = 1;
+		Flat.Topology.MinLoops = Flat.Topology.MaxLoops = 0;
+		const TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> FlatCandidate =
+			FVoxelLandM5FiniteEntranceFixtureFactory::Create(Budget.ToSharedRef(), Flat);
+		if (!FlatCandidate)
+		{
+			return false;
+		}
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> FlatOut;
+		D = VoxelLand::M5::FiniteEntrancePlanner::Build(
+			Flat, 42, FlatCandidate.ToSharedRef(), *Window, nullptr, Budget.ToSharedRef(), 1000000, Never, FlatOut);
+		bRealEntrance = D.Code == EVoxelLandM5ErrorCode::None && FlatOut.IsValid()
+			&& FlatOut->GetPlan().Entrances.Num() == 1 && FlatOut->GetPlan().Segments.Num() == 2
+			&& FlatOut->GetPlan().Connections.Num() == 1;
+		if (bRealEntrance)
+		{
+			const auto& Approach = FlatOut->GetPlan().Segments[0];
+			const auto& Ramp = FlatOut->GetPlan().Segments[1];
+			// Independent seed-42 coordinates from the analytic fixture, shifted
+			// vertically by the real window's 50 cm surface.
+			bRealEntrance = Approach.EndCm.X == -195 && Approach.EndCm.Y == 167
+				&& Approach.EndCm.Z == -50 && Ramp.StartCm.Z == -50 && Ramp.EndCm.Z == 235;
+		}
+		bInputUnchanged = FlatCandidate->GetPlan().Chambers.Num() == 1
+			&& FlatCandidate->GetPlan().Chambers[0].CenterCm.Z == -140
+			&& FlatCandidate->GetPlan().Entrances.IsEmpty() && FlatCandidate->GetPlan().Segments.IsEmpty()
+			&& FlatCandidate->GetPlan().Connections.IsEmpty();
 		return true;
 	}).Get();
 	TestTrue(TEXT("fixture setup"), bSetup);
@@ -153,6 +215,8 @@ bool FVoxelLandM5FiniteEntrancePlannerTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("foreign budget rejected"), bForeignBudget);
 	TestTrue(TEXT("negative query limit rejected"), bNegativeWork);
 	TestTrue(TEXT("cancellation preserves output"), bCancelled);
+	TestTrue(TEXT("real M4 window produces one finite entrance"), bRealEntrance);
+	TestTrue(TEXT("entrance construction preserves candidate input"), bInputUnchanged);
 	return bSetup;
 }
 

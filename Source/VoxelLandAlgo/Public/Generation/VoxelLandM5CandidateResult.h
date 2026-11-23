@@ -44,6 +44,7 @@ private:
 	friend class FVoxelLandM5IdealRouteFixtureFactory;
 	friend class FVoxelLandM5RouteBuilderFixtureFactory;
 	friend class FVoxelLandM5EntranceFixtureFactory;
+	friend class FVoxelLandM5FiniteEntranceFixtureFactory;
 	friend class FVoxelLandM5TopologyFixtureFactory;
 	friend class FVoxelLandM5HandshakeFixtureFactory;
 	friend class FVoxelLandM5RouteTopologyFixtureFactory;

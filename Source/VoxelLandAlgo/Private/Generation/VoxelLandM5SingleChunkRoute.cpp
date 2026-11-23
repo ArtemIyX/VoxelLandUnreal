@@ -72,6 +72,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 			}
 		}
 	}
+	// Selected support faces are omitted from the obstacle sweep. Their nominal
+	// contact proof does not establish clearance for the inflated capsule.
+	if (MarginCm != 0)
+	{
+		return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
+			E::Unproven, TEXT("Support-face clearance margin is not certified"));
+	}
 	constexpr int32 MaxVertices = 34 * 34 * 34;
 	constexpr int32 MaxTriangles = 32 * 32 * 32 * 3 * 2;
 	// Reserve before running the existing mesher or adapter. Both can grow UE

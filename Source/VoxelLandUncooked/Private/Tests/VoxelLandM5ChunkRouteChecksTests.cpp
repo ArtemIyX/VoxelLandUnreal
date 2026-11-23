@@ -59,6 +59,8 @@ bool FVoxelLandM5ChunkRoutesTest::RunTest(const FString& Parameters)
 		return false;
 	};
 	FVoxelLandM5CaveSettings Settings;
+	// Positive support-face clearance remains unproven; this fixture exercises zero-margin routes.
+	Settings.Capsule.ClearanceMarginCm = 0;
 	Settings.StageId = FGuid(1, 2, 3, 4);
 	Settings.Topology.MinChambers = 2;
 	Settings.Topology.MaxChambers = 3;

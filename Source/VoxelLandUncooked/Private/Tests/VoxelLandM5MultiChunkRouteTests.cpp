@@ -115,11 +115,17 @@ bool FVoxelLandM5MultiChunkRouteTest::RunTest(const FString& Parameters)
 	const auto Check = [&](TConstArrayView<FVoxelLandChunkData> Set,
 						   TConstArrayView<FVoxelLandM5ChunkFaceSelection> Selected, const FVoxelLandM5PointCm& A) {
 		return VoxelLand::M5::MultiChunkRoute::Certify(Set, FIntVector(-1, 0, 0), FIntVector(1, 1, 1), 100, false, A,
-			End, 35, 185, 10, 0, 1, 1, Selected, Budget.ToSharedRef(), NeverCancel)
+			End, 35, 185, 0, 0, 1, 1, Selected, Budget.ToSharedRef(), NeverCancel)
 			.Code;
 	};
 	TestEqual(TEXT("continuous route crosses negative-to-positive chunk seam"), int32(Check(Chunks, Faces, Start)),
 		int32(EVoxelLandM5ErrorCode::None));
+	const auto MarginResult = VoxelLand::M5::MultiChunkRoute::Certify(Chunks, FIntVector(-1, 0, 0),
+		FIntVector(1, 1, 1), 100, false, Start, End, 35, 185, 10, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel);
+	TestEqual(TEXT("positive support clearance margin remains unproven"), int32(MarginResult.Code),
+		int32(EVoxelLandM5ErrorCode::Unproven));
+	TestEqual(TEXT("margin-specific failure"), MarginResult.Message,
+		FString(TEXT("Support-face clearance margin is not certified")));
 	TArray<FVoxelLandChunkData> Missing;
 	Missing.Add(Chunks[0]);
 	TestEqual(
@@ -141,7 +147,7 @@ bool FVoxelLandM5MultiChunkRouteTest::RunTest(const FString& Parameters)
 	};
 	TestEqual(TEXT("cancelled"),
 		int32(VoxelLand::M5::MultiChunkRoute::Certify(Chunks, FIntVector(-1, 0, 0), FIntVector(1, 1, 1), 100, false,
-			Start, End, 35, 185, 10, 0, 1, 1, Faces, Budget.ToSharedRef(), Cancel)
+			Start, End, 35, 185, 0, 0, 1, 1, Faces, Budget.ToSharedRef(), Cancel)
 				.Code),
 		int32(EVoxelLandM5ErrorCode::Cancelled));
 	return true;
@@ -217,7 +223,7 @@ bool FVoxelLandM5MultiChunkRouteOtherAxesTest::RunTest(const FString& Parameters
 			return false;
 		}
 		const auto Result = VoxelLand::M5::MultiChunkRoute::Certify(
-			Chunks, Min, Max, 100, false, Start, End, 35, 185, 10, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel);
+			Chunks, Min, Max, 100, false, Start, End, 35, 185, 0, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel);
 		TestEqual(TEXT("actual field route outcome"), int32(Result.Code),
 			int32(Scenario == 1 || Scenario == 2 ? EVoxelLandM5ErrorCode::Unproven : EVoxelLandM5ErrorCode::None));
 		if (Scenario == 1 || Scenario == 2)
@@ -232,14 +238,14 @@ bool FVoxelLandM5MultiChunkRouteOtherAxesTest::RunTest(const FString& Parameters
 			TArray<FVoxelLandM5ChunkFaceSelection> Bad = Faces;
 			Bad[0].FaceIndex = -1;
 			TestEqual(TEXT("malformed support face rejected"),
-				int32(VoxelLand::M5::MultiChunkRoute::Certify(Chunks, Min, Max, 100, false, Start, End, 35, 185, 10, 0,
+				int32(VoxelLand::M5::MultiChunkRoute::Certify(Chunks, Min, Max, 100, false, Start, End, 35, 185, 0, 0,
 					1, 1, Bad, Budget.ToSharedRef(), NeverCancel)
 						.Code),
 				int32(EVoxelLandM5ErrorCode::InvalidInput));
 			Bad = Faces;
 			Bad[0].ChunkCoordinate = FIntVector(5, 5, 5);
 			TestEqual(TEXT("nonexistent support owner rejected"),
-				int32(VoxelLand::M5::MultiChunkRoute::Certify(Chunks, Min, Max, 100, false, Start, End, 35, 185, 10, 0,
+				int32(VoxelLand::M5::MultiChunkRoute::Certify(Chunks, Min, Max, 100, false, Start, End, 35, 185, 0, 0,
 					1, 1, Bad, Budget.ToSharedRef(), NeverCancel)
 						.Code),
 				int32(EVoxelLandM5ErrorCode::InvalidInput));
@@ -258,7 +264,7 @@ bool FVoxelLandM5MultiChunkRouteOtherAxesTest::RunTest(const FString& Parameters
 				return Work > InitialWork;
 			};
 			TestEqual(TEXT("cancel after a chunk has meshed"),
-				int32(VoxelLand::M5::MultiChunkRoute::Certify(Chunks, Min, Max, 100, false, Start, End, 35, 185, 10, 0,
+				int32(VoxelLand::M5::MultiChunkRoute::Certify(Chunks, Min, Max, 100, false, Start, End, 35, 185, 0, 0,
 					1, 1, Faces, CancelBudget.ToSharedRef(), CancelAfterMesh)
 						.Code),
 				int32(EVoxelLandM5ErrorCode::Cancelled));

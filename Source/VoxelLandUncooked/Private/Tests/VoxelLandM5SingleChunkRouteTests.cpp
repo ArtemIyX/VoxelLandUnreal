@@ -84,11 +84,17 @@ bool FVoxelLandM5SingleChunkRouteTest::RunTest(const FString& Parameters)
 	}
 	const auto Check = [&](const FVoxelLandM5PointCm& Start, TConstArrayView<int32> Faces) {
 		return VoxelLand::M5::SingleChunkRoute::Certify(
-			Chunk, 100, false, Start, B, 35, 185, 10, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel)
+			Chunk, 100, false, Start, B, 35, 185, 0, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel)
 			.Code;
 	};
 	TestEqual(TEXT("actual flat CPU mesh supports complete interval"), int32(Check(A, Support)),
 		int32(EVoxelLandM5ErrorCode::None));
+	const auto MarginResult = VoxelLand::M5::SingleChunkRoute::Certify(
+		Chunk, 100, false, A, B, 35, 185, 10, 0, 1, 1, Support, Budget.ToSharedRef(), NeverCancel);
+	TestEqual(TEXT("positive support clearance margin remains unproven"), int32(MarginResult.Code),
+		int32(EVoxelLandM5ErrorCode::Unproven));
+	TestEqual(TEXT("margin-specific failure"), MarginResult.Message,
+		FString(TEXT("Support-face clearance margin is not certified")));
 	TArray<int32> Duplicate = Support;
 	Duplicate.Add(Support[0]);
 	TestEqual(
@@ -106,7 +112,7 @@ bool FVoxelLandM5SingleChunkRouteTest::RunTest(const FString& Parameters)
 	};
 	TestEqual(TEXT("cancellation"),
 		int32(VoxelLand::M5::SingleChunkRoute::Certify(
-			Chunk, 100, false, A, B, 35, 185, 10, 0, 1, 1, Support, Budget.ToSharedRef(), Cancel)
+			Chunk, 100, false, A, B, 35, 185, 0, 0, 1, 1, Support, Budget.ToSharedRef(), Cancel)
 				.Code),
 		int32(EVoxelLandM5ErrorCode::Cancelled));
 	return true;
@@ -189,7 +195,7 @@ bool FVoxelLandM5SingleChunkRouteObstacleTest::RunTest(const FString& Parameters
 		}
 		const auto Check = [&](TConstArrayView<int32> Faces) {
 			return VoxelLand::M5::SingleChunkRoute::Certify(
-				Chunk, 100, false, Start, End, 35, 185, 10, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel)
+				Chunk, 100, false, Start, End, 35, 185, 0, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel)
 				.Code;
 		};
 		TestEqual(Scenario == 0 ? TEXT("midpoint slab rejects continuous route") : TEXT("low ceiling rejects route"),
@@ -226,7 +232,7 @@ bool FVoxelLandM5SingleChunkRouteBudgetTest::RunTest(const FString& Parameters)
 		return false;
 	};
 	const auto Exhausted = VoxelLand::M5::SingleChunkRoute::Certify(
-		Chunk, 100, false, A, B, 35, 185, 10, 0, 1, 1, Face, Budget.ToSharedRef(), CountOnly);
+		Chunk, 100, false, A, B, 35, 185, 0, 0, 1, 1, Face, Budget.ToSharedRef(), CountOnly);
 	TestEqual(TEXT("post-mesh conversion cannot exceed shared work"), int32(Exhausted.Code),
 		int32(EVoxelLandM5ErrorCode::BudgetExceeded));
 	TestTrue(TEXT("failure occurs after production mesher"), Polls > 67);
@@ -245,7 +251,7 @@ bool FVoxelLandM5SingleChunkRouteBudgetTest::RunTest(const FString& Parameters)
 		return ++Polls == 70;
 	};
 	const auto Cancelled = VoxelLand::M5::SingleChunkRoute::Certify(
-		Chunk, 100, false, A, B, 35, 185, 10, 0, 1, 1, Face, CancelBudget.ToSharedRef(), CancelAfterMesh);
+		Chunk, 100, false, A, B, 35, 185, 0, 0, 1, 1, Face, CancelBudget.ToSharedRef(), CancelAfterMesh);
 	TestEqual(TEXT("cancellation while adapting actual mesh"), int32(Cancelled.Code),
 		int32(EVoxelLandM5ErrorCode::Cancelled));
 	TestEqual(TEXT("deterministic post-meshing cancellation"), Polls, 70);

@@ -105,7 +105,6 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Shared surface work budget exceeded"));
 	}
 	int64 CommonCrossing = -1;
-	int16 CommonBelow = 0, CommonAbove = 0;
 	bool bProtected = false;
 	int64 Inspected = 0;
 	for (int64 CY = LowY; CY <= HighY; ++CY)
@@ -147,16 +146,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SurfaceQuery::QueryFlatSurface(
 			}
 			const int16 Below = Samples[Column + XY * Crossing];
 			const int16 Above = Samples[Column + XY * (Crossing + 1)];
-			if (int32(Below) != -int32(Above)
-				|| (CommonCrossing >= 0
-					&& (Crossing != CommonCrossing || Below != CommonBelow || Above != CommonAbove)))
+			if (int32(Below) != -int32(Above) || (CommonCrossing >= 0 && Crossing != CommonCrossing))
 			{
 				return FVoxelLandM5SurfaceQueryInternals::SurfaceQueryError(
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Surface is not a certified flat midpoint"));
 			}
 			CommonCrossing = Crossing;
-			CommonBelow = Below;
-			CommonAbove = Above;
 		}
 	}
 	int64 Offset = 0, Surface = 0;

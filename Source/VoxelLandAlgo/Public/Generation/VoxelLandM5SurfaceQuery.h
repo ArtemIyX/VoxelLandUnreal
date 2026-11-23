@@ -18,7 +18,7 @@ namespace VoxelLand::M5::SurfaceQuery
 // ProtectionColumns is an X-fastest X*Y array of conservative binary flags.
 // The entire requested square footprint and two extra samples on each side
 // must be available. Each inspected column must have one strict solid-to-air
-// crossing, at the same Z pair and with identical opposite-valued samples.
+// crossing at the same Z pair, with opposite-valued samples in each column.
 // Other surfaces, including zero-valued samples and slopes, are Unproven.
 // Caller must prove the field/protection provenance, complete Z domain,
 // compatible Surface Nets mesher precision and neighbor ownership, and apply

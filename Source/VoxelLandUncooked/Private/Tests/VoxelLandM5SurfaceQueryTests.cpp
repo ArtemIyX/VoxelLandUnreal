@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5SurfaceQuery.h"
+#include "Generation/VoxelLandMeshing.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -94,6 +95,64 @@ bool FVoxelLandM5FlatSurfaceQueryTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("cumulative shared budget enforced"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::BudgetExceeded));
 	TestEqual(TEXT("shared budget failure leaves height"), Height, int64(123));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5VariableFlatSurfaceTest, "VoxelLand.M5.SurfaceQuery.VariableFlatMesh", M5SurfaceQueryFlags)
+bool FVoxelLandM5VariableFlatSurfaceTest::RunTest(const FString& Parameters)
+{
+	FVoxelLandChunkData Chunk;
+	Chunk.Density.SetNumUninitialized(FVoxelLandChunkData::SampleCount);
+	for (int32 Z = -1; Z <= 33; ++Z)
+	{
+		for (int32 Y = -1; Y <= 33; ++Y)
+		{
+			for (int32 X = -1; X <= 33; ++X)
+			{
+				const int16 Magnitude = static_cast<int16>(1 + ((X + 1) * 37 + (Y + 1) * 19) % 1000);
+				Chunk.Density[(X + 1) + 35 * ((Y + 1) + 35 * (Z + 1))] = Z <= 0 ? -Magnitude : Magnitude;
+			}
+		}
+	}
+	TArray<uint8> Protection;
+	Protection.Init(0, 35 * 35);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("create work budget"), FVoxelLandM5Budget::TryCreate(0, 10000, Budget)))
+	{
+		return false;
+	}
+	FVoxelLandM5PointCm Origin;
+	Origin.X = -100;
+	Origin.Y = -100;
+	Origin.Z = -100;
+	int64 Height = 0, MinHeight = 0, MaxHeight = 0;
+	int32 Slope = -1;
+	bool bProtected = true, bFlooded = true;
+	const auto NeverCancel = []() { return false; };
+	const FVoxelLandM5Diagnostic Result = VoxelLand::M5::SurfaceQuery::QueryFlatSurface(Budget.ToSharedRef(),
+		FIntVector(35, 35, 35), Origin, 100, Chunk.Density, Protection, 1000, 1000, 0, false, 0, 1260,
+		NeverCancel, Height, MinHeight, MaxHeight, Slope, bProtected, bFlooded);
+	TestEqual(TEXT("variable symmetric crossings accepted"), int32(Result.Code), int32(EVoxelLandM5ErrorCode::None));
+	TestEqual(TEXT("analytic midpoint"), Height, int64(50));
+	TestEqual(TEXT("minimum midpoint"), MinHeight, Height);
+	TestEqual(TEXT("maximum midpoint"), MaxHeight, Height);
+	TestEqual(TEXT("zero slope"), Slope, 0);
+	TestFalse(TEXT("no protection"), bProtected);
+	TestFalse(TEXT("no water"), bFlooded);
+	FVoxelLandMeshingScratch Scratch;
+	FVoxelLandMeshData Mesh;
+	if (!TestEqual(TEXT("production mesh succeeds"),
+			int32(VoxelLandMeshing::BuildSurfaceNets(Chunk, 100.f, Scratch, Mesh, NeverCancel)),
+			int32(EVoxelLandMeshResult::Success)))
+	{
+		return false;
+	}
+	TestTrue(TEXT("mesh has triangles"), Mesh.Indices.Num() > 0);
+	for (const FVoxelLandMeshVertex& Vertex : Mesh.Vertices)
+	{
+		TestEqual(TEXT("mesh vertex matches queried midpoint"), Vertex.Position.Z, static_cast<float>(Height));
+	}
 	return true;
 }
 #endif

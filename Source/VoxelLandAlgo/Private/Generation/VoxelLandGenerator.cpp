@@ -5,6 +5,8 @@
 #include "Generation/VoxelLandM4Slope.h"
 #include "Generation/VoxelLandM4Overhang.h"
 #include "Generation/VoxelLandM4Unlimited.h"
+#include "Generation/VoxelLandM5ChunkFootprint.h"
+#include "Data/Structs/VoxelLandM5ChunkFootprint.h"
 #include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
@@ -1209,10 +1211,25 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 	const int64 BaseZ = int64(Key.Coordinate.Z) * 32;
 	const int32 Margin = bM4NormalizeSlope ? 1 : 0;
 	int64 MinX = 0, MaxX = 0, MinY = 0, MaxY = 0;
-	if (!VoxelLandM4Control::LatticePositionCm(BaseX + Offset - Margin, VoxelSize, MinX)
-		|| !VoxelLandM4Control::LatticePositionCm(BaseX + Offset + Axis - 1 + Margin, VoxelSize, MaxX)
-		|| !VoxelLandM4Control::LatticePositionCm(BaseY + Offset - Margin, VoxelSize, MinY)
-		|| !VoxelLandM4Control::LatticePositionCm(BaseY + Offset + Axis - 1 + Margin, VoxelSize, MaxY))
+	int64 MinZ = 0, MaxZ = 0;
+	const bool bStandardFootprint = (Axis == 35 && Offset == -1) || (Axis == 37 && Offset == -2);
+	FVoxelLandM5ChunkFootprint Footprint;
+	const bool bUseFootprint =
+		bStandardFootprint
+		&& VoxelLand::M5::ChunkFootprint::TryBuild(Key, VoxelSize, Axis == 37, bM4NormalizeSlope, Footprint);
+	if (bUseFootprint)
+	{
+		MinX = Footprint.HeightInputMin.X;
+		MaxX = Footprint.HeightInputMax.X;
+		MinY = Footprint.HeightInputMin.Y;
+		MaxY = Footprint.HeightInputMax.Y;
+		MinZ = Footprint.DensityInputMin.Z;
+		MaxZ = Footprint.DensityInputMax.Z;
+	}
+	else if (!VoxelLandM4Control::LatticePositionCm(BaseX + Offset - Margin, VoxelSize, MinX)
+			 || !VoxelLandM4Control::LatticePositionCm(BaseX + Offset + Axis - 1 + Margin, VoxelSize, MaxX)
+			 || !VoxelLandM4Control::LatticePositionCm(BaseY + Offset - Margin, VoxelSize, MinY)
+			 || !VoxelLandM4Control::LatticePositionCm(BaseY + Offset + Axis - 1 + Margin, VoxelSize, MaxY))
 	{
 		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field footprint overflows"));
@@ -1232,10 +1249,10 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("M4 chunk including padding, filter halo and slope stencil is outside the height grid"));
 	}
-	int64 MinZ = 0, MaxZ = 0;
-	if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Offset, VoxelSize, MinZ)
-		|| !VoxelLandM4Control::LatticePositionCm(BaseZ + Offset + Axis - 1, VoxelSize, MaxZ) || MinZ < -2000000
-		|| MaxZ > 2000000)
+	if ((!bUseFootprint
+			&& (!VoxelLandM4Control::LatticePositionCm(BaseZ + Offset, VoxelSize, MinZ)
+				|| !VoxelLandM4Control::LatticePositionCm(BaseZ + Offset + Axis - 1, VoxelSize, MaxZ)))
+		|| MinZ < -2000000 || MaxZ > 2000000)
 	{
 		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));

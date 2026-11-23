@@ -23,6 +23,8 @@ public:
 	TConstArrayView<FVoxelLandChunkData> GetChunks() const { return Chunks; }
 	FIntVector GetMinInclusive() const { return MinInclusive; }
 	FIntVector GetMaxExclusive() const { return MaxExclusive; }
+	int32 GetVoxelSizeCm() const { return VoxelSizeCm; }
+	bool IsOwnedBy(const FVoxelLandM5Budget& Budget) const;
 
 	// Finite, half-open LOD-zero chunk rectangle. Input storage remains immutable.
 	// Every chunk includes its normal stored halo and uses the generator's
@@ -40,9 +42,13 @@ public:
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe>& OutChunks);
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5ScratchProtectionCheckTest;
+#endif
 	explicit FVoxelLandM5ScratchChunks(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	FIntVector MinInclusive = FIntVector::ZeroValue;
 	FIntVector MaxExclusive = FIntVector::ZeroValue;
+	int32 VoxelSizeCm = 0;
 	TArray<FVoxelLandChunkData> Chunks;
 };

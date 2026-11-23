@@ -33,6 +33,11 @@ FVoxelLandM5ScratchChunks::FVoxelLandM5ScratchChunks(
 {
 }
 
+bool FVoxelLandM5ScratchChunks::IsOwnedBy(const FVoxelLandM5Budget& Budget) const
+{
+	return Lease.IsValid() && Budget.OwnsLease(*Lease);
+}
+
 FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSettings& Settings,
 	const FVoxelLandM5StageManifest& Manifest, int64 WorldSeed, const FVoxelLandM5BaselineWindow& Window,
 	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
@@ -124,6 +129,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchChunks::Build(const FVoxelLandM5CaveSe
 		MakeShareable(new FVoxelLandM5ScratchChunks(MoveTemp(OutputLease)));
 	Result->MinInclusive = MinInclusive;
 	Result->MaxExclusive = MaxExclusive;
+	Result->VoxelSizeCm = Window.GetVoxelSizeCm();
 	Result->Chunks.Reserve(int32(ChunkCount));
 	TArray<uint8> HashInput;
 	HashInput.Reserve(FVoxelLandChunkData::SampleCount * 2);

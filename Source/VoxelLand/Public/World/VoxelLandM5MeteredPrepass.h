@@ -11,9 +11,8 @@ class FVoxelLandM5PrepassBytes;
 // Additive M5 prepass-key encoder. It reloads and validates all three programs
 // through the metered built-in provider path; source/payload and input lifetime
 // must remain immutable for the entire call. Height-stage v1 projection
-// comparison requires empty root and function parameter arrays: arbitrary
-// FText histories remain Unproven. This creates bytes only: it neither generates
-// terrain nor authorizes cache reuse.
+// comparison excludes authoring-only parameter tooltips. This creates bytes
+// only: it neither generates terrain nor authorizes cache reuse.
 class VOXELLAND_API FVoxelLandM5MeteredPrepass final
 {
 public:

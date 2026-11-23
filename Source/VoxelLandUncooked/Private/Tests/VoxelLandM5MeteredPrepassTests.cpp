@@ -20,7 +20,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5MeteredPrepassTest, "VoxelLand.M5.I
 bool FVoxelLandM5MeteredPrepassTest::RunTest(const FString& Parameters)
 {
 	bool bBytes[2] = {}, bFailureAtomic = false, bCancelled = false, bHeightRejected = false, bReleased = false;
-	bool bHeightSupported = false, bHeightTextRejected = false;
+	bool bHeightSupported = false, bHeightParameterMismatch = false, bHeightParameterSupported = false;
 	bool bInfiniteRejected = false, bVersionRejected = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
@@ -130,7 +130,7 @@ bool FVoxelLandM5MeteredPrepassTest::RunTest(const FString& Parameters)
 		const auto Cancelled = FVoxelLandM5MeteredPrepass::Build(S, 1, Short.ToSharedRef(), Cancel, Retained);
 		bCancelled = Cancelled.Code == EVoxelLandM5ErrorCode::Cancelled && Retained.Get() == Before;
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> PolicyBudget;
-		if (!FVoxelLandM5Budget::TryCreate(64 * 1024 * 1024, 100000000, PolicyBudget))
+		if (!FVoxelLandM5Budget::TryCreate(64 * 1024 * 1024, 400000000, PolicyBudget))
 		{
 			return;
 		}
@@ -152,14 +152,40 @@ bool FVoxelLandM5MeteredPrepassTest::RunTest(const FString& Parameters)
 			return;
 		}
 		TSharedPtr<const FVoxelLandM5PrepassBytes, ESPMode::ThreadSafe> HeightBytes;
-		const auto Height = FVoxelLandM5MeteredPrepass::Build(S, 1, PolicyBudget.ToSharedRef(), NeverCancel, HeightBytes);
+		const auto Height =
+			FVoxelLandM5MeteredPrepass::Build(S, 1, PolicyBudget.ToSharedRef(), NeverCancel, HeightBytes);
 		bHeightSupported = Height.Code == EVoxelLandM5ErrorCode::None && HeightBytes.IsValid()
-			&& HeightBytes->GetBytes() == ExpectedHeight;
-		S.Continental.Source.Parameters.AddDefaulted();
-		const auto TextFailure =
+						&& HeightBytes->GetBytes() == ExpectedHeight;
+		FVoxelLandGraphParameter Parameter;
+		Parameter.Id = FGuid(12, 13, 14, 15);
+		Parameter.Name = TEXT("Amplitude");
+		for (int32 I = 0; I < 3; ++I)
+		{
+			Channels[I]->Source.Parameters.Add(Parameter);
+			FVoxelLandProgramDraft Draft;
+			if (!FVoxelLandGraphCompiler::Compile(Channels[I]->Source, Draft, Error)
+				|| FVoxelLandProgram::Validate(Draft, Programs[I])
+				|| !FVoxelLandProgramCodec::Pack(Channels[I]->Source, *Programs[I], Channels[I]->Payload, Error))
+			{
+				return;
+			}
+		}
+		ExpectedHeight.Reset();
+		if (VoxelLandM4PrepassIdentity::BuildCandidate(S, *Programs[0], *Programs[1], *Programs[2], ExpectedHeight, 1))
+		{
+			return;
+		}
+		HeightBytes.Reset();
+		const auto ParameterHeight =
+			FVoxelLandM5MeteredPrepass::Build(S, 1, PolicyBudget.ToSharedRef(), NeverCancel, HeightBytes);
+		bHeightParameterSupported = ParameterHeight.Code == EVoxelLandM5ErrorCode::None && HeightBytes.IsValid()
+								 && HeightBytes->GetBytes() == ExpectedHeight;
+		S.Continental.Source.Parameters[0].FloatDefault = 1.f;
+		const auto ParameterFailure =
 			FVoxelLandM5MeteredPrepass::Build(S, 1, PolicyBudget.ToSharedRef(), NeverCancel, Retained);
-		bHeightTextRejected = TextFailure.Code == EVoxelLandM5ErrorCode::Unproven && Retained.Get() == Before;
-		S.Continental.Source.Parameters.Reset();
+		bHeightParameterMismatch =
+			ParameterFailure.Code == EVoxelLandM5ErrorCode::InvalidInput && Retained.Get() == Before;
+		S.Continental.Source.Parameters[0].FloatDefault = 0.f;
 		S.Peaks.Source.Nodes[0].Pins[0].FloatDefault = 0.25f;
 		const auto InvalidHeight =
 			FVoxelLandM5MeteredPrepass::Build(S, 1, PolicyBudget.ToSharedRef(), NeverCancel, Retained);
@@ -176,7 +202,8 @@ bool FVoxelLandM5MeteredPrepassTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("failure retains prior bytes"), bFailureAtomic);
 	TestTrue(TEXT("cancellation retains prior bytes"), bCancelled);
 	TestTrue(TEXT("parameter-free height stage produces matching prepass bytes"), bHeightSupported);
-	TestTrue(TEXT("unmetered FText is rejected without replacing bytes"), bHeightTextRejected);
+	TestTrue(TEXT("parameterized height stage produces matching prepass bytes"), bHeightParameterSupported);
+	TestTrue(TEXT("different parameter rejected without replacing bytes"), bHeightParameterMismatch);
 	TestTrue(TEXT("invalid height stage fails closed"), bHeightRejected);
 	TestTrue(TEXT("infinite mode rejects finite prepass"), bInfiniteRejected);
 	TestTrue(TEXT("unknown encoding rejected"), bVersionRejected);

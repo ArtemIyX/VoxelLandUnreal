@@ -70,16 +70,239 @@ bool FVoxelLandM5HeightStageValidationTest::RunTest(const FString& Parameters)
 		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
 		EVoxelLandM5ErrorCode::InvalidInput);
 	Snapshot.Mountain.Source.Links[0] = SharedLink;
-	Snapshot.Continental.Source.Parameters.AddDefaulted();
-	TestEqual(TEXT("root parameter history fails closed"),
+	FVoxelLandGraphParameter Parameter;
+	Parameter.Id = FGuid(4, 1, 1, 1);
+	Parameter.Name = TEXT("Amplitude");
+	for (FVoxelLandM4ControlSnapshot* Channel : Channels)
+	{
+		Channel->Source.Parameters.Add(Parameter);
+		Channel->Source.Functions[0].Inputs.Add(Parameter);
+	}
+	Snapshot.Peaks.Source.Parameters[0].Tooltip = FText::FromString(TEXT("different display text"));
+	Snapshot.Peaks.Source.Functions[0].Inputs[0].Tooltip = FText::FromString(TEXT("different function text"));
+	TestEqual(TEXT("presentation-only tooltip differences do not affect projections"),
 		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
-		EVoxelLandM5ErrorCode::Unproven);
-	Snapshot.Continental.Source.Parameters.Reset();
-	Snapshot.Continental.Source.Functions[0].Inputs.AddDefaulted();
-	TestEqual(TEXT("function parameter history fails closed"),
+		EVoxelLandM5ErrorCode::None);
+	const auto MutateParameter = [](FVoxelLandGraphParameter& Item, int32 Field) {
+		switch (Field)
+		{
+			case 0:
+				Item.Id = FGuid(9, 1, 1, 1);
+				break;
+			case 1:
+				Item.Name = TEXT("amplitude");
+				break;
+			case 2:
+				Item.Type = EVoxelLandGraphValueType::Int32;
+				break;
+			case 3:
+				Item.FloatDefault = 0.5f;
+				break;
+			case 4:
+				Item.IntDefault = 1;
+				break;
+			case 5:
+				Item.BoolDefault = true;
+				break;
+			case 6:
+				Item.bHasRange = true;
+				break;
+			case 7:
+				Item.FloatMin = -1.f;
+				break;
+			case 8:
+				Item.FloatMax = 2.f;
+				break;
+			case 9:
+				Item.IntMin = -1;
+				break;
+			case 10:
+				Item.IntMax = 2;
+				break;
+		}
+	};
+	for (int32 Field = 0; Field < 11; ++Field)
+	{
+		MutateParameter(Snapshot.Peaks.Source.Parameters[0], Field);
+		TestEqual(*FString::Printf(TEXT("root semantic parameter %d rejected"), Field),
+			FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+			EVoxelLandM5ErrorCode::InvalidInput);
+		Snapshot.Peaks.Source.Parameters[0] = Parameter;
+		MutateParameter(Snapshot.Peaks.Source.Functions[0].Inputs[0], Field);
+		TestEqual(*FString::Printf(TEXT("function semantic parameter %d rejected"), Field),
+			FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+			EVoxelLandM5ErrorCode::InvalidInput);
+		Snapshot.Peaks.Source.Functions[0].Inputs[0] = Parameter;
+	}
+	const FVoxelLandGraphNodeRecord OriginalNode = Snapshot.Peaks.Source.Nodes[0];
+	for (int32 Field = 0; Field < 16; ++Field)
+	{
+		FVoxelLandGraphNodeRecord& Node = Snapshot.Peaks.Source.Nodes[0];
+		switch (Field)
+		{
+			case 0:
+				Node.Id = FGuid(9, 1, 1, 1);
+				break;
+			case 1:
+				Node.OperatorId = FGuid(9, 1, 1, 2);
+				break;
+			case 2:
+				++Node.OperatorVersion;
+				break;
+			case 3:
+				++Node.SeedSalt;
+				break;
+			case 4:
+				Node.Configuration[0]++;
+				break;
+			case 5:
+				Node.FunctionPath = FSoftObjectPath(TEXT("/Game/Functions/Other.Other"));
+				break;
+			case 6:
+				Node.ParameterId = FGuid(9, 1, 1, 3);
+				break;
+			case 7:
+				Node.Pins.AddDefaulted();
+				break;
+			case 8:
+				Node.Pins[0].Id = FGuid(9, 1, 1, 4);
+				break;
+			case 9:
+				Node.Pins[0].InterfaceId = FGuid(9, 1, 1, 5);
+				break;
+			case 10:
+				Node.Pins[0].Name = TEXT("SHARED");
+				break;
+			case 11:
+				Node.Pins[0].Type = EVoxelLandGraphValueType::Int32;
+				break;
+			case 12:
+				Node.Pins[0].bOutput = true;
+				break;
+			case 13:
+				Node.Pins[0].FloatDefault = 1.f;
+				break;
+			case 14:
+				Node.Pins[0].IntDefault = 1;
+				break;
+			case 15:
+				Node.Pins[0].BoolDefault = true;
+				break;
+		}
+		TestEqual(*FString::Printf(TEXT("node or pin semantic field %d rejected"), Field),
+			FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+			EVoxelLandM5ErrorCode::InvalidInput);
+		Node = OriginalNode;
+	}
+	Snapshot.Peaks.Source.Nodes[0].Pins[0].bInvalidDefault = true;
+	TestEqual(TEXT("invalid pin flag rejected"),
 		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
-		EVoxelLandM5ErrorCode::Unproven);
-	Snapshot.Continental.Source.Functions[0].Inputs.Reset();
+		EVoxelLandM5ErrorCode::InvalidInput);
+	Snapshot.Peaks.Source.Nodes[0] = OriginalNode;
+	const FVoxelLandGraphFunctionSnapshot OriginalFunction = Snapshot.Peaks.Source.Functions[0];
+	for (int32 Field = 0; Field < 5; ++Field)
+	{
+		FVoxelLandGraphFunctionSnapshot& Item = Snapshot.Peaks.Source.Functions[0];
+		switch (Field)
+		{
+			case 0:
+				Item.AssetPath = TEXT("/Game/Functions/Other.Other");
+				break;
+			case 1:
+				++Item.SourceVersion;
+				break;
+			case 2:
+				Item.OutputType = EVoxelLandGraphValueType::Int32;
+				break;
+			case 3:
+				Item.OutputNode = FGuid(9, 1, 1, 1);
+				break;
+			case 4:
+				Item.OutputPin = FGuid(9, 1, 1, 2);
+				break;
+		}
+		TestEqual(*FString::Printf(TEXT("function semantic field %d rejected"), Field),
+			FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+			EVoxelLandM5ErrorCode::InvalidInput);
+		Item = OriginalFunction;
+	}
+	Snapshot.Peaks.Source.Functions[0].Links[0].TargetPin = FGuid(9, 2, 2, 2);
+	TestEqual(TEXT("nested link rejected"),
+		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+		EVoxelLandM5ErrorCode::InvalidInput);
+	Snapshot.Peaks.Source.Functions[0] = OriginalFunction;
+	FString EmbeddedA(TEXT("prefix"));
+	EmbeddedA.AppendChar(TCHAR(0));
+	EmbeddedA.AppendChar(TCHAR('x'));
+	FString EmbeddedB = EmbeddedA;
+	EmbeddedB[EmbeddedB.Len() - 1] = TCHAR('y');
+	if (!TestEqual(TEXT("embedded-null fixture retains trailing code unit"), EmbeddedA.Len(), 8))
+	{
+		return false;
+	}
+	for (FVoxelLandM4ControlSnapshot* Channel : Channels)
+	{
+		Channel->Source.Parameters[0].Name = EmbeddedA;
+	}
+	Snapshot.Peaks.Source.Parameters[0].Name = EmbeddedB;
+	TestEqual(TEXT("embedded null in parameter names rejected"),
+		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+		EVoxelLandM5ErrorCode::InvalidInput);
+	for (FVoxelLandM4ControlSnapshot* Channel : Channels)
+	{
+		Channel->Source.Parameters[0].Name = Parameter.Name;
+		Channel->Source.Nodes[0].Pins[0].Name = EmbeddedA;
+	}
+	Snapshot.Peaks.Source.Nodes[0].Pins[0].Name = EmbeddedB;
+	TestEqual(TEXT("embedded null in pin names rejected"),
+		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+		EVoxelLandM5ErrorCode::InvalidInput);
+	for (FVoxelLandM4ControlSnapshot* Channel : Channels)
+	{
+		Channel->Source.Nodes[0].Pins[0].Name = TEXT("shared");
+		Channel->Source.Functions[0].AssetPath = EmbeddedA;
+	}
+	Snapshot.Peaks.Source.Functions[0].AssetPath = EmbeddedB;
+	TestEqual(TEXT("embedded null in function paths rejected"),
+		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+		EVoxelLandM5ErrorCode::InvalidInput);
+	for (FVoxelLandM4ControlSnapshot* Channel : Channels)
+	{
+		Channel->Source.Functions[0].AssetPath = Function.AssetPath;
+	}
+	for (int32 Field = 0; Field < 4; ++Field)
+	{
+		FVoxelLandGraphLinkRecord& Link = Snapshot.Peaks.Source.Links[0];
+		switch (Field)
+		{
+			case 0:
+				Link.SourceNode = FGuid(9, 1, 1, 1);
+				break;
+			case 1:
+				Link.SourcePin = FGuid(9, 1, 1, 2);
+				break;
+			case 2:
+				Link.TargetNode = FGuid(9, 1, 1, 3);
+				break;
+			case 3:
+				Link.TargetPin = FGuid(9, 1, 1, 4);
+				break;
+		}
+		TestEqual(*FString::Printf(TEXT("link semantic field %d rejected"), Field),
+			FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+			EVoxelLandM5ErrorCode::InvalidInput);
+		Link = SharedLink;
+	}
+	Snapshot.Peaks.Source.Nodes[1].OperatorId = FGuid(9, 1, 1, 5);
+	TestEqual(TEXT("wrong terminal operator rejected"),
+		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+		EVoxelLandM5ErrorCode::InvalidInput);
+	Snapshot.Peaks.Source.Nodes[1].OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+	Snapshot.HeightStage.PeaksInputId = Snapshot.HeightStage.MountainInputId;
+	TestEqual(TEXT("duplicate terminal input rejected"),
+		FVoxelLandM5HeightStageValidation::Validate(Snapshot, Budget.ToSharedRef(), NeverCancel).Code,
+		EVoxelLandM5ErrorCode::InvalidInput);
+	Snapshot.HeightStage.PeaksInputId = InputIds[2];
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Empty;
 	if (!TestTrue(TEXT("empty budget created"), FVoxelLandM5Budget::TryCreate(0, 0, Empty)))
 	{

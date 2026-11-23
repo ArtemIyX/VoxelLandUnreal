@@ -7,10 +7,11 @@
 class FVoxelLandM5Budget;
 struct FVoxelLandM4WorldSnapshot;
 
-// Bounded wrapper around the existing M4 projection comparison. Snapshot data
-// must remain immutable throughout. Version-one projections containing root or
-// function parameters fail Unproven: arbitrary FText histories cannot yet be
-// bounded. Success does not validate programs, providers or world identity.
+// Bounded semantic projection comparison. Snapshot data must remain immutable
+// throughout. Authoring-only parameter Tooltip is excluded and never read;
+// other parameter, node, pin, link and function fields are compared. Strings
+// containing embedded nulls are rejected. Success does not validate programs,
+// providers or world identity.
 class VOXELLAND_API FVoxelLandM5HeightStageValidation final
 {
 public:

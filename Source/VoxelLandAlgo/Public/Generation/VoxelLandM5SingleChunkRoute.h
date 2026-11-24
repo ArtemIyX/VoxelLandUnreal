@@ -15,7 +15,9 @@ namespace VoxelLand::M5::SingleChunkRoute
 // in that freshly generated mesh; every other face is an obstacle. The support
 // proof independently requires all selected faces to form one exact coplanar
 // patch and checks nominal capsule nonpenetration, contact and slope.
-// Nonzero MarginCm returns Unproven until support-face clearance is certified.
+// A positive margin permits coplanar support contact only when the bounded
+// proof confines all overlap to the lower cap within the nominal footprint.
+// All other faces undergo the inflated obstacle sweep; uncertain bounds fail.
 //
 // The entire inflated sweep must be strictly inside the chunk by two voxels,
 // so an edge owned by a neighboring chunk cannot contribute an intersecting

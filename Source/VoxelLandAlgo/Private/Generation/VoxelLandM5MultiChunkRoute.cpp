@@ -81,13 +81,6 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 			}
 		}
 	}
-	// Selected support faces are omitted from the obstacle sweep. Their nominal
-	// contact proof does not establish clearance for the inflated capsule.
-	if (MarginCm != 0)
-	{
-		return FVoxelLandM5MultiChunkRouteInternals::M5MultiRouteError(
-			E::Unproven, TEXT("Support-face clearance margin is not certified"));
-	}
 	// Reserve for all retained obstacles plus mesher/adapter temporary arrays.
 	// Input chunks and selections are caller-owned. Constants bound a LOD-zero
 	// mesher's maximum arrays; the fourfold payload includes TArray growth slack.
@@ -197,8 +190,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(TConstArrayView<F
 	B.X = EndFeet.X * Q;
 	B.Y = EndFeet.Y * Q;
 	B.Z = EndFeet.Z * Q;
-	const auto Contact = FixedSupport::CertifyLinearContact(A, B, RadiusCm * Q, HeightCm * Q, ContactSkinCm * Q,
-		MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
+	const auto Contact = FixedSupport::CertifyLinearContactWithMargin(A, B, RadiusCm * Q, HeightCm * Q, ContactSkinCm * Q,
+		MarginCm * Q, MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
 	if (Contact.Code != E::None)
 	{
 		return Contact;

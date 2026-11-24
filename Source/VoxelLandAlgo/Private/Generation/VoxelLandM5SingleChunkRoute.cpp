@@ -72,13 +72,6 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 			}
 		}
 	}
-	// Selected support faces are omitted from the obstacle sweep. Their nominal
-	// contact proof does not establish clearance for the inflated capsule.
-	if (MarginCm != 0)
-	{
-		return FVoxelLandM5SingleChunkRouteInternals::SingleChunkRouteError(
-			E::Unproven, TEXT("Support-face clearance margin is not certified"));
-	}
 	constexpr int32 MaxVertices = 34 * 34 * 34;
 	constexpr int32 MaxTriangles = 32 * 32 * 32 * 3 * 2;
 	// Reserve before running the existing mesher or adapter. Both can grow UE
@@ -144,8 +137,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SingleChunkRoute::Certify(const FVoxelLand
 	B.X = EndFeet.X * Q;
 	B.Y = EndFeet.Y * Q;
 	B.Z = EndFeet.Z * Q;
-	const auto Contact = VoxelLand::M5::FixedSupport::CertifyLinearContact(A, B, RadiusCm * Q, HeightCm * Q,
-		ContactSkinCm * Q, MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
+	const auto Contact = VoxelLand::M5::FixedSupport::CertifyLinearContactWithMargin(A, B, RadiusCm * Q, HeightCm * Q,
+		ContactSkinCm * Q, MarginCm * Q, MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
 	if (Contact.Code != E::None)
 	{
 		return Contact;

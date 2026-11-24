@@ -22,6 +22,17 @@ namespace VoxelLand::M5::FixedSupport
 // arithmetic, if the exact plane cannot be represented, or if any renderer
 // uncertainty is nonzero. Zero renderer uncertainty is not implied by CPU
 // mesh coordinates. Input storage and its admission remain caller-owned.
+// Additionally certifies that all support-plane points within the inflated
+// horizontal reach remain strictly below the lower medial center throughout
+// the sweep, and any possible overlap lies strictly within the nominal
+// support footprint. Only that lower-cap contact is permitted; all other
+// triangles must still pass the inflated obstacle sweep.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic CertifyLinearContactWithMargin(const FVoxelLandM5FixedPointQ18& FeetStart,
+	const FVoxelLandM5FixedPointQ18& FeetEnd, int64 RadiusQ18, int64 HeightQ18, int64 ContactSkinQ18,
+	int64 MarginQ18, int32 MaxSlopeNumerator, int32 MaxSlopeDenominator,
+	TConstArrayView<FVoxelLandM5FixedTriangleQ18> Triangles,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);
+
 VOXELLANDALGO_API FVoxelLandM5Diagnostic CertifyLinearContact(const FVoxelLandM5FixedPointQ18& FeetStart,
 	const FVoxelLandM5FixedPointQ18& FeetEnd, int64 RadiusQ18, int64 HeightQ18, int64 ContactSkinQ18,
 	int32 MaxSlopeNumerator, int32 MaxSlopeDenominator, TConstArrayView<FVoxelLandM5FixedTriangleQ18> Triangles,

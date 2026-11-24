@@ -122,10 +122,8 @@ bool FVoxelLandM5MultiChunkRouteTest::RunTest(const FString& Parameters)
 		int32(EVoxelLandM5ErrorCode::None));
 	const auto MarginResult = VoxelLand::M5::MultiChunkRoute::Certify(Chunks, FIntVector(-1, 0, 0),
 		FIntVector(1, 1, 1), 100, false, Start, End, 35, 185, 10, 0, 1, 1, Faces, Budget.ToSharedRef(), NeverCancel);
-	TestEqual(TEXT("positive support clearance margin remains unproven"), int32(MarginResult.Code),
-		int32(EVoxelLandM5ErrorCode::Unproven));
-	TestEqual(TEXT("margin-specific failure"), MarginResult.Message,
-		FString(TEXT("Support-face clearance margin is not certified")));
+	TestEqual(TEXT("positive margin across supported chunk seam"), int32(MarginResult.Code),
+		int32(EVoxelLandM5ErrorCode::None));
 	TArray<FVoxelLandChunkData> Missing;
 	Missing.Add(Chunks[0]);
 	TestEqual(

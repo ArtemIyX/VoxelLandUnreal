@@ -16,7 +16,9 @@ namespace VoxelLand::M5::MultiChunkRoute
 // All shared density halos must agree, and the inflated sweep must lie strictly
 // inside the rectangle by two voxels, so omitted neighboring mesh owners cannot
 // reach it. Input chunks and face selections remain caller-owned and immutable.
-// Nonzero MarginCm returns Unproven until support-face clearance is certified.
+// A positive margin permits coplanar support contact only when the bounded
+// proof confines all overlap to the lower cap within the nominal footprint.
+// All other faces undergo the inflated obstacle sweep; uncertain bounds fail.
 //
 // Success establishes CPU support and obstacle clearance for this interval only.
 // It does not prove field/descriptor provenance, renderer transforms, route or

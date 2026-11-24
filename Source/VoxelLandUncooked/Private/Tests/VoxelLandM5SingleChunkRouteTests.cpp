@@ -91,10 +91,8 @@ bool FVoxelLandM5SingleChunkRouteTest::RunTest(const FString& Parameters)
 		int32(EVoxelLandM5ErrorCode::None));
 	const auto MarginResult = VoxelLand::M5::SingleChunkRoute::Certify(
 		Chunk, 100, false, A, B, 35, 185, 10, 0, 1, 1, Support, Budget.ToSharedRef(), NeverCancel);
-	TestEqual(TEXT("positive support clearance margin remains unproven"), int32(MarginResult.Code),
-		int32(EVoxelLandM5ErrorCode::Unproven));
-	TestEqual(TEXT("margin-specific failure"), MarginResult.Message,
-		FString(TEXT("Support-face clearance margin is not certified")));
+	TestEqual(TEXT("positive margin on flat supported mesh"), int32(MarginResult.Code),
+		int32(EVoxelLandM5ErrorCode::None));
 	TArray<int32> Duplicate = Support;
 	Duplicate.Add(Support[0]);
 	TestEqual(
@@ -200,6 +198,11 @@ bool FVoxelLandM5SingleChunkRouteObstacleTest::RunTest(const FString& Parameters
 		};
 		TestEqual(Scenario == 0 ? TEXT("midpoint slab rejects continuous route") : TEXT("low ceiling rejects route"),
 			int32(Check(Support)), int32(EVoxelLandM5ErrorCode::Unproven));
+		const FVoxelLandM5Diagnostic MarginObstacle = VoxelLand::M5::SingleChunkRoute::Certify(
+			Chunk, 100, false, Start, End, 35, 185, 10, 0, 1, 1, Support, Budget.ToSharedRef(), NeverCancel);
+		TestEqual(TEXT("positive margin does not exempt non-support obstacle"), int32(MarginObstacle.Code),
+			int32(EVoxelLandM5ErrorCode::Unproven));
+		TestEqual(TEXT("obstacle reaches swept triangle"), MarginObstacle.Stage, FName(TEXT("M5.SweptTriangle")));
 		TArray<int32> MaliciousSupport = Support;
 		MaliciousSupport.Add(NonFloorIndex);
 		TestEqual(TEXT("obstacle cannot be exempted as support"), int32(Check(MaliciousSupport)),

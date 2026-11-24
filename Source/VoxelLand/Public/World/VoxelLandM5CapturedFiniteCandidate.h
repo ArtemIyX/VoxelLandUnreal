@@ -26,6 +26,9 @@ public:
 	TSharedRef<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> GetSourceShared() const { return Source; }
 	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> GetCandidateShared() const { return Candidate.ToSharedRef(); }
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5CapturedMeshRoutesFixture;
+#endif
 	FVoxelLandM5CapturedFiniteCandidate(TSharedRef<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> InSource,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
 		: Source(MoveTemp(InSource)), Lease(MoveTemp(InLease)) {}

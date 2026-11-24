@@ -28,6 +28,7 @@ public:
 	const FVoxelLandM5CapturedBaseline& GetSource() const { return *Source; }
 	const FVoxelLandM5CapturedFiniteCandidate* GetCandidate() const { return Candidate.Get(); }
 	const FVoxelLandM5ScratchChunks& GetChunks() const { return *Chunks; }
+	TSharedRef<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> GetChunksShared() const { return Chunks.ToSharedRef(); }
 private:
 	static FVoxelLandM5Diagnostic BuildInternal(
 		TSharedRef<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> Source,

@@ -8,6 +8,7 @@
 #include "Generation/VoxelLandM5CandidatePlanner.h"
 #include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5FiniteEntrancePlanner.h"
+#include "Generation/VoxelLandM5FiniteRoutePlanner.h"
 #include "Misc/AutomationTest.h"
 
 // Automation-only controlled candidate; production has no import path.
@@ -45,7 +46,8 @@ bool FVoxelLandM5FiniteEntrancePlannerTest::RunTest(const FString& Parameters)
 	bool bZeroEntrances = false, bQueryReached = false, bProtected = false;
 	bool bWaterRejected = false, bMaskRejected = false, bModeRejected = false;
 	bool bForeignBudget = false, bCancelled = false, bNegativeWork = false;
-	bool bRealEntrance = false, bInputUnchanged = false;
+	bool bRealEntrance = false, bInputUnchanged = false, bEntranceRoute = false;
+	FString RouteFailure;
 	const bool bSetup = Async(EAsyncExecution::ThreadPool, [&]() {
 		const auto Never = [] { return false; };
 		FVoxelLandProgramDraft Draft;
@@ -199,6 +201,48 @@ bool FVoxelLandM5FiniteEntrancePlannerTest::RunTest(const FString& Parameters)
 			bRealEntrance = Approach.EndCm.X == -195 && Approach.EndCm.Y == 167
 				&& Approach.EndCm.Z == -50 && Ramp.StartCm.Z == -50 && Ramp.EndCm.Z == 235;
 		}
+		if (bRealEntrance)
+		{
+			// Center-relative proposals fit the 100 cm ideal tube for this capsule.
+			// They do not establish floor support or final-field clearance.
+			const auto ResolveFeet = [&Flat](const FVoxelLandM5PointCm& Center,
+				TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SharedBudget,
+				TFunctionRef<bool()> Cancel, FVoxelLandM5PointCm& Feet) {
+				FVoxelLandM5Diagnostic Result;
+				if (Cancel())
+				{
+					Result.Code = EVoxelLandM5ErrorCode::Cancelled;
+				}
+				else if (!SharedBudget->TryChargeWork(1))
+				{
+					Result.Code = EVoxelLandM5ErrorCode::BudgetExceeded;
+				}
+				else
+				{
+					Feet = Center;
+					Feet.Z -= Flat.Capsule.StandingHeightCm / 2;
+				}
+				return Result;
+			};
+			TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Routed;
+			const auto RouteDiagnostic = VoxelLand::M5::FiniteRoutePlanner::Build(
+				Flat, 42, FlatOut->GetPlan().Region, FlatOut.ToSharedRef(), Budget.ToSharedRef(),
+				ResolveFeet, Never, Routed);
+			RouteFailure = RouteDiagnostic.Message;
+			if (RouteDiagnostic.Code == EVoxelLandM5ErrorCode::None && Routed
+				&& Routed->GetPlan().Routes.Num() == 1 && Routed->GetPlan().Entrances.Num() == 1)
+			{
+				const auto& Route = Routed->GetPlan().Routes[0];
+				const auto& Entrance = Routed->GetPlan().Entrances[0];
+				bEntranceRoute = Route.Id == FlatOut->GetPlan().Connections[0].Id && Route.Legs.Num() == 2
+					&& Route.Legs[0].Feature.Id == FlatOut->GetPlan().Segments[0].Id
+					&& Route.Legs[1].Feature.Id == FlatOut->GetPlan().Segments[1].Id
+					&& Entrance.bHasInsideFeetAnchor && Entrance.bHasOutsideFeetAnchor
+					&& Entrance.InsideFeetAnchorCm.X == -195 && Entrance.InsideFeetAnchorCm.Y == 167
+					&& Entrance.InsideFeetAnchorCm.Z == -142 && Entrance.OutsideFeetAnchorCm.X == 375
+					&& Entrance.OutsideFeetAnchorCm.Y == 167 && Entrance.OutsideFeetAnchorCm.Z == 143;
+			}
+		}
 		bInputUnchanged = FlatCandidate->GetPlan().Chambers.Num() == 1
 			&& FlatCandidate->GetPlan().Chambers[0].CenterCm.Z == -140
 			&& FlatCandidate->GetPlan().Entrances.IsEmpty() && FlatCandidate->GetPlan().Segments.IsEmpty()
@@ -216,6 +260,7 @@ bool FVoxelLandM5FiniteEntrancePlannerTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("negative query limit rejected"), bNegativeWork);
 	TestTrue(TEXT("cancellation preserves output"), bCancelled);
 	TestTrue(TEXT("real M4 window produces one finite entrance"), bRealEntrance);
+	TestTrue(FString::Printf(TEXT("real M4 entrance produces its nominal route and anchors: %s"), *RouteFailure), bEntranceRoute);
 	TestTrue(TEXT("entrance construction preserves candidate input"), bInputUnchanged);
 	return bSetup;
 }

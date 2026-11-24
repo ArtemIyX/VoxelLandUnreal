@@ -69,6 +69,16 @@ public:
 	static FVoxelLandM5Diagnostic CreateMetered(const FVoxelLandGeneratorSettings& Settings,
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	// Finite M4 setup using the same metered program and generator admission.
+	// The caller independently admits the grid and retains its provenance/lease;
+	// workers, providers and allocator overhead also require separate admission.
+	// Worker thread only; failure or cancellation preserves OutGenerator. This
+	// does not certify terrain or authorize world publication.
+	static FVoxelLandM5Diagnostic CreateM4HeightFieldMetered(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4SmoothSettings& Smooth,
+		const FVoxelLandM4HeightDetailConfig& Detail, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	// Transitional explicit height-field source. The VM's pure code is not run;
 	// only its optional built-in Smooth Density stage is retained. External operators and filters
 	// are not supported. Existing Create is unchanged.
@@ -132,6 +142,11 @@ public:
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> GetM4HeightGrid() const { return M4HeightGrid; }
 
 private:
+	static FVoxelLandM5Diagnostic CreateMeteredInternal(const FVoxelLandGeneratorSettings& Settings,
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+		const FVoxelLandM4OverhangConfig* Overhang, const FVoxelLandM4SmoothSettings* Smooth,
+		const FVoxelLandM4HeightDetailConfig* Detail, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	static FVoxelLandError CreateInternal(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		const FVoxelLandM4OverhangConfig* Overhang,

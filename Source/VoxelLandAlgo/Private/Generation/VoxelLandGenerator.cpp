@@ -133,6 +133,15 @@ FVoxelLandM5Diagnostic FVoxelLandGenerator::CreateMetered(const FVoxelLandGenera
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
+	return CreateMeteredInternal(Settings, nullptr, false, nullptr, nullptr, nullptr, Budget, IsCancelled, OutGenerator);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandGenerator::CreateMeteredInternal(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	const FVoxelLandM4OverhangConfig* Overhang, const FVoxelLandM4SmoothSettings* Smooth,
+	const FVoxelLandM4HeightDetailConfig* Detail, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
 	using E = EVoxelLandM5ErrorCode;
 	FVoxelLandM5Diagnostic Failure;
 	Failure.Stage = TEXT("M5.GeneratorSetup");
@@ -241,7 +250,7 @@ FVoxelLandM5Diagnostic FVoxelLandGenerator::CreateMetered(const FVoxelLandGenera
 		return Failure;
 	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
-	const FVoxelLandError Error = CreateInternal(Settings, nullptr, false, nullptr, Result, &IsCancelled);
+	const FVoxelLandError Error = CreateInternal(Settings, MoveTemp(HeightGrid), bNormalizeSlope, Overhang, Result, &IsCancelled);
 	if (Error || !Result.IsValid())
 	{
 		Failure.Code = Error.Code == EVoxelLandErrorCode::Cancelled ? E::Cancelled : E::InvalidInput;
@@ -256,9 +265,64 @@ FVoxelLandM5Diagnostic FVoxelLandGenerator::CreateMetered(const FVoxelLandGenera
 	}
 	// Create produces an unpublished mutable object. Install the lease before
 	// publishing so it outlives all generator-owned allocations.
-	ConstCastSharedPtr<FVoxelLandGenerator>(Result)->M5Lease = MoveTemp(Lease);
+	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
+	if (Smooth && Detail)
+	{
+		Mutable->bSmoothEnabled = Smooth->bEnabled;
+		Mutable->SmoothStrength = Smooth->Strength;
+		Mutable->M4HeightDetail = *Detail;
+		const uint32 Bits = uint32(VoxelLandDeterminism::DeriveNodeSeed(Settings.WorldSeed, Detail->NodeId, Detail->Salt));
+		Mutable->M4HeightDetailSeed = Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll);
+	}
+	if (IsCancelled())
+	{
+		Failure.Code = E::Cancelled;
+		Failure.Message = TEXT("Generator setup cancelled");
+		return Failure;
+	}
+	Mutable->M5Lease = MoveTemp(Lease);
 	OutGenerator = MoveTemp(Result);
 	return {};
+}
+
+FVoxelLandM5Diagnostic FVoxelLandGenerator::CreateM4HeightFieldMetered(const FVoxelLandGeneratorSettings& Settings,
+	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
+	const FVoxelLandM4OverhangConfig& Overhang, const FVoxelLandM4SmoothSettings& Smooth,
+	const FVoxelLandM4HeightDetailConfig& Detail, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
+{
+	FVoxelLandM5Diagnostic Failure;
+	Failure.Stage = TEXT("M5.GeneratorSetup");
+	if (IsCancelled())
+	{
+		Failure.Code = EVoxelLandM5ErrorCode::Cancelled;
+		Failure.Message = TEXT("Generator setup cancelled");
+		return Failure;
+	}
+	const float Size = Settings.Profile.VoxelSizeCm;
+	if (!HeightGrid || !Settings.Program || !VoxelLandM4Overhang::IsValid(Overhang.Displacement)
+		|| !FMath::IsFinite(Overhang.FrequencyPerCm) || Overhang.FrequencyPerCm <= 0.f
+		|| Overhang.FrequencyPerCm > 1.f || !Overhang.NodeId.IsValid()
+		|| (Settings.bM4FixedLatticeShaping && Overhang.Displacement.bEnabled
+			&& Overhang.Displacement.AmplitudeQ8 != 0
+			&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Overhang.FrequencyPerCm))
+		|| !FMath::IsFinite(Size) || Size < 1.f || Size > 2000000.f
+		|| FMath::FloorToDouble(double(Size)) != double(Size)
+		|| Settings.Program->GetData().ExternalFilterIndex != INDEX_NONE
+		|| !Settings.Program->GetData().ExternalOperators.IsEmpty()
+		|| Smooth.Version != 1 || !FMath::IsFinite(Smooth.Strength) || Smooth.Strength < 0.f || Smooth.Strength > 1.f
+		|| Detail.AlgorithmVersion != 1 || Detail.AmplitudeQ8 < 0 || Detail.AmplitudeQ8 > 1280000
+		|| !FMath::IsFinite(Detail.FrequencyPerCm) || Detail.FrequencyPerCm <= 0.f || Detail.FrequencyPerCm > 1.f
+		|| !Detail.NodeId.IsValid()
+		|| (Settings.bM4FixedLatticeShaping && Detail.bEnabled && Detail.AmplitudeQ8 != 0
+			&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Detail.FrequencyPerCm)))
+	{
+		Failure.Code = EVoxelLandM5ErrorCode::InvalidInput;
+		Failure.Message = TEXT("Invalid finite M4 height-field configuration");
+		return Failure;
+	}
+	return CreateMeteredInternal(Settings, MoveTemp(HeightGrid), bNormalizeSlope, &Overhang, &Smooth, &Detail,
+		Budget, IsCancelled, OutGenerator);
 }
 
 FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGeneratorSettings& Settings,

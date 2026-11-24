@@ -736,8 +736,9 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 	}
-	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Complete = MakeShareable(
+	TSharedPtr<FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Complete = MakeShareable(
 		new FVoxelLandM5CandidateResult(Budget, Settings, WorldSeed, Region, MoveTemp(Scratch), MoveTemp(Lease)));
+	Complete->DirectSource = Candidate;
 	Out = MoveTemp(Complete);
 	return FVoxelLandM5Diagnostic();
 }

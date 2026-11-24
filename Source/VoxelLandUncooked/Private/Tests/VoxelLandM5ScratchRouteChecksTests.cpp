@@ -8,10 +8,59 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5CandidatePlanner.h"
 #include "Generation/VoxelLandM5CandidateResult.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5FiniteRoutePlanner.h"
 #include "Generation/VoxelLandM5ProtectionGrid.h"
 #include "Generation/VoxelLandM5ScratchChunks.h"
 #include "Generation/VoxelLandM5ScratchRouteChecks.h"
 #include "Misc/AutomationTest.h"
+
+class FVoxelLandM5ScratchRouteLineageFixture final
+{
+public:
+	static TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Make(
+		const FVoxelLandM5CaveSettings& Settings, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget)
+	{
+		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+		if (!Budget->TryReserveBytes(65536, Lease))
+		{
+			return nullptr;
+		}
+		FVoxelLandM5CavePlan Plan;
+		Plan.Bounds = Settings.Bounds;
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			FVoxelLandM5Chamber Chamber;
+			Chamber.bHasId = true;
+			Chamber.Id = uint64(Index);
+			Chamber.CenterCm.X = -300 + Index * 300;
+			Chamber.CenterCm.Y = -200;
+			Chamber.CenterCm.Z = -200;
+			Chamber.RadiusCm = 200;
+			Plan.Chambers.Add(Chamber);
+		}
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			FVoxelLandM5Connection Connection;
+			Connection.bHasId = true;
+			Connection.Id = uint64(7 + Index);
+			Connection.Start.bValid = Connection.End.bValid = true;
+			Connection.Start.Id = uint64(Index);
+			Connection.End.Id = uint64(Index + 1);
+			Plan.Connections.Add(Connection);
+			FVoxelLandM5Segment Segment;
+			Segment.bHasId = Segment.bHasConnectionId = true;
+			Segment.Id = uint64(9 + Index);
+			Segment.ConnectionId = Connection.Id;
+			Segment.StartCm = Plan.Chambers[Index].CenterCm;
+			Segment.EndCm = Plan.Chambers[Index + 1].CenterCm;
+			Segment.RadiusCm = 100;
+			Plan.Segments.Add(Segment);
+		}
+		const FVoxelLandM5RegionCoord Region;
+		return MakeShareable(new FVoxelLandM5CandidateResult(Budget, Settings, 42, Region, MoveTemp(Plan), MoveTemp(Lease)));
+	}
+};
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5ScratchRouteChecksTest, "VoxelLand.M5.ScratchRouteChecks.Finite",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -21,6 +70,7 @@ bool FVoxelLandM5ScratchRouteChecksTest::RunTest(const FString& Parameters)
 	bool bDelegated = false, bSeed = false, bManifest = false, bSettings = false;
 	bool bWindow = false, bCandidate = false, bMask = false, bMode = false;
 	bool bForeign = false, bCancelled = false, bMidCancelled = false, bExhausted = false;
+	bool bLineage = false, bUnrelated = false, bSame = false, bSourceLifetime = false;
 	const bool bSetup = Async(EAsyncExecution::ThreadPool, [&]() {
 		const auto Never = [] { return false; };
 		FVoxelLandProgramDraft Draft;
@@ -83,10 +133,9 @@ bool FVoxelLandM5ScratchRouteChecksTest::RunTest(const FString& Parameters)
 		Settings.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
 		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate;
 		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> OtherCandidate;
-		if (VoxelLand::M5::CandidatePlanner::Build(Settings, 42, {}, Budget.ToSharedRef(), Never, Candidate).Code
-				!= EVoxelLandM5ErrorCode::None || !Candidate
-			|| VoxelLand::M5::CandidatePlanner::Build(Settings, 42, {}, Budget.ToSharedRef(), Never, OtherCandidate).Code
-				!= EVoxelLandM5ErrorCode::None || !OtherCandidate)
+		Candidate = FVoxelLandM5ScratchRouteLineageFixture::Make(Settings, Budget.ToSharedRef());
+		OtherCandidate = FVoxelLandM5ScratchRouteLineageFixture::Make(Settings, Budget.ToSharedRef());
+		if (!Candidate || !OtherCandidate)
 		{
 			return false;
 		}
@@ -110,6 +159,65 @@ bool FVoxelLandM5ScratchRouteChecksTest::RunTest(const FString& Parameters)
 		auto D = Run(Settings, 42, Manifest, Window.ToSharedRef(), Candidate.ToSharedRef(), nullptr,
 			Budget.ToSharedRef(), Never);
 		bDelegated = D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.MultiRouteChecks"));
+		const auto Resolve = [](const FVoxelLandM5PointCm& Center,
+			TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SharedBudget, TFunctionRef<bool()> Cancel,
+			FVoxelLandM5PointCm& Feet) {
+			FVoxelLandM5Diagnostic Result;
+			if (Cancel())
+			{
+				Result.Code = EVoxelLandM5ErrorCode::Cancelled;
+			}
+			else if (!SharedBudget->TryChargeWork(1))
+			{
+				Result.Code = EVoxelLandM5ErrorCode::BudgetExceeded;
+			}
+			else
+			{
+				Feet = Center;
+				Feet.Z -= 92;
+			}
+			return Result;
+		};
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Routed;
+		const FVoxelLandM5RegionCoord Region;
+		const FVoxelLandM5Diagnostic Built = VoxelLand::M5::FiniteRoutePlanner::Build(
+			Settings, 42, Region, Candidate.ToSharedRef(), Budget.ToSharedRef(), Resolve, Never, Routed);
+		if (Built.Code != EVoxelLandM5ErrorCode::None || !Routed)
+		{
+			return false;
+		}
+		D = VoxelLand::M5::ScratchRouteChecks::CheckAll(Settings, 42, Manifest, Window.ToSharedRef(),
+			Candidate.ToSharedRef(), Routed.ToSharedRef(), nullptr, Chunks.ToSharedRef(), 0, Selections, Budget.ToSharedRef(), Never);
+		bLineage = Routed->IsDirectlyDerivedFrom(*Candidate) && !Routed->IsDirectlyDerivedFrom(*OtherCandidate)
+			&& D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.MultiRouteChecks"));
+		D = VoxelLand::M5::ScratchRouteChecks::CheckAll(Settings, 42, Manifest, Window.ToSharedRef(),
+			Candidate.ToSharedRef(), OtherCandidate.ToSharedRef(), nullptr, Chunks.ToSharedRef(), 0, Selections, Budget.ToSharedRef(), Never);
+		bUnrelated = D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.ScratchRouteChecks"));
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> OtherRouted;
+		if (VoxelLand::M5::FiniteRoutePlanner::Build(Settings, 42, Region, OtherCandidate.ToSharedRef(),
+				Budget.ToSharedRef(), Resolve, Never, OtherRouted).Code != EVoxelLandM5ErrorCode::None || !OtherRouted)
+		{
+			return false;
+		}
+		D = VoxelLand::M5::ScratchRouteChecks::CheckAll(Settings, 42, Manifest, Window.ToSharedRef(),
+			Candidate.ToSharedRef(), OtherRouted.ToSharedRef(), nullptr, Chunks.ToSharedRef(), 0, Selections, Budget.ToSharedRef(), Never);
+		bUnrelated &= D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.ScratchRouteChecks"));
+		D = VoxelLand::M5::ScratchRouteChecks::CheckAll(Settings, 42, Manifest, Window.ToSharedRef(),
+			Candidate.ToSharedRef(), Candidate.ToSharedRef(), nullptr, Chunks.ToSharedRef(), 0, Selections, Budget.ToSharedRef(), Never);
+		bSame = D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.MultiRouteChecks"));
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Temporary =
+			FVoxelLandM5ScratchRouteLineageFixture::Make(Settings, Budget.ToSharedRef());
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> TemporaryRouted;
+		if (!Temporary || VoxelLand::M5::FiniteRoutePlanner::Build(Settings, 42, Region, Temporary.ToSharedRef(),
+				Budget.ToSharedRef(), Resolve, Never, TemporaryRouted).Code != EVoxelLandM5ErrorCode::None || !TemporaryRouted)
+		{
+			return false;
+		}
+		TWeakPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> WeakSource = Temporary;
+		Temporary.Reset();
+		bSourceLifetime = WeakSource.IsValid();
+		TemporaryRouted.Reset();
+		bSourceLifetime &= !WeakSource.IsValid();
 		D = Run(Settings, 43, Manifest, Window.ToSharedRef(), Candidate.ToSharedRef(), nullptr, Budget.ToSharedRef(), Never);
 		bSeed = D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.ScratchRouteChecks"));
 		FVoxelLandM5StageManifest ChangedManifest = Manifest;
@@ -152,6 +260,15 @@ bool FVoxelLandM5ScratchRouteChecksTest::RunTest(const FString& Parameters)
 		}
 		D = Run(Settings, 42, Manifest, Window.ToSharedRef(), Candidate.ToSharedRef(), nullptr, OtherBudget.ToSharedRef(), Never);
 		bForeign = D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.ScratchRouteChecks"));
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> ForeignRouted =
+			FVoxelLandM5ScratchRouteLineageFixture::Make(Settings, OtherBudget.ToSharedRef());
+		if (!ForeignRouted)
+		{
+			return false;
+		}
+		D = VoxelLand::M5::ScratchRouteChecks::CheckAll(Settings, 42, Manifest, Window.ToSharedRef(),
+			Candidate.ToSharedRef(), ForeignRouted.ToSharedRef(), nullptr, Chunks.ToSharedRef(), 0, Selections, Budget.ToSharedRef(), Never);
+		bForeign &= D.Code == EVoxelLandM5ErrorCode::InvalidInput && D.Stage == FName(TEXT("M5.ScratchRouteChecks"));
 		D = Run(Settings, 42, Manifest, Window.ToSharedRef(), Candidate.ToSharedRef(), nullptr, Budget.ToSharedRef(),
 			[] { return true; });
 		bCancelled = D.Code == EVoxelLandM5ErrorCode::Cancelled;
@@ -174,6 +291,10 @@ bool FVoxelLandM5ScratchRouteChecksTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("fixture setup"), bSetup);
 	TestTrue(TEXT("matching inputs reach CPU route validator"), bDelegated);
+	TestTrue(TEXT("direct routed candidate reaches CPU route validator"), bLineage);
+	TestTrue(TEXT("equal but unrelated candidate rejected"), bUnrelated);
+	TestTrue(TEXT("same candidate overload remains compatible"), bSame);
+	TestTrue(TEXT("routed result retains and releases direct source"), bSourceLifetime);
 	TestTrue(TEXT("changed seed rejected"), bSeed);
 	TestTrue(TEXT("changed manifest rejected"), bManifest);
 	TestTrue(TEXT("changed settings rejected"), bSettings);

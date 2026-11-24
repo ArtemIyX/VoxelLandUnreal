@@ -23,6 +23,8 @@ public:
 	bool MatchesSource(
 		const FVoxelLandM5CaveSettings& Settings, int64 Seed, const FVoxelLandM5RegionCoord& Region) const;
 	const FVoxelLandM5CavePlan& GetPlan() const { return Plan; }
+	// True only for a direct RouteBuilder result of this exact source object.
+	bool IsDirectlyDerivedFrom(const FVoxelLandM5CandidateResult& Source) const { return DirectSource.Get() == &Source; }
 
 private:
 	friend FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5CaveSettings&, int64,
@@ -40,6 +42,7 @@ private:
 			int64&, int64&, int64&, int32&, bool&, bool&)>,
 		TFunctionRef<bool()>, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>&);
 #if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5ScratchRouteLineageFixture;
 	friend class FVoxelLandM5CapturedMeshRoutesFixture;
 	friend class FVoxelLandM5FiniteRoutePlannerFixtureFactory;
 	friend class FVoxelLandM5MultiRoutesFixtureFactory;
@@ -68,6 +71,8 @@ private:
 	FVoxelLandM5CaveSettings SourceSettings;
 	int64 SourceSeed;
 	FVoxelLandM5RegionCoord SourceRegion;
+	// Direct source remains alive until after this result's plan and lease.
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> DirectSource;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	FVoxelLandM5CavePlan Plan;
 };

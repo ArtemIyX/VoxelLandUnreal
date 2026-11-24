@@ -31,13 +31,27 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRouteChecks::CheckAll(const FVoxelL
 	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> Selections,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
 {
+	return CheckAll(Settings, WorldSeed, Manifest, Window, Candidate, Candidate, Protection, Chunks, ContactSkinCm,
+		Selections, Budget, IsCancelled);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRouteChecks::CheckAll(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5StageManifest& Manifest,
+	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Window,
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> CompositionSource,
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> RoutedCandidate,
+	TSharedPtr<const FVoxelLandM5ProtectionGrid, ESPMode::ThreadSafe> Protection,
+	TSharedRef<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Chunks, int64 ContactSkinCm,
+	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> Selections,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
 	{
 		return FVoxelLandM5ScratchRouteChecksInternals::Error(E::Cancelled, TEXT("Scratch route checks cancelled"));
 	}
 	if (Settings.PlanningMode != EVoxelLandM5PlanningMode::Finite || !Chunks->IsOwnedBy(*Budget)
-		|| !Window->IsOwnedBy(*Budget) || !Candidate->UsesBudget(*Budget)
+		|| !Window->IsOwnedBy(*Budget) || !CompositionSource->UsesBudget(*Budget) || !RoutedCandidate->UsesBudget(*Budget)
 		|| (Protection && !Protection->IsOwnedBy(*Budget)))
 	{
 		return FVoxelLandM5ScratchRouteChecksInternals::Error(E::InvalidInput, TEXT("Invalid finite route inputs or budget ownership"));
@@ -46,9 +60,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRouteChecks::CheckAll(const FVoxelL
 	{
 		return FVoxelLandM5ScratchRouteChecksInternals::Error(E::BudgetExceeded, TEXT("Scratch route input work exhausted"));
 	}
-	const FVoxelLandM5RegionCoord& Region = Candidate->GetPlan().Region;
-	if (!Chunks->MatchesDependencies(Window.Get(), Candidate.Get(), Protection.Get(), WorldSeed, Manifest)
-		|| !Chunks->MatchesSettings(Settings) || !Candidate->MatchesSource(Settings, WorldSeed, Region))
+	const FVoxelLandM5RegionCoord& Region = CompositionSource->GetPlan().Region;
+	if (!Chunks->MatchesDependencies(Window.Get(), CompositionSource.Get(), Protection.Get(), WorldSeed, Manifest)
+		|| !Chunks->MatchesSettings(Settings) || !CompositionSource->MatchesSource(Settings, WorldSeed, Region)
+		|| !RoutedCandidate->MatchesSource(Settings, WorldSeed, Region)
+		|| (&RoutedCandidate.Get() != &CompositionSource.Get()
+			&& !RoutedCandidate->IsDirectlyDerivedFrom(CompositionSource.Get())))
 	{
 		return FVoxelLandM5ScratchRouteChecksInternals::Error(E::InvalidInput, TEXT("Scratch route sources do not match"));
 	}
@@ -56,7 +73,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRouteChecks::CheckAll(const FVoxelL
 	{
 		return FVoxelLandM5ScratchRouteChecksInternals::Error(E::Cancelled, TEXT("Scratch route checks cancelled"));
 	}
-	return VoxelLand::M5::MultiRouteChecks::CheckAll(Settings, WorldSeed, Region, Candidate, Chunks->GetChunks(),
+	return VoxelLand::M5::MultiRouteChecks::CheckAll(Settings, WorldSeed, Region, RoutedCandidate, Chunks->GetChunks(),
 		Chunks->GetMinInclusive(), Chunks->GetMaxExclusive(), Chunks->GetVoxelSizeCm(), false, ContactSkinCm,
 		Selections, Budget, IsCancelled);
 }

@@ -29,6 +29,7 @@ public:
 			TUniquePtr<FVoxelLandWorkerContext>&)> CreateWorker, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5CapturedFiniteScratch, ESPMode::ThreadSafe>& Out);
 	const FVoxelLandM5BaseCapture& GetCapture() const { return *Capture; }
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> GetBudget() const;
 	const FVoxelLandM5MeteredIdentity& GetIdentity() const { return *Identity; }
 	const FVoxelLandM5FiniteBaseScratch& GetScratch() const { return *Scratch; }
 private:

@@ -23,6 +23,11 @@ public:
 	}
 };
 
+TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> FVoxelLandM5CapturedFiniteScratch::GetBudget() const
+{
+	return Capture->Budget;
+}
+
 FVoxelLandM5Diagnostic FVoxelLandM5CapturedFiniteScratch::Build(
 	TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Capture,
 	TFunctionRef<FVoxelLandM5Diagnostic(const FVoxelLandGenerator&, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>,

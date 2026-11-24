@@ -30,6 +30,7 @@ public:
 		TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5FiniteBaseScratch, ESPMode::ThreadSafe>& Out);
 	const FVoxelLandGenerator& GetGenerator() const { return *Generator; }
+	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> GetGeneratorShared() const { return Generator.ToSharedRef(); }
 	const FVoxelLandM4HeightGrid& GetGrid() const { return *Grid; }
 	uint64 GetHash() const { return Hash; }
 private:

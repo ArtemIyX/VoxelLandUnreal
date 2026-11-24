@@ -225,7 +225,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 								{
 									return I::Error(E::Cancelled, TEXT("Roof check cancelled"));
 								}
-								bool bSolid = false, bAir = false;
+								bool bSolid = false, bAir = false, bZero = false;
 								for (int64 K = 0; K < 2; ++K)
 								{
 									for (int64 J = 0; J < 2; ++J)
@@ -235,16 +235,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::ScratchRoofCheck::Check(const FVoxelLandM5
 											const int64 Source = Cell[0] + DX + H + int64(Size.X) * (Cell[1] + DY + J)
 												+ XY * (Cell[2] + DZ + K);
 											const int16 Q = Values[int32(Source)];
-											if (Q == 0)
-											{
-												return I::Error(E::Unproven, TEXT("Ambiguous zero baseline sample in roof domain"));
-											}
 											bSolid |= Q < 0;
-											bAir |= Q > 0;
+											bAir |= Q >= 0;
+											bZero |= Q == 0;
 										}
 									}
 								}
-								bRoof |= bSolid && bAir;
+								// Zero is air to the mesher, but protect all zero-containing
+								// cells even when all eight samples are nonnegative.
+								bRoof |= (bSolid && bAir) || bZero;
 							}
 						}
 					}

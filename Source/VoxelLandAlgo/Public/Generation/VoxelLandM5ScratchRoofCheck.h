@@ -16,9 +16,9 @@ class FVoxelLandM5ScratchChunks;
 namespace VoxelLand::M5::ScratchRoofCheck
 {
 // Checks baseline/final contributing samples around owned cells near any
-// baseline mixed cell. Entire sample influence must fit one candidate opening
+// baseline mixed or zero-containing cell. Entire sample influence must fit one candidate opening
 // before a roof cell is exempted. The baseline window must cover the full
-// search and comparison halo; uniform-sign neighborhoods have no local roof.
+// search and comparison halo; strictly positive or strictly negative neighborhoods have no local roof.
 // Caller must establish that this covers the complete relevant surface domain.
 // Pocket-only checks have no candidate openings. Exact immediate inputs and budget must match. This does not prove surface provenance, opening authorization,
 // mesher/filter influence, water, geometry safety, or publication readiness.

@@ -40,6 +40,9 @@ public:
 		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow);
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5ScratchRoofFixtureFactory;
+#endif
 	FVoxelLandM5BaselineWindow(TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> InGenerator,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;

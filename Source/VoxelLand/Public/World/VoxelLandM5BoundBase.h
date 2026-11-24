@@ -53,6 +53,7 @@ public:
 
 private:
 	friend class FVoxelLandM5BoundBase;
+	friend class FVoxelLandM5CapturedFiniteScratch;
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FVoxelLandM5BoundBaseTest;
 	friend class FVoxelLandM5TypedFiniteBaseCaptureTest;

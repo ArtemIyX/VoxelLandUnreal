@@ -5,6 +5,7 @@
 #include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5FeetChain.h"
 #include "Generation/VoxelLandM5Seed.h"
+#include "Generation/VoxelLandM5SegmentCoverage.h"
 
 class FVoxelLandM5RouteBuilderInternals final
 {
@@ -257,6 +258,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing connection or segment chain"));
 		}
+		if (!Choice.FeetWaypoints.IsEmpty() && Choice.FeetWaypoints.Num() != Choice.SegmentIds.Num() + 1)
+		{
+			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Waypoint count does not match segment chain"));
+		}
 		TotalLegs += Choice.SegmentIds.Num();
 		if (TotalLegs > Limits.MaxRouteLegs || TotalLegs > Input.Segments.Num())
 		{
@@ -466,22 +472,6 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 			}
 			Segments.Add(*Found);
 		}
-		TSharedPtr<const FVoxelLandM5FeetChain, ESPMode::ThreadSafe> Chain;
-		auto Error = FVoxelLandM5FeetChain::Build(Segments, Choice.ConnectionId, Choice.bReverseFirst, Settings.Capsule,
-			Limits.MaxSegments, Budget, IsCancelled, Chain);
-		if (Error.Code != EVoxelLandM5ErrorCode::None)
-		{
-			return Error;
-		}
-		if (!Chain.IsValid() || Chain->GetLegs().IsEmpty()
-			|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(
-				Chain->GetLegs()[0].Feet.StartFeetCm, Start->FeetCm)
-			|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(
-				Chain->GetLegs().Last().Feet.EndFeetCm, End->FeetCm))
-		{
-			return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
-				EVoxelLandM5ErrorCode::Unproven, TEXT("Feet chain does not match explicit anchors"));
-		}
 		FVoxelLandM5Route Route;
 		Route.bHasId = true;
 		Route.Id = Choice.ConnectionId;
@@ -489,20 +479,112 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 		Route.End = Choice.End;
 		Route.CoveredFeatures.Add(FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
 			EVoxelLandM5RouteFeatureKind::Connection, Region, Choice.ConnectionId));
-		for (const auto& Leg : Chain->GetLegs())
+		if (Choice.FeetWaypoints.IsEmpty())
 		{
-			if (IsCancelled())
+			TSharedPtr<const FVoxelLandM5FeetChain, ESPMode::ThreadSafe> Chain;
+			auto Error = FVoxelLandM5FeetChain::Build(Segments, Choice.ConnectionId, Choice.bReverseFirst, Settings.Capsule,
+				Limits.MaxSegments, Budget, IsCancelled, Chain);
+			if (Error.Code != EVoxelLandM5ErrorCode::None)
+			{
+				return Error;
+			}
+			if (!Chain.IsValid() || Chain->GetLegs().IsEmpty()
+				|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(
+					Chain->GetLegs()[0].Feet.StartFeetCm, Start->FeetCm)
+				|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(
+					Chain->GetLegs().Last().Feet.EndFeetCm, End->FeetCm))
 			{
 				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
-					EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+					EVoxelLandM5ErrorCode::Unproven, TEXT("Feet chain does not match explicit anchors"));
 			}
-			FVoxelLandM5RouteLeg R;
-			R.StartFeetCm = Leg.Feet.StartFeetCm;
-			R.EndFeetCm = Leg.Feet.EndFeetCm;
-			R.Feature = FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
-				EVoxelLandM5RouteFeatureKind::Segment, Region, Leg.SegmentId);
-			Route.Legs.Add(R);
-			Route.CoveredFeatures.Add(R.Feature);
+			for (const auto& Leg : Chain->GetLegs())
+			{
+				if (IsCancelled())
+				{
+					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				}
+				FVoxelLandM5RouteLeg R;
+				R.StartFeetCm = Leg.Feet.StartFeetCm;
+				R.EndFeetCm = Leg.Feet.EndFeetCm;
+				R.Feature = FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
+					EVoxelLandM5RouteFeatureKind::Segment, Region, Leg.SegmentId);
+				Route.Legs.Add(R);
+				Route.CoveredFeatures.Add(R.Feature);
+			}
+		}
+		else
+		{
+			if (!FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(Choice.FeetWaypoints[0], Start->FeetCm)
+				|| !FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(Choice.FeetWaypoints.Last(), End->FeetCm))
+			{
+				return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+					EVoxelLandM5ErrorCode::Unproven, TEXT("Waypoints do not match explicit anchors"));
+			}
+			FVoxelLandM5PointCm PreviousCenter;
+			for (int32 Index = 0; Index < Segments.Num(); ++Index)
+			{
+				if (IsCancelled())
+				{
+					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+				}
+				const auto& Segment = Segments[Index];
+				for (int32 Previous = 0; Previous < Index; ++Previous)
+				{
+					if (IsCancelled())
+					{
+						return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+							EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
+					}
+					if (Segments[Previous].Id == Segment.Id)
+					{
+						return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+							EVoxelLandM5ErrorCode::IdentityCollision, TEXT("Duplicate segment ID in route"));
+					}
+				}
+				bool bReverse = Choice.bReverseFirst;
+				if (Index > 0)
+				{
+					if (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(PreviousCenter, Segment.StartCm))
+					{
+						bReverse = false;
+					}
+					else if (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(PreviousCenter, Segment.EndCm))
+					{
+						bReverse = true;
+					}
+					else
+					{
+						return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+							EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Segment chain is discontinuous"));
+					}
+				}
+				const auto& CenterStart = bReverse ? Segment.EndCm : Segment.StartCm;
+				const auto& CenterEnd = bReverse ? Segment.StartCm : Segment.EndCm;
+				const auto& WaypointStart = Choice.FeetWaypoints[Index];
+				const auto& WaypointEnd = Choice.FeetWaypoints[Index + 1];
+				if (WaypointStart.X != CenterStart.X || WaypointStart.Y != CenterStart.Y
+					|| WaypointEnd.X != CenterEnd.X || WaypointEnd.Y != CenterEnd.Y)
+				{
+					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+						EVoxelLandM5ErrorCode::InconsistentTopology, TEXT("Waypoint direction does not match segment chain"));
+				}
+				FVoxelLandM5RouteLeg R;
+				R.StartFeetCm = WaypointStart;
+				R.EndFeetCm = WaypointEnd;
+				R.Feature = FVoxelLandM5RouteBuilderInternals::M5RouteBuilderRef(
+					EVoxelLandM5RouteFeatureKind::Segment, Region, Segment.Id);
+				const auto Error = VoxelLand::M5::SegmentCoverage::Check(
+					Segment, R, Region, Settings.Capsule, Budget, IsCancelled);
+				if (Error.Code != EVoxelLandM5ErrorCode::None)
+				{
+					return Error;
+				}
+				Route.Legs.Add(R);
+				Route.CoveredFeatures.Add(R.Feature);
+				PreviousCenter = CenterEnd;
+			}
 		}
 		for (const FVoxelLandM5Endpoint* E : {&Choice.Start, &Choice.End})
 		{

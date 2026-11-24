@@ -174,6 +174,142 @@ bool FVoxelLandM5RouteBuilderTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5RouteBuilderWaypointsTest, "VoxelLand.M5.Routes.Waypoints",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandM5RouteBuilderWaypointsTest::RunTest(const FString& Parameters)
+{
+	FVoxelLandM5CaveSettings Settings;
+	Settings.Topology.MinChambers = Settings.Topology.MaxChambers = 2;
+	Settings.Topology.EntranceCount = 0;
+	Settings.Topology.MinLoops = Settings.Topology.MaxLoops = 0;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, Settings.Limits.MaxValidationWork, Budget))
+	{
+		return false;
+	}
+	FVoxelLandM5CavePlan Plan;
+	FVoxelLandM5Chamber A;
+	A.bHasId = true;
+	A.Id = 1;
+	A.CenterCm.X = -200;
+	A.CenterCm.Z = 200;
+	A.RadiusCm = 200;
+	FVoxelLandM5Chamber B = A;
+	B.Id = 2;
+	B.CenterCm.X = 200;
+	Plan.Chambers = {A, B};
+	FVoxelLandM5Connection Connection;
+	Connection.bHasId = true;
+	Connection.Id = 7;
+	Connection.Start.bValid = true;
+	Connection.Start.Id = 1;
+	Connection.End.bValid = true;
+	Connection.End.Id = 2;
+	Plan.Connections.Add(Connection);
+	FVoxelLandM5Segment First;
+	First.bHasId = true;
+	First.Id = 9;
+	First.bHasConnectionId = true;
+	First.ConnectionId = 7;
+	First.StartCm = A.CenterCm;
+	First.EndCm.Z = 200;
+	First.RadiusCm = 200;
+	FVoxelLandM5Segment Second = First;
+	Second.Id = 10;
+	Second.StartCm = First.EndCm;
+	Second.EndCm = B.CenterCm;
+	Plan.Segments = {First, Second};
+	auto Candidate = FVoxelLandM5RouteBuilderFixtureFactory::MakePlan(Settings, Budget.ToSharedRef(), Plan);
+	if (!TestTrue(TEXT("waypoint candidate"), Candidate.IsValid()))
+	{
+		return false;
+	}
+	FVoxelLandM5RouteAnchorChoice Start;
+	Start.Endpoint.bValid = true;
+	Start.Endpoint.Id = 1;
+	Start.Endpoint.AnchorRole = EVoxelLandM5AnchorRole::ChamberFeet;
+	Start.FeetCm.X = -200;
+	FVoxelLandM5RouteAnchorChoice End = Start;
+	End.Endpoint.Id = 2;
+	End.FeetCm.X = 200;
+	FVoxelLandM5PointCm Middle;
+	TArray<FVoxelLandM5RouteAnchorChoice> Anchors{Start, End};
+	FVoxelLandM5RouteConnectionChoice Choice;
+	Choice.bHasConnectionId = true;
+	Choice.ConnectionId = 7;
+	Choice.Start = Start.Endpoint;
+	Choice.End = End.Endpoint;
+	Choice.SegmentIds = {9, 10};
+	Choice.FeetWaypoints = {Start.FeetCm, Middle, End.FeetCm};
+	TArray<FVoxelLandM5RouteConnectionChoice> Choices{Choice};
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result;
+	const auto Never = [] { return false; };
+	const auto Build = [&] {
+		return VoxelLand::M5::RouteBuilder::Build(Settings, 11, Plan.Region, Candidate.ToSharedRef(), Anchors,
+			Choices, Budget.ToSharedRef(), Never, Result);
+	};
+	if (!TestTrue(TEXT("floor-aligned waypoints accepted"), Build().Code == EVoxelLandM5ErrorCode::None)
+		|| !TestTrue(TEXT("two waypoint legs"), Result.IsValid() && Result->GetPlan().Routes.Num() == 1
+			&& Result->GetPlan().Routes[0].Legs.Num() == 2))
+	{
+		return false;
+	}
+	TestEqual(TEXT("waypoint height retained"), Result->GetPlan().Routes[0].Legs[0].EndFeetCm.Z, int64(0));
+	TestTrue(TEXT("source remains unchanged"), Candidate->GetPlan().Routes.IsEmpty());
+	Choices[0].Start = End.Endpoint;
+	Choices[0].End = Start.Endpoint;
+	Choices[0].bReverseFirst = true;
+	Choices[0].SegmentIds = {10, 9};
+	Choices[0].FeetWaypoints = {End.FeetCm, Middle, Start.FeetCm};
+	TestTrue(TEXT("reversed waypoint chain accepted"), Build().Code == EVoxelLandM5ErrorCode::None);
+	auto Retained = Result;
+	Choices[0].bReverseFirst = false;
+	TestTrue(TEXT("incorrect first orientation rejected"), Build().Code == EVoxelLandM5ErrorCode::InconsistentTopology);
+	Choices[0] = Choice;
+	Choices[0].FeetWaypoints.RemoveAt(1);
+	TestTrue(TEXT("wrong waypoint count rejected"), Build().Code == EVoxelLandM5ErrorCode::InvalidInput);
+	Choices[0] = Choice;
+	Choices[0].FeetWaypoints[0].Z = 1;
+	TestTrue(TEXT("wrong endpoint waypoint rejected"), Build().Code == EVoxelLandM5ErrorCode::Unproven);
+	Choices[0] = Choice;
+	Choices[0].FeetWaypoints[1].Z = -1;
+	TestTrue(TEXT("waypoint outside tube rejected"), Build().Code == EVoxelLandM5ErrorCode::Unproven);
+	Choices[0] = Choice;
+	Choices[0].SegmentIds[1] = 9;
+	TestTrue(TEXT("duplicate segment rejected"), Build().Code == EVoxelLandM5ErrorCode::IdentityCollision);
+	Choices[0] = Choice;
+	FVoxelLandM5CavePlan Disconnected = Plan;
+	Disconnected.Segments[1].StartCm.X = 1;
+	auto DisconnectedCandidate = FVoxelLandM5RouteBuilderFixtureFactory::MakePlan(
+		Settings, Budget.ToSharedRef(), MoveTemp(Disconnected));
+	if (!DisconnectedCandidate.IsValid())
+	{
+		return false;
+	}
+	TestTrue(TEXT("discontinuous segment chain rejected"),
+		VoxelLand::M5::RouteBuilder::Build(Settings, 11, Plan.Region, DisconnectedCandidate.ToSharedRef(), Anchors,
+			Choices, Budget.ToSharedRef(), Never, Result).Code == EVoxelLandM5ErrorCode::InconsistentTopology);
+	const auto Cancel = [] { return true; };
+	TestTrue(TEXT("waypoint cancellation rejected"),
+		VoxelLand::M5::RouteBuilder::Build(Settings, 11, Plan.Region, Candidate.ToSharedRef(), Anchors,
+			Choices, Budget.ToSharedRef(), Cancel, Result).Code == EVoxelLandM5ErrorCode::Cancelled);
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> SmallWork;
+	if (!FVoxelLandM5Budget::TryCreate(Settings.Limits.MaxBytes, 1, SmallWork))
+	{
+		return false;
+	}
+	auto WorkCandidate = FVoxelLandM5RouteBuilderFixtureFactory::MakePlan(Settings, SmallWork.ToSharedRef(), Plan);
+	if (!WorkCandidate.IsValid())
+	{
+		return false;
+	}
+	TestTrue(TEXT("waypoint work budget rejected"),
+		VoxelLand::M5::RouteBuilder::Build(Settings, 11, Plan.Region, WorkCandidate.ToSharedRef(), Anchors,
+			Choices, SmallWork.ToSharedRef(), Never, Result).Code == EVoxelLandM5ErrorCode::BudgetExceeded);
+	TestTrue(TEXT("failures preserve result"), Result == Retained);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5RouteBuilderJunctionTest, "VoxelLand.M5.Routes.EntranceAndJunction",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandM5RouteBuilderJunctionTest::RunTest(const FString& Parameters)

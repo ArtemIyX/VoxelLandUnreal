@@ -15,7 +15,9 @@ class FVoxelLandM5CandidateResult;
 namespace VoxelLand::M5::RouteBuilder
 {
 // Constructs scratch route intents from explicit anchors and ordered connection
-// segments. The result is NOT certified, and must not be published as terrain.
+// segments. Optional explicit feet waypoints prove nominal ideal-tube coverage;
+// an empty waypoint list retains the centered inflated-envelope proposal.
+// The result is NOT certified, and must not be published as terrain.
 // Borrowed choices and candidate input must stay alive through this call. One
 // route per connection is supported; unrepresentable choices fail closed.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,

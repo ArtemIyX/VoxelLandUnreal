@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM5Endpoint.h"
+#include "Data/Structs/VoxelLandM5PointCm.h"
 
 // Explicit ordered segment chain and endpoint roles for one graph connection.
 struct VOXELLANDALGO_API FVoxelLandM5RouteConnectionChoice
@@ -12,4 +13,8 @@ struct VOXELLANDALGO_API FVoxelLandM5RouteConnectionChoice
 	FVoxelLandM5Endpoint End;
 	bool bReverseFirst = false;
 	TArray<uint64> SegmentIds;
+	// Empty selects the legacy centered proposal. Otherwise there must be one
+	// waypoint at each end of the ordered segment chain. These are intent only;
+	// the final surface must independently establish support and clearance.
+	TArray<FVoxelLandM5PointCm> FeetWaypoints;
 };

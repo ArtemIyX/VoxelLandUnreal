@@ -19,8 +19,10 @@ class VOXELLANDALGO_API FVoxelLandM5ScratchMesh final
 {
 public:
 	// Same-budget immutable finite LOD-zero source. MaxChunks is 1..16 and
-	// MaxTriangles 1..196608 for the complete result. Mesher and adapter run
-	// synchronously; cancellation or failure leaves Out unchanged. Caller owns
+	// MaxTriangles 1..196608 for the complete result. Preflight counts the
+	// two potential faces per sign-changing owned edge before reserving output
+	// and per-chunk triangle scratch; vertex scratch remains worst-case bounded.
+	// Mesher and adapter run synchronously; failure preserves Out. Caller owns
 	// source provenance, provider/module lifetime and allocator overhead.
 	static FVoxelLandM5Diagnostic Build(TSharedRef<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Source,
 		int32 MaxChunks, int32 MaxTriangles, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,

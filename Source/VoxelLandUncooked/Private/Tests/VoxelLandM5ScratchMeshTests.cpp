@@ -43,6 +43,25 @@ public:
 		Swap(Result->Chunks[0], Result->Chunks[1]);
 		return Result;
 	}
+	static void SetChecker(const FVoxelLandM5ScratchChunks& Source, bool bChecker)
+	{
+		FVoxelLandM5ScratchChunks& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
+		for (FVoxelLandChunkData& Chunk : Mutable.Chunks)
+		{
+			for (int32 Z = -1; Z <= 33; ++Z)
+			{
+				for (int32 Y = -1; Y <= 33; ++Y)
+				{
+					for (int32 X = -1; X <= 33; ++X)
+					{
+						const int32 Index = (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
+						Chunk.Density[Index] = bChecker ? (((X + Y + Z) & 1) ? -100 : 100)
+							: (Z <= 8 ? -100 : 100);
+					}
+				}
+			}
+		}
+	}
 	static void ChangeSharedSample(const FVoxelLandM5ScratchChunks& Source)
 	{
 		FVoxelLandM5ScratchChunks& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
@@ -56,12 +75,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5ScratchMeshTest, "VoxelLand.M5.Scra
 bool FVoxelLandM5ScratchMeshTest::RunTest(const FString& Parameters)
 {
 	bool bSuccess = false, bForeign = false, bLimit = false, bCancelled = false, bSeam = false, bRetained = false;
-	bool bWork = false;
+	bool bWork = false, bDense = false, bMidCancel = false, bAdmission = false;
 	FString Failure;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, Other;
-		if (!FVoxelLandM5Budget::TryCreate(1024ll * 1024 * 1024, 1000000000, Budget)
+		if (!FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 1000000000, Budget)
 			|| !FVoxelLandM5Budget::TryCreate(1024ll * 1024 * 1024, 1000000000, Other))
+		{
+			return;
+		}
+		// Represent the retained capture metadata alongside the sparse mesh.
+		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Metadata;
+		if (!Budget->TryReserveBytes(48ll * 1024 * 1024, Metadata))
 		{
 			return;
 		}
@@ -113,6 +138,9 @@ bool FVoxelLandM5ScratchMeshTest::RunTest(const FString& Parameters)
 			}
 		}
 		bSuccess &= bPlane && bNegative && bPositive && bFaces;
+		int64 Live = 0, Peak = 0, Used = 0;
+		Budget->GetUsage(Live, Peak, Used);
+		bAdmission = Metadata.IsValid() && Peak <= 256ll * 1024 * 1024;
 		const TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Previous = Mesh;
 		const FVoxelLandM5Diagnostic Foreign = FVoxelLandM5ScratchMesh::Build(
 			Source.ToSharedRef(), 2, 10000, Other.ToSharedRef(), Never, Mesh);
@@ -128,6 +156,24 @@ bool FVoxelLandM5ScratchMeshTest::RunTest(const FString& Parameters)
 			Source.ToSharedRef(), 2, 10000, Budget.ToSharedRef(), Never, Mesh);
 		bSeam = Mismatch.Code != EVoxelLandM5ErrorCode::None && Mesh == Previous;
 		FVoxelLandM5ScratchMeshFixture::ChangeSharedSample(*Source);
+		FVoxelLandM5ScratchMeshFixture::SetChecker(*Source, true);
+		Budget->GetUsage(Live, Peak, Used);
+		const int64 LiveBeforeDense = Live;
+		const FVoxelLandM5Diagnostic Dense = FVoxelLandM5ScratchMesh::Build(
+			Source.ToSharedRef(), 2, 10000, Budget.ToSharedRef(), Never, Mesh);
+		Budget->GetUsage(Live, Peak, Used);
+		bDense = Dense.Code == EVoxelLandM5ErrorCode::BudgetExceeded
+			&& Dense.Message == TEXT("Scratch mesh triangle limit exhausted") && Mesh == Previous && Live == LiveBeforeDense;
+		const int64 BeforeScan = Used;
+		const auto CancelAfterPrecharge = [&Budget, BeforeScan] {
+			int64 CurrentLive = 0, CurrentPeak = 0, CurrentWork = 0;
+			Budget->GetUsage(CurrentLive, CurrentPeak, CurrentWork);
+			return CurrentWork > BeforeScan + 24017;
+		};
+		const FVoxelLandM5Diagnostic DuringScan = FVoxelLandM5ScratchMesh::Build(
+			Source.ToSharedRef(), 2, 196608, Budget.ToSharedRef(), CancelAfterPrecharge, Mesh);
+		bMidCancel = DuringScan.Code == EVoxelLandM5ErrorCode::Cancelled && Mesh == Previous;
+		FVoxelLandM5ScratchMeshFixture::SetChecker(*Source, false);
 		TWeakPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Weak = Source;
 		Source.Reset();
 		bRetained = Weak.IsValid();
@@ -153,6 +199,9 @@ bool FVoxelLandM5ScratchMeshTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("mismatched shared sample rejected"), bSeam);
 	TestTrue(TEXT("mesh retains source"), bRetained);
 	TestTrue(TEXT("work exhaustion preserves output"), bWork);
+	TestTrue(TEXT("sparse mesh and capture metadata fit 256 MiB"), bAdmission);
+	TestTrue(TEXT("dense edge preflight rejects cap without allocating output"), bDense);
+	TestTrue(TEXT("cancellation during preflight preserves output"), bMidCancel);
 	return bSuccess;
 }
 #endif

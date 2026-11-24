@@ -105,11 +105,60 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchMesh::Build(
 		return Result;
 	}
 	constexpr int64 MaxVertices = 34 * 34 * 34;
-	constexpr int64 MeshTriangles = 32 * 32 * 32 * 3 * 2;
-	const int64 ScratchBytes = 4 * MaxVertices * (sizeof(FVoxelLandMeshVertex) + sizeof(int32))
-		+ 4 * MeshTriangles * (3 * sizeof(uint32) + 2 * sizeof(FVoxelLandM5ValidationTriangle) + sizeof(uint8)) + 1048576;
-	int64 OutputBytes = 0, Work = 0, SortWork = 0;
-	if (!TryMultiplyNonNegative(MaxTriangles,
+	constexpr int64 OwnedEdges = 32 * 32 * 32 * 3;
+	constexpr int64 MeshTriangles = OwnedEdges * 2;
+	int64 ScanWork = 0;
+	if (!TryMultiplyNonNegative(Chunks.Num(), OwnedEdges + 64, ScanWork))
+	{
+		return I::Error(E::ArithmeticOverflow, TEXT("Scratch mesh preflight work overflow"));
+	}
+	if (!Budget->TryChargeWork(ScanWork))
+	{
+		return I::Error(E::BudgetExceeded, TEXT("Scratch mesh preflight work exhausted"));
+	}
+	int64 TotalTriangles = 0, PeakTriangles = 0;
+	for (const FVoxelLandChunkData& Chunk : Chunks)
+	{
+		int64 Edges = 0;
+		for (int32 Z = 0; Z < 32; ++Z)
+		{
+			if (IsCancelled())
+			{
+				return I::Error(E::Cancelled, TEXT("Scratch mesh preflight cancelled"));
+			}
+			for (int32 Y = 0; Y < 32; ++Y)
+			{
+				for (int32 X = 0; X < 32; ++X)
+				{
+					const int32 Index = (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
+					const bool bSolid = Chunk.Density[Index] < 0;
+					Edges += bSolid != (Chunk.Density[Index + 1] < 0);
+					Edges += bSolid != (Chunk.Density[Index + 35] < 0);
+					Edges += bSolid != (Chunk.Density[Index + 35 * 35] < 0);
+				}
+			}
+		}
+		int64 ChunkTriangles = 0;
+		if (!TryMultiplyNonNegative(Edges, 2, ChunkTriangles)
+			|| !TryAdd(TotalTriangles, ChunkTriangles, TotalTriangles))
+		{
+			return I::Error(E::ArithmeticOverflow, TEXT("Scratch mesh triangle count overflow"));
+		}
+		PeakTriangles = FMath::Max(PeakTriangles, ChunkTriangles);
+		if (TotalTriangles > MaxTriangles)
+		{
+			return I::Error(E::BudgetExceeded, TEXT("Scratch mesh triangle limit exhausted"));
+		}
+	}
+	// The mesher allocates vertices and cell indices independently of the
+	// edge count. Triangle-dependent indices and adapter arrays are sequential
+	// per chunk; fourfold slack covers TArray growth and simultaneous copies.
+	int64 ScratchBytes = 0, TriangleBytes = 0, OutputBytes = 0, Work = 0, SortWork = 0;
+	if (!TryMultiplyNonNegative(PeakTriangles,
+			4 * int64(3 * sizeof(uint32) + 2 * sizeof(FVoxelLandM5ValidationTriangle) + sizeof(uint8)), TriangleBytes)
+		|| !TryAdd(4 * MaxVertices * int64(sizeof(FVoxelLandMeshVertex) + sizeof(int32)), 1048576, ScratchBytes)
+		|| !TryAdd(ScratchBytes, TriangleBytes, ScratchBytes)
+		|| !TryMultiplyNonNegative(TotalTriangles,
 			4 * int64(sizeof(FVoxelLandM5FixedTriangleQ18) + sizeof(FVoxelLandM5ChunkFaceSelection)), OutputBytes)
 		|| !TryAdd(OutputBytes, 4096, OutputBytes) || !TryMultiplyNonNegative(Chunks.Num(), 4000000, Work)
 		|| !TryMultiplyNonNegative(Chunks.Num(), Chunks.Num(), SortWork) || !TryAdd(Work, SortWork, Work))
@@ -131,8 +180,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchMesh::Build(
 	}
 	TSharedPtr<FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Built =
 		MakeShareable(new FVoxelLandM5ScratchMesh(MoveTemp(OutputLease), Source));
-	Built->Triangles.Reserve(MaxTriangles);
-	Built->Faces.Reserve(MaxTriangles);
+	Built->Triangles.Reserve(int32(TotalTriangles));
+	Built->Faces.Reserve(int32(TotalTriangles));
 	// ChunkSet has already rejected duplicates. At most sixteen indices fit
 	// the temporary allowance; insertion sort is deterministic and bounded.
 	TArray<int32> Order;

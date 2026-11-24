@@ -23,6 +23,8 @@ public:
 		TSharedPtr<const FVoxelLandM5CapturedFiniteCandidate, ESPMode::ThreadSafe>& Out);
 	const FVoxelLandM5CapturedBaseline& GetSource() const { return *Source; }
 	const FVoxelLandM5CandidateResult& GetCandidate() const { return *Candidate; }
+	TSharedRef<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> GetSourceShared() const { return Source; }
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> GetCandidateShared() const { return Candidate.ToSharedRef(); }
 private:
 	FVoxelLandM5CapturedFiniteCandidate(TSharedRef<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> InSource,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)

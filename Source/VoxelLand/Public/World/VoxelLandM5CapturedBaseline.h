@@ -22,6 +22,7 @@ public:
 		TSharedPtr<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe>& Out);
 	const FVoxelLandM5CapturedFiniteScratch& GetCaptured() const { return *Captured; }
 	const FVoxelLandM5BaselineWindow& GetWindow() const { return *Window; }
+	TSharedRef<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> GetWindowShared() const { return Window.ToSharedRef(); }
 private:
 	FVoxelLandM5CapturedBaseline(TSharedRef<const FVoxelLandM5CapturedFiniteScratch, ESPMode::ThreadSafe> InCaptured,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)

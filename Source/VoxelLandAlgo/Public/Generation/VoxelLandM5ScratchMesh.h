@@ -34,6 +34,9 @@ public:
 	TConstArrayView<FVoxelLandM5ChunkFaceSelection> GetFaces() const { return Faces; }
 	bool IsOwnedBy(const FVoxelLandM5Budget& Budget) const;
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5SupportSelectorFixture;
+#endif
 	FVoxelLandM5ScratchMesh(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease,
 		TSharedRef<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> InSource)
 		: Lease(MoveTemp(InLease)), Source(MoveTemp(InSource)) {}

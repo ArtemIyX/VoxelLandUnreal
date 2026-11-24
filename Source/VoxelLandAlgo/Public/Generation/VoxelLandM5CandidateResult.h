@@ -42,6 +42,7 @@ private:
 			int64&, int64&, int64&, int32&, bool&, bool&)>,
 		TFunctionRef<bool()>, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>&);
 #if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5SupportSelectorFixture;
 	friend class FVoxelLandM5ScratchRouteLineageFixture;
 	friend class FVoxelLandM5CapturedMeshRoutesFixture;
 	friend class FVoxelLandM5FiniteRoutePlannerFixtureFactory;

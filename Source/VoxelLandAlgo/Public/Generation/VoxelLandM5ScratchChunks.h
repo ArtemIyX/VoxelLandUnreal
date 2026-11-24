@@ -26,6 +26,8 @@ public:
 	FIntVector GetMaxExclusive() const { return MaxExclusive; }
 	int32 GetVoxelSizeCm() const { return VoxelSizeCm; }
 	bool IsOwnedBy(const FVoxelLandM5Budget& Budget) const;
+	// Exact candidate owner only; does not establish freshness or other dependencies.
+	bool IsComposedFrom(const FVoxelLandM5CandidateResult& Candidate) const { return SourceCandidate.Get() == &Candidate; }
 
 	// Exact immediate input identities and all manifest versions, not proof of
 	// source freshness, complete influence, final safety, or world identity.
@@ -72,6 +74,7 @@ public:
 
 private:
 #if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5SupportSelectorFixture;
 	friend class FVoxelLandM5ScratchMeshFixture;
 	friend class FVoxelLandM5CapturedSolidMutationFixture;
 	friend class FVoxelLandM5ScratchRoofFixtureFactory;

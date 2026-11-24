@@ -12,16 +12,16 @@ class FVoxelLandM5Budget;
 
 namespace VoxelLand::M5::SegmentCoverage
 {
-// A deliberately narrow sufficient check for ONE claimed segment: a Walk leg
-// must name this region-qualified segment and traverse the complete canonical
-// feet proposal in either direction. The proposal encloses the swept capsule
-// inside the ideal segment volume and bounds its centerline slope.
+// Checks ONE region-qualified segment and a complete straight Walk leg in
+// either direction. Canonical centered legs retain their inflated-ball proof.
+// Explicit legs must match endpoint XY, have nonzero horizontal extent and a
+// conservative feet slope; both nominal endpoint capsules must fit the segment
+// endpoint balls. Convex interpolation contains the complete nominal sweep.
 //
-// Success does not prove feature ownership/uniqueness, the remaining plan,
-// anchors, floor contact, actual quantized mesh, roof or walkability. The caller
-// must validate immutable source provenance, all route coverage and final field.
-// The budget charges this check plus FeetProposalBuilder's work; input storage
-// and its admission lease remain the caller's responsibility.
+// Explicit legs do not prove inflated clearance, floor contact, feature
+// ownership, anchors, final quantized mesh, roof or walkability. The caller must
+// validate source provenance, complete route coverage and final geometry. The
+// budget charges 40 work units; input storage and its lease remain caller-owned.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Check(const FVoxelLandM5Segment& Segment, const FVoxelLandM5RouteLeg& Leg,
 	const FVoxelLandM5RegionCoord& Region, const FVoxelLandM5CapsuleProfile& Capsule,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);

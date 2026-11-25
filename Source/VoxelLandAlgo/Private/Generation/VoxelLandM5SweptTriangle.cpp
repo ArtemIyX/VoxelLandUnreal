@@ -1,6 +1,7 @@
 #include "Generation/VoxelLandM5SweptTriangle.h"
 
 #include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
 
 #include <cfenv>
 #include <cmath>
@@ -11,6 +12,15 @@ class FVoxelLandM5SweptTriangleInternals final
 public:
 	static constexpr int64 M5SweepCoordinateLimit = 1048576;
 	static constexpr int64 M5SweepWorkPerTriangle = 24;
+	static constexpr int32 MaxSubdivisionDepth = 12;
+	static constexpr int32 MaxSubdivisionNodes = 8191;
+	static constexpr int64 StackAllowance = 4096;
+	class FInterval final
+	{
+	public:
+		int32 Index = 0;
+		int32 Depth = 0;
+	};
 	static FVoxelLandM5Diagnostic M5SweepError(EVoxelLandM5ErrorCode Code, const TCHAR* Message);
 	static double M5Down(double X);
 	static double M5Up(double X);
@@ -24,6 +34,11 @@ public:
 	static bool M5AxisWitness(const FVector3d& Axis, const FVector3d (&Medial)[4],
 		const FVoxelLandM5ValidationTriangle& Triangle, const FVector3d& Error, double Radius);
 	static FVector3d M5Cross(const FVector3d& A, const FVector3d& B);
+	static double M5DyadicCoordinate(int64 Start, int64 End, int32 Index, int32 Depth);
+	static bool M5Separated(const FVector3d (&Medial)[4], const FVector3d& Path,
+		const FVoxelLandM5ValidationTriangle& Triangle, const FVector3d& Error, double Radius);
+	static void M5DyadicMedial(const FVoxelLandM5PointCm& Start, const FVoxelLandM5PointCm& End,
+		int64 Radius, int64 Height, const FInterval& Interval, FVector3d (&Out)[4], FVector3d& OutPath);
 };
 
 // Covers construction of all 23 candidate axes and their interval witnesses.
@@ -173,10 +188,77 @@ FVector3d FVoxelLandM5SweptTriangleInternals::M5Cross(const FVector3d& A, const 
 		M5Subtract(M5Multiply(A.Z, B.X), M5Multiply(A.X, B.Z)), M5Subtract(M5Multiply(A.X, B.Y), M5Multiply(A.Y, B.X)));
 }
 
+// Numerators stay below 2^35; conversion and power-of-two scaling are exact.
+double FVoxelLandM5SweptTriangleInternals::M5DyadicCoordinate(int64 Start, int64 End, int32 Index, int32 Depth)
+{
+	const int64 Scale = int64(1) << Depth;
+	const int64 Numerator = Start * Scale + (End - Start) * Index;
+	return std::ldexp(double(Numerator), -Depth);
+}
+
+void FVoxelLandM5SweptTriangleInternals::M5DyadicMedial(const FVoxelLandM5PointCm& Start,
+	const FVoxelLandM5PointCm& End, int64 Radius, int64 Height, const FInterval& Interval,
+	FVector3d (&Out)[4], FVector3d& OutPath)
+{
+	const int32 A = Interval.Index;
+	const int32 B = A + 1;
+	const int32 D = Interval.Depth;
+	const double AX = M5DyadicCoordinate(Start.X, End.X, A, D);
+	const double AY = M5DyadicCoordinate(Start.Y, End.Y, A, D);
+	const double BX = M5DyadicCoordinate(Start.X, End.X, B, D);
+	const double BY = M5DyadicCoordinate(Start.Y, End.Y, B, D);
+	Out[0] = FVector3d(AX, AY, M5DyadicCoordinate(Start.Z + Radius, End.Z + Radius, A, D));
+	Out[1] = FVector3d(AX, AY, M5DyadicCoordinate(Start.Z + Height - Radius, End.Z + Height - Radius, A, D));
+	Out[2] = FVector3d(BX, BY, M5DyadicCoordinate(Start.Z + Radius, End.Z + Radius, B, D));
+	Out[3] = FVector3d(BX, BY, M5DyadicCoordinate(Start.Z + Height - Radius, End.Z + Height - Radius, B, D));
+	OutPath = Out[2] - Out[0];
+}
+
+bool FVoxelLandM5SweptTriangleInternals::M5Separated(const FVector3d (&Medial)[4], const FVector3d& Path,
+	const FVoxelLandM5ValidationTriangle& Triangle, const FVector3d& Error, double Radius)
+{
+	const FVector3d Vertical(0.0, 0.0, 1.0);
+	const FVector3d Edges[3] = {Triangle.B - Triangle.A, Triangle.C - Triangle.B, Triangle.A - Triangle.C};
+	FVector3d Axes[23] = {FVector3d(1.0, 0.0, 0.0), FVector3d(0.0, 1.0, 0.0), FVector3d(0.0, 0.0, 1.0),
+		M5Cross(Edges[0], Edges[1]), M5Cross(Path, Vertical)};
+	int32 AxisCount = 5;
+	for (const FVector3d& Edge : Edges)
+	{
+		Axes[AxisCount++] = M5Cross(Edge, Path);
+		Axes[AxisCount++] = M5Cross(Edge, Vertical);
+	}
+	const FVector3d Vertices[3] = {Triangle.A, Triangle.B, Triangle.C};
+	for (const FVector3d& Vertex : Vertices)
+	{
+		for (const FVector3d& Center : Medial)
+		{
+			Axes[AxisCount++] = Vertex - Center;
+		}
+	}
+	for (int32 Index = 0; Index < AxisCount; ++Index)
+	{
+		if (M5AxisWitness(Axes[Index], Medial, Triangle, Error, Radius))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 FVoxelLandM5Diagnostic VoxelLand::M5::SweptTriangle::Check(const FVoxelLandM5PointCm& StartFeet,
 	const FVoxelLandM5PointCm& EndFeet, int64 RadiusCm, int64 HeightCm, int64 MarginCm,
 	const FVector3d& TriangleErrorCm, TConstArrayView<FVoxelLandM5ValidationTriangle> Triangles,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
+	return Check(StartFeet, EndFeet, RadiusCm, HeightCm, MarginCm, TriangleErrorCm, Triangles,
+		FVoxelLandM5SweepSubdivisionLimits{}, Budget, IsCancelled);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::SweptTriangle::Check(const FVoxelLandM5PointCm& StartFeet,
+	const FVoxelLandM5PointCm& EndFeet, int64 RadiusCm, int64 HeightCm, int64 MarginCm,
+	const FVector3d& TriangleErrorCm, TConstArrayView<FVoxelLandM5ValidationTriangle> Triangles,
+	const FVoxelLandM5SweepSubdivisionLimits& Limits, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled)
 {
 	if (IsCancelled())
 	{
@@ -187,6 +269,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SweptTriangle::Check(const FVoxelLandM5Poi
 	{
 		return FVoxelLandM5SweptTriangleInternals::M5SweepError(
 			EVoxelLandM5ErrorCode::Unproven, TEXT("Unsupported floating-point environment"));
+	}
+	if (Limits.MaxDepth < 0 || Limits.MaxDepth > FVoxelLandM5SweptTriangleInternals::MaxSubdivisionDepth
+		|| Limits.MaxNodes < 1 || Limits.MaxNodes > FVoxelLandM5SweptTriangleInternals::MaxSubdivisionNodes)
+	{
+		return FVoxelLandM5SweptTriangleInternals::M5SweepError(
+			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid sweep subdivision limits"));
 	}
 	if (!FVoxelLandM5SweptTriangleInternals::M5ValidFeet(StartFeet)
 		|| !FVoxelLandM5SweptTriangleInternals::M5ValidFeet(EndFeet) || RadiusCm <= 0
@@ -207,79 +295,79 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SweptTriangle::Check(const FVoxelLandM5Poi
 		return FVoxelLandM5SweptTriangleInternals::M5SweepError(
 			EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Capsule medial endpoints outside domain"));
 	}
-	if (!Budget->TryChargeWork(int64(Triangles.Num()) * FVoxelLandM5SweptTriangleInternals::M5SweepWorkPerTriangle))
-	{
-		return FVoxelLandM5SweptTriangleInternals::M5SweepError(
-			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Sweep work budget exhausted"));
-	}
-	const FVector3d Medial[4] = {FVector3d(double(StartFeet.X), double(StartFeet.Y), double(StartFeet.Z + RadiusCm)),
-		FVector3d(double(StartFeet.X), double(StartFeet.Y), double(StartFeet.Z + HeightCm - RadiusCm)),
-		FVector3d(double(EndFeet.X), double(EndFeet.Y), double(EndFeet.Z + RadiusCm)),
-		FVector3d(double(EndFeet.X), double(EndFeet.Y), double(EndFeet.Z + HeightCm - RadiusCm))};
-	const FVector3d Path(
-		double(EndFeet.X - StartFeet.X), double(EndFeet.Y - StartFeet.Y), double(EndFeet.Z - StartFeet.Z));
-	const FVector3d Vertical(0.0, 0.0, 1.0);
+	using I = FVoxelLandM5SweptTriangleInternals;
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> StackLease;
+	TArray<I::FInterval> Pending;
 	const double InflatedRadius = double(RadiusCm + MarginCm);
-	for (int32 Index = 0; Index < Triangles.Num(); ++Index)
+	for (const FVoxelLandM5ValidationTriangle& Triangle : Triangles)
 	{
-		if (IsCancelled())
+		Pending.Reset();
+		I::FInterval Current;
+		int32 Visited = 0;
+		while (true)
 		{
-			return FVoxelLandM5SweptTriangleInternals::M5SweepError(
-				EVoxelLandM5ErrorCode::Cancelled, TEXT("Sweep cancelled"));
-		}
-		// A callback can change thread-local rounding or denormal controls.
-		// Recheck after every callback before evaluating any witness.
-		if (!FVoxelLandM5SweptTriangleInternals::M5SupportedEnvironment())
-		{
-			return FVoxelLandM5SweptTriangleInternals::M5SweepError(
-				EVoxelLandM5ErrorCode::Unproven, TEXT("Floating-point environment changed"));
-		}
-		const FVoxelLandM5ValidationTriangle& T = Triangles[Index];
-		if (!FVoxelLandM5SweptTriangleInternals::M5FinitePoint(T.A)
-			|| !FVoxelLandM5SweptTriangleInternals::M5FinitePoint(T.B)
-			|| !FVoxelLandM5SweptTriangleInternals::M5FinitePoint(T.C))
-		{
-			return FVoxelLandM5SweptTriangleInternals::M5SweepError(
-				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Triangle vertex outside supported domain"));
-		}
-		const FVector3d Edges[3] = {T.B - T.A, T.C - T.B, T.A - T.C};
-		FVector3d Axes[23] = {FVector3d(1.0, 0.0, 0.0), FVector3d(0.0, 1.0, 0.0), FVector3d(0.0, 0.0, 1.0),
-			FVoxelLandM5SweptTriangleInternals::M5Cross(Edges[0], Edges[1]),
-			FVoxelLandM5SweptTriangleInternals::M5Cross(Path, Vertical)};
-		int32 AxisCount = 5;
-		for (const FVector3d& Edge : Edges)
-		{
-			Axes[AxisCount++] = FVoxelLandM5SweptTriangleInternals::M5Cross(Edge, Path);
-			Axes[AxisCount++] = FVoxelLandM5SweptTriangleInternals::M5Cross(Edge, Vertical);
-		}
-		const FVector3d Vertices[3] = {T.A, T.B, T.C};
-		for (const FVector3d& V : Vertices)
-		{
-			for (const FVector3d& P : Medial)
+			if (IsCancelled())
 			{
-				Axes[AxisCount++] = V - P;
+				return I::M5SweepError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Sweep cancelled"));
 			}
-		}
-		bool bSeparated = false;
-		for (int32 AxisIndex = 0; AxisIndex < AxisCount; ++AxisIndex)
-		{
-			if (FVoxelLandM5SweptTriangleInternals::M5AxisWitness(
-					Axes[AxisIndex], Medial, T, TriangleErrorCm, InflatedRadius))
+			// Callbacks can alter rounding or denormal controls on this thread.
+			if (!I::M5SupportedEnvironment())
 			{
-				bSeparated = true;
-				break;
+				return I::M5SweepError(EVoxelLandM5ErrorCode::Unproven, TEXT("Floating-point environment changed"));
 			}
-		}
-		if (!bSeparated)
-		{
-			return FVoxelLandM5SweptTriangleInternals::M5SweepError(
-				EVoxelLandM5ErrorCode::Unproven, TEXT("Triangle separation could not be certified"));
+			if (!I::M5FinitePoint(Triangle.A) || !I::M5FinitePoint(Triangle.B) || !I::M5FinitePoint(Triangle.C))
+			{
+				return I::M5SweepError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Triangle vertex outside supported domain"));
+			}
+			if (Visited >= Limits.MaxNodes)
+			{
+				return I::M5SweepError(EVoxelLandM5ErrorCode::Unproven, TEXT("Sweep subdivision node cap exhausted"));
+			}
+			if (!Budget->TryChargeWork(I::M5SweepWorkPerTriangle))
+			{
+				return I::M5SweepError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Sweep work budget exhausted"));
+			}
+			++Visited;
+			FVector3d Medial[4];
+			FVector3d Path;
+			I::M5DyadicMedial(StartFeet, EndFeet, RadiusCm, HeightCm, Current, Medial, Path);
+			if (I::M5Separated(Medial, Path, Triangle, TriangleErrorCm, InflatedRadius))
+			{
+				if (Pending.IsEmpty())
+				{
+					break;
+				}
+				Current = Pending.Pop(EAllowShrinking::No);
+				continue;
+			}
+			if (Current.Depth >= Limits.MaxDepth || Visited >= Limits.MaxNodes)
+			{
+				return I::M5SweepError(EVoxelLandM5ErrorCode::Unproven, TEXT("Triangle separation could not be certified"));
+			}
+			if (!StackLease)
+			{
+				const int64 StackBytes = int64(Limits.MaxDepth + 1) * sizeof(I::FInterval) + I::StackAllowance;
+				if (!Budget->TryReserveBytes(StackBytes, StackLease))
+				{
+					return I::M5SweepError(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Sweep stack budget exhausted"));
+				}
+				Pending.Reserve(Limits.MaxDepth + 1);
+			}
+			I::FInterval Right;
+			Right.Depth = Current.Depth + 1;
+			Right.Index = Current.Index * 2 + 1;
+			Pending.Add(Right);
+			Current.Index *= 2;
+			++Current.Depth;
 		}
 	}
 	if (IsCancelled())
 	{
-		return FVoxelLandM5SweptTriangleInternals::M5SweepError(
-			EVoxelLandM5ErrorCode::Cancelled, TEXT("Sweep cancelled"));
+		return I::M5SweepError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Sweep cancelled"));
+	}
+	if (!I::M5SupportedEnvironment())
+	{
+		return I::M5SweepError(EVoxelLandM5ErrorCode::Unproven, TEXT("Floating-point environment changed"));
 	}
 	return FVoxelLandM5Diagnostic{};
 }

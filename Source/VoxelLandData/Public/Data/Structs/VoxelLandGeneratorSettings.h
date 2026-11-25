@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandBackendOptions.h"
 #include "Data/Structs/VoxelLandM6SphereSettings.h"
+#include "Data/Structs/VoxelLandM6StampSettings.h"
 #include "Data/Structs/VoxelLandZoneProfile.h"
 
 class FVoxelLandProgram;
@@ -16,6 +17,7 @@ struct FVoxelLandGeneratorSettings
 	FVoxelLandBackendOptions Backends;
 	// Used by fixed-lattice unlimited chunks when shaping an intermediate height grid.
 	bool bM4FixedLatticeShaping = false;
-	// Transient generation-time inputs for the ordinary finite M4 factory.
-	FVoxelLandM6SphereSettings M6Spheres;
+	// Transient generation-time inputs. Only one list can be active.
+	FVoxelLandM6SphereSettings M6Spheres; // First finite sphere checkpoint API.
+	FVoxelLandM6StampSettings M6Stamps;
 };

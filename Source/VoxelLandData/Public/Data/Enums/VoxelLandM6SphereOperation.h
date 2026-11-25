@@ -1,9 +1,5 @@
 #pragma once
 
-#include "CoreTypes.h"
+#include "Data/Enums/VoxelLandM6StampOperation.h"
 
-enum class EVoxelLandM6SphereOperation : uint8
-{
-	Add = 0,
-	Subtract = 1
-};
+using EVoxelLandM6SphereOperation = EVoxelLandM6StampOperation;

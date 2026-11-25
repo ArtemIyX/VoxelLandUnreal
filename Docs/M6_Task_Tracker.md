@@ -1,6 +1,6 @@
 # VoxelLand M6 task tracker
 
-**Progress:** 1 of 6 slices verified · **Current:** M6.1 sphere checkpoint · **Pending:** corrected contract fixture rerun
+**Progress:** 1 of 6 slices verified · **Implemented:** M6.1–M6.2 · **Next implementation:** M6.3 filters and halos
 
 M6 adds generation-time stamps and filters to cave-disabled M4 terrain. The first checkpoint is one hard sphere stamp across real finite M4 chunk seams. M6 acceptance also requires the remaining stamps, filters with accumulated halos, and bounded re-distance. M5 remains open and deferred. Runtime terrain editing is out of v1 scope.
 
@@ -20,6 +20,8 @@ See the example project's [M6 plan](../../../Docs/VoxelLand_M6_Plan.md), [techni
 - [x] **M6.1c** Compare full stored overlaps and CPU mesh seam ownership and positions across X/Y/Z, negative coordinates and a corner. Repeat with reversed chunk request order.
 
 ### M6.2 — Remaining stamps and local generation
+
+Implementation and static review complete. The following items remain open for executable verification.
 
 - [ ] **M6.2a** Add box, capsule, cut-hole and box-foundation composition. Verify numeric limits, degeneracies, overlap and stable operation ordering.
 - [ ] **M6.2b** Decide whether to support smooth blends. Verify any culling against exhaustive evaluation, including downstream halos. Return diagnostics for unsupported settings.
@@ -50,6 +52,12 @@ Update this tracker after each task. Check a box after its deliverable and any r
 | --- | --- | --- |
 | 2026-11-25 | M6.0 | Audited the project at `7b936eb` and plugin at `e3635e6`. Pinned the finite sphere contract in the technical description, including exact Q8 distance, stage order, limits, identity and publication. |
 | 2026-11-25 | M6.1 | Added finite generation-time sphere add/subtract, immutable list ownership and canonical payload identity. Static review found no critical issues. The first automation run passed the real finite density and CPU-mesh seam test plus 14 M2–M4 regressions. The contract test failed on its operation-byte assertion. Its fixture now reads byte 28, and the incremental build passed. The corrected contract test remains pending. |
+
+| 2026-11-25 | M6.2 | Added hard sphere, box and capsule stamps, ordered cut-hole/foundation composition, and the same once-only stamp stage on the ordinary erosion-disabled local path. Smooth blends are explicitly rejected. Static review found no critical issues. Authored `VoxelLand.M6.Stamps.ShapesAndFoundation` and `VoxelLand.M6.Stamps.LocalAcrossSeam`. Build and tests were not run at the owner's request. |
+
+### M6.2 arithmetic and ownership
+
+Generic stamps admit complete shape bounds within ±2^45 cm, dimensions up to 2,000,000 cm, and capsule endpoint spans up to 2,000,000 cm per axis. Voxel sizes are integral and at most 134,217 cm. A sample at least 32 voxels outside the enclosing bounds on any axis is already a saturated hard-CSG identity. The remaining maximum per-axis distance before Q8 conversion is 8,294,944 cm, which bounds the three-axis Q8 square sum within uint64. Capsule projection rounds its Q32 parameter using two 16-bit quotient steps and rounds the resulting closest-point offset to Q8. The temporary local M4 generator receives baseline settings only. One fixed 35³ int16 copy lets the parent apply stamps and publish the final hash without modifying the baseline.
 
 ### M6.1 execution evidence
 

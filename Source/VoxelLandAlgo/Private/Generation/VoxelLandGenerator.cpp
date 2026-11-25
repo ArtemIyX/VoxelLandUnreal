@@ -409,6 +409,11 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGeneratorSettings& Settings,
 	const FVoxelLandM4UnlimitedConfig& Config, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator)
 {
+	if (Settings.M6Spheres.IsActive())
+	{
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
+			TEXT("M6 local terrain requires the ordered stamp-list settings"));
+	}
 	if ((Config.Overhang.Displacement.bEnabled && Config.Overhang.Displacement.AmplitudeQ8 != 0
 			&& !VoxelLandM4FixedLattice::IsShapingFrequencySupported(Config.Overhang.FrequencyPerCm))
 		|| (Config.HeightDetail.bEnabled && Config.HeightDetail.AmplitudeQ8 != 0
@@ -472,16 +477,25 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 			return Error;
 		}
 	}
+	// The chunk-local backend produces the M4 baseline using only these inputs.
+	FVoxelLandGeneratorSettings LocalSettings = Settings;
+	LocalSettings.M6Spheres = {};
+	LocalSettings.M6Stamps = {};
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
-	if (FVoxelLandError Error = CreateInternal(Settings, nullptr, false, nullptr, Result))
+	if (FVoxelLandError Error = CreateInternal(LocalSettings, nullptr, false, nullptr, Result))
 	{
 		return Error;
 	}
 	// CreateInternal allocates a mutable object; no reference has been published.
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
+	if (Settings.M6Stamps.IsActive())
+	{
+		if (const FVoxelLandError Error = Mutable->InitializeM6Stamps(Settings.M6Stamps, Size))
+		{
+			return Error;
+		}
+	}
 	Mutable->M4Unlimited = MakeShared<FVoxelLandM4UnlimitedConfig, ESPMode::ThreadSafe>(Config);
-	FVoxelLandGeneratorSettings LocalSettings = Settings;
-	LocalSettings.M6Spheres = {};
 	Mutable->M4UnlimitedSettings = MakeShared<FVoxelLandGeneratorSettings, ESPMode::ThreadSafe>(MoveTemp(LocalSettings));
 	OutGenerator = MoveTemp(Result);
 	return {};
@@ -547,10 +561,17 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	const FVoxelLandM4OverhangConfig* Overhang,
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, TFunctionRef<bool()>* IsCancelled)
 {
-	if (Settings.M6Spheres.IsActive() && (!HeightGrid || IsCancelled))
+	const bool bLegacySpheres = Settings.M6Spheres.IsActive();
+	const bool bGenericStamps = Settings.M6Stamps.IsActive();
+	if (bLegacySpheres && bGenericStamps)
 	{
 		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
-			TEXT("M6 sphere stamps require the ordinary finite M4 generator"));
+			TEXT("Only one M6 stamp list can be active"));
+	}
+	if ((bLegacySpheres || bGenericStamps) && (!HeightGrid || IsCancelled))
+	{
+		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
+			TEXT("M6 stamp settings require an ordinary supported M4 generator"));
 	}
 	OutGenerator.Reset();
 	if (IsInGameThread())
@@ -574,9 +595,16 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandGenerator);
 	Result->Program = Program;
 	Result->M4HeightGrid = MoveTemp(HeightGrid);
-	if (Settings.M6Spheres.IsActive())
+	if (bLegacySpheres)
 	{
 		if (const FVoxelLandError Error = Result->InitializeM6Spheres(Settings.M6Spheres))
+		{
+			return Error;
+		}
+	}
+	if (bGenericStamps)
+	{
+		if (const FVoxelLandError Error = Result->InitializeM6Stamps(Settings.M6Stamps, Profile.VoxelSizeCm))
 		{
 			return Error;
 		}
@@ -1430,7 +1458,9 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 			return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidContext,
 				TEXT("M4 local worker belongs to a different generator or thread"));
 		}
-		return VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, *M4Unlimited, Key, OutChunk, IsCancelled);
+		return M6Stamps.IsEmpty()
+			? VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, *M4Unlimited, Key, OutChunk, IsCancelled)
+			: GenerateM4LocalChunkWithStamps(Key, Worker, OutChunk, IsCancelled);
 	}
 	if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
 	{
@@ -1520,7 +1550,7 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4Footprint(const FVoxelLandChunkKe
 		return FVoxelLandGeneratorValidation::Fail(
 			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));
 	}
-	return M6Spheres.IsEmpty() ? FVoxelLandError{} : ValidateM6SphereFootprint(Key);
+	return bM6LegacySphereEnvelope ? ValidateM6SphereFootprint(Key) : FVoxelLandError{};
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset,

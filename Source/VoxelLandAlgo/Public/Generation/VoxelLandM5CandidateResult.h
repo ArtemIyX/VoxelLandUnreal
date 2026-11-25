@@ -23,6 +23,8 @@ public:
 	bool MatchesSource(
 		const FVoxelLandM5CaveSettings& Settings, int64 Seed, const FVoxelLandM5RegionCoord& Region) const;
 	const FVoxelLandM5CavePlan& GetPlan() const { return Plan; }
+	// Full ordered bytes bind every plan field. Empty means not finalized.
+	TConstArrayView<uint8> GetCanonicalPlanBytes() const { return CanonicalPlanBytes; }
 	// True only for a direct RouteBuilder result of this exact source object.
 	bool IsDirectlyDerivedFrom(const FVoxelLandM5CandidateResult& Source) const { return DirectSource.Get() == &Source; }
 
@@ -72,6 +74,7 @@ private:
 		, Plan(MoveTemp(InPlan))
 	{
 	}
+	FVoxelLandM5Diagnostic BindCanonicalPlan(TFunctionRef<bool()> IsCancelled);
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	FVoxelLandM5CaveSettings SourceSettings;
 	int64 SourceSeed;
@@ -79,5 +82,7 @@ private:
 	// Direct source remains alive until after this result's plan and lease.
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> DirectSource;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> CanonicalPlanLease;
+	TArray<uint8> CanonicalPlanBytes;
 	FVoxelLandM5CavePlan Plan;
 };

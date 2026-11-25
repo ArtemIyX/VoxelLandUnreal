@@ -479,6 +479,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 	}
 	TSharedPtr<FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result = MakeShareable(
 		new FVoxelLandM5CandidateResult(Budget, S, Seed, Candidate.Region, MoveTemp(Scratch), MoveTemp(Lease)));
+	const FVoxelLandM5Diagnostic IdentityError = Result->BindCanonicalPlan(IsCancelled);
+	if (IdentityError.Code != EVoxelLandM5ErrorCode::None) return IdentityError;
+	if (IsCancelled()) return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(
+		EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance planning cancelled"));
 	Out = MoveTemp(Result);
 	return {};
 }

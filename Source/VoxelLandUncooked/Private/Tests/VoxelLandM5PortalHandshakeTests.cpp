@@ -240,8 +240,10 @@ bool FVoxelLandM5PortalHandshakeWorkTest::RunTest(const FString& Parameters)
 	// handshake = 343 sample comparisons + 8 descriptor comparisons + 4
 	// portal operations + 7 cancellation polls + 8192 hash allowance = 8554.
 	// Each topology check = 16*(2 nodes+1 edge+1)^2 + 1024 + 4096 = 5376.
-	// Total successful cumulative work: 16448 + 8554 + 2*5376 = 35754.
-	constexpr int64 RequiredWork = 35754;
+	// Each candidate also encodes one chamber, segment, connection and portal:
+	// 1 inventory + 2*(128+128+160+128+192) = 1473 work per candidate.
+	// Total: 16448 + 2*1473 + 8554 + 2*5376 = 38700.
+	constexpr int64 RequiredWork = 38700;
 	for (int32 Short = 0; Short <= 1; ++Short)
 	{
 		FVoxelLandM5CaveSettings S;
@@ -286,7 +288,7 @@ bool FVoxelLandM5PortalHandshakeWorkTest::RunTest(const FString& Parameters)
 		}
 		int64 LiveBefore = 0, Peak = 0, Work = 0;
 		Budget->GetUsage(LiveBefore, Peak, Work);
-		TestEqual(TEXT("both candidate precharges"), Work, int64(16448));
+		TestEqual(TEXT("both candidate precharges"), Work, int64(19394));
 		const FVoxelLandM5Portal& Portal = A->GetPlan().Portals[0];
 		TArray<int16> Samples;
 		Samples.Init(-20, 343);
@@ -306,7 +308,7 @@ bool FVoxelLandM5PortalHandshakeWorkTest::RunTest(const FString& Parameters)
 		Budget->GetUsage(LiveAfter, Peak, Work);
 		TestEqual(TEXT("scratch leases released without replacing plan handles"), LiveAfter, LiveBefore);
 		TestTrue(TEXT("candidate handles remain valid"), A.IsValid() && B.IsValid());
-		TestEqual(TEXT("cumulative precharge at boundary"), Work, Short == 0 ? RequiredWork : int64(30378));
+		TestEqual(TEXT("cumulative precharge at boundary"), Work, Short == 0 ? RequiredWork : int64(33324));
 	}
 	return true;
 }

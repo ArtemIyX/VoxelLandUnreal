@@ -97,6 +97,7 @@ bool FVoxelLandM5CandidateFiniteTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("first tree second endpoint"), Out->GetPlan().Connections[0].End.Id, uint64(2));
 	TestEqual(TEXT("second tree endpoint"), Out->GetPlan().Connections[1].Start.Id, uint64(0));
 	TestEqual(TEXT("second tree second endpoint"), Out->GetPlan().Connections[1].End.Id, uint64(2));
+	TestFalse(TEXT("candidate retains canonical plan bytes"), Out->GetCanonicalPlanBytes().IsEmpty());
 	TestEqual(TEXT("segments correspond to links"), Out->GetPlan().Segments.Num(), 2);
 	TestEqual(TEXT("entrances remain pending surface phase"), Out->GetPlan().Entrances.Num(), 0);
 	return true;
@@ -415,7 +416,7 @@ bool FVoxelLandM5CandidateSharedBudgetTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("stage work failure preserves result"), Unchanged.Get() == Before);
 	StageBudget->GetUsage(Live, Peak, Work);
 	TestEqual(TEXT("stage limit failure releases bytes"), Live, int64(0));
-	TestEqual(TEXT("stage limit failure does not charge work"), Work, int64(0));
+	TestTrue(TEXT("completed planning work remains charged before identity admission fails"), Work > 0 && Work < FirstWork);
 	S.Limits.MaxValidationWork = FirstWork;
 	if (!TestTrue(TEXT("create exact stage budget"), FVoxelLandM5Budget::TryCreate(1000000, FirstWork, StageBudget)))
 	{

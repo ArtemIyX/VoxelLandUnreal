@@ -739,6 +739,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 	TSharedPtr<FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Complete = MakeShareable(
 		new FVoxelLandM5CandidateResult(Budget, Settings, WorldSeed, Region, MoveTemp(Scratch), MoveTemp(Lease)));
 	Complete->DirectSource = Candidate;
+	const FVoxelLandM5Diagnostic IdentityError = Complete->BindCanonicalPlan(IsCancelled);
+	if (IdentityError.Code != EVoxelLandM5ErrorCode::None) return IdentityError;
+	if (IsCancelled()) return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
+		EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 	Out = MoveTemp(Complete);
 	return FVoxelLandM5Diagnostic();
 }

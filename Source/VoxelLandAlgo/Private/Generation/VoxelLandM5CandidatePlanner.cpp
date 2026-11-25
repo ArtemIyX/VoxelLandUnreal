@@ -737,8 +737,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	}
 	if (Cancelled()) return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
 		EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
-	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result =
+	TSharedPtr<FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result =
 		MakeShareable(new FVoxelLandM5CandidateResult(Budget, S, Seed, Region, MoveTemp(Scratch), MoveTemp(Lease)));
+	const FVoxelLandM5Diagnostic IdentityError = Result->BindCanonicalPlan(IsCancelled);
+	if (IdentityError.Code != EVoxelLandM5ErrorCode::None) return IdentityError;
+	if (Cancelled()) return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+		EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 	Out = MoveTemp(Result);
 	return {};
 }

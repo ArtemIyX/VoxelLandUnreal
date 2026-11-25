@@ -455,9 +455,10 @@ bool FVoxelLandM5EntranceBudgetTest::RunTest(const FString& Parameters)
 	// Independent admission reference for this fixture: 1024 fixed + 8
 	// duplicate-scan units + 8 connection and 64 segment ID-search units +
 	// four attempts * (2*(2*64+1) + 16 chamber + 32 overhead) = 2328.
-	// The query charges one additional unit, so 2329 succeeds and 2327 fails
-	// at entrance admission before the query is invoked.
-	for (int64 MaxWork : {int64(2327), int64(2329)})
+	// Query costs one. Encoding one chamber, two segments, one connection and
+	// one entrance admits 1 inventory unit + 2*864 bytes = 1729 work. Thus
+	// 4058 succeeds, 4057 fails encoding, and 2327 fails before the query.
+	for (int64 MaxWork : {int64(2327), int64(4057), int64(4058)})
 	{
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Bounded;
 		if (!TestTrue(TEXT("create boundary budget"), FVoxelLandM5Budget::TryCreate(1000000, MaxWork, Bounded)))
@@ -474,8 +475,8 @@ bool FVoxelLandM5EntranceBudgetTest::RunTest(const FString& Parameters)
 		const FVoxelLandM5Diagnostic Error = VoxelLand::M5::EntrancePlanner::Build(
 			S, 42, BoundedCandidate.ToSharedRef(), Bounded.ToSharedRef(), Query, [] { return false; }, BoundaryOut);
 		TestTrue(TEXT("exact work boundary"),
-			Error.Code == (MaxWork == 2329 ? EVoxelLandM5ErrorCode::None : EVoxelLandM5ErrorCode::BudgetExceeded));
-		TestEqual(TEXT("query charged only after admission"), QueryCount - CallsBefore, MaxWork == 2329 ? 1 : 0);
+			Error.Code == (MaxWork == 4058 ? EVoxelLandM5ErrorCode::None : EVoxelLandM5ErrorCode::BudgetExceeded));
+		TestEqual(TEXT("query charged only after admission"), QueryCount - CallsBefore, MaxWork == 2327 ? 0 : 1);
 	}
 	if (!TestTrue(TEXT("same budget accepted"),
 			VoxelLand::M5::EntrancePlanner::Build(
@@ -510,7 +511,9 @@ bool FVoxelLandM5CandidateEntranceCumulativeTest::RunTest(const FString& Paramet
 	S.Limits.MaxCandidates = 1;
 	// Independent work estimate: 1024 fixed + 4*(4*129+1+8)
 	// candidate attempts + 2*129 random-selection + 8 node work = 3390.
-	S.Limits.MaxValidationWork = 3390;
+	// Its one-chamber encoding costs 1 inventory + 2*256 = 513. The entrance
+	// alone needs 4058, and the combined stages exceed that cap.
+	S.Limits.MaxValidationWork = 4058;
 	const FVoxelLandM5CavePlan EntranceFixture = M5EntranceCandidate(S);
 	FVoxelLandM5CavePlan EntranceOnly;
 	if (!TestTrue(TEXT("entrance alone fits same cap"),
@@ -539,7 +542,7 @@ bool FVoxelLandM5CandidateEntranceCumulativeTest::RunTest(const FString& Paramet
 	}
 	int64 Live = 0, Peak = 0, Work = 0;
 	Budget->GetUsage(Live, Peak, Work);
-	TestEqual(TEXT("candidate charged independently calculated work"), Work, int64(3390));
+	TestEqual(TEXT("candidate charged independently calculated work"), Work, int64(3903));
 	int32 QueryCalls = 0;
 	const auto Query = [&QueryCalls](TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Shared, int64 X, int64 Y,
 						   int32 Radius, int64& Z, int64& MinZ, int64& MaxZ, int32& Slope, bool& Protected,
@@ -565,7 +568,7 @@ bool FVoxelLandM5CandidateEntranceCumulativeTest::RunTest(const FString& Paramet
 	TestTrue(TEXT("rejected entrance preserves candidate output"), Out == Candidate);
 	TestEqual(TEXT("cumulative rejection occurs before query"), QueryCalls, 0);
 	Budget->GetUsage(Live, Peak, Work);
-	TestEqual(TEXT("failed work admission does not increment charge"), Work, int64(3390));
+	TestEqual(TEXT("failed work admission does not increment charge"), Work, int64(3903));
 	return true;
 }
 #endif

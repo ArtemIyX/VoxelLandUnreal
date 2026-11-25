@@ -115,6 +115,7 @@ bool FVoxelLandM5RouteBuilderTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	TestFalse(TEXT("routed result retains canonical plan bytes"), Result->GetCanonicalPlanBytes().IsEmpty());
 	const auto& Route = Result->GetPlan().Routes[0];
 	TestEqual(TEXT("one leg"), Route.Legs.Num(), 1);
 	if (Route.Legs.Num() == 1)

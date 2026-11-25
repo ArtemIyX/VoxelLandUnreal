@@ -55,7 +55,11 @@
 	X(RerouteInt, 49)                  \
 	X(RerouteBool, 50)                 \
 	X(SmoothDensity, 51)               \
-	X(M4HeightOutput, 52)
+	X(M4HeightOutput, 52)              \
+	X(FloatOutput, 53)                 \
+	X(IntOutput, 54)                   \
+	X(BoolOutput, 55)                  \
+	X(WorldNoise2D, 56)
 
 enum class EVoxelLandBuiltinNode : uint32
 {

@@ -7,6 +7,14 @@ FText FVoxelLandBuiltinPresentationCatalog::ExplicitTitle(EVoxelLandBuiltinNode 
 {
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::FloatOutput:
+			return LOCTEXT("TitleFloatOutput", "Float Output");
+		case EVoxelLandBuiltinNode::IntOutput:
+			return LOCTEXT("TitleIntOutput", "Integer Output");
+		case EVoxelLandBuiltinNode::BoolOutput:
+			return LOCTEXT("TitleBoolOutput", "Boolean Output");
+		case EVoxelLandBuiltinNode::WorldNoise2D:
+			return LOCTEXT("TitleWorldNoise", "2D Noise");
 		case EVoxelLandBuiltinNode::DensityOutput:
 			return LOCTEXT("TitleDensityOutput", "Density Output");
 		case EVoxelLandBuiltinNode::M4HeightOutput:
@@ -120,6 +128,12 @@ FText FVoxelLandBuiltinPresentationCatalog::ExplicitDescription(EVoxelLandBuilti
 {
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::FloatOutput:
+		case EVoxelLandBuiltinNode::IntOutput:
+		case EVoxelLandBuiltinNode::BoolOutput:
+			return LOCTEXT("NamedOutputHelp", "Name this result and connect the signal you want to preview or bind.");
+		case EVoxelLandBuiltinNode::WorldNoise2D:
+			return LOCTEXT("WorldNoiseHelp", "Samples deterministic 2D noise. Unwired X and Y use the world position.");
 		case EVoxelLandBuiltinNode::DensityOutput:
 			return LOCTEXT("DescriptionDensityOutput",
 				"Final signed density in centimeters. Negative is solid; positive is empty. A graph requires exactly one output.");
@@ -248,6 +262,12 @@ FText FVoxelLandBuiltinPresentationCatalog::ExplicitCategory(EVoxelLandBuiltinNo
 {
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::FloatOutput:
+		case EVoxelLandBuiltinNode::IntOutput:
+		case EVoxelLandBuiltinNode::BoolOutput:
+			return LOCTEXT("OutputCategory", "Outputs");
+		case EVoxelLandBuiltinNode::WorldNoise2D:
+			return LOCTEXT("WorldNoiseCategory", "Noise");
 		case EVoxelLandBuiltinNode::DensityOutput:
 		case EVoxelLandBuiltinNode::M4HeightOutput:
 		case EVoxelLandBuiltinNode::PositionX:
@@ -355,6 +375,11 @@ FLinearColor FVoxelLandBuiltinPresentationCatalog::ExplicitTitleColor(EVoxelLand
 {
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::WorldNoise2D:
+			return FLinearColor(0.27f, 0.41f, 0.6f);
+		case EVoxelLandBuiltinNode::FloatOutput:
+		case EVoxelLandBuiltinNode::IntOutput:
+		case EVoxelLandBuiltinNode::BoolOutput:
 		case EVoxelLandBuiltinNode::DensityOutput:
 		case EVoxelLandBuiltinNode::M4HeightOutput:
 			return FLinearColor(0.55f, 0.16f, 0.13f);

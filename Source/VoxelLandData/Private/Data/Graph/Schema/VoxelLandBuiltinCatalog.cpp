@@ -89,6 +89,15 @@ bool FVoxelLandBuiltinCatalog::Find(
 	bool bHasOutput = true;
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::FloatOutput:
+		case EVoxelLandBuiltinNode::IntOutput:
+		case EVoxelLandBuiltinNode::BoolOutput:
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Value"),
+				Kind == EVoxelLandBuiltinNode::IntOutput    ? FVoxelLandBuiltinDescriptors::EType::Int32
+				: Kind == EVoxelLandBuiltinNode::BoolOutput ? FVoxelLandBuiltinDescriptors::EType::Bool
+															: FVoxelLandBuiltinDescriptors::EType::Float);
+			bHasOutput = false;
+			break;
 		case EVoxelLandBuiltinNode::DensityOutput:
 			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Density"), FVoxelLandBuiltinDescriptors::EType::Float);
 			bHasOutput = false;
@@ -234,6 +243,7 @@ bool FVoxelLandBuiltinCatalog::Find(
 			FVoxelLandBuiltinDescriptors::AddPin(
 				Spec, TEXT("Extent Z"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("100"));
 			break;
+		case EVoxelLandBuiltinNode::WorldNoise2D:
 		case EVoxelLandBuiltinNode::Perlin2:
 		case EVoxelLandBuiltinNode::Fbm2:
 		case EVoxelLandBuiltinNode::Value2:
@@ -319,7 +329,11 @@ bool FVoxelLandBuiltinCatalogLookup::ValidateBuiltinPins(const FVoxelLandBuiltin
 		}
 	}
 	const int32 ExpectedOutputs =
-		Spec.Kind == EVoxelLandBuiltinNode::DensityOutput || Spec.Kind == EVoxelLandBuiltinNode::M4HeightOutput ? 0 : 1;
+		(Spec.Kind == EVoxelLandBuiltinNode::DensityOutput || Spec.Kind == EVoxelLandBuiltinNode::M4HeightOutput
+			|| Spec.Kind == EVoxelLandBuiltinNode::FloatOutput || Spec.Kind == EVoxelLandBuiltinNode::IntOutput
+			|| Spec.Kind == EVoxelLandBuiltinNode::BoolOutput)
+			? 0
+			: 1;
 	if (Outputs != ExpectedOutputs || (Outputs == 1 && !Spec.Pins.Last().bOutput))
 	{
 		Error = TEXT("invalid output pin definition");

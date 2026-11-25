@@ -328,7 +328,7 @@ bool FVoxelLandM5CarveMasksAdmissionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("work failure retains output"), Masks == Original);
 	LessWork->GetUsage(Live, Peak, Work);
 	TestEqual(TEXT("failed work releases memory"), Live, int64(0));
-	TestEqual(TEXT("failed work not charged"), Work, int64(0));
+	TestEqual(TEXT("validation scan charged before search admission"), Work, int64(1));
 	Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, FIntVector(5, 5, 5), FIntVector(1, 1, 1), Samples,
 		Protection, Entrance, 0, false, 0, 0, true, LessMemory.ToSharedRef(), Never, Masks);
 	TestEqual(TEXT("one less byte fails"), Error.Code, EVoxelLandM5ErrorCode::BudgetExceeded);
@@ -351,6 +351,77 @@ bool FVoxelLandM5CarveMasksAdmissionTest::RunTest(const FString& Parameters)
 		Protection, Entrance, 0, false, 0, 0, true, BinaryBudget.ToSharedRef(), Never, Masks);
 	TestEqual(TEXT("nonbinary entrance rejected"), Error.Code, EVoxelLandM5ErrorCode::InvalidInput);
 	TestTrue(TEXT("invalid entrance retains output"), Masks == Original);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5CarveMasksProtectedWorkTest, "VoxelLand.M5.Masks.ProtectedWork", M5CarveMasksFlags)
+bool FVoxelLandM5CarveMasksProtectedWorkTest::RunTest(const FString& Parameters)
+{
+	TArray<int16> Samples;
+	TArray<uint8> Protection, Entrance;
+	M5MaskFlatFixture(Samples, Protection, Entrance);
+	const FIntVector Size(M5MaskX, M5MaskY, M5MaskZ), Start(5, 5, 5), Count(1, 1, 2);
+	const auto Origin = M5MaskPoint(-500, -500, -500);
+	const auto Never = [] { return false; };
+	Protection[M5MaskIndex(5, 5, 6)] = 1;
+	Entrance[M5MaskIndex(5, 5, 6)] = 1;
+	// One unprotected roof search: 2*8 + 6^3*12 + 1 = 2609.
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Exact, Less, More;
+	if (!TestTrue(TEXT("exact budget"), FVoxelLandM5Budget::TryCreate(4102, 2609, Exact))
+		|| !TestTrue(TEXT("less budget"), FVoxelLandM5Budget::TryCreate(4102, 2608, Less))
+		|| !TestTrue(TEXT("larger budget"), FVoxelLandM5Budget::TryCreate(100000, 1000000, More)))
+	{
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Masks;
+	auto Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, Start, Count, Samples, Protection, Entrance,
+		0, false, 0, 0, true, Exact.ToSharedRef(), Never, Masks);
+	if (!TestEqual(TEXT("mixed protected admission"), Error.Code, EVoxelLandM5ErrorCode::None) || !Masks.IsValid())
+	{
+		return false;
+	}
+	TestEqual(TEXT("unprotected network retains flat-field result"), Masks->GetNetworkAllowed()[0], uint8(1));
+	TestEqual(TEXT("protected entrance blocked"), Masks->GetNetworkAllowed()[1], uint8(0));
+	TestEqual(TEXT("protected bit retained"), Masks->GetProtected()[1], uint8(1));
+	TestEqual(TEXT("protected pocket blocked"), Masks->GetPocketAllowed()[1], uint8(0));
+	const auto Previous = Masks;
+	Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, Start, Count, Samples, Protection, Entrance,
+		0, false, 0, 0, true, Less.ToSharedRef(), Never, Masks);
+	TestEqual(TEXT("one less work rejected"), Error.Code, EVoxelLandM5ErrorCode::BudgetExceeded);
+	TestTrue(TEXT("failed admission retains result"), Masks == Previous);
+	Entrance[M5MaskIndex(5, 5, 6)] = 2;
+	Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, Start, Count, Samples, Protection, Entrance,
+		0, false, 0, 0, true, More.ToSharedRef(), Never, Masks);
+	TestEqual(TEXT("invalid protected entrance rejected"), Error.Code, EVoxelLandM5ErrorCode::InvalidInput);
+	TestTrue(TEXT("invalid input retains result"), Masks == Previous);
+	Entrance[M5MaskIndex(5, 5, 6)] = 1;
+	Protection[M5MaskIndex(5, 5, 5)] = 1;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ProtectedBudget;
+	if (!TestTrue(TEXT("all-protected budget"), FVoxelLandM5Budget::TryCreate(4102, 17, ProtectedBudget)))
+	{
+		return false;
+	}
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> AllProtected;
+	Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, Start, Count, Samples, Protection, Entrance,
+		0, false, 0, 0, true, ProtectedBudget.ToSharedRef(), Never, AllProtected);
+	if (TestEqual(TEXT("all protected linear work"), Error.Code, EVoxelLandM5ErrorCode::None)
+		&& TestTrue(TEXT("all protected result"), AllProtected.IsValid()))
+	{
+		TestEqual(TEXT("first blocked"), AllProtected->GetNetworkAllowed()[0], uint8(0));
+		TestEqual(TEXT("second blocked"), AllProtected->GetNetworkAllowed()[1], uint8(0));
+	}
+	Samples[M5MaskIndex(5, 5, 3)] = 100;
+	Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, Start, Count, Samples, Protection, Entrance,
+		0, true, 0, 1000, true, More.ToSharedRef(), Never, Masks);
+	TestEqual(TEXT("protected ambiguous pocket still rejected"), Error.Code, EVoxelLandM5ErrorCode::Unproven);
+	TestTrue(TEXT("ambiguous pocket retains result"), Masks == Previous);
+	int32 Calls = 0;
+	const auto CancelAfterScan = [&Calls] { return ++Calls == 3; };
+	Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, Start, Count, Samples, Protection, Entrance,
+		0, false, 0, 0, true, More.ToSharedRef(), CancelAfterScan, Masks);
+	TestEqual(TEXT("cancellation after scan"), Error.Code, EVoxelLandM5ErrorCode::Cancelled);
+	TestTrue(TEXT("cancellation retains result"), Masks == Previous);
 	return true;
 }
 #endif

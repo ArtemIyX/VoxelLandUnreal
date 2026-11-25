@@ -86,14 +86,11 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Incomplete roof and mesher halo"));
 		}
 	}
-	int64 Side = 0, CellsXY = 0, Cells = 0, PerSample = 0, Work = 0, PocketWork = 0, Bytes = 0;
+	int64 Side = 0, CellsXY = 0, Cells = 0, RoofWork = 0, PocketWork = 0, Bytes = 0;
 	if (!TryMultiply(Radius, 2, Side) || !TryAdd(Side, 2, Side) || !TryMultiplyNonNegative(Side, Side, CellsXY)
-		|| !TryMultiplyNonNegative(CellsXY, Side, Cells) || !TryMultiplyNonNegative(Cells, 12, PerSample)
-		|| !TryAdd(PerSample, 8, PerSample)
+		|| !TryMultiplyNonNegative(CellsXY, Side, Cells) || !TryMultiplyNonNegative(Cells, 12, RoofWork)
 		|| (bPocketEnabled
-			&& (!TryMultiplyNonNegative(25, Size.Z, PocketWork) || !TryMultiplyNonNegative(PocketWork, 3, PocketWork)
-				|| !TryAdd(PerSample, PocketWork, PerSample)))
-		|| !TryMultiplyNonNegative(Outputs, PerSample, Work) || !TryAdd(Work, 1, Work)
+			&& (!TryMultiplyNonNegative(25, Size.Z, PocketWork) || !TryMultiplyNonNegative(PocketWork, 3, PocketWork)))
 		|| !TryMultiplyNonNegative(Outputs, 3, Bytes) || !TryAdd(Bytes, 4096, Bytes))
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
@@ -105,7 +102,46 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
-	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(Work))
+	// Admit the validation scan before touching caller data. The inputs are
+	// immutable for this synchronous call, so the count remains valid below.
+	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(Outputs))
+	{
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask admission exhausted"));
+	}
+	int64 Unprotected = 0, Scanned = 0;
+	for (int64 OZ = 0; OZ < Count.Z; ++OZ)
+	{
+		for (int64 OY = 0; OY < Count.Y; ++OY)
+		{
+			for (int64 OX = 0; OX < Count.X; ++OX)
+			{
+				if ((Scanned++ & 63) == 0 && IsCancelled())
+				{
+					return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
+				}
+				const int64 Source = (Start.X + OX) + int64(Size.X) * (Start.Y + OY) + XY * (Start.Z + OZ);
+				if (Protection[Source] > 1 || EntranceAuthorized[Source] > 1)
+				{
+					return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Carve mask input is not binary"));
+				}
+				Unprotected += Protection[Source] == 0 ? 1 : 0;
+			}
+		}
+	}
+	int64 Work = 0, BaseWork = 0, SearchWork = 0;
+	// Seven output units remain after the charged scan; pocket validation is
+	// still required for protected samples because it can return Unproven.
+	if (!TryAdd(7, PocketWork, BaseWork) || !TryMultiplyNonNegative(Outputs, BaseWork, Work)
+		|| !TryMultiplyNonNegative(Unprotected, RoofWork, SearchWork) || !TryAdd(Work, SearchWork, Work)
+		|| !TryAdd(Work, 1, Work))
+	{
+		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask work or memory overflow"));
+	}
+	if (!Budget->TryChargeWork(Work))
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask admission exhausted"));
@@ -122,16 +158,17 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 		{
 			for (int64 OX = 0; OX < Count.X; ++OX)
 			{
+				if ((Visits++ & 63) == 0 && IsCancelled())
+				{
+					return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
+				}
 				const int64 X = Start.X + OX, Y = Start.Y + OY, Z = Start.Z + OZ;
 				const int64 Source = X + int64(Size.X) * Y + XY * Z;
 				const int64 Dest = OX + int64(Count.X) * OY + OutputXY * OZ;
-				if (Protection[Source] > 1 || EntranceAuthorized[Source] > 1)
-				{
-					return FVoxelLandM5CarveMasksInternals::CarveMasksError(
-						EVoxelLandM5ErrorCode::InvalidInput, TEXT("Carve mask input is not binary"));
-				}
+				const bool bProtected = Protection[Source] != 0;
 				bool bRoof = false;
-				for (int64 CZ = Z - Radius - 1; CZ <= Z + Radius; ++CZ)
+				for (int64 CZ = Z - Radius - 1; !bProtected && CZ <= Z + Radius; ++CZ)
 				{
 					for (int64 CY = Y - Radius - 1; CY <= Y + Radius; ++CY)
 					{
@@ -203,7 +240,6 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 					const int64 UpperDepth = (Highest - Z) * SpacingCm;
 					bDepthAllowed = LowerDepth >= MinPocketDepthCm && UpperDepth <= MaxPocketDepthCm;
 				}
-				const bool bProtected = Protection[Source] != 0;
 				Scratch->Protected[Dest] = bProtected ? 1 : 0;
 				Scratch->NetworkAllowed[Dest] = !bProtected && (!bRoof || EntranceAuthorized[Source]) ? 1 : 0;
 				Scratch->PocketAllowed[Dest] = !bProtected && !bRoof && bPocketEnabled && bDepthAllowed ? 1 : 0;

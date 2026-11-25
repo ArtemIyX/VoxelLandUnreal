@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandBackendOptions.h"
+#include "Data/Structs/VoxelLandM6FilterSettings.h"
 #include "Data/Structs/VoxelLandM6SphereSettings.h"
 #include "Data/Structs/VoxelLandM6StampSettings.h"
 #include "Data/Structs/VoxelLandZoneProfile.h"
@@ -20,4 +21,5 @@ struct FVoxelLandGeneratorSettings
 	// Transient generation-time inputs. Only one list can be active.
 	FVoxelLandM6SphereSettings M6Spheres; // First finite sphere checkpoint API.
 	FVoxelLandM6StampSettings M6Stamps;
+	FVoxelLandM6FilterSettings M6Filters;
 };

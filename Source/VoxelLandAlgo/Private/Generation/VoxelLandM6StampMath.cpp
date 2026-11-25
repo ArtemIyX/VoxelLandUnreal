@@ -186,13 +186,15 @@ int16 FVoxelLandM6StampMath::Combine(
 	{
 		return Density;
 	}
-	int64 Numerator = SignedDistanceQ8(Stamp, PositionCm) * (DensityUnitsPerVoxel / CentimetreScaleQ8);
 	const bool bSubtract = Stamp.Operation == EVoxelLandM6StampOperation::Subtract;
-	if (bSubtract)
-	{
-		Numerator = -Numerator;
-	}
-	const int64 Rounded = RoundRatio(Numerator, VoxelSizeCm);
-	const int16 Shape = int16(FMath::Clamp<int64>(Rounded, MIN_int16, MAX_int16));
+	const int16 Shape = QuantizeDistanceQ8(SignedDistanceQ8(Stamp, PositionCm), VoxelSizeCm, bSubtract);
 	return bSubtract ? FMath::Max(Density, Shape) : FMath::Min(Density, Shape);
+}
+
+int16 FVoxelLandM6StampMath::QuantizeDistanceQ8(int64 DistanceQ8, int64 VoxelSizeCm, bool bSubtract)
+{
+	const int64 DensityScale = DensityUnitsPerVoxel / CentimetreScaleQ8;
+	const int64 Numerator = DistanceQ8 * (bSubtract ? -DensityScale : DensityScale);
+	const int64 Rounded = RoundRatio(Numerator, VoxelSizeCm);
+	return int16(FMath::Clamp<int64>(Rounded, MIN_int16, MAX_int16));
 }

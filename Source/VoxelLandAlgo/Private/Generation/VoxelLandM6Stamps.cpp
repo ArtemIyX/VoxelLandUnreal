@@ -180,13 +180,13 @@ FVoxelLandError FVoxelLandGenerator::InitializeM6Stamps(const FVoxelLandM6StampS
 	return {};
 }
 
-FVoxelLandError FVoxelLandGenerator::ValidateM6SphereFootprint(const FVoxelLandChunkKey& Key) const
+FVoxelLandError FVoxelLandGenerator::ValidateM6SphereFootprint(const FVoxelLandChunkKey& Key, int32 Halo) const
 {
 	constexpr int64 Limit = FVoxelLandM6StampMath::LegacySphereLimitCm;
 	static_assert(2 * Limit / (FVoxelLandChunkData::SamplesPerAxis - 1) <= FVoxelLandM6StampMath::MaxVoxelSizeCm);
 	const int64 VoxelSizeCm = int64(Profile.VoxelSizeCm);
-	const FInt64Vector First = FVoxelLandM6StampMath::FirstSampleCm(Key, VoxelSizeCm);
-	const FInt64Vector Last = First + FInt64Vector((FVoxelLandChunkData::SamplesPerAxis - 1) * VoxelSizeCm);
+	const FInt64Vector First = FVoxelLandM6StampMath::FirstSampleCm(Key, VoxelSizeCm) - FInt64Vector(Halo * VoxelSizeCm);
+	const FInt64Vector Last = First + FInt64Vector((FVoxelLandChunkData::SamplesPerAxis - 1 + 2 * Halo) * VoxelSizeCm);
 	if (First.X < -Limit || First.Y < -Limit || First.Z < -Limit
 		|| Last.X > Limit || Last.Y > Limit || Last.Z > Limit)
 	{
@@ -195,13 +195,12 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6SphereFootprint(const FVoxelLandC
 	return {};
 }
 
-FVoxelLandError FVoxelLandGenerator::ApplyM6Stamps(FVoxelLandChunkData& Chunk, TFunctionRef<bool()> IsCancelled) const
+FVoxelLandError FVoxelLandGenerator::ApplyM6Stamps(const FInt64Vector& First, int32 Axis, TArray<int16>& Samples,
+	TFunctionRef<bool()> IsCancelled) const
 {
-	check(Chunk.Density.Num() == FVoxelLandChunkData::SampleCount);
+	check(Samples.Num() == Axis * Axis * Axis);
 	static_assert(FVoxelLandM6StampSettings::MaxStamps * FVoxelLandChunkData::SampleCount == 686000);
-	constexpr int32 Axis = FVoxelLandChunkData::SamplesPerAxis;
 	const int64 VoxelSizeCm = int64(Profile.VoxelSizeCm);
-	const FInt64Vector First = FVoxelLandM6StampMath::FirstSampleCm(Chunk.Key, VoxelSizeCm);
 	int32 Index = 0;
 	for (int32 Z = 0; Z < Axis; ++Z)
 	{
@@ -215,7 +214,7 @@ FVoxelLandError FVoxelLandGenerator::ApplyM6Stamps(FVoxelLandChunkData& Chunk, T
 			for (int32 X = 0; X < Axis; ++X)
 			{
 				const FInt64Vector PositionCm = First + FInt64Vector(X, Y, Z) * VoxelSizeCm;
-				int16& Density = Chunk.Density[Index++];
+				int16& Density = Samples[Index++];
 				for (const FVoxelLandM6Stamp& Stamp : M6Stamps)
 				{
 					Density = FVoxelLandM6StampMath::Combine(Density, Stamp, PositionCm, VoxelSizeCm);
@@ -254,11 +253,13 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4LocalChunkWithStamps(const FVoxel
 
 FVoxelLandError FVoxelLandGenerator::FinalizeDensityChunk(TSharedRef<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk,
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
-	TFunctionRef<bool()> IsCancelled) const
+	TFunctionRef<bool()> IsCancelled, bool bApplyStamps) const
 {
-	if (!M6Stamps.IsEmpty())
+	if (bApplyStamps && !M6Stamps.IsEmpty())
 	{
-		if (const FVoxelLandError Error = ApplyM6Stamps(*Chunk, IsCancelled))
+		const FInt64Vector First = FVoxelLandM6StampMath::FirstSampleCm(Chunk->Key, int64(Profile.VoxelSizeCm));
+		if (const FVoxelLandError Error =
+				ApplyM6Stamps(First, FVoxelLandChunkData::SamplesPerAxis, Chunk->Density, IsCancelled))
 		{
 			return Error;
 		}

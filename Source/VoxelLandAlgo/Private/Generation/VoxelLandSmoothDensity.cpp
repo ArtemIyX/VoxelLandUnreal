@@ -3,6 +3,7 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
+#include "Generation/VoxelLandQuantizedDensity.h"
 #include "Data/Structs/VoxelLandM5PointCm.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "Operators/VoxelLandOperator.h"
@@ -16,11 +17,8 @@ public:
 	static constexpr int32 ExpandedCount = ExpandedAxis * ExpandedAxis * ExpandedAxis;
 	static constexpr int32 SmoothBatchSize = 256;
 	static FVoxelLandError SmoothError(EVoxelLandErrorCode Code, const TCHAR* Message);
-	static int32 RoundRatioAwayFromZero(int64 Numerator, int32 Denominator);
 	static FVoxelLandError FillExpandedPositions(
 		const FVoxelLandChunkKey& Key, float VoxelSize, int32 Start, TArrayView<FVector3f> Positions);
-	static int16 SmoothSample(TConstArrayView<int16> Expanded, const FIntVector& ExpandedSize,
-		int32 X, int32 Y, int32 Z, int32 Strength);
 };
 
 FVoxelLandError FVoxelLandSmoothDensityInternals::SmoothError(EVoxelLandErrorCode Code, const TCHAR* Message)
@@ -31,7 +29,7 @@ FVoxelLandError FVoxelLandSmoothDensityInternals::SmoothError(EVoxelLandErrorCod
 	return Error;
 }
 
-int32 FVoxelLandSmoothDensityInternals::RoundRatioAwayFromZero(int64 Numerator, int32 Denominator)
+int32 FVoxelLandQuantizedDensity::RoundRatioAwayFromZero(int64 Numerator, int32 Denominator)
 {
 	const int64 Magnitude = Numerator < 0 ? -Numerator : Numerator;
 	const int32 Rounded = int32((Magnitude + Denominator / 2) / Denominator);
@@ -67,7 +65,7 @@ FVoxelLandError FVoxelLandSmoothDensityInternals::FillExpandedPositions(
 	return {};
 }
 
-int16 FVoxelLandSmoothDensityInternals::SmoothSample(
+int16 FVoxelLandQuantizedDensity::SmoothSample(
 	TConstArrayView<int16> Expanded, const FIntVector& ExpandedSize, int32 X, int32 Y, int32 Z, int32 Strength)
 {
 	const int32 Center = (X + 1) + ExpandedSize.X * ((Y + 1) + ExpandedSize.Y * (Z + 1));
@@ -82,10 +80,13 @@ int16 FVoxelLandSmoothDensityInternals::SmoothSample(
 			}
 		}
 	}
-	const int32 Average = RoundRatioAwayFromZero(Sum, 27);
-	const int32 Original = Expanded[Center];
-	const int64 Blend = int64(Original) * (65535 - Strength) + int64(Average) * Strength;
-	return int16(FMath::Clamp(RoundRatioAwayFromZero(Blend, 65535), -32768, 32767));
+	return Blend(Expanded[Center], RoundRatioAwayFromZero(Sum, 27), Strength);
+}
+
+int16 FVoxelLandQuantizedDensity::Blend(int16 Original, int32 Target, int32 Strength)
+{
+	const int64 Weighted = int64(Original) * (MAX_uint16 - Strength) + int64(Target) * Strength;
+	return int16(FMath::Clamp(RoundRatioAwayFromZero(Weighted, MAX_uint16), int32(MIN_int16), int32(MAX_int16)));
 }
 
 FVoxelLandM5Diagnostic FVoxelLandGenerator::GenerateFiniteM4Box(const FVoxelLandM5PointCm& MinLattice,
@@ -190,7 +191,7 @@ FVoxelLandM5Diagnostic FVoxelLandGenerator::GenerateFiniteM4Box(const FVoxelLand
 					for (int32 J = 0; J < Tile.Y; ++J)
 						for (int32 I = 0; I < Tile.X; ++I)
 							Result[(X + I) + Size.X * ((Y + J) + Size.Y * (Z + K))] = bSmooth
-								? FVoxelLandSmoothDensityInternals::SmoothSample(Raw, RawSize, I, J, K, Strength)
+								? FVoxelLandQuantizedDensity::SmoothSample(Raw, RawSize, I, J, K, Strength)
 								: Raw[I + RawSize.X * (J + RawSize.Y * K)];
 				}
 			}
@@ -258,7 +259,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 		{
 			for (int32 X = 0; X < FVoxelLandChunkData::SamplesPerAxis; ++X)
 			{
-				Chunk->Density.Add(FVoxelLandSmoothDensityInternals::SmoothSample(Expanded, ExpandedSize, X, Y, Z, FixedStrength));
+				Chunk->Density.Add(FVoxelLandQuantizedDensity::SmoothSample(Expanded, ExpandedSize, X, Y, Z, FixedStrength));
 			}
 		}
 	}

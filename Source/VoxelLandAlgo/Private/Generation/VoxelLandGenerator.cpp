@@ -8,6 +8,7 @@
 #include "Generation/VoxelLandM5ChunkFootprint.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM6FilterPlan.h"
 #include "Data/Structs/VoxelLandM5ChunkFootprint.h"
 #include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
@@ -481,6 +482,7 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	FVoxelLandGeneratorSettings LocalSettings = Settings;
 	LocalSettings.M6Spheres = {};
 	LocalSettings.M6Stamps = {};
+	LocalSettings.M6Filters = {};
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
 	if (FVoxelLandError Error = CreateInternal(LocalSettings, nullptr, false, nullptr, Result))
 	{
@@ -491,6 +493,13 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	if (Settings.M6Stamps.IsActive())
 	{
 		if (const FVoxelLandError Error = Mutable->InitializeM6Stamps(Settings.M6Stamps, Size))
+		{
+			return Error;
+		}
+	}
+	if (Settings.M6Filters.IsActive())
+	{
+		if (const FVoxelLandError Error = Mutable->InitializeM6Filters(Settings.M6Filters, Size))
 		{
 			return Error;
 		}
@@ -563,15 +572,16 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 {
 	const bool bLegacySpheres = Settings.M6Spheres.IsActive();
 	const bool bGenericStamps = Settings.M6Stamps.IsActive();
+	const bool bRegionFilters = Settings.M6Filters.IsActive();
 	if (bLegacySpheres && bGenericStamps)
 	{
 		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("Only one M6 stamp list can be active"));
 	}
-	if ((bLegacySpheres || bGenericStamps) && (!HeightGrid || IsCancelled))
+	if ((bLegacySpheres || bGenericStamps || bRegionFilters) && (!HeightGrid || IsCancelled))
 	{
 		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
-			TEXT("M6 stamp settings require an ordinary supported M4 generator"));
+			TEXT("M6 settings require an ordinary supported M4 generator"));
 	}
 	OutGenerator.Reset();
 	if (IsInGameThread())
@@ -605,6 +615,13 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	if (bGenericStamps)
 	{
 		if (const FVoxelLandError Error = Result->InitializeM6Stamps(Settings.M6Stamps, Profile.VoxelSizeCm))
+		{
+			return Error;
+		}
+	}
+	if (bRegionFilters)
+	{
+		if (const FVoxelLandError Error = Result->InitializeM6Filters(Settings.M6Filters, Profile.VoxelSizeCm))
 		{
 			return Error;
 		}
@@ -1445,6 +1462,14 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
+	if (!M6Filters.IsEmpty())
+	{
+		const FVoxelLandM6FilterPlan Plan = MakeM6FilterPlan(Key);
+		if (Plan.ActiveStages != 0)
+		{
+			return GenerateM6FilteredChunk(Key, Plan, Worker, OutChunk, IsCancelled);
+		}
+	}
 	if (M4Unlimited)
 	{
 		if (IsInGameThread())
@@ -1475,6 +1500,14 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 
 FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const
 {
+	if (!M6Filters.IsEmpty())
+	{
+		const FVoxelLandM6FilterPlan Plan = MakeM6FilterPlan(Key);
+		if (Plan.ActiveStages != 0)
+		{
+			return ValidateM6FilterDemand(Key, Plan);
+		}
+	}
 	if (M4Unlimited)
 	{
 		return VoxelLandM4Unlimited::ValidateChunkDemand(Key, Profile.VoxelSizeCm);

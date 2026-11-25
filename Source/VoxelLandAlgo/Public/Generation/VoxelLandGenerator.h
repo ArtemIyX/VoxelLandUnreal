@@ -21,6 +21,7 @@ class FVoxelLandM4HeightGrid;
 struct FVoxelLandM4UnlimitedConfig;
 struct FVoxelLandM4SmoothSettings;
 struct FVoxelLandM5PointCm;
+struct FVoxelLandM6FilterPlan;
 struct FVoxelLandWorkerContextImpl;
 
 // Copies and validates the draft before publishing it. Safe to share across workers.
@@ -128,8 +129,8 @@ public:
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const;
 	FVoxelLandError GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
-	// Explicit filter API. Compiled filter stages are also applied by GenerateChunk.
-	// Strength maps to uint16 by rounding Strength * 65535 to nearest; integer averages
+	// Explicit compatibility-filter API. Use GenerateChunk for the configured
+	// M6 region pipeline. Strength maps to uint16 by rounding Strength * 65535 to nearest; integer averages
 	// and blends round to nearest, ties away from zero. The source has a one-cell halo.
 	FVoxelLandError GenerateSmoothedChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		bool bEnabled, float Strength, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
@@ -145,6 +146,7 @@ public:
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 	// This payload supplements the baseline generator inputs. An inactive stage has no bytes.
 	TConstArrayView<uint8> GetM6StampIdentity() const { return M6StampIdentity; }
+	TConstArrayView<uint8> GetM6FilterIdentity() const { return M6FilterIdentity; }
 	TConstArrayView<uint8> GetM6SphereIdentity() const
 	{
 		return bM6LegacySphereEnvelope ? GetM6StampIdentity() : TConstArrayView<uint8>();
@@ -184,13 +186,26 @@ private:
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError InitializeM6Spheres(const FVoxelLandM6SphereSettings& Settings);
 	FVoxelLandError InitializeM6Stamps(const FVoxelLandM6StampSettings& Settings, float VoxelSizeCm);
-	FVoxelLandError ValidateM6SphereFootprint(const FVoxelLandChunkKey& Key) const;
-	FVoxelLandError ApplyM6Stamps(FVoxelLandChunkData& Chunk, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError ValidateM6SphereFootprint(const FVoxelLandChunkKey& Key, int32 Halo = 0) const;
+	FVoxelLandError ApplyM6Stamps(const FInt64Vector& FirstSampleCm, int32 Axis, TArray<int16>& Density,
+		TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError InitializeM6Filters(const FVoxelLandM6FilterSettings& Settings, float VoxelSizeCm);
+	FVoxelLandM6FilterPlan MakeM6FilterPlan(const FVoxelLandChunkKey& Key) const;
+	FVoxelLandError ValidateM6FilterDemand(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan) const;
+	int32 GetM6CompatibilityHalo() const;
+	FVoxelLandError ValidateM6BaselineFootprint(const FVoxelLandChunkKey& Key, int32 Halo) const;
+	FVoxelLandError GenerateM6BaselineBox(const FVoxelLandChunkKey& Key, int32 Halo,
+		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateM6LocalBaselineBox(const FVoxelLandChunkKey& Key, int32 Halo,
+		TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateM6FilteredChunk(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan,
+		FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
+		TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateM4LocalChunkWithStamps(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError FinalizeDensityChunk(TSharedRef<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk,
 		FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
-		TFunctionRef<bool()> IsCancelled) const;
+		TFunctionRef<bool()> IsCancelled, bool bApplyStamps = true) const;
 	FVoxelLandGenerator() = default;
 	FVoxelLandGenerator(const FVoxelLandGenerator&) = delete;
 	FVoxelLandGenerator& operator=(const FVoxelLandGenerator&) = delete;
@@ -216,6 +231,8 @@ private:
 	TArray<uint64> FullSeeds;
 	TArray<FVoxelLandM6Stamp> M6Stamps;
 	TArray<uint8> M6StampIdentity;
+	TArray<FVoxelLandM6FilterStage> M6Filters;
+	TArray<uint8> M6FilterIdentity;
 	bool bM6LegacySphereEnvelope = false;
 	friend class FVoxelLandWorkerContext;
 	friend struct FVoxelLandWorkerContextImpl;

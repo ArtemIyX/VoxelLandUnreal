@@ -18,6 +18,7 @@ public:
 	static FVoxelLandError Validate(const FVoxelLandM6Stamp& Stamp, int64 CoordinateLimit);
 	static int16 Combine(int16 Density, const FVoxelLandM6Stamp& Stamp, const FInt64Vector& PositionCm,
 		int64 VoxelSizeCm);
+	static int16 QuantizeDistanceQ8(int64 DistanceQ8, int64 VoxelSizeCm, bool bSubtract);
 
 private:
 	static constexpr int64 CentimetreScaleQ8 = 256;

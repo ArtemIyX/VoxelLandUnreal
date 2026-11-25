@@ -1,6 +1,6 @@
 # VoxelLand M6 task tracker
 
-**Progress:** 1 of 6 slices verified · **Implemented:** M6.1–M6.2 · **Next implementation:** M6.3 filters and halos
+**Progress:** 1 of 6 slices verified · **Implemented:** M6.1–M6.3 · **Next implementation:** M6.4 bounded re-distance
 
 M6 adds generation-time stamps and filters to cave-disabled M4 terrain. The first checkpoint is one hard sphere stamp across real finite M4 chunk seams. M6 acceptance also requires the remaining stamps, filters with accumulated halos, and bounded re-distance. M5 remains open and deferred. Runtime terrain editing is out of v1 scope.
 
@@ -29,6 +29,8 @@ Implementation and static review complete. The following items remain open for e
 
 ### M6.3 — Region filters and accumulated halos
 
+Implementation and static review complete. The following items remain open for executable verification.
+
 - [ ] **M6.3a** Implement region-limited smoothing and the agreed flatten and make-space behavior. Define masks, rounding, order and interaction with existing M4 smoothing.
 - [ ] **M6.3b** Compute the full read footprint from stored offsets −1…33, summed sequential filter radii, and relevant M4 and mesher stencils. Reject requests beyond the cap or source domain.
 - [ ] **M6.3c** Verify sequential filters, region edges, negative coordinates, all axes and corners. Compare full density overlaps and CPU mesh seams across chunk request orders.
@@ -54,6 +56,12 @@ Update this tracker after each task. Check a box after its deliverable and any r
 | 2026-11-25 | M6.1 | Added finite generation-time sphere add/subtract, immutable list ownership and canonical payload identity. Static review found no critical issues. The first automation run passed the real finite density and CPU-mesh seam test plus 14 M2–M4 regressions. The contract test failed on its operation-byte assertion. Its fixture now reads byte 28, and the incremental build passed. The corrected contract test remains pending. |
 
 | 2026-11-25 | M6.2 | Added hard sphere, box and capsule stamps, ordered cut-hole/foundation composition, and the same once-only stamp stage on the ordinary erosion-disabled local path. Smooth blends are explicitly rejected. Static review found no critical issues. Authored `VoxelLand.M6.Stamps.ShapesAndFoundation` and `VoxelLand.M6.Stamps.LocalAcrossSeam`. Build and tests were not run at the owner's request. |
+
+| 2026-11-25 | M6.3 | Added ordered box-masked smooth, flatten and make-space stages with backward lattice demand planning. Reused the existing M4 compatibility smooth kernel and local fixed-lattice baseline path. Static review found no critical issues. Authored `VoxelLand.M6.Filters.Contract` and `VoxelLand.M6.Filters.FiniteAndLocalSeams`. Build and tests were not run at the owner's request. |
+
+### M6.3 filter footprint
+
+The planner uses ordered masks and skips a stage if its mask contains no lattice samples in the stage's demanded box. Active neighborhood stages expand the earlier input by one voxel. Each chunk admits at most eight filter stages and eight voxels of accumulated M6 halo. The largest baseline field is 51³ samples, with separate M4 compatibility smoothing and slope reads. The workload gate admits up to 40 million logical stamp/stencil and baseline units, and 2 MiB of logical filter and field scratch per chunk. Existing worker/provider resources remain governed by M4. Make-space clears only inside its box, with an inclusive mask and hard field subtraction.
 
 ### M6.2 arithmetic and ownership
 

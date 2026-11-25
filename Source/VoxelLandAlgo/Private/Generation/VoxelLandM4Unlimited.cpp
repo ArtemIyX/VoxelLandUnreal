@@ -7,6 +7,7 @@
 #include "Generation/VoxelLandM4FixedLattice.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
 #include "Generation/VoxelLandM4HeightPrepass.h"
+#include "Generation/VoxelLandM4LocalBaseline.h"
 
 namespace VoxelLandM4Unlimited
 {
@@ -59,15 +60,10 @@ FVoxelLandError ValidateChunkDemand(const FVoxelLandChunkKey& Key, float VoxelSi
 	return {};
 }
 
-FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
-	const FVoxelLandM4UnlimitedConfig& Config, const FVoxelLandChunkKey& Key,
-	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled)
+FVoxelLandError PrepareFiniteBaseline(const FVoxelLandGeneratorSettings& FinalSettings,
+	const FVoxelLandM4UnlimitedConfig& Config, const FVoxelLandM4LatticeGeometry& Geometry,
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, TFunctionRef<bool()> IsCancelled)
 {
-	const float VoxelSize = FinalSettings.Profile.VoxelSizeCm;
-	if (const FVoxelLandError Error = ValidateChunkDemand(Key, VoxelSize))
-	{
-		return Error;
-	}
 	if (!FinalSettings.Program)
 	{
 		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(
@@ -84,28 +80,13 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("M4 local terrain requires all three control generators and curves"));
 	}
-	// Always cover the largest supported footprint: stored [-1,33], plus a
-	// one-cell Smooth Density halo and one-voxel height-gradient stencil.
-	constexpr int32 Start = -3;
-	constexpr int32 Cells = 38;
-	const int64 SizeCm = int64(VoxelSize);
-	int64 OriginX = 0, OriginY = 0;
-	if (!VoxelLandM4Control::LatticePositionCm(
-			int64(Key.Coordinate.X) * FVoxelLandChunkData::Cells + Start, SizeCm, OriginX)
-		|| !VoxelLandM4Control::LatticePositionCm(
-			int64(Key.Coordinate.Y) * FVoxelLandChunkData::Cells + Start, SizeCm, OriginY))
-	{
-		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(
-			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 local terrain coordinate overflows"));
-	}
 	FVoxelLandM4DomainSettings Region;
 	Region.bGlobalErosion = false;
-	Region.OriginXCm = OriginX;
-	Region.OriginYCm = OriginY;
-	Region.CellsX = Cells;
-	Region.CellsY = Cells;
-	Region.GridSpacingCm = SizeCm;
-	const FVoxelLandM4LatticeGeometry Geometry{OriginX, OriginY, SizeCm, Cells, Cells};
+	Region.OriginXCm = Geometry.OriginX;
+	Region.OriginYCm = Geometry.OriginY;
+	Region.CellsX = Geometry.CellsX;
+	Region.CellsY = Geometry.CellsY;
+	Region.GridSpacingCm = Geometry.SpacingCm;
 	TArray<uint16> Continental, Mountain, Peaks;
 	const FVoxelLandGenerator* Generators[] = {
 		Config.ContinentalGenerator.Get(), Config.MountainGenerator.Get(), Config.PeaksGenerator.Get()};
@@ -139,18 +120,48 @@ FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
 			bCancelled ? EVoxelLandErrorCode::Cancelled : EVoxelLandErrorCode::InvalidParameter,
 			bCancelled ? TEXT("M4 local terrain cancelled") : TEXT("Invalid M4 local height grid"));
 	}
-	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 	FVoxelLandGeneratorSettings ShapingSettings = FinalSettings;
 	ShapingSettings.bM4FixedLatticeShaping = true;
-	const FVoxelLandError CreateError =
-		Config.SmoothOverride.IsSet()
-			? FVoxelLandGenerator::CreateM4HeightField(ShapingSettings, Grid, Config.bNormalizeSlope, Config.Overhang,
-				Config.SmoothOverride.GetValue(), Config.HeightDetail, Generator)
-			: FVoxelLandGenerator::CreateM4HeightField(
-				ShapingSettings, Grid, Config.bNormalizeSlope, Config.Overhang, Config.HeightDetail, Generator);
-	if (CreateError)
+	ShapingSettings.M6Spheres = {};
+	ShapingSettings.M6Stamps = {};
+	ShapingSettings.M6Filters = {};
+	return Config.SmoothOverride.IsSet()
+		? FVoxelLandGenerator::CreateM4HeightField(ShapingSettings, Grid, Config.bNormalizeSlope, Config.Overhang,
+			Config.SmoothOverride.GetValue(), Config.HeightDetail, OutGenerator)
+		: FVoxelLandGenerator::CreateM4HeightField(
+			ShapingSettings, Grid, Config.bNormalizeSlope, Config.Overhang, Config.HeightDetail, OutGenerator);
+}
+
+FVoxelLandError GenerateChunk(const FVoxelLandGeneratorSettings& FinalSettings,
+	const FVoxelLandM4UnlimitedConfig& Config, const FVoxelLandChunkKey& Key,
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled)
+{
+	const float VoxelSize = FinalSettings.Profile.VoxelSizeCm;
+	if (const FVoxelLandError Error = ValidateChunkDemand(Key, VoxelSize))
 	{
-		return CreateError;
+		return Error;
+	}
+
+	// Always cover the largest supported M4 footprint: stored [-1,33], plus
+	// a one-cell Smooth Density halo and one-voxel height-gradient stencil.
+	constexpr int32 Start = -3;
+	constexpr int32 Cells = 38;
+	const int64 SizeCm = int64(VoxelSize);
+	int64 OriginX = 0, OriginY = 0;
+	if (!VoxelLandM4Control::LatticePositionCm(
+			int64(Key.Coordinate.X) * FVoxelLandChunkData::Cells + Start, SizeCm, OriginX)
+		|| !VoxelLandM4Control::LatticePositionCm(
+			int64(Key.Coordinate.Y) * FVoxelLandChunkData::Cells + Start, SizeCm, OriginY))
+	{
+		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(
+			EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 local terrain coordinate overflows"));
+	}
+
+	const FVoxelLandM4LatticeGeometry Geometry{OriginX, OriginY, SizeCm, Cells, Cells};
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+	if (const FVoxelLandError Error = PrepareFiniteBaseline(FinalSettings, Config, Geometry, Generator, IsCancelled))
+	{
+		return Error;
 	}
 	TUniquePtr<FVoxelLandWorkerContext> Worker;
 	if (const FVoxelLandError Error = Generator->CreateWorker(Worker))

@@ -7,6 +7,8 @@
 #include "Data/Structs/VoxelLandMeshData.h"
 #include "Data/Structs/VoxelLandMeshingScratch.h"
 
+struct FVoxelLandM7SeamMesh;
+
 namespace VoxelLandMeshing
 {
 // No current VM interval bounds are proven; unknown bounds must be sampled.
@@ -21,4 +23,8 @@ VOXELLANDALGO_API EVoxelLandMeshResult BuildSurfaceNets(const FVoxelLandChunkDat
 VOXELLANDALGO_API EVoxelLandMeshResult BuildSurfaceNets(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
 	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled,
 	bool bUnlimitedM4);
+// Explicit opt-in. Positive owner candidates share the ordinary vertex buffer
+// and never enter the ordinary draw index stream.
+VOXELLANDALGO_API EVoxelLandMeshResult BuildM7SeamMesh(const FVoxelLandChunkData& Chunk, int64 BaseVoxelSizeCm,
+	FVoxelLandMeshingScratch& Scratch, FVoxelLandM7SeamMesh& OutMesh, TFunctionRef<bool()> IsCancelled);
 }

@@ -1,6 +1,6 @@
 # VoxelLand M7 task tracker
 
-**Progress** 1 of 6 phases verified through source and contract audit. **Implemented** M7.1–M7.2. **Next** M7.3 straight-down seam cover.
+**Progress** 1 of 6 phases verified through source and contract audit. **Implemented** M7.1–M7.3. **Next** M7.4 clipmap and publication.
 
 See the example project's [M7 technical description](../../../Docs/VoxelLand_M7_Technical_Description.md) and [implementation plan](../../../Docs/VoxelLand_M7_Plan.md).
 
@@ -32,9 +32,9 @@ M7.1 uses level spacing `S × 2^L` and samples base-lattice coordinate `(32 × K
 
 ## M7.3 — Straight-down seam cover
 
-- [ ] Build deterministic single-owner vertical curtains with constant X/Y, measured depth and a hard cap. Keep separate render vertices, normals, tangents and bounds.
-- [ ] Verify 2:1 rim closure and leakage at corners or grazing/upward view angles. Check that terrain frames remain independent of the skirt.
-- [ ] Reject missing, vertical, stacked, horizontal-face and depth-cap cases where a vertical curtain cannot cover the gap. Test balanced finer/fallback coverage and budget exhaustion.
+- [x] Cut one complete vertical LOD1 face and its four LOD0 neighbors through actual Surface Nets triangles and separate positive-owner candidates. Split both terrain rims at common anchors and apply the shared frames.
+- [x] Build a separate coarse-owned vertical curtain with constant X/Y, measured depth and a cap. Preserve prior outputs on unsupported coverage, over-budget requests and cancellation.
+- [ ] Execute the mixed-rim fixtures and inspect closure, corners, grazing/upward visibility and terrain/skirt shading. Verify balanced finer fallback and coherent publication after M7.4.
 
 ## M7.4 — Clipmap, hysteresis and runtime paths
 
@@ -56,5 +56,7 @@ M7.1 uses level spacing `S × 2^L` and samples base-lattice coordinate `(32 × K
 | 2026-11-25 | M7.0 | Audited project `7b936eb` and plugin `5932627`. Graphify traced Surface Nets and finite/local M4/M6 field paths across 339 C++ files, 5,070 nodes and 10,436 edges. Corroborated the integration points in source because Unreal macros and unresolved graph endpoints limit extraction. Recorded numeric footprints, LOD0 compatibility and the finite two-level reference. Static review found no critical issues. No build, test or editor execution. |
 | 2026-11-25 | M7.1 | Added ordinary finite LOD1 generation, full-footprint admission, base-lattice compatibility tile reuse, exact stride-two sampling and level spacing in Surface Nets. Actor coarse demand and publication are still gated. Static review found no critical issues. Authored `VoxelLand.M7.Lod.FiniteCoincidence` and `VoxelLand.M7.Lod.MeshSeams`. Build and tests remain unexecuted. |
 | 2026-11-25 | M7.2 | Added shared finite M4 normal frames with canonical Q16 anchor fractions, complete tiled base-stencil admission, and exact paired mesh-frame application. Central differences use base spacing, then interpolate raw gradients before normalization. Fallbacks follow the first canonical solid-to-air edge or +Z and are counted. Admission allows up to 1,024 anchors and 256 unique 4³ stencils. Existing actor and terrain topology are unchanged. Paired-frame fixtures use the API ahead of actual rim extraction in M7.3. Static review found no critical issues. Authored `VoxelLand.M7.Normals.FiniteSharedSource` and `VoxelLand.M7.Normals.ReferenceAndPairs`, and extended `VoxelLand.M7.Lod.MeshSeams` with raw and packed frame comparisons. No build or test execution. |
+
+| 2026-11-25 | M7.3 | Added optional positive-owner Surface Nets candidates, complete 2:1 X/Y rim clipping, shared knot subdivisions and bounded terrain shading. The separate coarse-owned curtain drops from the upper trace to below the lower, with one coarse voxel maximum depth. Unsupported single-face geometry rejects before publication. Static review found no critical issues. Multiple incident face composition, finer fallback and runtime publication remain M7.4. Authored `VoxelLand.M7.Seams.VerticalTerrain` through ordinary finite generation and real Surface Nets, including both signs, packed frames, four fine participants, nonzero curtain, missing/stacked/empty cases, depth, and cancellation. Build, automation and interactive inspection remain pending. |
 
 Update the log after each phase with its commit, relevant paths, review findings and executed checks. Leave a checkbox open if its evidence is pending.

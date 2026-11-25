@@ -1,5 +1,6 @@
 #include "Generation/VoxelLandMeshing.h"
 #include "Generation/VoxelLandM7NormalFrames.h"
+#include "Generation/VoxelLandM7Seams.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 class FVoxelLandMeshingInternals final
@@ -15,7 +16,11 @@ public:
 	static int16 Sample(const FVoxelLandChunkData& Chunk, int32 X, int32 Y, int32 Z);
 	static bool IsSolid(int16 Q);
 	static FVector3f Gradient(const int16* Q, const FVector3f& P);
-	static void AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float Scale);
+	static bool AddTriangle(const FVoxelLandMeshData& Mesh, TArray<uint32>& Indices,
+		uint32 A, uint32 B, uint32 C, float Scale);
+	static EVoxelLandMeshResult Build(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
+		FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled,
+		bool bUnlimitedM4, FVoxelLandM7SeamMesh* Seam);
 };
 
 int32 FVoxelLandMeshingInternals::SampleIndex(int32 X, int32 Y, int32 Z)
@@ -50,21 +55,23 @@ FVector3f FVoxelLandMeshingInternals::Gradient(const int16* Q, const FVector3f& 
 	return FVector3f(DX, DY, DZ);
 }
 
-void FVoxelLandMeshingInternals::AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float Scale)
+bool FVoxelLandMeshingInternals::AddTriangle(const FVoxelLandMeshData& Mesh, TArray<uint32>& Indices,
+	uint32 A, uint32 B, uint32 C, float Scale)
 {
 	if (A == B || B == C || C == A)
 	{
-		return;
+		return false;
 	}
 	const FVector3f E1 = (Mesh.Vertices[B].Position - Mesh.Vertices[A].Position) / Scale;
 	const FVector3f E2 = (Mesh.Vertices[C].Position - Mesh.Vertices[A].Position) / Scale;
 	if (FVector3f::CrossProduct(E1, E2).SizeSquared() == 0.f)
 	{
-		return;
+		return false;
 	}
-	Mesh.Indices.Add(A);
-	Mesh.Indices.Add(B);
-	Mesh.Indices.Add(C);
+	Indices.Add(A);
+	Indices.Add(B);
+	Indices.Add(C);
+	return true;
 }
 
 EVoxelLandChunkClassification VoxelLandMeshing::ClassifyBeforeSampling()
@@ -100,6 +107,38 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 
 EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
 	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled, bool bUnlimitedM4)
+{
+	return FVoxelLandMeshingInternals::Build(Chunk, VoxelSizeCm, Scratch, OutMesh, IsCancelled, bUnlimitedM4, nullptr);
+}
+
+EVoxelLandMeshResult VoxelLandMeshing::BuildM7SeamMesh(const FVoxelLandChunkData& Chunk, int64 BaseVoxelSizeCm,
+	FVoxelLandMeshingScratch& Scratch, FVoxelLandM7SeamMesh& OutMesh, TFunctionRef<bool()> IsCancelled)
+{
+	if (BaseVoxelSizeCm < 1 || BaseVoxelSizeCm > 134217)
+	{
+		return EVoxelLandMeshResult::InvalidInput;
+	}
+	FVoxelLandM7SeamMesh Mesh;
+	const EVoxelLandMeshResult Result = FVoxelLandMeshingInternals::Build(Chunk, float(BaseVoxelSizeCm),
+		Scratch, Mesh.Terrain, IsCancelled, false, &Mesh);
+	if (Result != EVoxelLandMeshResult::Success)
+	{
+		return Result;
+	}
+	Mesh.Key = Chunk.Key;
+	Mesh.BaseVoxelSizeCm = BaseVoxelSizeCm;
+	Mesh.Classification = Classify(Chunk);
+	if (IsCancelled())
+	{
+		return EVoxelLandMeshResult::Cancelled;
+	}
+	OutMesh = MoveTemp(Mesh);
+	return EVoxelLandMeshResult::Success;
+}
+
+EVoxelLandMeshResult FVoxelLandMeshingInternals::Build(const FVoxelLandChunkData& Chunk, float VoxelSizeCm,
+	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled,
+	bool bUnlimitedM4, FVoxelLandM7SeamMesh* Seam)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SurfaceNets);
 	float LevelSpacingCm = 0.f;
@@ -188,16 +227,20 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 		}
 	}
 	// Each edge is owned by the chunk containing its lower endpoint on all axes.
-	for (int32 Z = 0; Z < 32; ++Z)
+	// The optional positive layer is disjoint from owned edges and includes corners.
+	const int32 OwnerLimit = Seam ? 33 : 32;
+	for (int32 Z = 0; Z < OwnerLimit; ++Z)
 	{
 		if (IsCancelled())
 		{
 			return EVoxelLandMeshResult::Cancelled;
 		}
-		for (int32 Y = 0; Y < 32; ++Y)
+		for (int32 Y = 0; Y < OwnerLimit; ++Y)
 		{
-			for (int32 X = 0; X < 32; ++X)
+			for (int32 X = 0; X < OwnerLimit; ++X)
 			{
+				const uint8 PositiveAxes = uint8((X == 32) | ((Y == 32) << 1) | ((Z == 32) << 2));
+				TArray<uint32>& Indices = PositiveAxes ? Seam->PositiveOwnerIndices : Mesh.Indices;
 				for (int32 AxisIndex = 0; AxisIndex < 3; ++AxisIndex)
 				{
 					int32 P[3] = {X, Y, Z};
@@ -231,8 +274,17 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 					{
 						Swap(Vertices[1], Vertices[3]);
 					}
-					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[1], Vertices[2], LevelSpacingCm);
-					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[2], Vertices[3], LevelSpacingCm);
+					const uint32 OwnerEdge = uint32(3 * (X + 33 * (Y + 33 * Z)) + AxisIndex);
+					if (AddTriangle(Mesh, Indices, Vertices[0], Vertices[1], Vertices[2], LevelSpacingCm)
+						&& PositiveAxes)
+					{
+						Seam->PositiveOwnerEdges.Add(OwnerEdge);
+					}
+					if (AddTriangle(Mesh, Indices, Vertices[0], Vertices[2], Vertices[3], LevelSpacingCm)
+						&& PositiveAxes)
+					{
+						Seam->PositiveOwnerEdges.Add(OwnerEdge);
+					}
 				}
 			}
 		}

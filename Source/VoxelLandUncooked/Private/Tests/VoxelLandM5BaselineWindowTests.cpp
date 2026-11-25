@@ -19,7 +19,9 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 	bool bAnalytic = false, bExactChunk = false, bAtomic = false, bBudget = false, bCancelled = false;
 	bool bLocalMatches = false, bMidCancellation = false, bBoundary = false, bNonuniformSmooth = false;
 	bool bFixedLocalMatches = false, bSampleLimits = false, bReusedWorker = false, bForeignWorker = false;
-	bool bWrongThread = false, bWorkerCancelled = false;
+	bool bWrongThread = false, bWorkerCancelled = false, bBoxParity = false, bBoxSmoothParity = false;
+	bool bBoxAtomic = false, bBoxBudget = false, bShapedBoxParity = false;
+	bool bDetailEffect = false, bOverhangEffect = false;
 	const bool bCompleted = Async(EAsyncExecution::ThreadPool, [&]() {
 		FVoxelLandProgramDraft Draft;
 		Draft.RegisterCount = 1;
@@ -136,6 +138,25 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 		const auto WorkerCancel = FVoxelLandM5BaselineWindow::Build(Generator.ToSharedRef(), *Worker,
 			Min, Max, 8, ReuseBudget.ToSharedRef(), [] { return true; }, Reused);
 		bWorkerCancelled = WorkerCancel.Code == EVoxelLandM5ErrorCode::Cancelled && Reused == PreviousReuse;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> BoxBudget;
+		FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 10000000, BoxBudget);
+		FVoxelLandM5PointCm BoxMin; BoxMin.X = BoxMin.Y = BoxMin.Z = -33;
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Box;
+		const auto BoxResult = FVoxelLandM5BaselineWindow::BuildBox(Generator.ToSharedRef(), *Worker,
+			BoxMin, FIntVector(67, 67, 67), BoxBudget.ToSharedRef(), [] { return false; }, Box);
+		bBoxParity = BoxResult.Code == EVoxelLandM5ErrorCode::None && Box && Box->GetSize() == Window->GetSize()
+			&& Box->GetOriginCm().X == Window->GetOriginCm().X && Box->GetDensity().Num() == Window->GetDensity().Num();
+		if (bBoxParity)
+			for (int32 I = 0; I < Window->GetDensity().Num(); ++I) bBoxParity &= Box->GetDensity()[I] == Window->GetDensity()[I];
+		const auto PriorBox = Box;
+		const auto BoxCancel = FVoxelLandM5BaselineWindow::BuildBox(Generator.ToSharedRef(), *Worker,
+			BoxMin, FIntVector(67, 67, 67), BoxBudget.ToSharedRef(), [] { return true; }, Box);
+		bBoxAtomic = BoxCancel.Code == EVoxelLandM5ErrorCode::Cancelled && Box == PriorBox;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> BoxTiny;
+		FVoxelLandM5Budget::TryCreate(1024, 1, BoxTiny);
+		const auto BoxExhausted = FVoxelLandM5BaselineWindow::BuildBox(Generator.ToSharedRef(), *Worker,
+			BoxMin, FIntVector(67, 67, 67), BoxTiny.ToSharedRef(), [] { return false; }, Box);
+		bBoxBudget = BoxExhausted.Code == EVoxelLandM5ErrorCode::BudgetExceeded && Box == PriorBox;
 		const auto Previous = Window;
 		const FVoxelLandM5Diagnostic Invalid = FVoxelLandM5BaselineWindow::Build(
 			Generator.ToSharedRef(), Min, Max, 7, Budget.ToSharedRef(), [] { return false; }, Window);
@@ -267,6 +288,61 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 			}
 		}
 		bNonuniformSmooth &= bDifferentColumns;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> SmoothBoxBudget;
+		FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 10000000, SmoothBoxBudget);
+		FVoxelLandM5PointCm SmoothBoxMin; SmoothBoxMin.X = -33; SmoothBoxMin.Y = SmoothBoxMin.Z = -1;
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> SmoothBox;
+		const auto SmoothBoxError = FVoxelLandM5BaselineWindow::BuildBox(SmoothedGenerator.ToSharedRef(), *SmoothWorker,
+			SmoothBoxMin, FIntVector(67, 35, 35), SmoothBoxBudget.ToSharedRef(), [] { return false; }, SmoothBox);
+		bBoxSmoothParity = SmoothBoxError.Code == EVoxelLandM5ErrorCode::None && SmoothBox
+			&& SmoothBox->GetDensity().Num() == SmoothWindow->GetDensity().Num();
+		if (bBoxSmoothParity)
+			for (int32 I = 0; I < SmoothWindow->GetDensity().Num(); ++I)
+				bBoxSmoothParity &= SmoothBox->GetDensity()[I] == SmoothWindow->GetDensity()[I];
+
+		// Native noise, nonzero detail and overhang, slope normalization and
+		// smoothing all participate. The second 35-cell tile has a shorter
+		// noise row than a chunk; compare every stored sample across x=-1/0.
+		FVoxelLandM4HeightDetailConfig ActiveDetail;
+		ActiveDetail.bEnabled = true; ActiveDetail.AmplitudeQ8 = 128000;
+		ActiveDetail.FrequencyPerCm = 0.004f; ActiveDetail.NodeId = FGuid(11, 22, 33, 44);
+		FVoxelLandM4OverhangConfig ActiveOverhang;
+		ActiveOverhang.Displacement.bEnabled = true; ActiveOverhang.Displacement.AmplitudeQ8 = 128000;
+		ActiveOverhang.Displacement.BandHalfWidthQ8 = 256000;
+		ActiveOverhang.FrequencyPerCm = 0.004f; ActiveOverhang.NodeId = FGuid(55, 66, 77, 88);
+		FVoxelLandM4HeightDetailConfig NoDetail;
+		FVoxelLandM4OverhangConfig NoOverhang;
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Shaped, NoDetailGenerator, NoOverhangGenerator;
+		if (FVoxelLandGenerator::CreateM4HeightField(Settings, UnevenGrid, true, ActiveOverhang, Smooth, ActiveDetail, Shaped)
+			|| FVoxelLandGenerator::CreateM4HeightField(Settings, UnevenGrid, true, ActiveOverhang, Smooth, NoDetail, NoDetailGenerator)
+			|| FVoxelLandGenerator::CreateM4HeightField(Settings, UnevenGrid, true, NoOverhang, Smooth, ActiveDetail, NoOverhangGenerator)
+			|| !Shaped || !NoDetailGenerator || !NoOverhangGenerator) return false;
+		TUniquePtr<FVoxelLandWorkerContext> ShapedWorker, NoDetailWorker, NoOverhangWorker;
+		if (Shaped->CreateWorker(ShapedWorker) || NoDetailGenerator->CreateWorker(NoDetailWorker)
+			|| NoOverhangGenerator->CreateWorker(NoOverhangWorker) || !ShapedWorker || !NoDetailWorker || !NoOverhangWorker) return false;
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> ShapedLeft, ShapedRight, WithoutDetail, WithoutOverhang;
+		if (Shaped->GenerateChunk(LeftKey, *ShapedWorker, ShapedLeft)
+			|| Shaped->GenerateChunk(RightKey, *ShapedWorker, ShapedRight)
+			|| NoDetailGenerator->GenerateChunk(RightKey, *NoDetailWorker, WithoutDetail)
+			|| NoOverhangGenerator->GenerateChunk(RightKey, *NoOverhangWorker, WithoutOverhang)
+			|| !ShapedLeft || !ShapedRight || !WithoutDetail || !WithoutOverhang) return false;
+		bDetailEffect = ShapedRight->Density != WithoutDetail->Density;
+		bOverhangEffect = ShapedRight->Density != WithoutOverhang->Density;
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ShapedBudget;
+		FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 10000000, ShapedBudget);
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> ShapedBox;
+		const auto ShapedError = FVoxelLandM5BaselineWindow::BuildBox(Shaped.ToSharedRef(), *ShapedWorker,
+			SmoothBoxMin, FIntVector(67, 35, 35), ShapedBudget.ToSharedRef(), [] { return false; }, ShapedBox);
+		bShapedBoxParity = ShapedError.Code == EVoxelLandM5ErrorCode::None && ShapedBox;
+		if (bShapedBoxParity)
+			for (int32 Z = 0; Z < 35; ++Z)
+				for (int32 Y = 0; Y < 35; ++Y)
+					for (int32 X = 0; X < 35; ++X)
+					{
+						const int32 ChunkIndex = X + 35 * (Y + 35 * Z);
+						bShapedBoxParity &= ShapedLeft->Density[ChunkIndex] == ShapedBox->GetDensity()[X + 67 * (Y + 35 * Z)]
+							&& ShapedRight->Density[ChunkIndex] == ShapedBox->GetDensity()[(X + 32) + 67 * (Y + 35 * Z)];
+					}
 
 		FVoxelLandProgramDraft ControlDraft;
 		ControlDraft.RegisterCount = 1;
@@ -409,6 +485,13 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("foreign worker rejected before admission"), bForeignWorker);
 	TestTrue(TEXT("wrong-thread worker rejected before admission"), bWrongThread);
 	TestTrue(TEXT("admitted worker cancellation preserves output"), bWorkerCancelled);
+	TestTrue(TEXT("rectangular finite box matches complete chunk assembly"), bBoxParity);
+	TestTrue(TEXT("nonuniform smoothed box matches complete chunk assembly"), bBoxSmoothParity);
+	TestTrue(TEXT("native detail affects chunk density"), bDetailEffect);
+	TestTrue(TEXT("native overhang affects chunk density"), bOverhangEffect);
+	TestTrue(TEXT("native detail, overhang and slope box matches both negative-seam chunks"), bShapedBoxParity);
+	TestTrue(TEXT("box cancellation preserves output"), bBoxAtomic);
+	TestTrue(TEXT("box exhaustion preserves output"), bBoxBudget);
 	TestTrue(TEXT("unsupported domain preserves prior result"), bAtomic);
 	TestTrue(TEXT("budget failure preserves prior result"), bBudget);
 	TestTrue(TEXT("cancellation preserves prior result"), bCancelled);

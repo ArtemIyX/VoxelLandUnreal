@@ -20,6 +20,7 @@ class FVoxelLandWorkerContext;
 class FVoxelLandM4HeightGrid;
 struct FVoxelLandM4UnlimitedConfig;
 struct FVoxelLandM4SmoothSettings;
+struct FVoxelLandM5PointCm;
 struct FVoxelLandWorkerContextImpl;
 
 // Copies and validates the draft before publishing it. Safe to share across workers.
@@ -108,6 +109,13 @@ public:
 	static FVoxelLandError CreateM4Unlimited(const FVoxelLandGeneratorSettings& Settings,
 		const FVoxelLandM4UnlimitedConfig& Config,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
+	// Finite M4 only. MinLattice and Size describe an X-fastest LOD0 box.
+	// Caller retains output allocation admission; this call meters temporary
+	// allocations/work and requires the exact thread-affine worker. Failure
+	// and cancellation preserve OutDensity. Native provider resources are separate.
+	FVoxelLandM5Diagnostic GenerateFiniteM4Box(const FVoxelLandM5PointCm& MinLattice, const FIntVector& Size,
+		FVoxelLandWorkerContext& Worker, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+		TFunctionRef<bool()> IsCancelled, TArray<int16>& OutDensity) const;
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
 	// Checks exact generator identity and creating thread without allocating.
 	bool OwnsWorkerOnCurrentThread(const FVoxelLandWorkerContext& Worker) const;
@@ -155,6 +163,9 @@ private:
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
 		TFunctionRef<bool()>* IsCancelled = nullptr);
 	FVoxelLandError GenerateM4Density(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset,
+		FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
+	// Caller validates lattice range, thread ownership and dimensions (1..37).
+	FVoxelLandError GenerateM4DensityBox(const FVoxelLandM5PointCm& MinLattice, const FIntVector& Size,
 		FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const;
 	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const;

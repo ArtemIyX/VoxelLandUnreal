@@ -40,6 +40,14 @@ public:
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow);
 
+	// Exact finite M4 rectangular lattice box. The source generator and admitted
+	// worker must match; output and temporary storage share the supplied budget.
+	// MinLattice is in LOD0 lattice units, Size is positive, X-fastest.
+	static FVoxelLandM5Diagnostic BuildBox(TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
+		FVoxelLandWorkerContext& Worker, const FVoxelLandM5PointCm& MinLattice, const FIntVector& Size,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow);
+
 	// Reuses a caller-admitted worker, synchronously on its owning thread.
 	// Exact generator/worker identity is checked before any budget charge or allocation.
 	static FVoxelLandM5Diagnostic Build(TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,

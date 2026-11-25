@@ -80,6 +80,54 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 	return BuildInternal(Generator, &Worker, MinChunk, MaxChunk, MaxChunks, Budget, IsCancelled, OutWindow);
 }
 
+FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::BuildBox(
+	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator, FVoxelLandWorkerContext& Worker,
+	const FVoxelLandM5PointCm& MinLattice, const FIntVector& Size,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow)
+{
+	using namespace VoxelLand::M5::CheckedMath;
+	using E = EVoxelLandM5ErrorCode;
+	using I = FVoxelLandM5BaselineWindowInternals;
+	if (IsCancelled()) return I::M5BaselineWindowError(E::Cancelled, TEXT("Baseline box cancelled"));
+	const float RawSpacing = Generator->GetProfile().VoxelSizeCm;
+	if (!Generator->OwnsWorkerOnCurrentThread(Worker) || Size.X < 1 || Size.Y < 1 || Size.Z < 1
+		|| Size.X > 4096 || Size.Y > 4096 || Size.Z > 4096 || !FMath::IsFinite(RawSpacing)
+		|| RawSpacing < 1.f || RawSpacing > 65536.f || RawSpacing != float(int32(RawSpacing)))
+		return I::M5BaselineWindowError(E::InvalidInput, TEXT("Invalid baseline box or worker"));
+	int64 Count = 1, Bytes = 0;
+	FVoxelLandM5PointCm Origin;
+	const int64 Coordinates[] = {MinLattice.X, MinLattice.Y, MinLattice.Z};
+	int64* Origins[] = {&Origin.X, &Origin.Y, &Origin.Z};
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		int64 Last = 0, LastCm = 0;
+		if (!TryMultiplyNonNegative(Count, Size[Axis], Count) || Count > MAX_int32
+			|| !TryAdd(Coordinates[Axis], int64(Size[Axis]) - 1, Last)
+			|| !TryMultiply(Coordinates[Axis], int64(RawSpacing), *Origins[Axis])
+			|| !TryMultiply(Last, int64(RawSpacing), LastCm)
+			|| *Origins[Axis] < -1048576 || LastCm > 1048576)
+			return I::M5BaselineWindowError(E::OutOfDomain, TEXT("Baseline box outside logical domain"));
+	}
+	if (!TryMultiplyNonNegative(Count, int64(sizeof(int16)), Bytes) || !TryAdd(Bytes, 4096, Bytes))
+		return I::M5BaselineWindowError(E::ArithmeticOverflow, TEXT("Baseline box admission overflow"));
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	if (!Budget->TryReserveBytes(Bytes, Lease))
+		return I::M5BaselineWindowError(E::BudgetExceeded, TEXT("Baseline box memory exhausted"));
+	TArray<int16> Density;
+	const auto Diagnostic = Generator->GenerateFiniteM4Box(MinLattice, Size, Worker, Budget, IsCancelled, Density);
+	if (Diagnostic.Code != E::None) return Diagnostic;
+	if (Density.Num() != Count) return I::M5BaselineWindowError(E::Unproven, TEXT("Baseline box sample count mismatch"));
+	if (IsCancelled()) return I::M5BaselineWindowError(E::Cancelled, TEXT("Baseline box cancelled"));
+	TSharedPtr<FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Built =
+		MakeShareable(new FVoxelLandM5BaselineWindow(Generator, MoveTemp(Lease)));
+	Built->Size = Size; Built->OriginCm = Origin; Built->VoxelSizeCm = int32(RawSpacing);
+	Built->Density = MoveTemp(Density);
+	if (IsCancelled()) return I::M5BaselineWindowError(E::Cancelled, TEXT("Baseline box cancelled"));
+	OutWindow = MoveTemp(Built);
+	return {};
+}
+
 FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::BuildInternal(
 	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator, FVoxelLandWorkerContext* SuppliedWorker,
 	const FIntVector& MinChunk, const FIntVector& MaxChunk, int32 MaxChunks,

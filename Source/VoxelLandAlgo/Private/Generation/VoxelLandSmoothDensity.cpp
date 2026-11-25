@@ -1,4 +1,9 @@
 #include "Generation/VoxelLandGenerator.h"
+#include "Generation/VoxelLandM4HeightGrid.h"
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5CheckedMath.h"
+#include "Data/Structs/VoxelLandM5PointCm.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "Operators/VoxelLandOperator.h"
 #include "HAL/PlatformTLS.h"
@@ -14,7 +19,8 @@ public:
 	static int32 RoundRatioAwayFromZero(int64 Numerator, int32 Denominator);
 	static FVoxelLandError FillExpandedPositions(
 		const FVoxelLandChunkKey& Key, float VoxelSize, int32 Start, TArrayView<FVector3f> Positions);
-	static int16 SmoothSample(const TArray<int16>& Expanded, int32 X, int32 Y, int32 Z, int32 Strength);
+	static int16 SmoothSample(TConstArrayView<int16> Expanded, const FIntVector& ExpandedSize,
+		int32 X, int32 Y, int32 Z, int32 Strength);
 };
 
 FVoxelLandError FVoxelLandSmoothDensityInternals::SmoothError(EVoxelLandErrorCode Code, const TCHAR* Message)
@@ -62,9 +68,9 @@ FVoxelLandError FVoxelLandSmoothDensityInternals::FillExpandedPositions(
 }
 
 int16 FVoxelLandSmoothDensityInternals::SmoothSample(
-	const TArray<int16>& Expanded, int32 X, int32 Y, int32 Z, int32 Strength)
+	TConstArrayView<int16> Expanded, const FIntVector& ExpandedSize, int32 X, int32 Y, int32 Z, int32 Strength)
 {
-	const int32 Center = (X + 1) + ExpandedAxis * ((Y + 1) + ExpandedAxis * (Z + 1));
+	const int32 Center = (X + 1) + ExpandedSize.X * ((Y + 1) + ExpandedSize.Y * (Z + 1));
 	int32 Sum = 0;
 	for (int32 DZ = -1; DZ <= 1; ++DZ)
 	{
@@ -72,7 +78,7 @@ int16 FVoxelLandSmoothDensityInternals::SmoothSample(
 		{
 			for (int32 DX = -1; DX <= 1; ++DX)
 			{
-				Sum += Expanded[Center + DX + ExpandedAxis * (DY + ExpandedAxis * DZ)];
+				Sum += Expanded[Center + DX + ExpandedSize.X * (DY + ExpandedSize.Y * DZ)];
 			}
 		}
 	}
@@ -80,6 +86,97 @@ int16 FVoxelLandSmoothDensityInternals::SmoothSample(
 	const int32 Original = Expanded[Center];
 	const int64 Blend = int64(Original) * (65535 - Strength) + int64(Average) * Strength;
 	return int16(FMath::Clamp(RoundRatioAwayFromZero(Blend, 65535), -32768, 32767));
+}
+
+FVoxelLandM5Diagnostic FVoxelLandGenerator::GenerateFiniteM4Box(const FVoxelLandM5PointCm& MinLattice,
+	const FIntVector& Size, FVoxelLandWorkerContext& Worker, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TArray<int16>& OutDensity) const
+{
+	using E = EVoxelLandM5ErrorCode;
+	using namespace VoxelLand::M5::CheckedMath;
+	const auto Fail = [](E Code, const TCHAR* Message) {
+		FVoxelLandM5Diagnostic Result; Result.Code = Code; Result.Stage = TEXT("M5.M4Box"); Result.Message = Message;
+		return Result;
+	};
+	if (IsCancelled()) return Fail(E::Cancelled, TEXT("M4 box cancelled"));
+	if (!M4HeightGrid || M4Unlimited || Program->GetData().ExternalFilterIndex != INDEX_NONE
+		|| !OwnsWorkerOnCurrentThread(Worker) || Size.X < 1 || Size.Y < 1 || Size.Z < 1
+		|| Size.X > 4096 || Size.Y > 4096 || Size.Z > 4096 || !FMath::IsFinite(Profile.VoxelSizeCm)
+		|| Profile.VoxelSizeCm < 1.f || Profile.VoxelSizeCm > 65536.f
+		|| Profile.VoxelSizeCm != float(int32(Profile.VoxelSizeCm)))
+		return Fail(E::InvalidInput, TEXT("Invalid finite M4 box, generator or worker"));
+	const bool bSmooth = bSmoothEnabled && SmoothStrength > 0.f;
+	const int64 Halo = bSmooth ? 1 : 0, Slope = bM4NormalizeSlope ? 1 : 0;
+	const int64 Spacing = int64(Profile.VoxelSizeCm);
+	const int64 Min[] = {MinLattice.X, MinLattice.Y, MinLattice.Z};
+	int64 Low[3] = {}, High[3] = {}, Count = 1;
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		int64 Last = 0, LowIndex = 0, HighIndex = 0;
+		const int64 Extra = Halo + (Axis < 2 ? Slope : 0);
+		if (!TryMultiplyNonNegative(Count, Size[Axis], Count) || Count > MAX_int32
+			|| !TryAdd(Min[Axis], int64(Size[Axis]) - 1, Last)
+			|| !TrySubtract(Min[Axis], Extra, LowIndex) || !TryAdd(Last, Extra, HighIndex)
+			|| !TryMultiply(LowIndex, Spacing, Low[Axis]) || !TryMultiply(HighIndex, Spacing, High[Axis]))
+			return Fail(E::OutOfDomain, TEXT("M4 box footprint overflow"));
+	}
+	if (Low[2] < -2000000 || High[2] > 2000000)
+		return Fail(E::OutOfDomain, TEXT("M4 box Z outside fixed range"));
+	const bool bNative = !bM4FixedLatticeShaping &&
+		((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
+		|| (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0));
+	if (bNative && (Low[0] < -16777216 || High[0] > 16777216 || Low[1] < -16777216 || High[1] > 16777216))
+		return Fail(E::OutOfDomain, TEXT("M4 box native coordinates outside exact float lattice"));
+	int32 Sample = 0;
+	if (!M4HeightGrid->Sample(Low[0], Low[1], Sample) || !M4HeightGrid->Sample(High[0], High[1], Sample))
+		return Fail(E::OutOfDomain, TEXT("M4 box outside height grid"));
+	int64 Work = 0, OutputBytes = 0;
+	// Bound all 35-cube tiles, including their one-sample smooth halos, and
+	// every 27-sample reduction. The row evaluator uses fixed <=39 arrays.
+	int64 Tiles = 1;
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+		if (!TryMultiplyNonNegative(Tiles, (int64(Size[Axis]) + 34) / 35, Tiles))
+			return Fail(E::ArithmeticOverflow, TEXT("M4 box tile count overflow"));
+	if (!TryMultiplyNonNegative(Tiles, 37 * 37 * 37 * 8, Work)
+		|| !TryAdd(Work, Count * (bSmooth ? 30 : 2), Work)
+		|| !TryMultiplyNonNegative(Count, 2 * int64(sizeof(int16)), OutputBytes)
+		|| !TryAdd(OutputBytes, 4 * 1024 * 1024, OutputBytes))
+		return Fail(E::ArithmeticOverflow, TEXT("M4 box admission overflow"));
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	if (!Budget->TryChargeWork(Work) || !Budget->TryReserveBytes(OutputBytes, Lease))
+		return Fail(E::BudgetExceeded, TEXT("M4 box admission exhausted"));
+	TArray<int16> Result;
+	Result.SetNumUninitialized(int32(Count));
+	const int32 Strength = int32(double(SmoothStrength) * 65535.0 + 0.5);
+	for (int32 Z = 0; Z < Size.Z; Z += 35)
+		for (int32 Y = 0; Y < Size.Y; Y += 35)
+			for (int32 X = 0; X < Size.X; X += 35)
+			{
+				if (IsCancelled()) return Fail(E::Cancelled, TEXT("M4 box cancelled"));
+				const FIntVector Tile(FMath::Min(35, Size.X - X), FMath::Min(35, Size.Y - Y), FMath::Min(35, Size.Z - Z));
+				const FIntVector RawSize(Tile.X + int32(2 * Halo), Tile.Y + int32(2 * Halo), Tile.Z + int32(2 * Halo));
+				FVoxelLandM5PointCm RawMin;
+				RawMin.X = MinLattice.X + X - Halo; RawMin.Y = MinLattice.Y + Y - Halo; RawMin.Z = MinLattice.Z + Z - Halo;
+				TArray<int16> Raw;
+				const auto Error = GenerateM4DensityBox(RawMin, RawSize, Worker, Raw, IsCancelled);
+				if (Error)
+				{
+					FVoxelLandM5Diagnostic Diagnostic = Fail(Error.Code == EVoxelLandErrorCode::Cancelled ? E::Cancelled : E::Unproven, TEXT("M4 box sampling failed"));
+					Diagnostic.Message = Error.Message; return Diagnostic;
+				}
+				for (int32 K = 0; K < Tile.Z; ++K)
+				{
+					if (IsCancelled()) return Fail(E::Cancelled, TEXT("M4 box cancelled"));
+					for (int32 J = 0; J < Tile.Y; ++J)
+						for (int32 I = 0; I < Tile.X; ++I)
+							Result[(X + I) + Size.X * ((Y + J) + Size.Y * (Z + K))] = bSmooth
+								? FVoxelLandSmoothDensityInternals::SmoothSample(Raw, RawSize, I, J, K, Strength)
+								: Raw[I + RawSize.X * (J + RawSize.Y * K)];
+				}
+			}
+	if (IsCancelled()) return Fail(E::Cancelled, TEXT("M4 box cancelled"));
+	OutDensity = MoveTemp(Result);
+	return {};
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVoxelLandChunkKey& Key,
@@ -125,6 +222,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 	}
 	const TArray<int16>& Expanded = Worker.SmoothScratch;
 	const int32 FixedStrength = int32(double(Strength) * 65535.0 + 0.5);
+	const FIntVector ExpandedSize(FVoxelLandSmoothDensityInternals::ExpandedAxis,
+		FVoxelLandSmoothDensityInternals::ExpandedAxis, FVoxelLandSmoothDensityInternals::ExpandedAxis);
 	TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
 	Chunk->Key = Key;
 	Chunk->Density.Reserve(FVoxelLandChunkData::SampleCount);
@@ -139,7 +238,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 		{
 			for (int32 X = 0; X < FVoxelLandChunkData::SamplesPerAxis; ++X)
 			{
-				Chunk->Density.Add(FVoxelLandSmoothDensityInternals::SmoothSample(Expanded, X, Y, Z, FixedStrength));
+				Chunk->Density.Add(FVoxelLandSmoothDensityInternals::SmoothSample(Expanded, ExpandedSize, X, Y, Z, FixedStrength));
 			}
 		}
 	}

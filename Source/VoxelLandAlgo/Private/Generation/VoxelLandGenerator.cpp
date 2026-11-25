@@ -1516,33 +1516,43 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 	{
 		return Error;
 	}
+	FVoxelLandM5PointCm MinLattice;
+	MinLattice.X = int64(Key.Coordinate.X) * 32 + Offset;
+	MinLattice.Y = int64(Key.Coordinate.Y) * 32 + Offset;
+	MinLattice.Z = int64(Key.Coordinate.Z) * 32 + Offset;
+	return GenerateM4DensityBox(MinLattice, FIntVector(Axis, Axis, Axis), Worker, OutDensity, IsCancelled);
+}
+
+FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5PointCm& MinLattice,
+	const FIntVector& Size, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity,
+	TFunctionRef<bool()> IsCancelled) const
+{
 	const int64 VoxelSize = int64(Profile.VoxelSizeCm);
-	const int64 BaseX = int64(Key.Coordinate.X) * 32;
-	const int64 BaseY = int64(Key.Coordinate.Y) * 32;
-	const int64 BaseZ = int64(Key.Coordinate.Z) * 32;
+	const int64 BaseX = MinLattice.X, BaseY = MinLattice.Y, BaseZ = MinLattice.Z;
+	const int32 AxisX = Size.X, AxisY = Size.Y, AxisZ = Size.Z;
 	// Height and stencil inputs are 2D; evaluate each XY column once rather
 	// than repeating the same bilinear lookups for every Z sample.
 	TArray<int32> Centers, PlusX, MinusX, PlusY, MinusY;
-	Centers.SetNumUninitialized(Axis * Axis);
+	Centers.SetNumUninitialized(AxisX * AxisY);
 	if (bM4NormalizeSlope)
 	{
-		PlusX.SetNumUninitialized(Axis * Axis);
-		MinusX.SetNumUninitialized(Axis * Axis);
-		PlusY.SetNumUninitialized(Axis * Axis);
-		MinusY.SetNumUninitialized(Axis * Axis);
+		PlusX.SetNumUninitialized(AxisX * AxisY);
+		MinusX.SetNumUninitialized(AxisX * AxisY);
+		PlusY.SetNumUninitialized(AxisX * AxisY);
+		MinusY.SetNumUninitialized(AxisX * AxisY);
 	}
-	for (int32 Y = 0; Y < Axis; ++Y)
+	for (int32 Y = 0; Y < AxisY; ++Y)
 	{
 		if (IsCancelled())
 		{
 			return FVoxelLandGeneratorValidation::Fail(
 				EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 		}
-		const int64 YCm = (BaseY + Offset + Y) * VoxelSize;
-		for (int32 X = 0; X < Axis; ++X)
+		const int64 YCm = (BaseY + Y) * VoxelSize;
+		for (int32 X = 0; X < AxisX; ++X)
 		{
-			const int64 XCm = (BaseX + Offset + X) * VoxelSize;
-			const int32 Column = X + Axis * Y;
+			const int64 XCm = (BaseX + X) * VoxelSize;
+			const int32 Column = X + AxisX * Y;
 			if (!M4HeightGrid->Sample(XCm, YCm, Centers[Column]))
 			{
 				return FVoxelLandGeneratorValidation::Fail(
@@ -1567,36 +1577,37 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 				EVoxelLandErrorCode::InvalidContext, TEXT("M4 height detail worker missing"));
 		}
 		const int32 Margin = bM4NormalizeSlope ? 1 : 0;
-		const int32 DetailAxis = Axis + 2 * Margin;
+		const int32 DetailAxisX = AxisX + 2 * Margin;
+		const int32 DetailAxisY = AxisY + 2 * Margin;
 		TArray<int32> DetailedHeights;
-		DetailedHeights.SetNumUninitialized(DetailAxis * DetailAxis);
-		for (int32 Y = 0; Y < DetailAxis; ++Y)
+		DetailedHeights.SetNumUninitialized(DetailAxisX * DetailAxisY);
+		for (int32 Y = 0; Y < DetailAxisY; ++Y)
 		{
 			if (IsCancelled())
 			{
 				return FVoxelLandGeneratorValidation::Fail(
 					EVoxelLandErrorCode::Cancelled, TEXT("M4 height detail generation cancelled"));
 			}
-			const int64 YCm = (BaseY + Offset + Y - Margin) * VoxelSize;
+			const int64 YCm = (BaseY + Y - Margin) * VoxelSize;
 			float XNoise[39], YNoise[39], Noise[39];
 			if (!bM4FixedLatticeShaping)
 			{
-				for (int32 X = 0; X < DetailAxis; ++X)
+				for (int32 X = 0; X < DetailAxisX; ++X)
 				{
-					XNoise[X] = float((BaseX + Offset + X - Margin) * VoxelSize) * M4HeightDetail.FrequencyPerCm;
+					XNoise[X] = float((BaseX + X - Margin) * VoxelSize) * M4HeightDetail.FrequencyPerCm;
 					YNoise[X] = float(YCm) * M4HeightDetail.FrequencyPerCm;
 				}
 				FString Error;
 				if (!Worker.Impl->Noise->Sample(
-						0, false, M4HeightDetailSeed, DetailAxis, XNoise, YNoise, nullptr, Noise, Error))
+						0, false, M4HeightDetailSeed, DetailAxisX, XNoise, YNoise, nullptr, Noise, Error))
 				{
 					return FVoxelLandGeneratorValidation::NativeError(Error);
 				}
 			}
-			for (int32 X = 0; X < DetailAxis; ++X)
+			for (int32 X = 0; X < DetailAxisX; ++X)
 			{
 				int32 BaseHeight = 0, NoiseQ = 0;
-				const int64 XCm = (BaseX + Offset + X - Margin) * VoxelSize;
+				const int64 XCm = (BaseX + X - Margin) * VoxelSize;
 				const bool bNoiseValid = bM4FixedLatticeShaping ? VoxelLandM4FixedLattice::SampleShaping2D(XCm, YCm,
 																	  M4HeightDetail.FrequencyPerCm,
 																	  uint64(uint32(M4HeightDetailSeed)), NoiseQ)
@@ -1619,29 +1630,29 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 					return FVoxelLandGeneratorValidation::Fail(
 						EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 detailed height exceeds fixed-point range"));
 				}
-				DetailedHeights[X + DetailAxis * Y] = int32(Height);
+				DetailedHeights[X + DetailAxisX * Y] = int32(Height);
 			}
 		}
-		for (int32 Y = 0; Y < Axis; ++Y)
+		for (int32 Y = 0; Y < AxisY; ++Y)
 		{
-			for (int32 X = 0; X < Axis; ++X)
+			for (int32 X = 0; X < AxisX; ++X)
 			{
-				const int32 Column = X + Axis * Y;
-				const int32 I = X + Margin + DetailAxis * (Y + Margin);
+				const int32 Column = X + AxisX * Y;
+				const int32 I = X + Margin + DetailAxisX * (Y + Margin);
 				Centers[Column] = DetailedHeights[I];
 				if (bM4NormalizeSlope)
 				{
 					PlusX[Column] = DetailedHeights[I + 1];
 					MinusX[Column] = DetailedHeights[I - 1];
-					PlusY[Column] = DetailedHeights[I + DetailAxis];
-					MinusY[Column] = DetailedHeights[I - DetailAxis];
+					PlusY[Column] = DetailedHeights[I + DetailAxisX];
+					MinusY[Column] = DetailedHeights[I - DetailAxisX];
 				}
 			}
 		}
 	}
 	TArray<int16> Density;
-	Density.Reserve(Axis * Axis * Axis);
-	for (int32 Z = 0; Z < Axis; ++Z)
+	Density.Reserve(AxisX * AxisY * AxisZ);
+	for (int32 Z = 0; Z < AxisZ; ++Z)
 	{
 		if (IsCancelled())
 		{
@@ -1649,13 +1660,13 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 				EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 		}
 		int64 ZCm = 0;
-		if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Offset + Z, VoxelSize, ZCm) || ZCm < -2000000
+		if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Z, VoxelSize, ZCm) || ZCm < -2000000
 			|| ZCm > 2000000)
 		{
 			return FVoxelLandGeneratorValidation::Fail(
 				EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M4 height-field Z exceeds the fixed-point range"));
 		}
-		for (int32 Y = 0; Y < Axis; ++Y)
+		for (int32 Y = 0; Y < AxisY; ++Y)
 		{
 			if (IsCancelled())
 			{
@@ -1673,22 +1684,22 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 				}
 				if (!bM4FixedLatticeShaping)
 				{
-					for (int32 X = 0; X < Axis; ++X)
+					for (int32 X = 0; X < AxisX; ++X)
 					{
-						NX[X] = float((BaseX + Offset + X) * VoxelSize) * M4Overhang.FrequencyPerCm;
-						NY[X] = float((BaseY + Offset + Y) * VoxelSize) * M4Overhang.FrequencyPerCm;
+						NX[X] = float((BaseX + X) * VoxelSize) * M4Overhang.FrequencyPerCm;
+						NY[X] = float((BaseY + Y) * VoxelSize) * M4Overhang.FrequencyPerCm;
 						NZ[X] = float(ZCm) * M4Overhang.FrequencyPerCm;
 					}
 					FString Error;
-					if (!Worker.Impl->Noise->Sample(0, true, M4OverhangSeed, Axis, NX, NY, NZ, Noise, Error))
+					if (!Worker.Impl->Noise->Sample(0, true, M4OverhangSeed, AxisX, NX, NY, NZ, Noise, Error))
 					{
 						return FVoxelLandGeneratorValidation::NativeError(Error);
 					}
 				}
 			}
-			for (int32 X = 0; X < Axis; ++X)
+			for (int32 X = 0; X < AxisX; ++X)
 			{
-				const int32 Column = X + Axis * Y;
+				const int32 Column = X + AxisX * Y;
 				const int32 Center = Centers[Column];
 				int64 DensityQ8 = ZCm * 256 - Center;
 				if (bM4NormalizeSlope)
@@ -1705,8 +1716,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4Density(const FVoxelLandChunkKey&
 					int32 NoiseQ = 0, DeltaQ8 = 0;
 					const bool bNoiseValid =
 						bM4FixedLatticeShaping
-							? VoxelLandM4FixedLattice::SampleShaping3D((BaseX + Offset + X) * VoxelSize,
-								  (BaseY + Offset + Y) * VoxelSize, ZCm, M4Overhang.FrequencyPerCm,
+							? VoxelLandM4FixedLattice::SampleShaping3D((BaseX + X) * VoxelSize,
+								  (BaseY + Y) * VoxelSize, ZCm, M4Overhang.FrequencyPerCm,
 								  uint64(uint32(M4OverhangSeed)), NoiseQ)
 							: VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ);
 					if (!bNoiseValid

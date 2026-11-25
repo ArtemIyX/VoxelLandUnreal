@@ -9,6 +9,7 @@
 #include "Generation/VoxelLandM5ChunkSet.h"
 #include "Generation/VoxelLandM5FixedMesh.h"
 #include "Generation/VoxelLandM5FixedSupport.h"
+#include "Generation/VoxelLandM5PiecewiseSupport.h"
 #include "Generation/VoxelLandM5MeshAdapter.h"
 #include "Generation/VoxelLandM5SweptTriangle.h"
 #include "Generation/VoxelLandM5ScratchChunks.h"
@@ -272,8 +273,13 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiChunkRoute::Certify(const FVoxelLandM
 	FVoxelLandM5FixedPointQ18 A, B;
 	A.X = StartFeet.X * Q; A.Y = StartFeet.Y * Q; A.Z = StartFeet.Z * Q;
 	B.X = EndFeet.X * Q; B.Y = EndFeet.Y * Q; B.Z = EndFeet.Z * Q;
-	const auto Contact = FixedSupport::CertifyLinearContactWithMargin(A, B, RadiusCm * Q, HeightCm * Q, ContactSkinCm * Q,
-		MarginCm * Q, MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
+	FVoxelLandM5Diagnostic Contact = FixedSupport::CertifyLinearContactWithMargin(A, B, RadiusCm * Q, HeightCm * Q,
+		ContactSkinCm * Q, MarginCm * Q, MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
+	if (Contact.Code == E::Unproven)
+	{
+		Contact = PiecewiseSupport::CertifyLinearContactWithMargin(A, B, RadiusCm * Q, HeightCm * Q,
+			ContactSkinCm * Q, MarginCm * Q, MaxSlopeNumerator, MaxSlopeDenominator, Support, Budget, IsCancelled);
+	}
 	if (Contact.Code != E::None) return Contact;
 	// Validate the sweep domain and arithmetic environment even with no obstacles.
 	const auto SweepInputs = SweptTriangle::Check(StartFeet, EndFeet, RadiusCm, HeightCm, MarginCm,

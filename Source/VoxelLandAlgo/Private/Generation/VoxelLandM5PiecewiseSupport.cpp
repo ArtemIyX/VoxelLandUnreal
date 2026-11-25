@@ -5,6 +5,7 @@
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5FloorTriangleCm.h"
 #include "Generation/VoxelLandM5SupportPlane.h"
+#include "Generation/VoxelLandM5SupportMargin.h"
 #include "Generation/VoxelLandM5TriangleSupport.h"
 
 class FVoxelLandM5PiecewiseSupportInternals final
@@ -128,14 +129,25 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PiecewiseSupport::CertifyLinearContact(con
 	int32 MaxSlopeDenominator, TConstArrayView<FVoxelLandM5FixedTriangleQ18> Triangles,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
 {
+	return CertifyLinearContactWithMargin(StartQ, EndQ, RadiusQ18, HeightQ18, SkinQ18, 0, MaxSlopeNumerator,
+		MaxSlopeDenominator, Triangles, Budget, IsCancelled);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::PiecewiseSupport::CertifyLinearContactWithMargin(
+	const FVoxelLandM5FixedPointQ18& StartQ, const FVoxelLandM5FixedPointQ18& EndQ, int64 RadiusQ18, int64 HeightQ18,
+	int64 SkinQ18, int64 MarginQ18, int32 MaxSlopeNumerator, int32 MaxSlopeDenominator,
+	TConstArrayView<FVoxelLandM5FixedTriangleQ18> Triangles, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled)
+{
 	using I = FVoxelLandM5PiecewiseSupportInternals;
 	if (IsCancelled())
 	{
 		return I::Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support cancelled"));
 	}
 	if (Triangles.IsEmpty() || Triangles.Num() > 256 || RadiusQ18 <= 0 || RadiusQ18 > I::Q18Limit
-		|| HeightQ18 < 2 * RadiusQ18 || HeightQ18 > I::Q18Limit || SkinQ18 < 0 || SkinQ18 > I::Q18Limit
-		|| MaxSlopeNumerator < 0 || MaxSlopeNumerator > 32767 || MaxSlopeDenominator < 1 || MaxSlopeDenominator > 32767)
+		|| HeightQ18 < 2 * RadiusQ18 || HeightQ18 > I::Q18Limit || SkinQ18 < 0 || SkinQ18 > I::Q18Limit || MarginQ18 < 0
+		|| MarginQ18 > I::Q18Limit || MaxSlopeNumerator < 0 || MaxSlopeNumerator > 32767 || MaxSlopeDenominator < 1
+		|| MaxSlopeDenominator > 32767)
 	{
 		return I::Error(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid support inputs"));
 	}
@@ -158,8 +170,9 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PiecewiseSupport::CertifyLinearContact(con
 			return I::Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support cancelled"));
 		}
 		const int64 S = int64(1) << Shift;
-		if (RadiusQ18 % S || HeightQ18 % S || SkinQ18 % S || RadiusQ18 / S > I::Limit || HeightQ18 / S > I::Limit
-			|| SkinQ18 / S > I::Limit || !I::Reduce(StartQ, Origin, S, Dummy) || !I::Reduce(EndQ, Origin, S, Dummy))
+		if (RadiusQ18 % S || HeightQ18 % S || SkinQ18 % S || MarginQ18 % S || RadiusQ18 / S > I::Limit
+			|| HeightQ18 / S > I::Limit || SkinQ18 / S > I::Limit || MarginQ18 / S > I::Limit
+			|| !I::Reduce(StartQ, Origin, S, Dummy) || !I::Reduce(EndQ, Origin, S, Dummy))
 		{
 			continue;
 		}
@@ -266,6 +279,24 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PiecewiseSupport::CertifyLinearContact(con
 		if (IsCancelled())
 		{
 			return I::Error(EVoxelLandM5ErrorCode::Cancelled, TEXT("Support cancelled"));
+		}
+		if (MarginQ18 != 0)
+		{
+			if (!Budget->TryChargeWork(64))
+			{
+				return I::Error(EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Support margin work exhausted"));
+			}
+			FVoxelLandM5SupportPlane FacePlane;
+			FacePlane.Origin = F.Triangle.A;
+			FacePlane.GradientX = int32(-F.NX);
+			FacePlane.GradientY = int32(-F.NY);
+			FacePlane.Denominator = int32(F.NZ);
+			const FVoxelLandM5Diagnostic MarginResult =
+				VoxelLand::M5::SupportMargin::Check(Start, End, Radius, MarginQ18 / Scale, FacePlane, IsCancelled);
+			if (MarginResult.Code != EVoxelLandM5ErrorCode::None)
+			{
+				return MarginResult;
+			}
 		}
 		const int64 N2 = F.NX * F.NX + F.NY * F.NY + F.NZ * F.NZ;
 		if (!I::DistanceWithin(I::Gap(F, Start, End, Radius, 0), Radius, N2, false)

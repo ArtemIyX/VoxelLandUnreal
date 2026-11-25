@@ -33,6 +33,7 @@ bool FVoxelLandM5PiecewiseSupportTest::RunTest(const FString& Parameters)
 {
 	using F = FVoxelLandM5PiecewiseFixture;
 	using VoxelLand::M5::PiecewiseSupport::CertifyLinearContact;
+	using VoxelLand::M5::PiecewiseSupport::CertifyLinearContactWithMargin;
 	const FVoxelLandM5FixedPointQ18 A = F::Point(-40, -40, 20), B = F::Point(0, -40, 0), C = F::Point(40, -40, 20);
 	const FVoxelLandM5FixedPointQ18 D = F::Point(-40, 40, 20), E = F::Point(0, 40, 0), G = F::Point(40, 40, 20);
 	TArray<FVoxelLandM5FixedTriangleQ18> Faces = {
@@ -49,6 +50,24 @@ bool FVoxelLandM5PiecewiseSupportTest::RunTest(const FString& Parameters)
 	// 36/sqrt(5), inside [10,17]. Projections lie in their triangles.
 	TestEqual(TEXT("continuous contact across kink"),
 		CertifyLinearContact(Start, End, 10 * Q, 20 * Q, 7 * Q, 1, 2, Faces, Budget.ToSharedRef(), F::NeverCancel).Code,
+		EVoxelLandM5ErrorCode::None);
+	// At the limiting endpoint, gap=26, gradient=1 and denominator=2.
+	// Margin 1 gives (26-11)^2 + 20^2 = 625 > 22^2.
+	// Margin 3 gives (26-13)^2 + 20^2 = 569 < 26^2.
+	TestEqual(TEXT("one-unit margin safe on every face"),
+		CertifyLinearContactWithMargin(
+			Start, End, 10 * Q, 20 * Q, 7 * Q, Q, 1, 2, Faces, Budget.ToSharedRef(), F::NeverCancel)
+			.Code,
+		EVoxelLandM5ErrorCode::None);
+	TestEqual(TEXT("excess margin rejected"),
+		CertifyLinearContactWithMargin(
+			Start, End, 10 * Q, 20 * Q, 7 * Q, 3 * Q, 1, 2, Faces, Budget.ToSharedRef(), F::NeverCancel)
+			.Code,
+		EVoxelLandM5ErrorCode::Unproven);
+	TestEqual(TEXT("zero margin preserves nominal proof"),
+		CertifyLinearContactWithMargin(
+			Start, End, 10 * Q, 20 * Q, 7 * Q, 0, 1, 2, Faces, Budget.ToSharedRef(), F::NeverCancel)
+			.Code,
 		EVoxelLandM5ErrorCode::None);
 	TestEqual(TEXT("slope bound enforced"),
 		CertifyLinearContact(Start, End, 10 * Q, 20 * Q, 7 * Q, 1, 3, Faces, Budget.ToSharedRef(), F::NeverCancel).Code,

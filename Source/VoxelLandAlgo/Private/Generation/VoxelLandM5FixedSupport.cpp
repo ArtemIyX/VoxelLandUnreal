@@ -5,6 +5,7 @@
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5FloorTriangleCm.h"
 #include "Generation/VoxelLandM5SupportPlane.h"
+#include "Generation/VoxelLandM5SupportMargin.h"
 #include "Generation/VoxelLandM5TriangleSupport.h"
 
 class FVoxelLandM5FixedSupportInternals final
@@ -262,52 +263,6 @@ FVoxelLandM5Diagnostic FVoxelLandM5FixedSupportInternals::Certify(const FVoxelLa
 	{
 		return Contact;
 	}
-	// The L1 gradient bounds plane rise over the entire inflated XY disc.
-	// The lower center and plane height are affine along the sweep, so strict
-	// endpoint inequalities hold continuously. The additional distance bound
-	// excludes overlap at and beyond the nominal-radius XY footprint. Therefore
-	// only lower-cap contact within the certified support patch is exempted.
-	using namespace VoxelLand::M5::CheckedMath;
-	const int64 Radius = RadiusQ18 / SelectedScale, Margin = MarginQ18 / SelectedScale;
-	int64 Reach = 0, Gradient = 0, Rise = 0;
-	if (!TryAdd(Radius, Margin, Reach)
-		|| !TryAdd(FMath::Abs(int64(Plane.GradientX)), FMath::Abs(int64(Plane.GradientY)), Gradient)
-		|| !TryMultiplyNonNegative(Reach, Gradient, Rise))
-	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Support margin bound overflow"));
-	}
-	int64 NominalRadial = 0, InflatedRadial = 0, NominalSquared = 0, InflatedSquared = 0;
-	if (!TryMultiplyNonNegative(Radius, Plane.Denominator, NominalRadial)
-		|| !TryMultiplyNonNegative(Reach, Plane.Denominator, InflatedRadial)
-		|| !TryMultiplyNonNegative(NominalRadial, NominalRadial, NominalSquared)
-		|| !TryMultiplyNonNegative(InflatedRadial, InflatedRadial, InflatedSquared))
-	{
-		return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Support footprint bound overflow"));
-	}
-	for (const FVoxelLandM5PointCm* Feet : {&Start, &End})
-	{
-		if (IsCancelled())
-		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"));
-		}
-		int64 Center = 0, DeltaZ = 0, DeltaX = 0, DeltaY = 0;
-		int64 ZTerm = 0, XTerm = 0, YTerm = 0, Gap = 0;
-		if (!TryAdd(Feet->Z, Radius, Center) || !TrySubtract(Center, Plane.Origin.Z, DeltaZ)
-			|| !TrySubtract(Feet->X, Plane.Origin.X, DeltaX) || !TrySubtract(Feet->Y, Plane.Origin.Y, DeltaY)
-			|| !TryMultiply(DeltaZ, Plane.Denominator, ZTerm) || !TryMultiply(DeltaX, Plane.GradientX, XTerm)
-			|| !TryMultiply(DeltaY, Plane.GradientY, YTerm) || !TrySubtract(ZTerm, XTerm, Gap)
-			|| !TrySubtract(Gap, YTerm, Gap) || Gap <= Rise)
-		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Support margin reaches capsule side"));
-		}
-		int64 VerticalGap = 0, VerticalSquared = 0, DistanceSquared = 0;
-		if (!TrySubtract(Gap, Rise, VerticalGap)
-			|| !TryMultiplyNonNegative(VerticalGap, VerticalGap, VerticalSquared)
-			|| !TryAdd(VerticalSquared, NominalSquared, DistanceSquared) || DistanceSquared <= InflatedSquared)
-		{
-			return FixedSupportError(EVoxelLandM5ErrorCode::Unproven, TEXT("Support margin exceeds nominal footprint"));
-		}
-	}
-	return IsCancelled() ? FixedSupportError(EVoxelLandM5ErrorCode::Cancelled, TEXT("Fixed support cancelled"))
-						 : FVoxelLandM5Diagnostic{};
+	return VoxelLand::M5::SupportMargin::Check(
+		Start, End, RadiusQ18 / SelectedScale, MarginQ18 / SelectedScale, Plane, IsCancelled);
 }

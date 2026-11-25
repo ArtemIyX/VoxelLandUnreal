@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "VoxelLandM4RuntimeTestInputs.h"
+
 #include "Async/Async.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
 #include "Data/Assets/VoxelLandFiniteWorld.h"
@@ -24,8 +26,9 @@ namespace
 {
 constexpr EAutomationTestFlags M4RuntimeFlags =
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter;
+}
 
-bool M4RuntimeMakeProgram(UVoxelLandTerrainGraph& Graph, FString& Error)
+bool FVoxelLandM4RuntimeTestInputs::MakeProgram(UVoxelLandTerrainGraph& Graph, FString& Error)
 {
 	FVoxelLandGraphNodeRecord Constant;
 	Constant.Id = FGuid(1, 1, 1, 1);
@@ -65,7 +68,7 @@ bool M4RuntimeMakeProgram(UVoxelLandTerrainGraph& Graph, FString& Error)
 	return bPacked;
 }
 
-void M4RuntimeSetCurve(FVoxelLandM4ControlConfig& Channel)
+void FVoxelLandM4RuntimeTestInputs::SetCurve(FVoxelLandM4ControlConfig& Channel)
 {
 	FVoxelLandM4CurveAuthoringKey First, Last;
 	First.InputQ16 = 0;
@@ -73,6 +76,8 @@ void M4RuntimeSetCurve(FVoxelLandM4ControlConfig& Channel)
 	Channel.CurveKeys = {First, Last};
 }
 
+namespace
+{
 class FM4RuntimeCommand final : public IAutomationLatentCommand
 {
 public:
@@ -301,16 +306,16 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	FString Error;
-	if (!M4RuntimeMakeProgram(*Graph, Error))
+	if (!FVoxelLandM4RuntimeTestInputs::MakeProgram(*Graph, Error))
 	{
 		AddError(FString::Printf(TEXT("Could not create compiled graph: %s"), *Error));
 		Config->RemoveFromRoot();
 		return false;
 	}
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
-	M4RuntimeSetCurve(Config->Continental);
-	M4RuntimeSetCurve(Config->Mountain);
-	M4RuntimeSetCurve(Config->Peaks);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Continental);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Mountain);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Peaks);
 	TArray<int32> BakedCurve;
 	BakedCurve.Init(0, 4097);
 	if (!Config->SetBakedCurves(BakedCurve, BakedCurve, BakedCurve, 1, Error))
@@ -386,16 +391,16 @@ bool FVoxelLandM4RuntimeSharedPrepassTest::RunTest(const FString& Parameters)
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	FString Error;
-	if (!M4RuntimeMakeProgram(*Graph, Error))
+	if (!FVoxelLandM4RuntimeTestInputs::MakeProgram(*Graph, Error))
 	{
 		AddError(FString::Printf(TEXT("Could not create compiled graph: %s"), *Error));
 		Config->RemoveFromRoot();
 		return false;
 	}
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
-	M4RuntimeSetCurve(Config->Continental);
-	M4RuntimeSetCurve(Config->Mountain);
-	M4RuntimeSetCurve(Config->Peaks);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Continental);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Mountain);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Peaks);
 	TArray<int32> Samples;
 	Samples.Init(0, 4097);
 	Config->CellsX = Config->CellsY = 8;
@@ -515,7 +520,7 @@ bool FVoxelLandTypedFiniteDispatchTest::RunTest(const FString& Parameters)
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Definition);
 	FString Error;
-	if (!M4RuntimeMakeProgram(*Graph, Error))
+	if (!FVoxelLandM4RuntimeTestInputs::MakeProgram(*Graph, Error))
 	{
 		AddError(FString::Printf(TEXT("Could not create graph: %s"), *Error));
 		Config->RemoveFromRoot();
@@ -523,9 +528,9 @@ bool FVoxelLandTypedFiniteDispatchTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
-	M4RuntimeSetCurve(Config->Continental);
-	M4RuntimeSetCurve(Config->Mountain);
-	M4RuntimeSetCurve(Config->Peaks);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Continental);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Mountain);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Peaks);
 	TArray<int32> Samples;
 	Samples.Init(0, 4097);
 	if (!Config->SetBakedCurves(Samples, Samples, Samples, 1, Error))
@@ -703,7 +708,7 @@ bool FVoxelLandTypedFiniteLifecycleTest::RunTest(const FString& Parameters)
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Definition);
 	FString Error;
-	if (!M4RuntimeMakeProgram(*Graph, Error))
+	if (!FVoxelLandM4RuntimeTestInputs::MakeProgram(*Graph, Error))
 	{
 		AddError(FString::Printf(TEXT("Could not create graph: %s"), *Error));
 		Config->RemoveFromRoot();
@@ -711,9 +716,9 @@ bool FVoxelLandTypedFiniteLifecycleTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
-	M4RuntimeSetCurve(Config->Continental);
-	M4RuntimeSetCurve(Config->Mountain);
-	M4RuntimeSetCurve(Config->Peaks);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Continental);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Mountain);
+	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Peaks);
 	TArray<int32> Samples;
 	Samples.Init(0, 4097);
 	if (!Config->SetBakedCurves(Samples, Samples, Samples, 1, Error))

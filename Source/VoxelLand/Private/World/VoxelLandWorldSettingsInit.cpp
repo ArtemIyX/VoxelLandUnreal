@@ -17,6 +17,8 @@
 #include "Data/Structs/VoxelLandFiniteWorldSnapshot.h"
 #include "Data/Structs/VoxelLandWorldSourceSnapshot.h"
 #include "Data/Assets/VoxelLandM4WorldConfig.h"
+#include "Data/Assets/VoxelLandM6WorldConfig.h"
+#include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/VoxelLandM4HeightStageValidation.h"
 #include "Data/Assets/VoxelLandTerrainGraph.h"
 #include "Data/Assets/VoxelLandWorldDefinition.h"
@@ -34,6 +36,7 @@
 #include "Generation/VoxelLandM4FixedLattice.h"
 #include "Generation/VoxelLandM4CurveLut.h"
 #include "Generation/VoxelLandM4GridLease.h"
+#include "Generation/VoxelLandM6OverlayValidation.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
@@ -120,7 +123,8 @@ public:
 		virtual bool ReferencesPackage(const UPackage* Package) const = 0;
 #endif
 		virtual void Run(const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
-			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError
+			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError,
+			TArray<uint8>& OutM6Identity
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 			,
 			const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>& Barrier
@@ -195,7 +199,8 @@ public:
 		}
 #endif
 		void Run(const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
-			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError
+			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError,
+			TArray<uint8>& OutM6Identity
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 			,
 			const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>& Barrier
@@ -412,8 +417,10 @@ public:
 	public:
 		FM4InitializationRequest(UVoxelLandM4WorldConfig& Config, FVoxelLandM4WorldSnapshot&& InSnapshot,
 			FIntVector InStartup, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InLease,
-			TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InValidationLease)
+			TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InValidationLease,
+			UVoxelLandM6WorldConfig* M6, TOptional<FVoxelLandM6WorldOverlay>&& InOverlay)
 			: WeakConfig(&Config)
+			, WeakM6(M6)
 			, Continental(Config.Continental.Graph)
 			, Mountain(Config.Mountain.Graph)
 			, Peaks(Config.Peaks.Graph)
@@ -421,6 +428,7 @@ public:
 			, Snapshot(MoveTemp(InSnapshot))
 			, Startup(InStartup)
 			, Lease(MoveTemp(InLease))
+			, Overlay(MoveTemp(InOverlay))
 		{
 			// Capture weak dependency handles only on the game thread. Worker jobs
 			// use the UObject-free function snapshots, while reload handlers can
@@ -504,9 +512,11 @@ public:
 						OriginalFinite, CurrentFinite, 0);
 			}
 			TStrongObjectPtr<UVoxelLandM4WorldConfig> ConfigGuard(WeakConfig.Get());
+			TStrongObjectPtr<UVoxelLandM6WorldConfig> M6Guard(WeakM6.Get());
 			UVoxelLandM4WorldConfig* Config = ConfigGuard.Get();
 			if (!Config || Config->Continental.Graph != Continental.Get() || Config->Mountain.Graph != Mountain.Get()
-				|| Config->Peaks.Graph != Peaks.Get() || !Config->MatchesSnapshot(Snapshot))
+				|| Config->Peaks.Graph != Peaks.Get() || !Config->MatchesSnapshot(Snapshot)
+				|| !MatchesOverlay(M6Guard.Get(), Config, Overlay))
 			{
 				return false;
 			}
@@ -527,7 +537,14 @@ public:
 					return false;
 				}
 			}
-			return true;
+			return MatchesOverlay(M6Guard.Get(), Config, Overlay);
+		}
+
+		static bool MatchesOverlay(const UVoxelLandM6WorldConfig* M6, const UVoxelLandM4WorldConfig* Config,
+			const TOptional<FVoxelLandM6WorldOverlay>& Captured)
+		{
+			return !Captured.IsSet() || (IsValid(M6) && M6->Baseline == Config
+				&& FVoxelLandM6WorldOverlay::StaticStruct()->CompareScriptStruct(&M6->Overlay, &Captured.GetValue(), 0));
 		}
 
 		void ApplyDemand(AVoxelLandWorld& World) const override
@@ -566,8 +583,8 @@ public:
 #if WITH_EDITOR
 		bool References(const UObject* Object) const override
 		{
-			if (Object == WeakConfig.Get() || Object == WeakDefinition.Get() || Object == Continental.Get()
-				|| Object == Mountain.Get() || Object == Peaks.Get())
+			if (Object == WeakConfig.Get() || Object == WeakM6.Get() || Object == WeakDefinition.Get()
+				|| Object == Continental.Get() || Object == Mountain.Get() || Object == Peaks.Get())
 			{
 				return true;
 			}
@@ -584,7 +601,7 @@ public:
 		bool ReferencesPackage(const UPackage* Package) const override
 		{
 			const UObject* Objects[] = {
-				WeakConfig.Get(), WeakDefinition.Get(), Continental.Get(), Mountain.Get(), Peaks.Get()};
+				WeakConfig.Get(), WeakM6.Get(), WeakDefinition.Get(), Continental.Get(), Mountain.Get(), Peaks.Get()};
 			for (const UObject* Object : Objects)
 			{
 				if (Object && Object->GetOutermost() == Package)
@@ -605,7 +622,8 @@ public:
 #endif
 
 		void Run(const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
-			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError
+			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator, FString& OutError,
+			TArray<uint8>& OutM6Identity
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 			,
 			const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>& Barrier
@@ -631,8 +649,9 @@ public:
 			{
 				return;
 			}
+			const FVoxelLandM6WorldOverlay* ActiveOverlay = Overlay.IsSet() && Overlay->IsActive() ? &Overlay.GetValue() : nullptr;
 			if (Cancel->Load()
-				|| !VoxelLandM4Preparation::Prepare(Snapshot, Lease, ValidationLease, IsCancelled, Result, OutError))
+				|| !VoxelLandM4Preparation::Prepare(Snapshot, Lease, ValidationLease, IsCancelled, Result, OutError, ActiveOverlay))
 			{
 				return;
 			}
@@ -664,14 +683,47 @@ public:
 					}
 				}
 			}
+			TArray<uint8> M6Identity;
+			if (ActiveOverlay && !Cancel->Load() && !EncodeM6Identity(*Result, M6Identity, OutError))
+			{
+				return;
+			}
 			if (!Cancel->Load())
 			{
+				OutM6Identity = MoveTemp(M6Identity);
 				OutGenerator = MoveTemp(Result);
 			}
 		}
 
 	private:
+		bool EncodeM6Identity(const FVoxelLandGenerator& Generator, TArray<uint8>& Identity, FString& Error) const
+		{
+			FVoxelLandM4IdentityRecord Baseline;
+			if (!VoxelLandM4WorldIdentity::Capture(Snapshot, Baseline, Error))
+			{
+				return false;
+			}
+			FCanonicalWriter Writer;
+			constexpr uint32 IdentityTag = 0x36574c56; // VLW6 in little endian.
+			constexpr uint32 Version = 1;
+			Writer.U32(IdentityTag);
+			Writer.U32(Version);
+			const TConstArrayView<uint8> Sections[] = {Baseline.CanonicalBytes, Generator.GetM6StampIdentity(),
+				Generator.GetM6FilterIdentity(), Generator.GetM6RedistanceIdentity()};
+			for (const TConstArrayView<uint8> Section : Sections)
+			{
+				Writer.U32(uint32(Section.Num()));
+				if (!Section.IsEmpty())
+				{
+					Writer.Bytes.Append(Section.GetData(), Section.Num());
+				}
+			}
+			Identity = MoveTemp(Writer.Bytes);
+			return true;
+		}
+
 		TWeakObjectPtr<UVoxelLandM4WorldConfig> WeakConfig;
+		TWeakObjectPtr<UVoxelLandM6WorldConfig> WeakM6;
 		TWeakObjectPtr<UVoxelLandFiniteWorld> WeakDefinition;
 		TWeakObjectPtr<UVoxelLandTerrainGraph> Continental, Mountain, Peaks;
 		TArray<TWeakObjectPtr<UObject>> FunctionDependencies;
@@ -682,6 +734,7 @@ public:
 		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
 		TOptional<FVoxelLandM4IdentityRecord> SavedIdentity;
 		TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> DefinitionSource;
+		TOptional<FVoxelLandM6WorldOverlay> Overlay;
 	};
 
 #if !UE_SERVER
@@ -843,6 +896,15 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
 	FString& OutError)
 {
+	return Prepare(Snapshot, Lease, ValidationLease, IsCancelled, OutGenerator, OutError, nullptr);
+}
+
+bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& Lease,
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& ValidationLease,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
+	FString& OutError, const FVoxelLandM6WorldOverlay* Overlay)
+{
 	if (!VoxelLandM4HeightStageValidation::Validate(Snapshot, OutError))
 	{
 		return false;
@@ -943,6 +1005,10 @@ bool VoxelLandM4Preparation::Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	FinalSettings.Program = Programs[0];
 	FinalSettings.WorldSeed = uint64(Snapshot.Seed);
 	FinalSettings.Profile = Profiles[0];
+	if (Overlay)
+	{
+		Overlay->ApplyTo(FinalSettings);
+	}
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
 	if (Snapshot.Domain.Mode == EVoxelLandM4DomainMode::Unlimited)
 	{
@@ -1123,6 +1189,7 @@ public:
 	TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> Cancel;
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 	FString Error;
+	TArray<uint8> M6Identity;
 };
 
 bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
@@ -1187,7 +1254,7 @@ bool AVoxelLandWorld::InitializeFromSettings(UVoxelLandWorldSettings* Settings)
 		InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
 #endif
 		{
-			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error, Job->M6Identity
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 				, Barrier
 #endif
@@ -1284,7 +1351,7 @@ bool AVoxelLandWorld::InitializeFromWorldDefinition(UVoxelLandWorldDefinition* D
 	InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
 #endif
 		{
-			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error, Job->M6Identity
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 				,
 				Barrier
@@ -1296,6 +1363,23 @@ bool AVoxelLandWorld::InitializeFromWorldDefinition(UVoxelLandWorldDefinition* D
 
 bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk)
 {
+	return InitializeAuthoredM4(Settings, StartupChunk, nullptr);
+}
+
+bool AVoxelLandWorld::InitializeM6FromSettings(UVoxelLandM6WorldConfig* Settings, FIntVector StartupChunk)
+{
+	check(IsInGameThread());
+	if (!IsValid(Settings))
+	{
+		LastInitializationError = TEXT("M6 world settings are missing");
+		return false;
+	}
+	return InitializeAuthoredM4(Settings->Baseline.Get(), StartupChunk, Settings);
+}
+
+bool AVoxelLandWorld::InitializeAuthoredM4(
+	UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk, UVoxelLandM6WorldConfig* M6)
+{
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
 	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
@@ -1305,10 +1389,23 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		return false;
 	}
 	LastInitializationError.Reset();
-	if (!Settings)
+	if (!IsValid(Settings))
 	{
-		LastInitializationError = TEXT("M4 world settings are missing");
+		LastInitializationError = M6 ? TEXT("Select a baseline M4 configuration in the M6 world asset")
+			: TEXT("M4 world settings are missing");
 		return false;
+	}
+	TStrongObjectPtr<UVoxelLandM4WorldConfig> SettingsGuard(Settings);
+	TStrongObjectPtr<UVoxelLandM6WorldConfig> M6Guard(M6);
+	TOptional<FVoxelLandM6WorldOverlay> Captured;
+	if (M6)
+	{
+		if (const FVoxelLandError Error = FVoxelLandM6OverlayValidation::Validate(M6->Overlay, float(Settings->VoxelSizeCm)))
+		{
+			LastInitializationError = Error.Message;
+			return false;
+		}
+		Captured.Emplace(M6->Overlay);
 	}
 	StopDemo();
 	StopPendingInitialization();
@@ -1339,7 +1436,6 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		LastInitializationError = TEXT("M4 snapshot validation capacity is exhausted");
 		return false;
 	}
-	TStrongObjectPtr<UVoxelLandM4WorldConfig> SettingsGuard(Settings);
 	const uint64 CaptureEpoch = ConfigurationEpoch;
 	FVoxelLandM4WorldSnapshot Snapshot;
 	FString CaptureError;
@@ -1356,9 +1452,14 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		LastInitializationError = MoveTemp(CaptureError);
 		return false;
 	}
-	const TSharedRef<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe> Request =
-		MakeShared<FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest, ESPMode::ThreadSafe>(
-			*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease));
+	using FRequest = FVoxelLandWorldSettingsInitInternals::FM4InitializationRequest;
+	if (!FRequest::MatchesOverlay(M6Guard.Get(), Settings, Captured))
+	{
+		LastInitializationError = TEXT("M6 world settings changed during capture");
+		return false;
+	}
+	const TSharedRef<FRequest, ESPMode::ThreadSafe> Request = MakeShared<FRequest, ESPMode::ThreadSafe>(
+		*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease), M6Guard.Get(), MoveTemp(Captured));
 	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
 		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
 	PendingInitialization = Job;
@@ -1377,7 +1478,7 @@ bool AVoxelLandWorld::InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings
 		InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
 #endif
 		{
-			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error, Job->M6Identity
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 				,
 				Barrier
@@ -1448,7 +1549,7 @@ bool AVoxelLandWorld::InitializeM4FromSavedWorld(const FVoxelLandM4SavedWorld& S
 		InitializationTask = Async(EAsyncExecution::ThreadPool, [Job]()
 #endif
 		{
-			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error
+			Job->Request->Run(Job->Cancel, Job->Generator, Job->Error, Job->M6Identity
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
 				,
 				Barrier
@@ -1547,7 +1648,7 @@ void AVoxelLandWorld::PollInitialization()
 	}
 	const TOptional<FVoxelLandChunkKey> Startup = Job->Request->GetStartup();
 	const uint64 StartupEpoch = ConfigurationEpoch;
-	if (!TryInitialize(Job->Generator, Startup.IsSet() ? &Startup.GetValue() : nullptr))
+	if (!TryInitialize(Job->Generator, Startup.IsSet() ? &Startup.GetValue() : nullptr, MoveTemp(Job->M6Identity)))
 	{
 		if (ConfigurationEpoch != StartupEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
 			|| GetWorld()->bIsTearingDown)

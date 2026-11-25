@@ -2,6 +2,7 @@
 
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Generation/VoxelLandM6FilterPlan.h"
+#include "Generation/VoxelLandM6OverlayValidation.h"
 #include "Generation/VoxelLandM6Redistance.h"
 #include "Generation/VoxelLandM6StampMath.h"
 
@@ -89,23 +90,24 @@ bool FVoxelLandM6FilterPlanning::IntersectsStoredBox(
 	return Ordered(RequiredMin.ComponentMax(MaskMin), RequiredMax.ComponentMin(MaskMax));
 }
 
-FVoxelLandError FVoxelLandGenerator::InitializeM6Filters(const FVoxelLandM6FilterSettings& Settings, float VoxelSizeCm)
+FVoxelLandError FVoxelLandM6OverlayValidation::ValidateFilters(const FVoxelLandM6FilterSettings& Settings, float VoxelSizeCm)
 {
 	if (Settings.Version != FVoxelLandM6FilterSettings::CurrentVersion
 		|| Settings.Stages.Num() > FVoxelLandM6FilterSettings::MaxStages)
 	{
 		return {EVoxelLandErrorCode::InvalidParameter, TEXT("Unsupported M6 filter version or stage count")};
 	}
-	if (VoxelSizeCm > float(FVoxelLandM6StampMath::MaxVoxelSizeCm))
+	if (const FVoxelLandError Error = ValidateVoxelSize(VoxelSizeCm))
 	{
-		return {EVoxelLandErrorCode::InvalidProfile, TEXT("M6 filters exceed the supported voxel size")};
+		return Error;
 	}
 	int32 ConfiguredHalo = 0;
 	for (int32 Index = 0; Index < Settings.Stages.Num(); ++Index)
 	{
 		const FVoxelLandM6FilterStage& Stage = Settings.Stages[Index];
-		if (const FVoxelLandError Error = FVoxelLandM6FilterPlanning::ValidateStage(Stage))
+		if (FVoxelLandError Error = FVoxelLandM6FilterPlanning::ValidateStage(Stage))
 		{
+			Error.Message = FString::Printf(TEXT("Filter %d: %s"), Index + 1, *Error.Message);
 			return Error;
 		}
 		for (int32 Prior = 0; Prior < Index; ++Prior)
@@ -121,7 +123,15 @@ FVoxelLandError FVoxelLandGenerator::InitializeM6Filters(const FVoxelLandM6Filte
 	{
 		return {EVoxelLandErrorCode::InvalidParameter, TEXT("Configured M6 filters exceed the accumulated halo limit")};
 	}
+	return {};
+}
 
+FVoxelLandError FVoxelLandGenerator::InitializeM6Filters(const FVoxelLandM6FilterSettings& Settings, float VoxelSizeCm)
+{
+	if (const FVoxelLandError Error = FVoxelLandM6OverlayValidation::ValidateFilters(Settings, VoxelSizeCm))
+	{
+		return Error;
+	}
 	FCanonicalWriter Writer;
 	constexpr uint32 IdentityTag = 0x4c46364d; // M6FL in little endian.
 	constexpr int32 RecordBytes = 16 * sizeof(uint32) + sizeof(uint8) + sizeof(uint16);
@@ -145,28 +155,37 @@ FVoxelLandError FVoxelLandGenerator::InitializeM6Filters(const FVoxelLandM6Filte
 	return {};
 }
 
-FVoxelLandError FVoxelLandGenerator::InitializeM6Redistance(const FVoxelLandM6RedistanceSettings& Settings, float VoxelSizeCm)
+FVoxelLandError FVoxelLandM6OverlayValidation::ValidateRedistance(const FVoxelLandM6RedistanceSettings& Settings,
+	TConstArrayView<FVoxelLandM6FilterStage> Filters, float VoxelSizeCm)
 {
 	if (Settings.Version != FVoxelLandM6RedistanceSettings::CurrentVersion || Settings.BandVoxels < 1
 		|| Settings.BandVoxels > FVoxelLandM6RedistanceSettings::MaxBandVoxels)
 	{
 		return {EVoxelLandErrorCode::InvalidParameter, TEXT("Unsupported M6 re-distance version or band")};
 	}
-	if (VoxelSizeCm > float(FVoxelLandM6StampMath::MaxVoxelSizeCm))
+	if (const FVoxelLandError Error = ValidateVoxelSize(VoxelSizeCm))
 	{
-		return {EVoxelLandErrorCode::InvalidProfile, TEXT("M6 re-distance exceeds the supported voxel size")};
+		return Error;
 	}
 
 	int32 ConfiguredHalo = FVoxelLandM6Redistance::HaloForBand(Settings.BandVoxels);
-	for (const FVoxelLandM6FilterStage& Stage : M6Filters)
+	for (const FVoxelLandM6FilterStage& Stage : Filters)
 	{
 		ConfiguredHalo += FVoxelLandM6FilterPlan::FilterRadius(Stage);
 	}
 	if (ConfiguredHalo > FVoxelLandM6FilterSettings::MaxHalo)
 	{
-		return {EVoxelLandErrorCode::InvalidParameter, TEXT("Configured M6 filters and re-distance exceed the accumulated halo limit")};
+		return {EVoxelLandErrorCode::InvalidParameter, TEXT("M6 filters plus the re-distance endpoint halo exceed 8 voxels")};
 	}
+	return {};
+}
 
+FVoxelLandError FVoxelLandGenerator::InitializeM6Redistance(const FVoxelLandM6RedistanceSettings& Settings, float VoxelSizeCm)
+{
+	if (const FVoxelLandError Error = FVoxelLandM6OverlayValidation::ValidateRedistance(Settings, M6Filters, VoxelSizeCm))
+	{
+		return Error;
+	}
 	FCanonicalWriter Writer;
 	constexpr uint32 IdentityTag = 0x4452364d; // M6RD in little endian.
 	Writer.U32(IdentityTag);

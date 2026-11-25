@@ -13,7 +13,13 @@ public:
 	static FVoxelLandM6FilterStage Stage(uint32 Id, EVoxelLandM6FilterKind Kind, const FInt64Vector& Min,
 		const FInt64Vector& Max, uint16 Strength = MAX_uint16)
 	{
-		return {FGuid(0x4d36, 3, 0, Id), Kind, Min, Max, Strength};
+		FVoxelLandM6FilterStage Result;
+		Result.Id = FGuid(0x4d36, 3, 0, Id);
+		Result.Kind = Kind;
+		Result.MinCm = Min;
+		Result.MaxCm = Max;
+		Result.Strength = Strength;
+		return Result;
 	}
 
 	static bool CreateFinite(FVoxelLandGeneratorSettings Settings, const FGridPtr& Grid,

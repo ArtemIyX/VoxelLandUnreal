@@ -1,7 +1,9 @@
 #pragma once
 
-#include "CoreTypes.h"
+#include "CoreMinimal.h"
+#include "VoxelLandM6StampShape.generated.h"
 
+UENUM()
 enum class EVoxelLandM6StampShape : uint8
 {
 	Sphere = 0,

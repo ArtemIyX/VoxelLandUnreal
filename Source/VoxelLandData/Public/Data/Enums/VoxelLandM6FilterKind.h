@@ -1,7 +1,9 @@
 #pragma once
 
-#include "CoreTypes.h"
+#include "CoreMinimal.h"
+#include "VoxelLandM6FilterKind.generated.h"
 
+UENUM()
 enum class EVoxelLandM6FilterKind : uint8
 {
 	Smooth = 0,

@@ -3,6 +3,7 @@
 class FVoxelLandGenerator;
 class FVoxelLandM4GridLease;
 struct FVoxelLandM4WorldSnapshot;
+struct FVoxelLandM6WorldOverlay;
 
 // Shared finite/unlimited M4 preparation for runtime and editor preview.
 // Finite callers may use EnsureCoordinatorReady on the game thread, capture
@@ -33,4 +34,10 @@ VOXELLAND_API bool Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
 	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& ValidationLease,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
 	FString& OutError);
+// The optional immutable overlay applies only to the final terrain generator.
+VOXELLAND_API bool Prepare(const FVoxelLandM4WorldSnapshot& Snapshot,
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& Lease,
+	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>& ValidationLease,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator,
+	FString& OutError, const FVoxelLandM6WorldOverlay* Overlay);
 }

@@ -9,6 +9,7 @@ class FVoxelLandGenerator;
 class UVoxelLandWorldSettings;
 class UVoxelLandWorldDefinition;
 class UVoxelLandM4WorldConfig;
+class UVoxelLandM6WorldConfig;
 class UPrimitiveComponent;
 class FVoxelLandInitializationJob;
 class FVoxelLandDemoJob;
@@ -73,6 +74,12 @@ public:
 	// voxel.M4.PrepassBudgetMiB; actual allocator/backend usage is not measured.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk);
+	// Explicit generation-time overlay. The complete startup footprint is validated asynchronously.
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
+	bool InitializeM6FromSettings(UVoxelLandM6WorldConfig* Settings, FIntVector StartupChunk);
+	// Game-thread copy of the published authored M6 identity. False means no active overlay.
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
+	bool GetM6WorldIdentity(TArray<uint8>& OutIdentity) const;
 	// The caller supplies an already-deserialized, trusted saved record. Material
 	// presentation remains under caller control. Validation runs asynchronously.
 	bool InitializeM4FromSavedWorld(const FVoxelLandM4SavedWorld& Saved, FIntVector StartupChunk);
@@ -155,8 +162,9 @@ public:
 	TObjectPtr<UMaterialInterface> TerrainMaterial;
 
 private:
+	bool InitializeAuthoredM4(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk, UVoxelLandM6WorldConfig* M6);
 	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
-		const FVoxelLandChunkKey* Startup = nullptr);
+		const FVoxelLandChunkKey* Startup = nullptr, TArray<uint8> M6Identity = {});
 	void UpdateDemand();
 	void RetireChunk(const FVoxelLandChunkKey& Key);
 	void PumpCompletions();

@@ -19,6 +19,7 @@ struct FVoxelLandWorldState
 	uint64 Epoch = 1, NextTicket = 0, Cancelled = 0, Stale = 0, Failed = 0;
 	int32 Active = 0;
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
+	TArray<uint8> M6Identity;
 	TSharedRef<VoxelLandWorldPrivate::FSharedWork, ESPMode::ThreadSafe> Work =
 		MakeShared<VoxelLandWorldPrivate::FSharedWork, ESPMode::ThreadSafe>();
 	TArray<TUniquePtr<VoxelLandWorldPrivate::FWorker>> Workers;

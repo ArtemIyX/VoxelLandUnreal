@@ -1,6 +1,6 @@
 # VoxelLand M6 task tracker
 
-**Progress:** 1 of 6 slices verified · **Implemented:** M6.1–M6.4 · **Next implementation:** M6.5 authoring and acceptance
+**Progress:** 1 of 6 slices verified · **Implemented:** M6.1–M6.5 · **Next:** executable acceptance evidence
 
 M6 adds generation-time stamps and filters to cave-disabled M4 terrain. The first checkpoint is one hard sphere stamp across real finite M4 chunk seams. M6 acceptance also requires the remaining stamps, filters with accumulated halos, and bounded re-distance. M5 remains open and deferred. Runtime terrain editing is out of v1 scope.
 
@@ -44,7 +44,7 @@ Implementation and static review complete. Executable verification and measured 
 
 ### M6.5 — Authoring and milestone acceptance
 
-- [ ] **M6.5a** Expose supported generation-time controls and diagnostics. Ship a small foundation or clearing example.
+- [x] **M6.5a** Expose supported generation-time controls and diagnostics. Ship a small foundation or clearing example.
 - [ ] **M6.5b** Run focused M6 and relevant M3/M4 regressions. Verify seam-free density and CPU meshes on supported finite and local paths, deterministic request ordering and headless CPU generation.
 - [ ] **M6.5c** Record cook, real dedicated-server, cross-host and visual checks individually as passed, failed or pending. Review the milestone evidence against the canonical criteria.
 
@@ -62,6 +62,19 @@ Update this tracker after each task. Check a box after its deliverable and any r
 | 2026-11-25 | M6.3 | Added ordered box-masked smooth, flatten and make-space stages with backward lattice demand planning. Reused the existing M4 compatibility smooth kernel and local fixed-lattice baseline path. Static review found no critical issues. Authored `VoxelLand.M6.Filters.Contract` and `VoxelLand.M6.Filters.FiniteAndLocalSeams`. Build and tests were not run at the owner's request. |
 
 | 2026-11-25 | M6.4 | Implemented a final one- or two-voxel band with fixed-point edge crossings, deterministic nearest distance, combined halo admission, and a versioned re-distance identity. Static review found no critical issues. Authored `VoxelLand.M6.Redistance.Contract`, `VoxelLand.M6.Redistance.AnalyticError` and `VoxelLand.M6.Redistance.FilteredFiniteAndLocalSeams`. Build, automation and measured reference error remain pending at the owner's request. |
+
+| 2026-11-25 | M6.5 | Added the separate M6 World Config asset, game-thread authoring checks, explicit actor initialization, atomic publication of the complete canonical M6 identity, and the [foundation example](M6_Foundation_Example.md). Static review found no critical issues. Authored `VoxelLand.M6.Runtime.AuthoredDataOnly` for real finite and local actor demand. Build and automation were not run at the owner's request. |
+
+### Outstanding milestone evidence
+
+| Check | Status |
+| --- | --- |
+| Corrected M6.1 contract and M6.2–M6.5 executable suites | Pending. Earlier M6.1 seam and relevant regression evidence is recorded below. |
+| Bounded re-distance error measurements | Pending. Analytic plane, sphere and box fixtures are authored. |
+| Cooked build | Pending. |
+| Actual dedicated-server run | Pending. Authored actor fixture uses data-only mode. |
+| Cross-host deterministic density and hash comparison | Pending. |
+| Interactive foundation and clearing inspection | Pending. |
 
 ### M6.4 band and work admission
 

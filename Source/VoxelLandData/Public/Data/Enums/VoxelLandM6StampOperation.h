@@ -1,7 +1,9 @@
 #pragma once
 
-#include "CoreTypes.h"
+#include "CoreMinimal.h"
+#include "VoxelLandM6StampOperation.generated.h"
 
+UENUM()
 enum class EVoxelLandM6StampOperation : uint8
 {
 	Add = 0,

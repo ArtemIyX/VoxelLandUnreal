@@ -312,8 +312,20 @@ void AVoxelLandWorld::Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::
 	TryInitialize(MoveTemp(Generator));
 }
 
+bool AVoxelLandWorld::GetM6WorldIdentity(TArray<uint8>& OutIdentity) const
+{
+	check(IsInGameThread());
+	if (!State || State->M6Identity.IsEmpty())
+	{
+		OutIdentity.Reset();
+		return false;
+	}
+	OutIdentity = State->M6Identity;
+	return true;
+}
+
 bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
-	const FVoxelLandChunkKey* Startup)
+	const FVoxelLandChunkKey* Startup, TArray<uint8> M6Identity)
 {
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
@@ -329,6 +341,7 @@ bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMod
 	}
 	TUniquePtr<FVoxelLandWorldState> Candidate = MakeUnique<FVoxelLandWorldState>();
 	Candidate->Generator = Generator;
+	Candidate->M6Identity = MoveTemp(M6Identity);
 	Candidate->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
 	Candidate->RegionDimensions = FIntVector(
 		FMath::Clamp(RegionSize.X, 1, 32), FMath::Clamp(RegionSize.Y, 1, 32), FMath::Clamp(RegionSize.Z, 1, 8));

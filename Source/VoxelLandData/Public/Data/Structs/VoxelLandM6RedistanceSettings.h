@@ -1,13 +1,22 @@
 #pragma once
 
-#include "CoreTypes.h"
+#include "CoreMinimal.h"
+#include "VoxelLandM6RedistanceSettings.generated.h"
 
-struct FVoxelLandM6RedistanceSettings
+USTRUCT()
+struct VOXELLANDDATA_API FVoxelLandM6RedistanceSettings
 {
+	GENERATED_BODY()
+
 	static constexpr uint32 CurrentVersion = 1;
 	static constexpr uint8 MaxBandVoxels = 2;
 
+	UPROPERTY()
 	uint32 Version = CurrentVersion;
-	uint8 BandVoxels = 1;
+
+	UPROPERTY(EditAnywhere, Category = "Re-Distance")
 	bool bEnabled = false;
+
+	UPROPERTY(EditAnywhere, Category = "Re-Distance", meta = (EditCondition = "bEnabled", ClampMin = "1", ClampMax = "2"))
+	uint8 BandVoxels = 1;
 };

@@ -3,6 +3,7 @@
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "Generation/VoxelLandM4Unlimited.h"
+#include "Generation/VoxelLandM6OverlayValidation.h"
 #include "Generation/VoxelLandM6StampComposition.h"
 #include "Generation/VoxelLandM6StampMath.h"
 
@@ -26,8 +27,9 @@ FVoxelLandError FVoxelLandM6StampList::Validate(TConstArrayView<FVoxelLandM6Stam
 	for (int32 Index = 0; Index < Stamps.Num(); ++Index)
 	{
 		const FVoxelLandM6Stamp& Stamp = Stamps[Index];
-		if (const FVoxelLandError Error = FVoxelLandM6StampMath::Validate(Stamp, CoordinateLimit))
+		if (FVoxelLandError Error = FVoxelLandM6StampMath::Validate(Stamp, CoordinateLimit))
 		{
+			Error.Message = FString::Printf(TEXT("Stamp %d: %s"), Index + 1, *Error.Message);
 			return Error;
 		}
 		for (int32 Prior = 0; Prior < Index; ++Prior)
@@ -132,21 +134,25 @@ FVoxelLandError FVoxelLandGenerator::InitializeM6Spheres(const FVoxelLandM6Spher
 	return {};
 }
 
-FVoxelLandError FVoxelLandGenerator::InitializeM6Stamps(const FVoxelLandM6StampSettings& Settings, float VoxelSizeCm)
+FVoxelLandError FVoxelLandM6OverlayValidation::ValidateStamps(const FVoxelLandM6StampSettings& Settings, float VoxelSizeCm)
 {
 	if (Settings.Version != FVoxelLandM6StampSettings::CurrentVersion)
 	{
 		return {EVoxelLandErrorCode::InvalidParameter, TEXT("Unsupported M6 stamp-list version")};
 	}
-	if (VoxelSizeCm > float(FVoxelLandM6StampMath::MaxVoxelSizeCm))
-	{
-		return {EVoxelLandErrorCode::InvalidProfile, TEXT("M6 stamps exceed the supported voxel size")};
-	}
-	if (const FVoxelLandError Error = FVoxelLandM6StampList::Validate(Settings.Stamps, FVoxelLandM6StampMath::CoordinateLimitCm))
+	if (const FVoxelLandError Error = ValidateVoxelSize(VoxelSizeCm))
 	{
 		return Error;
 	}
+	return FVoxelLandM6StampList::Validate(Settings.Stamps, FVoxelLandM6StampMath::CoordinateLimitCm);
+}
 
+FVoxelLandError FVoxelLandGenerator::InitializeM6Stamps(const FVoxelLandM6StampSettings& Settings, float VoxelSizeCm)
+{
+	if (const FVoxelLandError Error = FVoxelLandM6OverlayValidation::ValidateStamps(Settings, VoxelSizeCm))
+	{
+		return Error;
+	}
 	FCanonicalWriter Writer;
 	constexpr int32 MaxRecordBytes = 17 * sizeof(uint32) + 2 * sizeof(uint8);
 	Writer.Bytes.Reserve(3 * sizeof(uint32) + Settings.Stamps.Num() * MaxRecordBytes);

@@ -239,6 +239,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	const FVoxelLandM5RegionCoord& Region, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>& Out)
 {
+	return Build(S, Seed, Region, 1, Budget, IsCancelled, Out);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5CaveSettings& S, int64 Seed,
+	const FVoxelLandM5RegionCoord& Region, int32 GeometryVersion,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>& Out)
+{
 	const auto Cancelled = [&IsCancelled]() {
 		return IsCancelled();
 	};
@@ -246,6 +254,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	{
 		return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
+	}
+	if (GeometryVersion != 1 && GeometryVersion != 2)
+	{
+		return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+			EVoxelLandM5ErrorCode::UnsupportedVersion, TEXT("Unsupported candidate geometry version"));
 	}
 	const auto& T = S.Topology;
 	const auto& L = S.Limits;
@@ -275,6 +288,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	FVoxelLandM5CavePlan Scratch;
+	Scratch.GeometryVersion = GeometryVersion;
 	Scratch.Region = Region;
 	if (S.PlanningMode == EVoxelLandM5PlanningMode::Regional)
 	{
@@ -678,6 +692,51 @@ FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5
 		return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 	}
+	if (GeometryVersion == 2)
+	{
+		const int64 Height = S.Capsule.StandingHeightCm;
+		const int64 ProfileMargin = S.Capsule.ClearanceMarginCm;
+		if (Height < 1 || Height > 1048576 || S.Capsule.RadiusCm < 1
+			|| Height < 2 * int64(S.Capsule.RadiusCm) || ProfileMargin < 0 || ProfileMargin > 1048576)
+		{
+			return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Invalid profile geometry dimensions"));
+		}
+		if (!Budget->TryChargeWork(int64(Scratch.Chambers.Num()) + Scratch.Segments.Num()))
+		{
+			return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Profile geometry work exhausted"));
+		}
+		const int64 Span = Height + 2 * ProfileMargin;
+		auto Planes = [&B, Span](int64 Center, int64& Floor, int64& Ceiling) {
+			Floor = Center - Span / 2;
+			Ceiling = Floor + Span;
+			return Floor >= B.MinInclusive.Z && Ceiling < B.MaxExclusive.Z
+				&& Floor >= -1048576 && Ceiling <= 1048576;
+		};
+		for (auto& Chamber : Scratch.Chambers)
+		{
+			if (Cancelled()) return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Profile construction cancelled"));
+			Chamber.Profile.Version = 2;
+			if (!Planes(Chamber.CenterCm.Z, Chamber.Profile.FloorCm, Chamber.Profile.CeilingCm))
+				return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+					EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Chamber profile exceeds bounds"));
+		}
+		for (auto& Segment : Scratch.Segments)
+		{
+			if (Cancelled()) return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Profile construction cancelled"));
+			Segment.Profile.Version = 2;
+			if ((Segment.StartCm.X == Segment.EndCm.X && Segment.StartCm.Y == Segment.EndCm.Y)
+				|| !Planes(Segment.StartCm.Z, Segment.Profile.StartFloorCm, Segment.Profile.StartCeilingCm)
+				|| !Planes(Segment.EndCm.Z, Segment.Profile.EndFloorCm, Segment.Profile.EndCeilingCm))
+				return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+					EVoxelLandM5ErrorCode::Unproven, TEXT("Segment profile is vertical or exceeds bounds"));
+		}
+	}
+	if (Cancelled()) return FVoxelLandM5CandidatePlannerInternals::M5CandidateFailure(
+		EVoxelLandM5ErrorCode::Cancelled, TEXT("Candidate planning cancelled"));
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Result =
 		MakeShareable(new FVoxelLandM5CandidateResult(Budget, S, Seed, Region, MoveTemp(Scratch), MoveTemp(Lease)));
 	Out = MoveTemp(Result);

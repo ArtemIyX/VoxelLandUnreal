@@ -17,6 +17,8 @@
 // across plans. This is transient topology, not a persisted descriptor or plan format.
 struct FVoxelLandM5CavePlan
 {
+	// Every primitive profile must match this version; mixed plans fail closed.
+	int32 GeometryVersion = 1;
 	FVoxelLandM5Bounds Bounds;
 	FVoxelLandM5RegionCoord Region;
 	TArray<FVoxelLandM5Chamber> Chambers;

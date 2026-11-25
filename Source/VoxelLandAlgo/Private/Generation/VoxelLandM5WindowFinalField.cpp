@@ -57,6 +57,10 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowFinalField::Build(const FVoxelLandM5
 	{
 		return FVoxelLandM5WindowFinalFieldInternals::Error(E::Cancelled, TEXT("Window field cancelled"));
 	}
+	if (Settings.bEnabled && (Manifest.Geometry != 1 || (Candidate && Candidate->GetPlan().GeometryVersion != Manifest.Geometry)))
+	{
+		return FVoxelLandM5WindowFinalFieldInternals::Error(E::UnsupportedVersion, TEXT("Unsupported or mismatched geometry version"));
+	}
 	if ((Settings.bEnabled || Settings.Pockets.bEnabled) && Manifest.Composition != 2)
 	{
 		return FVoxelLandM5WindowFinalFieldInternals::Error(E::UnsupportedVersion, TEXT("Unsupported composition version"));
@@ -149,6 +153,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowFinalField::Build(const FVoxelLandM5
 	Inputs.Pockets = Settings.Pockets;
 	Inputs.PocketNoiseVersion = Manifest.PocketNoise;
 	Inputs.CompositionVersion = Manifest.Composition;
+	Inputs.GeometryVersion = Manifest.Geometry;
 	Inputs.WorldSeed = WorldSeed;
 	Inputs.StageId = Settings.StageId;
 	return FVoxelLandM5FinalField::Build(Inputs, Budget, IsCancelled, OutField);

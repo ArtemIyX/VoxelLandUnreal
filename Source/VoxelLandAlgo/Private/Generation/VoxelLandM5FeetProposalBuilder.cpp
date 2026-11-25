@@ -41,6 +41,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FeetProposalBuilder::Build(const FVoxelLan
 		return FVoxelLandM5FeetProposalBuilderInternals::M5FeetError(
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet proposal cancelled"));
 	}
+	if (Segment.Profile.Version != 1)
+	{
+		return FVoxelLandM5FeetProposalBuilderInternals::M5FeetError(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Profile containment is not yet proven"));
+	}
 	const int64 Height = Capsule.StandingHeightCm;
 	const int64 Radius = Capsule.RadiusCm;
 	const int64 Margin = Capsule.ClearanceMarginCm;

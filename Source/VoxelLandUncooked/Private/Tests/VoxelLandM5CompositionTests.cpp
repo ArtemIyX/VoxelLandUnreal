@@ -55,6 +55,14 @@ bool FVoxelLandM5CompositionReferenceTest::RunTest(const FString& Parameters)
 	Plan.Segments.Add(Segment);
 	TestTrue(TEXT("segment midpoint succeeds"), Sample(-3000, M5CompositionPoint(300, 0, 0)));
 	TestEqual(TEXT("segment carving union"), Out, int16(512));
+	Out = 777;
+	Plan.Segments[0].Profile.Version = 2;
+	TestFalse(TEXT("mixed primitive version rejected"), Sample(-3000, M5CompositionPoint(300, 0, 0)));
+	TestEqual(TEXT("mixed version leaves output"), Out, int16(777));
+	Plan.GeometryVersion = 2;
+	Plan.Chambers[0].Profile.Version = 2;
+	TestFalse(TEXT("unbound geometry version rejected"), Sample(-3000, M5CompositionPoint(300, 0, 0)));
+	TestEqual(TEXT("unsupported geometry leaves output"), Out, int16(777));
 	return true;
 }
 

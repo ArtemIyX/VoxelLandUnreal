@@ -35,6 +35,9 @@ private:
 	friend FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5CaveSettings&, int64,
 		const FVoxelLandM5RegionCoord&, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
 		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>&);
+	friend FVoxelLandM5Diagnostic VoxelLand::M5::CandidatePlanner::Build(const FVoxelLandM5CaveSettings&, int64,
+		const FVoxelLandM5RegionCoord&, int32, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
+		TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>&);
 	friend FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5CaveSettings&, int64,
 		TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>,
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>,

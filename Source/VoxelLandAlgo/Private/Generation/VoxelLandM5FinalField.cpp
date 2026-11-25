@@ -65,7 +65,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 	const bool bPocket = Inputs.Pockets.bEnabled && Inputs.Pockets.AmplitudeCm != 0;
 	const bool bCompose = Inputs.bNetworkEnabled || bPocket;
 	if ((Inputs.Pockets.bEnabled && Inputs.PocketNoiseVersion != 1)
-		|| ((Inputs.bNetworkEnabled || Inputs.Pockets.bEnabled) && Inputs.CompositionVersion != 2))
+		|| ((Inputs.bNetworkEnabled || Inputs.Pockets.bEnabled) && Inputs.CompositionVersion != 2)
+		|| (Inputs.bNetworkEnabled && Inputs.GeometryVersion != 1))
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(
 			E::UnsupportedVersion, TEXT("Unsupported final field algorithm version"));
@@ -100,6 +101,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 		return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Final field input size mismatch"));
 	}
 	int64 PerSample = 2;
+	int64 PlanInventoryWork = Inputs.bNetworkEnabled ? Inputs.Plans.Num() : 0;
 	if (Inputs.bNetworkEnabled)
 	{
 		if (!Budget->TryChargeWork(Inputs.Plans.Num()))
@@ -113,12 +115,30 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 			{
 				return FVoxelLandM5FinalFieldInternals::Error(E::Cancelled, TEXT("Final field cancelled"));
 			}
-			if (!Plan.IsValid())
+			if (!Plan.IsValid() || Plan->GeometryVersion != Inputs.GeometryVersion)
 			{
 				return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Final field plan is missing"));
 			}
-			if (!TryAdd(PerSample, 1, PerSample) || !TryAdd(PerSample, Plan->Chambers.Num(), PerSample)
-				|| !TryAdd(PerSample, Plan->Segments.Num(), PerSample))
+			const int64 PrimitiveCount = int64(Plan->Chambers.Num()) + Plan->Segments.Num();
+			if (!TryAdd(PlanInventoryWork, PrimitiveCount, PlanInventoryWork))
+				return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Profile inventory overflow"));
+			if (!Budget->TryChargeWork(PrimitiveCount))
+				return FVoxelLandM5FinalFieldInternals::Error(E::BudgetExceeded, TEXT("Profile inventory budget exhausted"));
+			for (const auto& Chamber : Plan->Chambers)
+			{
+				if (IsCancelled()) return FVoxelLandM5FinalFieldInternals::Error(E::Cancelled, TEXT("Final field cancelled"));
+				if (Chamber.Profile.Version != Inputs.GeometryVersion)
+					return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Chamber profile version mismatch"));
+			}
+			for (const auto& Segment : Plan->Segments)
+			{
+				if (IsCancelled()) return FVoxelLandM5FinalFieldInternals::Error(E::Cancelled, TEXT("Final field cancelled"));
+				if (Segment.Profile.Version != Inputs.GeometryVersion)
+					return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Segment profile version mismatch"));
+			}
+			int64 PrimitiveWork = 0;
+			if (!TryMultiplyNonNegative(int64(Plan->Chambers.Num()) + Plan->Segments.Num(), 1, PrimitiveWork)
+				|| !TryAdd(PerSample, 1, PerSample) || !TryAdd(PerSample, PrimitiveWork, PerSample))
 			{
 				return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Final field work overflow"));
 			}
@@ -230,13 +250,25 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 			}
 		}
 	}
+	// ChunkCarve independently validates every plan and primitive before sampling.
+	// Charge that second inventory scan as well as this builder's scan.
+	if (!Budget->TryChargeWork(PlanInventoryWork))
+		return FVoxelLandM5FinalFieldInternals::Error(E::BudgetExceeded, TEXT("Carve inventory budget exhausted"));
+	int64 CarveWork = 0;
+	if (!TryAdd(Work, PlanInventoryWork, CarveWork))
+		return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Carve work overflow"));
+	bool bCarveCancelled = false;
+	const auto CheckCarveCancelled = [&IsCancelled, &bCarveCancelled]() {
+		bCarveCancelled = bCarveCancelled || IsCancelled();
+		return bCarveCancelled;
+	};
 	TArray<int16> Samples;
 	if (!VoxelLand::M5::ChunkCarve::TryCarve(Inputs.Baseline, Inputs.Size, Inputs.OriginCm, Inputs.SpacingCm,
 			Inputs.VoxelSizeCm, Inputs.bNetworkEnabled, bPocket, Inputs.Plans, Inputs.NetworkAllowed,
-			Inputs.PocketAllowed, Inputs.Protected, Present, Distances, OutputBytes, Work, IsCancelled, Samples))
+			Inputs.PocketAllowed, Inputs.Protected, Present, Distances, OutputBytes, CarveWork, CheckCarveCancelled, Samples))
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(
-			IsCancelled() ? E::Cancelled : E::Unproven, TEXT("Final field composition failed"));
+			bCarveCancelled ? E::Cancelled : E::Unproven, TEXT("Final field composition failed"));
 	}
 	if (IsCancelled())
 	{

@@ -144,6 +144,27 @@ bool FVoxelLandM5FinalFieldTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("network chamber center"), Network->GetDensity()[0], int16(1024));
 	TestEqual(TEXT("network respects protection"), Network->GetDensity()[1], int16(-3000));
+	Inputs.GeometryVersion = 2;
+	const auto PreviousNetwork = Network;
+	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Network);
+	TestEqual(TEXT("unbound profile geometry rejected"), Error.Code, EVoxelLandM5ErrorCode::UnsupportedVersion);
+	TestTrue(TEXT("geometry failure preserves output"), Network == PreviousNetwork);
+	Inputs.GeometryVersion = 1;
+	int32 Polls = 0;
+	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), [&Polls] { return ++Polls == 3; }, Network);
+	TestEqual(TEXT("one-shot inventory cancellation"), Error.Code, EVoxelLandM5ErrorCode::Cancelled);
+	TestTrue(TEXT("cancellation preserves output"), Network == PreviousNetwork);
+	Polls = 0;
+	// Initial, plan, chamber and mask checks precede ChunkCarve's initial,
+	// plan and chamber checks. A one-shot pulse in its inventory must survive.
+	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), [&Polls] { return ++Polls == 7; }, Network);
+	TestEqual(TEXT("one-shot inner inventory cancellation"), Error.Code, EVoxelLandM5ErrorCode::Cancelled);
+	TestTrue(TEXT("inner cancellation preserves output"), Network == PreviousNetwork);
+	Plan->Chambers[0].Profile.Version = 2;
+	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Network);
+	TestEqual(TEXT("mixed profile rejected"), Error.Code, EVoxelLandM5ErrorCode::InvalidInput);
+	TestTrue(TEXT("mixed profile preserves output"), Network == PreviousNetwork);
+	Plan->Chambers[0].Profile.Version = 1;
 	Inputs.Pockets.AmplitudeCm = 400;
 	Inputs.PocketAllowed = Allowed;
 	Inputs.Protected = NoProtection;

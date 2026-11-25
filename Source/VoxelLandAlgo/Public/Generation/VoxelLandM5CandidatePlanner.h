@@ -21,6 +21,11 @@ class FVoxelLandM5CandidateResult;
 // the caller owns and accounts for any external callback resources.
 namespace VoxelLand::M5::CandidatePlanner
 {
+// Explicit version is retained in the immutable plan; unsupported versions fail.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5RegionCoord& Region, int32 GeometryVersion,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>& Out);
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	const FVoxelLandM5RegionCoord& Region, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>& Out);

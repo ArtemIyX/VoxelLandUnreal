@@ -46,7 +46,7 @@ bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelL
 		Out = M4Density;
 		return true;
 	}
-	if (VoxelSizeCm <= 0 || PositionCm.X < -1048576 || PositionCm.X > 1048576 || PositionCm.Y < -1048576
+	if (Plan.GeometryVersion != 1 || VoxelSizeCm <= 0 || PositionCm.X < -1048576 || PositionCm.X > 1048576 || PositionCm.Y < -1048576
 		|| PositionCm.Y > 1048576 || PositionCm.Z < -1048576 || PositionCm.Z > 1048576)
 	{
 		return false;
@@ -65,7 +65,8 @@ bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelL
 	uint64 Processed = 0;
 	for (const FVoxelLandM5Chamber& Chamber : Plan.Chambers)
 	{
-		if ((Processed++ % 64 == 0 && IsCancelled()) || !Chamber.bHasId)
+		if ((Processed++ % 64 == 0 && IsCancelled()) || !Chamber.bHasId
+			|| Chamber.Profile.Version != Plan.GeometryVersion)
 		{
 			return false;
 		}
@@ -78,7 +79,8 @@ bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelL
 	}
 	for (const FVoxelLandM5Segment& Segment : Plan.Segments)
 	{
-		if ((Processed++ % 64 == 0 && IsCancelled()) || !Segment.bHasId || !Segment.bHasConnectionId)
+		if ((Processed++ % 64 == 0 && IsCancelled()) || !Segment.bHasId || !Segment.bHasConnectionId
+			|| Segment.Profile.Version != Plan.GeometryVersion)
 		{
 			return false;
 		}

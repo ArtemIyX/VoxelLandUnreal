@@ -146,6 +146,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::EntrancePlanner::Build(const FVoxelLandM5C
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate budget or source descriptor mismatch"));
 	}
 	const FVoxelLandM5CavePlan& Candidate = CandidateResult->GetPlan();
+	if (Candidate.GeometryVersion != 1)
+	{
+		return FVoxelLandM5EntrancePlannerInternals::M5EntranceError(EVoxelLandM5ErrorCode::Unproven,
+			TEXT("Entrance geometry is not available for this profile version"));
+	}
 	// Routes own nested arrays and junctions add another array. This stage does
 	// not yet account for either, so reject before making an uncharged copy.
 	if (!Candidate.Routes.IsEmpty() || !Candidate.Junctions.IsEmpty())

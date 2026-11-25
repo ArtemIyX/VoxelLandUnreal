@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandM5PointCm.h"
+#include "Data/Structs/VoxelLandM5SegmentProfile.h"
 
 // Endpoints are logical global centimetres, never chunk-local coordinates.
 struct FVoxelLandM5Segment
@@ -13,4 +14,5 @@ struct FVoxelLandM5Segment
 	FVoxelLandM5PointCm StartCm;
 	FVoxelLandM5PointCm EndCm;
 	int32 RadiusCm = 0;
+	FVoxelLandM5SegmentProfile Profile;
 };

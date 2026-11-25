@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Generation/VoxelLandM5CandidatePlanner.h"
 #include "Generation/VoxelLandM5EntrancePlanner.h"
+#include "Generation/VoxelLandM5IdealRouteValidation.h"
 #include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Misc/AutomationTest.h"
@@ -534,6 +535,43 @@ bool FVoxelLandM5CandidateFailureTest::RunTest(const FString& Parameters)
 	E = M5CandidateBuild(S, 42, {}, [] { return false; }, Out);
 	TestTrue(TEXT("empty bounds rejected"), E.Code == EVoxelLandM5ErrorCode::InvalidInput);
 	TestEqual(TEXT("invalid input preserves output"), Out->GetPlan().Chambers[0].Id, uint64(0));
+	return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5ProfileCandidateTest,
+	"VoxelLand.M5.Candidates.ProfileVersion", M5CandidateFlags)
+bool FVoxelLandM5ProfileCandidateTest::RunTest(const FString& Parameters)
+{
+	FVoxelLandM5CaveSettings S = M5CandidateSettings();
+	S.Capsule.RadiusCm = 1;
+	S.Capsule.StandingHeightCm = 4;
+	S.Capsule.ClearanceMarginCm = 0;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!FVoxelLandM5Budget::TryCreate(S.Limits.MaxBytes, S.Limits.MaxValidationWork, Budget)) return false;
+	FM5CandidateHandle Result;
+	const auto Never = [] { return false; };
+	const auto Built = VoxelLand::M5::CandidatePlanner::Build(S, 42, {}, 2, Budget.ToSharedRef(), Never, Result);
+	if (!TestTrue(TEXT("profile candidate built"), Built.Code == EVoxelLandM5ErrorCode::None && Result.IsValid()))
+		return false;
+	const auto& Plan = Result->GetPlan();
+	TestEqual(TEXT("plan owns geometry version"), Plan.GeometryVersion, 2);
+	for (const auto& Chamber : Plan.Chambers)
+	{
+		TestEqual(TEXT("profile version"), Chamber.Profile.Version, 2);
+		TestEqual(TEXT("chamber floor"), Chamber.Profile.FloorCm, Chamber.CenterCm.Z - 2);
+		TestEqual(TEXT("chamber ceiling"), Chamber.Profile.CeilingCm, Chamber.CenterCm.Z + 2);
+	}
+	for (const auto& Segment : Plan.Segments)
+	{
+		TestEqual(TEXT("segment version"), Segment.Profile.Version, 2);
+		TestEqual(TEXT("start floor joins node"), Segment.Profile.StartFloorCm, Segment.StartCm.Z - 2);
+		TestEqual(TEXT("end ceiling joins node"), Segment.Profile.EndCeilingCm, Segment.EndCm.Z + 2);
+	}
+	const auto Route = VoxelLand::M5::IdealRouteValidation::Validate(S, 42, {}, Result.ToSharedRef(), Budget.ToSharedRef(), Never);
+	TestTrue(TEXT("profile routes fail closed"), Route.Code == EVoxelLandM5ErrorCode::Unproven);
+	FM5CandidateHandle Prior = Result;
+	const auto Unsupported = VoxelLand::M5::CandidatePlanner::Build(S, 42, {}, 3, Budget.ToSharedRef(), Never, Result);
+	TestTrue(TEXT("unsupported version rejected"), Unsupported.Code == EVoxelLandM5ErrorCode::UnsupportedVersion);
+	TestTrue(TEXT("failed version preserves output"), Prior.Get() == Result.Get());
 	return true;
 }
 #endif

@@ -40,6 +40,7 @@ bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Ba
 	}
 	const bool bEnabled = bNetworkEnabled || bPocketEnabled;
 	int64 WorkPerSample = 1;
+	int64 InventoryWork = 0;
 	if (bEnabled)
 	{
 		if (SpacingCm <= 0 || VoxelSizeCm <= 0 || Protected.Num() != Count
@@ -68,12 +69,18 @@ bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Ba
 		{
 			for (const auto& Plan : Plans)
 			{
-				if (IsCancelled() || !Plan.IsValid() || !TryAdd(WorkPerSample, 1, WorkPerSample)
-					|| !TryAdd(WorkPerSample, Plan->Chambers.Num(), WorkPerSample)
-					|| !TryAdd(WorkPerSample, Plan->Segments.Num(), WorkPerSample))
-				{
+				if (IsCancelled() || !Plan.IsValid() || Plan->GeometryVersion != 1)
 					return false;
-				}
+				if (!TryAdd(InventoryWork, 1 + int64(Plan->Chambers.Num()) + Plan->Segments.Num(), InventoryWork)
+					|| InventoryWork > MaxWork) return false;
+				for (const auto& Chamber : Plan->Chambers)
+					if (IsCancelled() || Chamber.Profile.Version != Plan->GeometryVersion) return false;
+				for (const auto& Segment : Plan->Segments)
+					if (IsCancelled() || Segment.Profile.Version != Plan->GeometryVersion) return false;
+				int64 PrimitiveWork = 0;
+				if (!TryMultiplyNonNegative(int64(Plan->Chambers.Num()) + Plan->Segments.Num(), 1, PrimitiveWork)
+					|| !TryAdd(WorkPerSample, 1, WorkPerSample) || !TryAdd(WorkPerSample, PrimitiveWork, WorkPerSample))
+					return false;
 			}
 		}
 		if (bPocketEnabled && !TryAdd(WorkPerSample, 1, WorkPerSample))
@@ -82,7 +89,7 @@ bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Ba
 		}
 	}
 	int64 Work = 0;
-	if (!TryMultiplyNonNegative(Count, WorkPerSample, Work) || Work > MaxWork)
+	if (!TryMultiplyNonNegative(Count, WorkPerSample, Work) || !TryAdd(Work, InventoryWork, Work) || Work > MaxWork)
 	{
 		return false;
 	}

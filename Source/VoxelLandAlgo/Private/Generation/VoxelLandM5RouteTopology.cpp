@@ -119,6 +119,9 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructureForJob(con
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate source or budget mismatch"));
 	}
 	const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
+	if (Plan.GeometryVersion != 1)
+		return FVoxelLandM5RouteTopologyInternals::Failure(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Profile route containment is not yet proven"));
 	const FVoxelLandM5ResourceLimits& L = Settings.Limits;
 	const auto& Topology = Settings.Topology;
 	int64 BudgetBytes = 0, BudgetWork = 0;

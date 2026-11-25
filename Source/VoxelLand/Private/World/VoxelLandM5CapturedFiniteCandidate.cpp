@@ -56,7 +56,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5CapturedFiniteCandidate::Build(
 	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate;
 	const FVoxelLandM5RegionCoord FiniteRegion;
 	FVoxelLandM5Diagnostic Result = VoxelLand::M5::CandidatePlanner::Build(
-		Settings, Snapshot.Base.Seed, FiniteRegion, Budget, IsCancelled, Candidate);
+		Settings, Snapshot.Base.Seed, FiniteRegion, Snapshot.Manifest.Geometry, Budget, IsCancelled, Candidate);
 	if (Result.Code != E::None)
 	{
 		return Result;

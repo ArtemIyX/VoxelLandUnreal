@@ -82,6 +82,11 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SegmentCoverage::Check(const FVoxelLandM5S
 		return FVoxelLandM5SegmentCoverageInternals::SegmentCoverageFailure(
 			EVoxelLandM5ErrorCode::Unproven, TEXT("Segment transition is not a straight walk"), Segment);
 	}
+	if (Segment.Profile.Version != 1)
+	{
+		return FVoxelLandM5SegmentCoverageInternals::SegmentCoverageFailure(
+			EVoxelLandM5ErrorCode::Unproven, TEXT("Profile containment is not yet proven"), Segment);
+	}
 	using I = FVoxelLandM5SegmentCoverageInternals;
 	const int64 Height = Capsule.StandingHeightCm;
 	const int64 Radius = Capsule.RadiusCm;

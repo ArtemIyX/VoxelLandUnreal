@@ -165,6 +165,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FinalField::EvaluateChunk(const FVoxelLand
 	Field.VoxelSizeCm = int32(V); Field.Baseline = Cropped; Field.PocketAllowed = GatePocket;
 	Field.Protected = Masks->GetProtected(); Field.Pockets = Snapshot.Caves.Pockets;
 	Field.PocketNoiseVersion = Snapshot.Manifest.PocketNoise; Field.CompositionVersion = Snapshot.Manifest.Composition;
+	Field.GeometryVersion = Snapshot.Manifest.Geometry;
 	Field.WorldSeed = Snapshot.Base.Seed; Field.StageId = Snapshot.Caves.StageId;
 	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe> Evaluated;
 	Result = FVoxelLandM5FinalField::Build(Field, Job, IsCancelled, Evaluated);

@@ -53,7 +53,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5FiniteContributorSeal::Build(
 	Settings.Bounds = InInfluence->GetDeclaredBounds();
 	const FVoxelLandM5RegionCoord Region;
 	TVoxelLandM5ConstPtr<FVoxelLandM5CandidateResult> CandidateResult;
-	auto Result = VoxelLand::M5::CandidatePlanner::Build(Settings, Snapshot.Base.Seed, Region, InBudget, IsCancelled, CandidateResult);
+	auto Result = VoxelLand::M5::CandidatePlanner::Build(Settings, Snapshot.Base.Seed, Region, Snapshot.Manifest.Geometry, InBudget, IsCancelled, CandidateResult);
 	if (Result.Code != E::None) return Result;
 	if (!CandidateResult || !CandidateResult->MatchesSource(Settings, Snapshot.Base.Seed, Region))
 		return SealError(E::Unproven, TEXT("Canonical finite candidate missing"));

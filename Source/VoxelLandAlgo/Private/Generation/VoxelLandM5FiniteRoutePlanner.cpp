@@ -199,6 +199,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FiniteRoutePlanner::Build(const FVoxelLand
 		return I::Error(E::Cancelled, TEXT("Finite route planning cancelled"));
 	}
 	const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
+	if (Plan.GeometryVersion != 1)
+		return I::Error(E::Unproven, TEXT("Profile route construction is not yet proven"));
 	int64 MaxBytes = 0, MaxWork = 0;
 	Budget->GetLimits(MaxBytes, MaxWork);
 	const int64 ConnectionCount = Plan.Connections.Num();

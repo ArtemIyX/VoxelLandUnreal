@@ -175,7 +175,7 @@ bool FVoxelLandM5ChunkCarveMaskTest::RunTest(const FString& Parameters)
 	};
 	TestTrue(TEXT("independent masks succeed"),
 		TryCarve(Baseline, FIntVector(4, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, true, true, Plans, Network,
-			Pocket, Protected, PocketValues, 8, 16, NotCancelled, Out));
+			Pocket, Protected, PocketValues, 8, 18, NotCancelled, Out));
 	if (Out.Num() != 4)
 	{
 		AddError(TEXT("Combined processing did not produce the expected samples"));
@@ -189,7 +189,7 @@ bool FVoxelLandM5ChunkCarveMaskTest::RunTest(const FString& Parameters)
 	Pocket.Pop();
 	TestFalse(TEXT("missing pocket mask rejected"),
 		TryCarve(Baseline, FIntVector(4, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, true, true, Plans, Network,
-			Pocket, Protected, PocketValues, 8, 16, NotCancelled, Out));
+			Pocket, Protected, PocketValues, 8, 18, NotCancelled, Out));
 	TestTrue(TEXT("mask failure is atomic"), Out == TArray<int16>({777}));
 	return true;
 }
@@ -277,6 +277,30 @@ bool FVoxelLandM5ChunkCarvePocketPresenceTest::RunTest(const FString& Parameters
 		ChunkCarve::TryCarve(Baseline, FIntVector(6, 1, 1), M5ChunkCarvePoint(0, 0, 0), 100, 100, false, true, Plans,
 			Allowed, Allowed, Protected, Presence, Pockets, 12, 12, NotCancelled, Out));
 	TestTrue(TEXT("failure retains output"), Out == TArray<int16>({777}));
+	return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5ChunkCarveInventoryTest,
+	"VoxelLand.M5.ChunkCarve.InventoryBudget", M5ChunkCarveFlags)
+bool FVoxelLandM5ChunkCarveInventoryTest::RunTest(const FString& Parameters)
+{
+	using namespace VoxelLand::M5::ChunkCarve;
+	const TArray<int16> Baseline = {-100};
+	const TArray<uint8> Allowed = {1}, Protected = {0};
+	const TArray<int64> NoPockets;
+	auto Plan = MakeShared<FVoxelLandM5CavePlan, ESPMode::ThreadSafe>();
+	FVoxelLandM5Chamber Chamber;
+	Chamber.bHasId = true;
+	Chamber.RadiusCm = 10;
+	Plan->Chambers.Add(Chamber);
+	const TArray<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans = {Plan};
+	TArray<int16> Out = {777};
+	const auto Never = [] { return false; };
+	// One sample: base + plan + chamber = 3; inventory: plan + chamber = 2.
+	TestFalse(TEXT("one below complete work"), TryCarve(Baseline, FIntVector(1, 1, 1), {}, 1, 100,
+		true, false, Plans, Allowed, Allowed, Protected, NoPockets, 2, 4, Never, Out));
+	TestEqual(TEXT("exhaustion preserves output"), Out[0], int16(777));
+	TestTrue(TEXT("exact complete work"), TryCarve(Baseline, FIntVector(1, 1, 1), {}, 1, 100,
+		true, false, Plans, Allowed, Allowed, Protected, NoPockets, 2, 5, Never, Out));
 	return true;
 }
 #endif

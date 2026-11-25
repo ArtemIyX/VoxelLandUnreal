@@ -6,6 +6,7 @@
 #include "Templates/Function.h"
 
 class FVoxelLandGenerator;
+class FVoxelLandWorkerContext;
 class FVoxelLandM5Budget;
 class FVoxelLandM5BudgetLease;
 
@@ -39,7 +40,18 @@ public:
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow);
 
+	// Reuses a caller-admitted worker, synchronously on its owning thread.
+	// Exact generator/worker identity is checked before any budget charge or allocation.
+	static FVoxelLandM5Diagnostic Build(TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
+		FVoxelLandWorkerContext& Worker, const FIntVector& MinChunk, const FIntVector& MaxChunk, int32 MaxChunks,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow);
+
 private:
+	static FVoxelLandM5Diagnostic BuildInternal(TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
+		FVoxelLandWorkerContext* Worker, const FIntVector& MinChunk, const FIntVector& MaxChunk, int32 MaxChunks,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow);
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FVoxelLandM5ScratchRoofFixtureFactory;
 #endif

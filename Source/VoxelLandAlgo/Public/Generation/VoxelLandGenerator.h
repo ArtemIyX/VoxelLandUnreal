@@ -109,6 +109,8 @@ public:
 		const FVoxelLandM4UnlimitedConfig& Config,
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& OutGenerator);
 	FVoxelLandError CreateWorker(TUniquePtr<FVoxelLandWorkerContext>& OutWorker) const;
+	// Checks exact generator identity and creating thread without allocating.
+	bool OwnsWorkerOnCurrentThread(const FVoxelLandWorkerContext& Worker) const;
 	// Proof-only hint; chunk sampling still runs and remains authoritative.
 	EVoxelLandChunkClassification ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const;
 	// Thread-safe read-only demand gate. M3 returns success and retains its

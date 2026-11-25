@@ -68,6 +68,24 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 	const FIntVector& MaxChunk, int32 MaxChunks, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow)
 {
+	return BuildInternal(Generator, nullptr, MinChunk, MaxChunk, MaxChunks, Budget, IsCancelled, OutWindow);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
+	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator, FVoxelLandWorkerContext& Worker,
+	const FIntVector& MinChunk, const FIntVector& MaxChunk, int32 MaxChunks,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow)
+{
+	return BuildInternal(Generator, &Worker, MinChunk, MaxChunk, MaxChunks, Budget, IsCancelled, OutWindow);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::BuildInternal(
+	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator, FVoxelLandWorkerContext* SuppliedWorker,
+	const FIntVector& MinChunk, const FIntVector& MaxChunk, int32 MaxChunks,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe>& OutWindow)
+{
 	using namespace VoxelLand::M5::CheckedMath;
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
@@ -76,6 +94,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 			E::Cancelled, TEXT("Baseline generation cancelled"));
 	}
 	if (IsInGameThread() || MaxChunks < 1 || MaxChunks > 512
+		|| (SuppliedWorker && !Generator->OwnsWorkerOnCurrentThread(*SuppliedWorker))
 		|| (!Generator->IsM4Unlimited() && !Generator->GetM4HeightGrid().IsValid()))
 	{
 		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
@@ -176,16 +195,20 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
 			E::BudgetExceeded, TEXT("Baseline assembly budget exhausted"));
 	}
-	TUniquePtr<FVoxelLandWorkerContext> Worker;
-	const FVoxelLandError WorkerError = Generator->CreateWorker(Worker);
-	if (WorkerError)
+	TUniquePtr<FVoxelLandWorkerContext> OwnedWorker;
+	if (!SuppliedWorker)
 	{
-		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowM4Error(WorkerError, false);
-	}
-	if (!Worker)
-	{
-		return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
-			E::ProviderUnavailable, TEXT("M4 worker could not be created"));
+		const FVoxelLandError WorkerError = Generator->CreateWorker(OwnedWorker);
+		if (WorkerError)
+		{
+			return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowM4Error(WorkerError, false);
+		}
+		if (!OwnedWorker)
+		{
+			return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowError(
+				E::ProviderUnavailable, TEXT("M4 worker could not be created"));
+		}
+		SuppliedWorker = OwnedWorker.Get();
 	}
 	TSharedPtr<FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Scratch =
 		MakeShareable(new FVoxelLandM5BaselineWindow(Generator, MoveTemp(OutputLease)));
@@ -213,7 +236,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaselineWindow::Build(
 				Key.Coordinate = FIntVector(
 					int32(int64(MinChunk.X) + X), int32(int64(MinChunk.Y) + Y), int32(int64(MinChunk.Z) + Z));
 				TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
-				const FVoxelLandError Error = Generator->GenerateChunkCancellable(Key, *Worker, Chunk, IsCancelled);
+				const FVoxelLandError Error = Generator->GenerateChunkCancellable(Key, *SuppliedWorker, Chunk, IsCancelled);
 				if (Error)
 				{
 					return FVoxelLandM5BaselineWindowInternals::M5BaselineWindowM4Error(Error, false);

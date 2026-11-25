@@ -18,7 +18,8 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 	FString Failure;
 	bool bAnalytic = false, bExactChunk = false, bAtomic = false, bBudget = false, bCancelled = false;
 	bool bLocalMatches = false, bMidCancellation = false, bBoundary = false, bNonuniformSmooth = false;
-	bool bFixedLocalMatches = false, bSampleLimits = false;
+	bool bFixedLocalMatches = false, bSampleLimits = false, bReusedWorker = false, bForeignWorker = false;
+	bool bWrongThread = false, bWorkerCancelled = false;
 	const bool bCompleted = Async(EAsyncExecution::ThreadPool, [&]() {
 		FVoxelLandProgramDraft Draft;
 		Draft.RegisterCount = 1;
@@ -101,6 +102,40 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 				}
 			}
 		}
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> ReuseBudget;
+		FVoxelLandM5Budget::TryCreate(16 * 1024 * 1024, 10000000, ReuseBudget);
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Reused;
+		const auto ReuseResult = FVoxelLandM5BaselineWindow::Build(Generator.ToSharedRef(), *Worker,
+			Min, Max, 8, ReuseBudget.ToSharedRef(), [] { return false; }, Reused);
+		bReusedWorker = ReuseResult.Code == EVoxelLandM5ErrorCode::None && Reused
+			&& Reused->GetSize() == Window->GetSize() && Reused->GetDensity().Num() == Window->GetDensity().Num();
+		if (bReusedWorker)
+			for (int32 I = 0; I < Window->GetDensity().Num(); ++I)
+				bReusedWorker &= Reused->GetDensity()[I] == Window->GetDensity()[I];
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> ForeignGenerator;
+		TUniquePtr<FVoxelLandWorkerContext> ForeignWorker;
+		if (FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, false, ForeignGenerator)
+			|| !ForeignGenerator || ForeignGenerator->CreateWorker(ForeignWorker) || !ForeignWorker)
+			return false;
+		int64 WorkerBeforeLive = 0, WorkerBeforePeak = 0, WorkerBeforeWork = 0;
+		int64 WorkerAfterLive = 0, WorkerAfterPeak = 0, WorkerAfterWork = 0;
+		ReuseBudget->GetUsage(WorkerBeforeLive, WorkerBeforePeak, WorkerBeforeWork);
+		const auto PreviousReuse = Reused;
+		const auto ForeignResult = FVoxelLandM5BaselineWindow::Build(Generator.ToSharedRef(), *ForeignWorker,
+			Min, Max, 8, ReuseBudget.ToSharedRef(), [] { return false; }, Reused);
+		ReuseBudget->GetUsage(WorkerAfterLive, WorkerAfterPeak, WorkerAfterWork);
+		bForeignWorker = ForeignResult.Code == EVoxelLandM5ErrorCode::InvalidInput && Reused == PreviousReuse
+			&& WorkerBeforeLive == WorkerAfterLive && WorkerBeforePeak == WorkerAfterPeak && WorkerBeforeWork == WorkerAfterWork;
+		const auto ThreadResult = Async(EAsyncExecution::Thread, [&] {
+			return FVoxelLandM5BaselineWindow::Build(Generator.ToSharedRef(), *Worker,
+				Min, Max, 8, ReuseBudget.ToSharedRef(), [] { return false; }, Reused);
+		}).Get();
+		ReuseBudget->GetUsage(WorkerAfterLive, WorkerAfterPeak, WorkerAfterWork);
+		bWrongThread = ThreadResult.Code == EVoxelLandM5ErrorCode::InvalidInput && Reused == PreviousReuse
+			&& WorkerBeforeLive == WorkerAfterLive && WorkerBeforePeak == WorkerAfterPeak && WorkerBeforeWork == WorkerAfterWork;
+		const auto WorkerCancel = FVoxelLandM5BaselineWindow::Build(Generator.ToSharedRef(), *Worker,
+			Min, Max, 8, ReuseBudget.ToSharedRef(), [] { return true; }, Reused);
+		bWorkerCancelled = WorkerCancel.Code == EVoxelLandM5ErrorCode::Cancelled && Reused == PreviousReuse;
 		const auto Previous = Window;
 		const FVoxelLandM5Diagnostic Invalid = FVoxelLandM5BaselineWindow::Build(
 			Generator.ToSharedRef(), Min, Max, 7, Budget.ToSharedRef(), [] { return false; }, Window);
@@ -370,6 +405,10 @@ bool FVoxelLandM5BaselineWindowTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("worker setup: %s"), *Failure), bCompleted);
 	TestTrue(TEXT("flat-field independent reference across shared planes"), bAnalytic);
 	TestTrue(TEXT("merged samples match direct M4 chunk"), bExactChunk);
+	TestTrue(TEXT("admitted worker reproduces entire baseline window"), bReusedWorker);
+	TestTrue(TEXT("foreign worker rejected before admission"), bForeignWorker);
+	TestTrue(TEXT("wrong-thread worker rejected before admission"), bWrongThread);
+	TestTrue(TEXT("admitted worker cancellation preserves output"), bWorkerCancelled);
 	TestTrue(TEXT("unsupported domain preserves prior result"), bAtomic);
 	TestTrue(TEXT("budget failure preserves prior result"), bBudget);
 	TestTrue(TEXT("cancellation preserves prior result"), bCancelled);

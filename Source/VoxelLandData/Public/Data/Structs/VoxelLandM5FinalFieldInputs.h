@@ -11,6 +11,7 @@ struct FVoxelLandM5CavePlan;
 // The caller retains every referenced allocation throughout Build.
 struct VOXELLANDDATA_API FVoxelLandM5FinalFieldInputs
 {
+	FVoxelLandM5FinalFieldInputs();
 	FIntVector Size = FIntVector::ZeroValue;
 	FVoxelLandM5PointCm OriginCm;
 	int64 SpacingCm = 0;

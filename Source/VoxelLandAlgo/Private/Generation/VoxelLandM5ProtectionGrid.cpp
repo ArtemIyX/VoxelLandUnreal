@@ -163,14 +163,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProtectionGrid::Project(FIntVector SampleSize
 		return FVoxelLandM5ProtectionGridInternals::Error(EVoxelLandM5ErrorCode::Cancelled,
 			TEXT("Protection projection cancelled"));
 	}
-	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
-	if (!Budget->TryReserveBytes(Bytes, Lease) || !Budget->TryChargeWork(Work))
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> SampleLease;
+	if (!Budget->TryReserveBytes(Bytes, SampleLease) || !Budget->TryChargeWork(Work))
 	{
 		return FVoxelLandM5ProtectionGridInternals::Error(EVoxelLandM5ErrorCode::BudgetExceeded,
 			TEXT("Protection sample admission exhausted"));
 	}
 	TSharedPtr<FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe> Scratch =
-		MakeShareable(new FVoxelLandM5ProtectionSamples(MoveTemp(Lease)));
+		MakeShareable(new FVoxelLandM5ProtectionSamples(MoveTemp(SampleLease)));
 	Scratch->Samples.SetNumUninitialized(int32(Count));
 	int32 OutputIndex = 0;
 	for (int64 Z = 0; Z < SampleSize.Z; ++Z)

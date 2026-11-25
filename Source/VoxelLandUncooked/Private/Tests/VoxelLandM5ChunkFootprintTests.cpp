@@ -38,7 +38,21 @@ bool FVoxelLandM5ChunkFootprintTest::RunTest(const FString& Parameters)
 		TEXT("slope without smoothing"), VoxelLand::M5::ChunkFootprint::TryBuild(Key, 100, false, true, Footprint));
 	TestEqual(TEXT("slope only X"), Footprint.HeightInputMin.X, int64(-3400));
 	TestEqual(TEXT("density without smoothing"), Footprint.DensityInputMin.X, int64(-3300));
+	TestTrue(TEXT("mask and owner footprints with sequential filters"),
+		VoxelLand::M5::ChunkFootprint::TryBuildExpanded(Key, 100, true, true, 3, 1, Footprint));
+	TestEqual(TEXT("owner X minimum"), Footprint.OwnerMin.X, int64(-3400));
+	TestEqual(TEXT("owner then mask baseline X minimum"), Footprint.BaselineMin.X, int64(-3700));
+	TestEqual(TEXT("owner then mask baseline X maximum"), Footprint.BaselineMax.X, int64(500));
+	TestEqual(TEXT("owner mask then smooth X minimum"), Footprint.DensityInputMin.X, int64(-3800));
+	TestEqual(TEXT("owner mask smooth then slope X minimum"), Footprint.HeightInputMin.X, int64(-3900));
+	TestEqual(TEXT("slope adds no Z stencil"), Footprint.HeightInputMax.Z, int64(7000));
+	TestTrue(TEXT("owner and mask halos accumulate"),
+		VoxelLand::M5::ChunkFootprint::TryBuildExpanded(Key, 100, false, false, 1, 3, Footprint));
+	TestEqual(TEXT("owner plus mask X minimum"), Footprint.BaselineMin.X, int64(-3700));
+	TestEqual(TEXT("owner union Z maximum"), Footprint.OwnerMax.Z, int64(6800));
 	const FVoxelLandM5ChunkFootprint Before = Footprint;
+	TestFalse(TEXT("negative halo rejected"),
+		VoxelLand::M5::ChunkFootprint::TryBuildExpanded(Key, 100, false, false, -1, 0, Footprint));
 	TestFalse(TEXT("zero size rejected"), VoxelLand::M5::ChunkFootprint::TryBuild(Key, 0, true, true, Footprint));
 	TestFalse(TEXT("negative size rejected"), VoxelLand::M5::ChunkFootprint::TryBuild(Key, -1, true, true, Footprint));
 	Key.LOD = 1;

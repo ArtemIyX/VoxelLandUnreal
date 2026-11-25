@@ -164,9 +164,9 @@ public:
 			}
 			for (const auto& Node : Graph.Nodes)
 			{
-				const FTopLevelAssetPath AssetPath = Node.FunctionPath.GetAssetPath();
-				const uint64 PathLength = uint64(AssetPath.GetPackageName().GetStringLength())
-										+ uint64(AssetPath.GetAssetName().GetStringLength())
+				const FTopLevelAssetPath FunctionAssetPath = Node.FunctionPath.GetAssetPath();
+				const uint64 PathLength = uint64(FunctionAssetPath.GetPackageName().GetStringLength())
+										+ uint64(FunctionAssetPath.GetAssetName().GetStringLength())
 										+ uint64(Node.FunctionPath.GetSubPathUtf8String().Len()) + 2;
 				if (Node.Configuration.Num() > 65536 || ConfigurationBytes > 1048576 - Node.Configuration.Num()
 					|| Node.Pins.Num() > 64 || Node.Pins.Num() > 1024 - PinCount || PathLength > 2048)

@@ -522,15 +522,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 					EVoxelLandM5ErrorCode::Unproven, TEXT("Waypoints do not match explicit anchors"));
 			}
 			FVoxelLandM5PointCm PreviousCenter;
-			for (int32 Index = 0; Index < Segments.Num(); ++Index)
+			for (int32 SegmentIndex = 0; SegmentIndex < Segments.Num(); ++SegmentIndex)
 			{
 				if (IsCancelled())
 				{
 					return FVoxelLandM5RouteBuilderInternals::M5RouteBuilderFailure(
 						EVoxelLandM5ErrorCode::Cancelled, TEXT("Route construction cancelled"));
 				}
-				const auto& Segment = Segments[Index];
-				for (int32 Previous = 0; Previous < Index; ++Previous)
+				const auto& Segment = Segments[SegmentIndex];
+				for (int32 Previous = 0; Previous < SegmentIndex; ++Previous)
 				{
 					if (IsCancelled())
 					{
@@ -544,7 +544,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 					}
 				}
 				bool bReverse = Choice.bReverseFirst;
-				if (Index > 0)
+				if (SegmentIndex > 0)
 				{
 					if (FVoxelLandM5RouteBuilderInternals::M5RouteBuilderSamePoint(PreviousCenter, Segment.StartCm))
 					{
@@ -562,8 +562,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteBuilder::Build(const FVoxelLandM5Cave
 				}
 				const auto& CenterStart = bReverse ? Segment.EndCm : Segment.StartCm;
 				const auto& CenterEnd = bReverse ? Segment.StartCm : Segment.EndCm;
-				const auto& WaypointStart = Choice.FeetWaypoints[Index];
-				const auto& WaypointEnd = Choice.FeetWaypoints[Index + 1];
+				const auto& WaypointStart = Choice.FeetWaypoints[SegmentIndex];
+				const auto& WaypointEnd = Choice.FeetWaypoints[SegmentIndex + 1];
 				if (WaypointStart.X != CenterStart.X || WaypointStart.Y != CenterStart.Y
 					|| WaypointEnd.X != CenterEnd.X || WaypointEnd.Y != CenterEnd.Y)
 				{

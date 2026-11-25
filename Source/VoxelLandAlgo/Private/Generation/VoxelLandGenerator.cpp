@@ -113,6 +113,12 @@ FVoxelLandWorkerContext::~FVoxelLandWorkerContext()
 	check(!Impl || Impl->Thread == FPlatformTLS::GetCurrentThreadId());
 }
 
+bool FVoxelLandGenerator::OwnsWorkerOnCurrentThread(const FVoxelLandWorkerContext& Worker) const
+{
+	return !IsInGameThread() && Worker.Impl && Worker.Impl->Owner.Get() == this
+		&& Worker.Impl->Thread == FPlatformTLS::GetCurrentThreadId();
+}
+
 EVoxelLandVMBackend FVoxelLandWorkerContext::GetVMBackend() const
 {
 	return Impl->VM;

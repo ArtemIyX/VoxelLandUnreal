@@ -100,10 +100,6 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 		return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Final field input size mismatch"));
 	}
 	int64 PerSample = 2;
-	if (bPocket && !TryAdd(PerSample, FVoxelLandM5FinalFieldInternals::PocketWorkPerSample, PerSample))
-	{
-		return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Final field work overflow"));
-	}
 	if (Inputs.bNetworkEnabled)
 	{
 		if (!Budget->TryChargeWork(Inputs.Plans.Num()))
@@ -140,10 +136,13 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Final field admission overflow"));
 	}
-	if (!Budget->TryChargeWork(Work))
+	// Admit the mask inventory before reading caller arrays; sampling charges follow
+	// only after all binary masks have been validated.
+	if (!Budget->TryChargeWork(Work) || ((Inputs.bNetworkEnabled || bPocket) && !Budget->TryChargeWork(Count)))
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(E::BudgetExceeded, TEXT("Final field work budget exhausted"));
 	}
+	int64 EligiblePockets = 0;
 	for (int32 Index = 0; Index < Count && (Inputs.bNetworkEnabled || bPocket); ++Index)
 	{
 		if (Index % 64 == 0 && IsCancelled())
@@ -155,6 +154,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 		{
 			return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Final field mask is not binary"));
 		}
+		EligiblePockets += bPocket && Inputs.PocketAllowed[Index] && !Inputs.Protected[Index] ? 1 : 0;
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> OutputLease;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> ScratchLease;
@@ -162,6 +162,26 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 		|| (bPocket && !Budget->TryReserveBytes(ScratchBytes, ScratchLease)))
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(E::BudgetExceeded, TEXT("Final field memory budget exhausted"));
+	}
+	TUniquePtr<FVoxelLandM5PocketNoiseCache> Cache;
+	if (EligiblePockets > 0)
+	{
+		FVoxelLandM5PointCm Last = Inputs.OriginCm;
+		Last.X += int64(Inputs.Size.X - 1) * Inputs.SpacingCm;
+		Last.Y += int64(Inputs.Size.Y - 1) * Inputs.SpacingCm;
+		Last.Z += int64(Inputs.Size.Z - 1) * Inputs.SpacingCm;
+		const auto CacheResult = FVoxelLandM5PocketNoiseCache::Build(Inputs.OriginCm, Last,
+			Inputs.Pockets.LatticeSpacingCm, Inputs.WorldSeed, Inputs.StageId, uint64(Inputs.Pockets.Salt),
+			Budget, IsCancelled, Cache);
+		if (CacheResult.Code != E::None && CacheResult.Code != E::BudgetExceeded) return CacheResult;
+		if (!Cache)
+		{
+			int64 PocketWork = 0;
+			if (!TryMultiplyNonNegative(EligiblePockets, FVoxelLandM5FinalFieldInternals::PocketWorkPerSample, PocketWork))
+				return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Pocket sampler work overflow"));
+			if (!Budget->TryChargeWork(PocketWork))
+				return FVoxelLandM5FinalFieldInternals::Error(E::BudgetExceeded, TEXT("Pocket sampler work budget exhausted"));
+		}
 	}
 	TArray<uint8> Present;
 	TArray<int64> Distances;
@@ -187,12 +207,18 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 					int32 Noise = 0;
 					bool bHas = false;
 					int64 Distance = 0;
-					if (!VoxelLand::M5::PocketNoise::TrySample(Inputs.OriginCm.X + int64(X) * Inputs.SpacingCm,
-							Inputs.OriginCm.Y + int64(Y) * Inputs.SpacingCm,
-							Inputs.OriginCm.Z + int64(Z) * Inputs.SpacingCm, Inputs.Pockets.LatticeSpacingCm,
-							Inputs.WorldSeed, Inputs.StageId, static_cast<uint64>(Inputs.Pockets.Salt), IsCancelled,
-							Noise)
-						|| !VoxelLand::M5::PocketMapping::TryMap(
+					const int64 PX = Inputs.OriginCm.X + int64(X) * Inputs.SpacingCm;
+					const int64 PY = Inputs.OriginCm.Y + int64(Y) * Inputs.SpacingCm;
+					const int64 PZ = Inputs.OriginCm.Z + int64(Z) * Inputs.SpacingCm;
+					if (Cache)
+					{
+						const auto SampleResult = Cache->Sample(PX, PY, PZ, IsCancelled, Noise);
+						if (SampleResult.Code != E::None) return SampleResult;
+					}
+					else if (!VoxelLand::M5::PocketNoise::TrySample(PX, PY, PZ, Inputs.Pockets.LatticeSpacingCm,
+						Inputs.WorldSeed, Inputs.StageId, uint64(Inputs.Pockets.Salt), IsCancelled, Noise))
+						return FVoxelLandM5FinalFieldInternals::Error(IsCancelled() ? E::Cancelled : E::Unproven, TEXT("Pocket sampling failed"));
+					if (!VoxelLand::M5::PocketMapping::TryMap(
 							true, Noise, Inputs.Pockets.ThresholdQ16, Inputs.Pockets.AmplitudeCm, bHas, Distance))
 					{
 						return FVoxelLandM5FinalFieldInternals::Error(

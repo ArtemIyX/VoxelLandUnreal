@@ -37,6 +37,13 @@ VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildOwned(const FVoxelLandM5BoundBasel
 	const FVoxelLandM5BaselineWindow& Window, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	FIntVector Start, FIntVector Count, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+// Source budget binds retained owners; job budget pays all new work and output.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildOwnedForJob(const FVoxelLandM5BoundBaseline& Baseline,
+	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5PocketSurfaceColumns& Columns,
+	const FVoxelLandM5BaselineWindow& Window, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
 // Compatibility overload for network candidates.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	const FVoxelLandM5BaselineWindow& Window,

@@ -115,8 +115,16 @@ FVoxelLandM5Diagnostic FVoxelLandM5ProtectionGrid::Project(FIntVector SampleSize
 	const FVoxelLandM5PointCm& SampleOriginCm, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe>& OutSamples) const
 {
+	return ProjectForJob(SampleSize, SampleOriginCm, Budget, Budget, IsCancelled, OutSamples);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5ProtectionGrid::ProjectForJob(FIntVector SampleSize,
+	const FVoxelLandM5PointCm& SampleOriginCm, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe>& OutSamples) const
+{
 	using namespace VoxelLand::M5::CheckedMath;
-	if (!Lease.IsValid() || !Budget->OwnsLease(*Lease))
+	if (!Lease.IsValid() || !SourceBudget->OwnsLease(*Lease))
 	{
 		return FVoxelLandM5ProtectionGridInternals::Error(EVoxelLandM5ErrorCode::InvalidInput,
 			TEXT("Protection grid belongs to a different budget"));

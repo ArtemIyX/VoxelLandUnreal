@@ -20,7 +20,7 @@ public:
 	// Caller establishes baseline provenance, complete plan influence, conservative
 	// masks, water, roof, entrance, route, attachment and enclosed-void safety.
 	// Neither this result nor a successful build proves those obligations.
-	// Enabled stages require composition version 1; enabled pockets additionally
+	// Enabled stages require composition version 2; enabled pockets additionally
 	// require pocket-noise version 1 even when amplitude is zero.
 	// Budget charges logical work and conservative array/sampler allowances, not
 	// allocator overhead, borrowed inputs or upstream generator/provider work.

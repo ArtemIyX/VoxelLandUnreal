@@ -44,6 +44,12 @@ public:
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe>& OutSamples) const;
 
+	// SourceBudget verifies the retained grid; JobBudget pays for projection.
+	FVoxelLandM5Diagnostic ProjectForJob(FIntVector SampleSize, const FVoxelLandM5PointCm& SampleOriginCm,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5ProtectionSamples, ESPMode::ThreadSafe>& OutSamples) const;
+
 	// Same-spacing aligned XY vertices. A column is marked if any of its four
 	// incident XY cells is protected at any captured Z. All four cells must be
 	// present; missing XY halo returns OutOfDomain. Result is X-fastest for

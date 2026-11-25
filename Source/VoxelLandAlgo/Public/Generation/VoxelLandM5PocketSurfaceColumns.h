@@ -23,6 +23,11 @@ public:
 		TVoxelLandM5ConstRef<FVoxelLandM5InfluenceSet> Influence, FVoxelLandWorkerContext& Worker,
 		FVoxelLandM5PointCm OutputMinLattice, FIntPoint OutputSize, FVoxelLandM5BudgetRef Budget,
 		TFunctionRef<bool()> IsCancelled, TVoxelLandM5ConstPtr<FVoxelLandM5PocketSurfaceColumns>& Out);
+	static FVoxelLandM5Diagnostic BuildForJob(TVoxelLandM5ConstRef<FVoxelLandM5BoundBaseline> Baseline,
+		TVoxelLandM5ConstRef<FVoxelLandM5InfluenceSet> Influence, FVoxelLandWorkerContext& Worker,
+		FVoxelLandM5PointCm OutputMinLattice, FIntPoint OutputSize, FVoxelLandM5BudgetRef SourceBudget,
+		FVoxelLandM5BudgetRef JobBudget, TFunctionRef<bool()> IsCancelled,
+		TVoxelLandM5ConstPtr<FVoxelLandM5PocketSurfaceColumns>& Out);
 	bool Matches(const FVoxelLandM5BoundBaseline& Baseline, const FVoxelLandM5InfluenceSet& Influence,
 		const FVoxelLandM5Budget& Budget) const;
 	bool GetSurfaceBounds(int64 LatticeX, int64 LatticeY, int64& OutMinCm, int64& OutMaxCm) const;

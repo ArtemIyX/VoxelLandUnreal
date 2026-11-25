@@ -40,11 +40,19 @@ FVoxelLandM5Diagnostic FVoxelLandM5PocketSurfaceColumns::Build(
 	FVoxelLandWorkerContext& Worker, FVoxelLandM5PointCm OutputMinLattice, FIntPoint OutputSize,
 	FVoxelLandM5BudgetRef Budget, TFunctionRef<bool()> IsCancelled, TVoxelLandM5ConstPtr<FVoxelLandM5PocketSurfaceColumns>& Out)
 {
+	return BuildForJob(Baseline, Influence, Worker, OutputMinLattice, OutputSize, Budget, Budget, IsCancelled, Out);
+}
+FVoxelLandM5Diagnostic FVoxelLandM5PocketSurfaceColumns::BuildForJob(
+	TVoxelLandM5ConstRef<FVoxelLandM5BoundBaseline> Baseline, TVoxelLandM5ConstRef<FVoxelLandM5InfluenceSet> Influence,
+	FVoxelLandWorkerContext& Worker, FVoxelLandM5PointCm OutputMinLattice, FIntPoint OutputSize,
+	FVoxelLandM5BudgetRef SourceBudget, FVoxelLandM5BudgetRef Budget, TFunctionRef<bool()> IsCancelled,
+	TVoxelLandM5ConstPtr<FVoxelLandM5PocketSurfaceColumns>& Out)
+{
 	using namespace VoxelLand::M5::CheckedMath;
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled()) return ColumnError(E::Cancelled, TEXT("Pocket column scan cancelled"));
-	if (&Baseline->GetDefinition() != &Influence->GetDefinition() || !Baseline->UsesBudget(*Budget)
-		|| !Influence->UsesBudget(*Budget) || !Baseline->GetGenerator().OwnsWorkerOnCurrentThread(Worker))
+	if (&Baseline->GetDefinition() != &Influence->GetDefinition() || !Baseline->UsesBudget(*SourceBudget)
+		|| !Influence->UsesBudget(*SourceBudget) || !Baseline->GetGenerator().OwnsWorkerOnCurrentThread(Worker))
 		return ColumnError(E::InvalidInput, TEXT("Pocket column owner or worker mismatch"));
 	const auto& Coverage = Influence->GetCoverage();
 	const int64 V = Influence->GetDefinition().GetSnapshot().Base.VoxelSizeCm;

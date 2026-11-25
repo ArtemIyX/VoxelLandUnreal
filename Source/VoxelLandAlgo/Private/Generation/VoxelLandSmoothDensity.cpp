@@ -131,13 +131,33 @@ FVoxelLandM5Diagnostic FVoxelLandGenerator::GenerateFiniteM4Box(const FVoxelLand
 	if (!M4HeightGrid->Sample(Low[0], Low[1], Sample) || !M4HeightGrid->Sample(High[0], High[1], Sample))
 		return Fail(E::OutOfDomain, TEXT("M4 box outside height grid"));
 	int64 Work = 0, OutputBytes = 0;
-	// Bound all 35-cube tiles, including their one-sample smooth halos, and
-	// every 27-sample reduction. The row evaluator uses fixed <=39 arrays.
-	int64 Tiles = 1;
+	// The sum of the raw tile volumes is the product of the per-axis
+	// extents, including each tile's own smoothing halo. This counts overlap
+	// again where adjacent tiles recompute it. The kernel's 8-unit raw-sample
+	// bound is unchanged. Detailed-height slope stencils additionally evaluate
+	// a two-dimensional expanded grid once per Z tile, including thin tiles.
+	int64 RawSamples = 1, AxisExtent[3] = {}, TileCount[3] = {};
 	for (int32 Axis = 0; Axis < 3; ++Axis)
-		if (!TryMultiplyNonNegative(Tiles, (int64(Size[Axis]) + 34) / 35, Tiles))
+	{
+		TileCount[Axis] = (int64(Size[Axis]) + 34) / 35;
+		int64 TileHalo = 0;
+		if (!TryMultiplyNonNegative(TileCount[Axis], 2 * Halo, TileHalo)
+			|| !TryAdd(Size[Axis], TileHalo, AxisExtent[Axis])
+			|| !TryMultiplyNonNegative(RawSamples, AxisExtent[Axis], RawSamples))
 			return Fail(E::ArithmeticOverflow, TEXT("M4 box tile count overflow"));
-	if (!TryMultiplyNonNegative(Tiles, 37 * 37 * 37 * 8, Work)
+	}
+	int64 DetailWork = 0, DetailX = 0, DetailY = 0, ExpandedSlopeX = 0, ExpandedSlopeY = 0;
+	if (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0
+		&& (!TryMultiplyNonNegative(TileCount[0], 2 * Slope, ExpandedSlopeX)
+			|| !TryMultiplyNonNegative(TileCount[1], 2 * Slope, ExpandedSlopeY)
+			|| !TryAdd(AxisExtent[0], ExpandedSlopeX, DetailX)
+			|| !TryAdd(AxisExtent[1], ExpandedSlopeY, DetailY)
+			|| !TryMultiplyNonNegative(DetailX, DetailY, DetailWork)
+			|| !TryMultiplyNonNegative(DetailWork, TileCount[2], DetailWork)
+			|| !TryMultiplyNonNegative(DetailWork, 8, DetailWork)))
+		return Fail(E::ArithmeticOverflow, TEXT("M4 box detail work overflow"));
+	if (!TryMultiplyNonNegative(RawSamples, 8, Work)
+		|| !TryAdd(Work, DetailWork, Work)
 		|| !TryAdd(Work, Count * (bSmooth ? 30 : 2), Work)
 		|| !TryMultiplyNonNegative(Count, 2 * int64(sizeof(int16)), OutputBytes)
 		|| !TryAdd(OutputBytes, 4 * 1024 * 1024, OutputBytes))

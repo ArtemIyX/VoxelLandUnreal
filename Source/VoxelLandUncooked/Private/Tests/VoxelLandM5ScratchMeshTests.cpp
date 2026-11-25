@@ -62,6 +62,36 @@ public:
 			}
 		}
 	}
+	static void KeepSingleChunk(const FVoxelLandM5ScratchChunks& Source)
+	{
+		FVoxelLandM5ScratchChunks& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
+		// Make() stores coordinate zero first. The resulting rectangle remains complete.
+		Mutable.Chunks.RemoveAt(1);
+		Mutable.MinInclusive = FIntVector(0, 0, 0);
+		Mutable.MaxExclusive = FIntVector(1, 1, 1);
+	}
+	static void SetHaloOnly(const FVoxelLandM5ScratchChunks& Source)
+	{
+		FVoxelLandM5ScratchChunks& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
+		for (FVoxelLandChunkData& Chunk : Mutable.Chunks)
+		{
+			for (int32 Z = -1; Z <= 33; ++Z)
+			{
+				for (int32 Y = -1; Y <= 33; ++Y)
+				{
+					for (int32 X = -1; X <= 33; ++X)
+					{
+						Chunk.Density[(X + 1) + 35 * ((Y + 1) + 35 * (Z + 1))] = Z == -1 ? -100 : 100;
+					}
+				}
+			}
+		}
+	}
+	static void Reverse(const FVoxelLandM5ScratchChunks& Source)
+	{
+		FVoxelLandM5ScratchChunks& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
+		Swap(Mutable.Chunks[0], Mutable.Chunks[1]);
+	}
 	static void ChangeSharedSample(const FVoxelLandM5ScratchChunks& Source)
 	{
 		FVoxelLandM5ScratchChunks& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
@@ -76,6 +106,7 @@ bool FVoxelLandM5ScratchMeshTest::RunTest(const FString& Parameters)
 {
 	bool bSuccess = false, bForeign = false, bLimit = false, bCancelled = false, bSeam = false, bRetained = false;
 	bool bWork = false, bDense = false, bMidCancel = false, bAdmission = false;
+	bool bExactWork = false, bBelowWork = false, bHalo = false, bReverse = false, bDenseAdmitted = false;
 	FString Failure;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, Other;
@@ -174,6 +205,82 @@ bool FVoxelLandM5ScratchMeshTest::RunTest(const FString& Parameters)
 			Source.ToSharedRef(), 2, 196608, Budget.ToSharedRef(), CancelAfterPrecharge, Mesh);
 		bMidCancel = DuringScan.Code == EVoxelLandM5ErrorCode::Cancelled && Mesh == Previous;
 		FVoxelLandM5ScratchMeshFixture::SetChecker(*Source, false);
+		// Independently derive the plane's 34*34 mixed cells and 32*32
+		// crossing owned edges per chunk; each crossing produces two faces.
+		constexpr int64 C = 34 * 34 * 34, E = 32 * 32 * 32 * 3;
+		constexpr int64 ExpectedWork = (4 * 2 * 2 + 2 * 12000 + 1)
+			+ 2 * (E + 9 * C + 64)
+			+ 2 * (9 * C + 2 * E + 4096) + 2 * 34 * 34 * 172
+			+ 2 * 32 * 32 * 2 * (112 + 32) + 4;
+		auto BuildWithLimit = [&](int64 Limit, bool bReverseStorage,
+			TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe>& OutMesh) {
+			TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> LocalBudget;
+			if (!FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, Limit, LocalBudget))
+			{
+				return EVoxelLandM5ErrorCode::InvalidInput;
+			}
+			TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> LocalSource =
+				FVoxelLandM5ScratchMeshFixture::Make(LocalBudget.ToSharedRef());
+			if (!LocalSource)
+			{
+				return EVoxelLandM5ErrorCode::InvalidInput;
+			}
+			if (bReverseStorage)
+			{
+				FVoxelLandM5ScratchMeshFixture::Reverse(*LocalSource);
+			}
+			return FVoxelLandM5ScratchMesh::Build(LocalSource.ToSharedRef(), 2, 10000,
+				LocalBudget.ToSharedRef(), Never, OutMesh).Code;
+		};
+		TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Exact;
+		bExactWork = BuildWithLimit(ExpectedWork, false, Exact) == EVoxelLandM5ErrorCode::None && Exact.IsValid();
+		TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Below = Previous;
+		bBelowWork = BuildWithLimit(ExpectedWork - 1, false, Below) == EVoxelLandM5ErrorCode::BudgetExceeded
+			&& Below == Previous;
+		TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Reversed;
+		bReverse = BuildWithLimit(ExpectedWork, true, Reversed) == EVoxelLandM5ErrorCode::None
+			&& Exact.IsValid() && Reversed.IsValid() && Exact->GetFaces().Num() == Reversed->GetFaces().Num();
+		if (bReverse)
+		{
+			for (int32 I = 0; I < Exact->GetFaces().Num(); ++I)
+			{
+				bReverse &= Exact->GetFaces()[I].ChunkCoordinate == Reversed->GetFaces()[I].ChunkCoordinate
+					&& Exact->GetFaces()[I].FaceIndex == Reversed->GetFaces()[I].FaceIndex;
+			}
+		}
+		FVoxelLandM5ScratchMeshFixture::SetHaloOnly(*Source);
+		TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Halo;
+		Budget->GetUsage(Live, Peak, Used);
+		const int64 HaloBefore = Used;
+		const FVoxelLandM5Diagnostic HaloResult = FVoxelLandM5ScratchMesh::Build(
+			Source.ToSharedRef(), 2, 10000, Budget.ToSharedRef(), Never, Halo);
+		Budget->GetUsage(Live, Peak, Used);
+		constexpr int64 HaloWork = (4 * 2 * 2 + 2 * 12000 + 1)
+			+ 2 * (E + 9 * C + 64) + 2 * (9 * C + 2 * E + 4096) + 2 * 34 * 34 * 172 + 4;
+		bHalo = HaloResult.Code == EVoxelLandM5ErrorCode::None && Halo.IsValid()
+			&& Halo->GetTriangles().IsEmpty() && Used - HaloBefore == HaloWork;
+		// A full alternating chunk has every halo cell mixed and every owned
+		// edge crossing. Unlike the dense limit rejection above, this admits
+		// all 196608 predicted faces and exercises the actual CPU mesher.
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> DenseBudget;
+		if (FVoxelLandM5Budget::TryCreate(1024ll * 1024 * 1024, 1000000000, DenseBudget))
+		{
+			TSharedPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> DenseSource =
+				FVoxelLandM5ScratchMeshFixture::Make(DenseBudget.ToSharedRef());
+			if (DenseSource)
+			{
+				FVoxelLandM5ScratchMeshFixture::KeepSingleChunk(*DenseSource);
+				FVoxelLandM5ScratchMeshFixture::SetChecker(*DenseSource, true);
+				TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> DenseMesh;
+				const FVoxelLandM5Diagnostic DenseResult = FVoxelLandM5ScratchMesh::Build(
+					DenseSource.ToSharedRef(), 1, 196608, DenseBudget.ToSharedRef(), Never, DenseMesh);
+				DenseBudget->GetUsage(Live, Peak, Used);
+				constexpr int64 DenseWork = (4 + 12000 + 1) + (E + 9 * C + 64)
+					+ (9 * C + 2 * E + 4096) + C * 172 + 196608ll * (112 + 32) + 1;
+				bDenseAdmitted = DenseResult.Code == EVoxelLandM5ErrorCode::None && DenseMesh.IsValid()
+					&& DenseMesh->GetTriangles().Num() == 196608 && Used == DenseWork;
+			}
+		}
 		TWeakPtr<const FVoxelLandM5ScratchChunks, ESPMode::ThreadSafe> Weak = Source;
 		Source.Reset();
 		bRetained = Weak.IsValid();
@@ -202,6 +309,11 @@ bool FVoxelLandM5ScratchMeshTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("sparse mesh and capture metadata fit 256 MiB"), bAdmission);
 	TestTrue(TEXT("dense edge preflight rejects cap without allocating output"), bDense);
 	TestTrue(TEXT("cancellation during preflight preserves output"), bMidCancel);
+	TestTrue(TEXT("independent flat topology work fits exact cap"), bExactWork);
+	TestTrue(TEXT("one below complete work preserves output"), bBelowWork);
+	TestTrue(TEXT("reversed storage retains canonical faces and work"), bReverse);
+	TestTrue(TEXT("halo-only mixed cells are charged without owned triangles"), bHalo);
+	TestTrue(TEXT("dense topology is admitted and fully meshed"), bDenseAdmitted);
 	return bSuccess;
 }
 #endif

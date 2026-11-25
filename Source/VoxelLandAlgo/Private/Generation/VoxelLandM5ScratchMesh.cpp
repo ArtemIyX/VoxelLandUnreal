@@ -108,7 +108,10 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchMesh::Build(
 	constexpr int64 OwnedEdges = 32 * 32 * 32 * 3;
 	constexpr int64 MeshTriangles = OwnedEdges * 2;
 	int64 ScanWork = 0;
-	if (!TryMultiplyNonNegative(Chunks.Num(), OwnedEdges + 64, ScanWork))
+	// Count all mesher cells, including the -1..32 halo. A mixed cell can
+	// generate a vertex even when no owned edge emits a face. Admit this
+	// inventory before reading it; each cell scans eight corners plus setup.
+	if (!TryMultiplyNonNegative(Chunks.Num(), OwnedEdges + 9 * MaxVertices + 64, ScanWork))
 	{
 		return I::Error(E::ArithmeticOverflow, TEXT("Scratch mesh preflight work overflow"));
 	}
@@ -116,9 +119,37 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchMesh::Build(
 	{
 		return I::Error(E::BudgetExceeded, TEXT("Scratch mesh preflight work exhausted"));
 	}
-	int64 TotalTriangles = 0, PeakTriangles = 0;
+	int64 TotalTriangles = 0, PeakTriangles = 0, MixedCells = 0;
 	for (const FVoxelLandChunkData& Chunk : Chunks)
 	{
+		for (int32 Z = -1; Z <= 32; ++Z)
+		{
+			if (IsCancelled())
+			{
+				return I::Error(E::Cancelled, TEXT("Scratch mesh preflight cancelled"));
+			}
+			for (int32 Y = -1; Y <= 32; ++Y)
+			{
+				for (int32 X = -1; X <= 32; ++X)
+				{
+					const int32 Index = (X + 1) + 35 * ((Y + 1) + 35 * (Z + 1));
+					bool bSolid = false, bAir = false;
+					for (int32 DZ = 0; DZ != 2; ++DZ)
+					{
+						for (int32 DY = 0; DY != 2; ++DY)
+						{
+							for (int32 DX = 0; DX != 2; ++DX)
+							{
+								const bool bCornerSolid = Chunk.Density[Index + DX + 35 * DY + 35 * 35 * DZ] < 0;
+								bSolid |= bCornerSolid;
+								bAir |= !bCornerSolid;
+							}
+						}
+					}
+					MixedCells += bSolid && bAir;
+				}
+			}
+		}
 		int64 Edges = 0;
 		for (int32 Z = 0; Z < 32; ++Z)
 		{
@@ -153,14 +184,25 @@ FVoxelLandM5Diagnostic FVoxelLandM5ScratchMesh::Build(
 	// The mesher allocates vertices and cell indices independently of the
 	// edge count. Triangle-dependent indices and adapter arrays are sequential
 	// per chunk; fourfold slack covers TArray growth and simultaneous copies.
+	// Logical work groups, charged before meshing and adaptation: cell
+	// initialization/eight samples (9 per cell); up to 12 edge tests, 12
+	// crossing constructions and bounded gradient, normal and snap work
+	// (172 per mixed cell); mesher and adapter owned-edge scans (2 per
+	// edge); face construction, adapter enclosures/nondegeneracy and exact
+	// source checks (112 per predicted triangle); setup and insertion sort.
+	// FixedMesh::Convert separately charges 32 per emitted triangle.
 	int64 ScratchBytes = 0, TriangleBytes = 0, OutputBytes = 0, Work = 0, SortWork = 0;
+	int64 MixedWork = 0, FaceWork = 0;
 	if (!TryMultiplyNonNegative(PeakTriangles,
 			4 * int64(3 * sizeof(uint32) + 2 * sizeof(FVoxelLandM5ValidationTriangle) + sizeof(uint8)), TriangleBytes)
 		|| !TryAdd(4 * MaxVertices * int64(sizeof(FVoxelLandMeshVertex) + sizeof(int32)), 1048576, ScratchBytes)
 		|| !TryAdd(ScratchBytes, TriangleBytes, ScratchBytes)
 		|| !TryMultiplyNonNegative(TotalTriangles,
 			4 * int64(sizeof(FVoxelLandM5FixedTriangleQ18) + sizeof(FVoxelLandM5ChunkFaceSelection)), OutputBytes)
-		|| !TryAdd(OutputBytes, 4096, OutputBytes) || !TryMultiplyNonNegative(Chunks.Num(), 4000000, Work)
+		|| !TryAdd(OutputBytes, 4096, OutputBytes)
+		|| !TryMultiplyNonNegative(Chunks.Num(), 9 * MaxVertices + 2 * OwnedEdges + 4096, Work)
+		|| !TryMultiplyNonNegative(MixedCells, 172, MixedWork) || !TryAdd(Work, MixedWork, Work)
+		|| !TryMultiplyNonNegative(TotalTriangles, 112, FaceWork) || !TryAdd(Work, FaceWork, Work)
 		|| !TryMultiplyNonNegative(Chunks.Num(), Chunks.Num(), SortWork) || !TryAdd(Work, SortWork, Work))
 	{
 		return I::Error(E::ArithmeticOverflow, TEXT("Scratch mesh admission overflow"));

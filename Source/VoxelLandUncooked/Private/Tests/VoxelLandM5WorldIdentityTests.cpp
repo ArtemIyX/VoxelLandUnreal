@@ -244,7 +244,7 @@ bool FVoxelLandM5WorldIdentityTest::RunTest(const FString& Parameters)
 		--X.Caves.Limits.MaxValidationWork;
 		bAllFields &= Changed(X);
 		X = S;
-		++X.Manifest.Geometry;
+		X.Manifest.Geometry = 3;
 		FVoxelLandM5IdentityRecord Retained = Identity;
 		bBadVersion = !VoxelLandM5WorldIdentity::Capture(X, Retained, Error);
 		bAtomic =

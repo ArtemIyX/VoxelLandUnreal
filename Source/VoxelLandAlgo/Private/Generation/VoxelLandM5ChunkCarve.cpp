@@ -3,6 +3,10 @@
 #include "Data/Structs/VoxelLandM5CavePlan.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5Composition.h"
+#include "Generation/VoxelLandM5CompositionPrivate.h"
+#include "Generation/VoxelLandM5ChunkCarvePrivate.h"
+#include "Generation/VoxelLandM5CandidateResult.h"
+#include "Generation/VoxelLandM5PrimitiveWork.h"
 
 namespace VoxelLand::M5::ChunkCarve
 {
@@ -14,7 +18,7 @@ public:
 		bool bPocketEnabled, TConstArrayView<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans,
 		TConstArrayView<uint8> NetworkAllowed, TConstArrayView<uint8> PocketAllowed, TConstArrayView<uint8> Protected,
 		bool bExplicitPresence, TConstArrayView<uint8> PocketPresent, TConstArrayView<int64> PocketDistanceQ8,
-		int64 MaxScratchBytes, int64 MaxWork, TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples);
+		int64 MaxScratchBytes, int64 MaxWork, bool bOwned, TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples);
 };
 
 bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Baseline, const FIntVector& Size,
@@ -22,7 +26,7 @@ bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Ba
 	TConstArrayView<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans,
 	TConstArrayView<uint8> NetworkAllowed, TConstArrayView<uint8> PocketAllowed, TConstArrayView<uint8> Protected,
 	bool bExplicitPresence, TConstArrayView<uint8> PocketPresent, TConstArrayView<int64> PocketDistanceQ8,
-	int64 MaxScratchBytes, int64 MaxWork, TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples)
+	int64 MaxScratchBytes, int64 MaxWork, bool bOwned, TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples)
 {
 	using namespace CheckedMath;
 	if (IsCancelled() || Size.X <= 0 || Size.Y <= 0 || Size.Z <= 0 || MaxScratchBytes < 0 || MaxWork < 0)
@@ -69,7 +73,7 @@ bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Ba
 		{
 			for (const auto& Plan : Plans)
 			{
-				if (IsCancelled() || !Plan.IsValid() || Plan->GeometryVersion != 1)
+				if (IsCancelled() || !Plan.IsValid() || (Plan->GeometryVersion != 1 && !(bOwned && Plan->GeometryVersion == 2)))
 					return false;
 				if (!TryAdd(InventoryWork, 1 + int64(Plan->Chambers.Num()) + Plan->Segments.Num(), InventoryWork)
 					|| InventoryWork > MaxWork) return false;
@@ -77,9 +81,9 @@ bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Ba
 					if (IsCancelled() || Chamber.Profile.Version != Plan->GeometryVersion) return false;
 				for (const auto& Segment : Plan->Segments)
 					if (IsCancelled() || Segment.Profile.Version != Plan->GeometryVersion) return false;
-				int64 PrimitiveWork = 0;
-				if (!TryMultiplyNonNegative(int64(Plan->Chambers.Num()) + Plan->Segments.Num(), 1, PrimitiveWork)
-					|| !TryAdd(WorkPerSample, 1, WorkPerSample) || !TryAdd(WorkPerSample, PrimitiveWork, WorkPerSample))
+				int64 PlanWork = 0;
+				if (!PrimitiveWork::TryForPlan(*Plan, PlanWork)
+					|| !TryAdd(WorkPerSample, PlanWork, WorkPerSample))
 					return false;
 			}
 		}
@@ -133,8 +137,12 @@ bool FVoxelLandM5ChunkCarveInternals::TryCarveInternal(TConstArrayView<int16> Ba
 					{
 						for (const auto& Plan : Plans)
 						{
-							if (!Composition::TryCompose(Value, *Plan, P, VoxelSizeCm, true, NetworkAllowed[Index] != 0,
-									Protected[Index] != 0, false, 0, IsCancelled, Value))
+							const bool bOk = bOwned
+								? Composition::Private::TryComposeOwned(Value, *Plan, P, VoxelSizeCm, true,
+									NetworkAllowed[Index] != 0, Protected[Index] != 0, false, 0, IsCancelled, Value)
+								: Composition::TryCompose(Value, *Plan, P, VoxelSizeCm, true,
+									NetworkAllowed[Index] != 0, Protected[Index] != 0, false, 0, IsCancelled, Value);
+							if (!bOk)
 							{
 								return false;
 							}
@@ -169,7 +177,7 @@ bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVo
 {
 	return FVoxelLandM5ChunkCarveInternals::TryCarveInternal(Baseline, Size, OriginCm, SpacingCm, VoxelSizeCm,
 		bNetworkEnabled, bPocketEnabled, Plans, NetworkAllowed, PocketAllowed, Protected, false, {}, PocketDistanceQ8,
-		MaxScratchBytes, MaxWork, IsCancelled, OutSamples);
+		MaxScratchBytes, MaxWork, false, IsCancelled, OutSamples);
 }
 
 bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVoxelLandM5PointCm& OriginCm,
@@ -181,6 +189,21 @@ bool TryCarve(TConstArrayView<int16> Baseline, const FIntVector& Size, const FVo
 {
 	return FVoxelLandM5ChunkCarveInternals::TryCarveInternal(Baseline, Size, OriginCm, SpacingCm, VoxelSizeCm,
 		bNetworkEnabled, bPocketEnabled, Plans, NetworkAllowed, PocketAllowed, Protected, true, PocketPresent,
-		PocketDistanceQ8, MaxScratchBytes, MaxWork, IsCancelled, OutSamples);
+		PocketDistanceQ8, MaxScratchBytes, MaxWork, false, IsCancelled, OutSamples);
+}
+
+bool Private::TryCarveOwned(TConstArrayView<int16> Baseline, const FIntVector& Size,
+	const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm, int32 VoxelSizeCm, bool bNetworkEnabled, bool bPocketEnabled,
+	TConstArrayView<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans,
+	TConstArrayView<uint8> NetworkAllowed, TConstArrayView<uint8> PocketAllowed, TConstArrayView<uint8> Protected,
+	TConstArrayView<uint8> PocketPresent, TConstArrayView<int64> PocketDistanceQ8, int64 MaxScratchBytes, int64 MaxWork,
+	const FVoxelLandM5CandidateResult& Candidate, const FVoxelLandM5Budget& SourceBudget,
+	TFunctionRef<bool()> IsCancelled, TArray<int16>& OutSamples)
+{
+	if (!bNetworkEnabled || !Candidate.HasOwnedCanonicalPlan(SourceBudget) || Plans.Num() != 1
+		|| Plans[0].Get() != &Candidate.GetPlan() || Candidate.GetPlan().GeometryVersion != 2) return false;
+	return FVoxelLandM5ChunkCarveInternals::TryCarveInternal(Baseline, Size, OriginCm, SpacingCm, VoxelSizeCm,
+		bNetworkEnabled, bPocketEnabled, Plans, NetworkAllowed, PocketAllowed, Protected, true, PocketPresent,
+		PocketDistanceQ8, MaxScratchBytes, MaxWork, true, IsCancelled, OutSamples);
 }
 }

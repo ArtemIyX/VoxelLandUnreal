@@ -25,6 +25,13 @@ public:
 	const FVoxelLandM5CavePlan& GetPlan() const { return Plan; }
 	// Full ordered bytes bind every plan field. Empty means not finalized.
 	TConstArrayView<uint8> GetCanonicalPlanBytes() const { return CanonicalPlanBytes; }
+	// Exact source budget and both retained admissions are required.
+	bool HasOwnedCanonicalPlan(const FVoxelLandM5Budget& Owner) const
+	{
+		return UsesBudget(Owner) && Lease.IsValid() && CanonicalPlanLease.IsValid()
+			&& Owner.OwnsLease(*Lease) && Owner.OwnsLease(*CanonicalPlanLease)
+			&& !CanonicalPlanBytes.IsEmpty();
+	}
 	// True only for a direct RouteBuilder result of this exact source object.
 	bool IsDirectlyDerivedFrom(const FVoxelLandM5CandidateResult& Source) const { return DirectSource.Get() == &Source; }
 

@@ -4,6 +4,16 @@
 #include "Data/Structs/VoxelLandM5FinalFieldInputs.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
+#include "Generation/VoxelLandM5BoundBaseline.h"
+#include "Generation/VoxelLandM5CandidateResult.h"
+#include "Generation/VoxelLandM5ChunkCarvePrivate.h"
+#include "Generation/VoxelLandM5FieldInputs.h"
+#include "Generation/VoxelLandM5FiniteContributorSeal.h"
+#include "Generation/VoxelLandM5InfluenceSet.h"
+#include "Generation/VoxelLandM5PrimitiveWork.h"
+#include "Generation/VoxelLandM5ProfileGeometry.h"
+#include "Generation/VoxelLandM5ValidatedDefinition.h"
+#include "Data/Structs/VoxelLandM5WorldSnapshot.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5ChunkCarve.h"
 #include "Generation/VoxelLandM5PocketMapping.h"
@@ -56,6 +66,96 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe>& OutField)
 {
+	return BuildInternal(Inputs, Budget, nullptr, nullptr, IsCancelled, OutField);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5FinalField::BuildOwned(const FVoxelLandM5FieldInputs& Owner,
+	const FVoxelLandM5FinalFieldInputs& Inputs, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe>& OutField)
+{
+	using E = EVoxelLandM5ErrorCode;
+	using namespace VoxelLand::M5;
+	if (IsCancelled()) return FVoxelLandM5FinalFieldInternals::Error(E::Cancelled, TEXT("Owned field cancelled"));
+	const auto& Baseline = Owner.GetBaseline();
+	const auto& Influence = Owner.GetInfluence();
+	const auto SourceBudget = Owner.GetSourceBudget();
+	const auto& Snapshot = Baseline.GetDefinition().GetSnapshot();
+	const auto* Seal = Owner.GetSeal();
+	if (!Seal || !Seal->Matches(Baseline, Influence, *SourceBudget) || !Baseline.UsesBudget(*SourceBudget)
+		|| !Influence.UsesBudget(*SourceBudget) || &Baseline.GetDefinition() != &Influence.GetDefinition()
+		|| !Snapshot.Caves.bEnabled || !Inputs.bNetworkEnabled || Snapshot.Manifest.Geometry != 2 || Inputs.GeometryVersion != 2
+		|| Inputs.Plans.Num() != 1 || Inputs.Plans[0].Get() != &Seal->GetCandidate().GetPlan()
+		|| !Seal->GetCandidate().HasOwnedCanonicalPlan(*SourceBudget) || &Budget.Get() == &SourceBudget.Get())
+		return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Owned field source or geometry mismatch"));
+	const auto& Candidate = Seal->GetCandidate();
+	const auto& Plan = Candidate.GetPlan();
+	const auto& Declared = Influence.GetDeclaredBounds();
+	auto SamePoint = [](const FVoxelLandM5PointCm& A, const FVoxelLandM5PointCm& B) {
+		return A.X == B.X && A.Y == B.Y && A.Z == B.Z;
+	};
+	FVoxelLandM5CaveSettings Expected = Snapshot.Caves;
+	Expected.Bounds = Declared;
+	const auto& A = Inputs.Pockets;
+	const auto& B = Snapshot.Caves.Pockets;
+	int64 JobBytes = 0, JobWork = 0;
+	Budget->GetLimits(JobBytes, JobWork);
+	if (!Candidate.MatchesSource(Expected, Snapshot.Base.Seed, Plan.Region) || Plan.GeometryVersion != 2
+		|| Plan.Region.X != 0 || Plan.Region.Y != 0
+		|| !SamePoint(Plan.Bounds.MinInclusive, Declared.MinInclusive) || !SamePoint(Plan.Bounds.MaxExclusive, Declared.MaxExclusive)
+		|| Inputs.WorldSeed != Snapshot.Base.Seed || Inputs.StageId != Snapshot.Caves.StageId
+		|| Inputs.VoxelSizeCm != Snapshot.Base.VoxelSizeCm || Inputs.CompositionVersion != Snapshot.Manifest.Composition
+		|| Inputs.PocketNoiseVersion != Snapshot.Manifest.PocketNoise || A.bEnabled != B.bEnabled
+		|| A.LatticeSpacingCm != B.LatticeSpacingCm || A.ThresholdQ16 != B.ThresholdQ16 || A.AmplitudeCm != B.AmplitudeCm
+		|| A.MinDepthCm != B.MinDepthCm || A.MaxDepthCm != B.MaxDepthCm || A.bAllowAttachment != B.bAllowAttachment
+		|| A.bAllowEnclosedVoids != B.bAllowEnclosedVoids || A.Salt != B.Salt
+		|| JobBytes > Snapshot.Caves.Limits.MaxBytes || JobWork > Snapshot.Caves.Limits.MaxValidationWork)
+		return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Owned field inputs differ from source"));
+	int64 Count = 0, Work = 0;
+	if (!CheckedMath::TryAdd(Plan.Chambers.Num(), Plan.Segments.Num(), Count)
+		|| !CheckedMath::TryMultiplyNonNegative(Count, 256, Work) || !CheckedMath::TryAdd(Work, 1, Work))
+		return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Profile validation work overflow"));
+	if (!Budget->TryChargeWork(Work)) return FVoxelLandM5FinalFieldInternals::Error(E::BudgetExceeded, TEXT("Profile validation budget exhausted"));
+	auto InBounds = [&Declared](int64 MinX, int64 MaxX, int64 MinY, int64 MaxY, int64 MinZ, int64 MaxZ) {
+		return MinX >= Declared.MinInclusive.X && MaxX < Declared.MaxExclusive.X
+			&& MinY >= Declared.MinInclusive.Y && MaxY < Declared.MaxExclusive.Y
+			&& MinZ >= Declared.MinInclusive.Z && MaxZ < Declared.MaxExclusive.Z;
+	};
+	for (const auto& C : Plan.Chambers)
+	{
+		if (IsCancelled()) return FVoxelLandM5FinalFieldInternals::Error(E::Cancelled, TEXT("Profile validation cancelled"));
+		ProfileGeometry::FChamber Shape;
+		Shape.CenterCm = C.CenterCm; Shape.RadiusCm = C.RadiusCm;
+		Shape.FloorCm = C.Profile.FloorCm; Shape.CeilingCm = C.Profile.CeilingCm;
+		int64 Unused = 0;
+		if (!C.bHasId || C.Profile.Version != 2 || !ProfileGeometry::TryChamberDistanceQ8(Shape, C.CenterCm, Unused)
+			|| !InBounds(C.CenterCm.X - C.RadiusCm, C.CenterCm.X + C.RadiusCm,
+				C.CenterCm.Y - C.RadiusCm, C.CenterCm.Y + C.RadiusCm, C.Profile.FloorCm, C.Profile.CeilingCm))
+			return FVoxelLandM5FinalFieldInternals::Error(E::OutOfDomain, TEXT("Unsupported chamber profile bounds"));
+	}
+	for (const auto& S : Plan.Segments)
+	{
+		if (IsCancelled()) return FVoxelLandM5FinalFieldInternals::Error(E::Cancelled, TEXT("Profile validation cancelled"));
+		ProfileGeometry::FSegment Shape;
+		Shape.StartCm = S.StartCm; Shape.EndCm = S.EndCm; Shape.RadiusCm = S.RadiusCm;
+		Shape.StartFloorCm = S.Profile.StartFloorCm; Shape.EndFloorCm = S.Profile.EndFloorCm;
+		Shape.StartCeilingCm = S.Profile.StartCeilingCm; Shape.EndCeilingCm = S.Profile.EndCeilingCm;
+		int64 Unused = 0;
+		if (!S.bHasId || !S.bHasConnectionId || S.Profile.Version != 2
+			|| !ProfileGeometry::TrySegmentDistanceQ8(Shape, S.StartCm, Unused)
+			|| !InBounds(FMath::Min(S.StartCm.X, S.EndCm.X) - S.RadiusCm, FMath::Max(S.StartCm.X, S.EndCm.X) + S.RadiusCm,
+				FMath::Min(S.StartCm.Y, S.EndCm.Y) - S.RadiusCm, FMath::Max(S.StartCm.Y, S.EndCm.Y) + S.RadiusCm,
+				FMath::Min(S.Profile.StartFloorCm, S.Profile.EndFloorCm), FMath::Max(S.Profile.StartCeilingCm, S.Profile.EndCeilingCm)))
+			return FVoxelLandM5FinalFieldInternals::Error(E::OutOfDomain, TEXT("Unsupported segment profile bounds"));
+	}
+	if (IsCancelled()) return FVoxelLandM5FinalFieldInternals::Error(E::Cancelled, TEXT("Owned field cancelled"));
+	return BuildInternal(Inputs, Budget, &Candidate, &SourceBudget.Get(), IsCancelled, OutField);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5FinalField::BuildInternal(const FVoxelLandM5FinalFieldInputs& Inputs,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, const FVoxelLandM5CandidateResult* Owned,
+	const FVoxelLandM5Budget* SourceBudget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe>& OutField)
+{
 	using namespace VoxelLand::M5::CheckedMath;
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
@@ -66,7 +166,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 	const bool bCompose = Inputs.bNetworkEnabled || bPocket;
 	if ((Inputs.Pockets.bEnabled && Inputs.PocketNoiseVersion != 1)
 		|| ((Inputs.bNetworkEnabled || Inputs.Pockets.bEnabled) && Inputs.CompositionVersion != 2)
-		|| (Inputs.bNetworkEnabled && Inputs.GeometryVersion != 1))
+		|| (Inputs.bNetworkEnabled && Inputs.GeometryVersion != 1
+			&& !(Inputs.GeometryVersion == 2 && Owned && SourceBudget)))
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(
 			E::UnsupportedVersion, TEXT("Unsupported final field algorithm version"));
@@ -136,9 +237,9 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 				if (Segment.Profile.Version != Inputs.GeometryVersion)
 					return FVoxelLandM5FinalFieldInternals::Error(E::InvalidInput, TEXT("Segment profile version mismatch"));
 			}
-			int64 PrimitiveWork = 0;
-			if (!TryMultiplyNonNegative(int64(Plan->Chambers.Num()) + Plan->Segments.Num(), 1, PrimitiveWork)
-				|| !TryAdd(PerSample, 1, PerSample) || !TryAdd(PerSample, PrimitiveWork, PerSample))
+			int64 PlanWork = 0;
+			if (!VoxelLand::M5::PrimitiveWork::TryForPlan(*Plan, PlanWork)
+				|| !TryAdd(PerSample, PlanWork, PerSample))
 			{
 				return FVoxelLandM5FinalFieldInternals::Error(E::ArithmeticOverflow, TEXT("Final field work overflow"));
 			}
@@ -263,9 +364,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 		return bCarveCancelled;
 	};
 	TArray<int16> Samples;
-	if (!VoxelLand::M5::ChunkCarve::TryCarve(Inputs.Baseline, Inputs.Size, Inputs.OriginCm, Inputs.SpacingCm,
+	const bool bCarved = Owned
+		? VoxelLand::M5::ChunkCarve::Private::TryCarveOwned(Inputs.Baseline, Inputs.Size, Inputs.OriginCm, Inputs.SpacingCm,
+			Inputs.VoxelSizeCm, Inputs.bNetworkEnabled, bPocket, Inputs.Plans, Inputs.NetworkAllowed, Inputs.PocketAllowed,
+			Inputs.Protected, Present, Distances, OutputBytes, CarveWork, *Owned, *SourceBudget, CheckCarveCancelled, Samples)
+		: VoxelLand::M5::ChunkCarve::TryCarve(Inputs.Baseline, Inputs.Size, Inputs.OriginCm, Inputs.SpacingCm,
 			Inputs.VoxelSizeCm, Inputs.bNetworkEnabled, bPocket, Inputs.Plans, Inputs.NetworkAllowed,
-			Inputs.PocketAllowed, Inputs.Protected, Present, Distances, OutputBytes, CarveWork, CheckCarveCancelled, Samples))
+			Inputs.PocketAllowed, Inputs.Protected, Present, Distances, OutputBytes, CarveWork, CheckCarveCancelled, Samples);
+	if (!bCarved)
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(
 			bCarveCancelled ? E::Cancelled : E::Unproven, TEXT("Final field composition failed"));

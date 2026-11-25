@@ -56,6 +56,12 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FinalField::EvaluateChunk(const FVoxelLand
 	const FVoxelLandM5FiniteContributorSeal* Seal = Inputs.GetSeal();
 	if (Snapshot.Caves.bEnabled && (!Seal || !Seal->Matches(Baseline, Influence, *Inputs.GetSourceBudget())))
 		return FieldError(E::Unproven, TEXT("Network contributor completeness unavailable"));
+	if (Snapshot.Caves.bEnabled && Snapshot.Manifest.Geometry == 2
+		&& (!Seal->GetCandidate().HasOwnedCanonicalPlan(*Inputs.GetSourceBudget())
+			|| Seal->GetCandidate().GetPlan().GeometryVersion != Snapshot.Manifest.Geometry))
+		return FieldError(E::InvalidInput, TEXT("Owned profile candidate mismatch"));
+	if (Snapshot.Caves.bEnabled && Snapshot.Manifest.Geometry != 1 && Snapshot.Manifest.Geometry != 2)
+		return FieldError(E::UnsupportedVersion, TEXT("Unsupported geometry version"));
 	if (!Influence.CoversChunk(Key))
 		return FieldError(E::OutOfDomain, TEXT("Chunk is outside influence coverage"));
 	int64 JobBytes = 0, JobWork = 0;
@@ -168,7 +174,9 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FinalField::EvaluateChunk(const FVoxelLand
 	Field.GeometryVersion = Snapshot.Manifest.Geometry;
 	Field.WorldSeed = Snapshot.Base.Seed; Field.StageId = Snapshot.Caves.StageId;
 	TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe> Evaluated;
-	Result = FVoxelLandM5FinalField::Build(Field, Job, IsCancelled, Evaluated);
+	Result = Snapshot.Caves.bEnabled && Snapshot.Manifest.Geometry == 2
+		? FVoxelLandM5FinalField::BuildOwned(Inputs, Field, Job, IsCancelled, Evaluated)
+		: FVoxelLandM5FinalField::Build(Field, Job, IsCancelled, Evaluated);
 	if (Result.Code != E::None) return Result;
 	if (!Evaluated || Evaluated->GetDensity().Num() != Count) return FieldError(E::Unproven, TEXT("Chunk field missing"));
 	TSharedPtr<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk =

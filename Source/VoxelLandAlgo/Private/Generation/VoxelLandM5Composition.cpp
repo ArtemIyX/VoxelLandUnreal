@@ -3,6 +3,8 @@
 #include "Data/Structs/VoxelLandM5CavePlan.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5IntegerGeometry.h"
+#include "Generation/VoxelLandM5ProfileGeometry.h"
+#include "Generation/VoxelLandM5CompositionPrivate.h"
 
 namespace VoxelLand::M5::Composition
 {
@@ -33,20 +35,21 @@ public:
 	}
 };
 
-bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelLandM5PointCm& PositionCm,
+static bool TryComposeInternal(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelLandM5PointCm& PositionCm,
 	int32 VoxelSizeCm, bool bEnabled, bool bCarveAllowed, bool bProtected, bool bHasPocket, int64 PocketDistanceQ8,
-	TFunctionRef<bool()> IsCancelled, int16& Out)
+	bool bOwned, TFunctionRef<bool()> IsCancelled, int16& Out)
 {
 	if (IsCancelled())
 	{
 		return false;
 	}
+	if (bEnabled && !bOwned && Plan.GeometryVersion != 1) return false;
 	if (!bEnabled || !bCarveAllowed || bProtected)
 	{
 		Out = M4Density;
 		return true;
 	}
-	if (Plan.GeometryVersion != 1 || VoxelSizeCm <= 0 || PositionCm.X < -1048576 || PositionCm.X > 1048576 || PositionCm.Y < -1048576
+	if ((Plan.GeometryVersion != 1 && !(bOwned && Plan.GeometryVersion == 2)) || VoxelSizeCm <= 0 || PositionCm.X < -1048576 || PositionCm.X > 1048576 || PositionCm.Y < -1048576
 		|| PositionCm.Y > 1048576 || PositionCm.Z < -1048576 || PositionCm.Z > 1048576)
 	{
 		return false;
@@ -71,8 +74,17 @@ bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelL
 			return false;
 		}
 		int64 DistanceQ8 = 0;
-		if (!IntegerGeometry::TrySphereDistanceQ8(PositionCm, Chamber.CenterCm, Chamber.RadiusCm, DistanceQ8)
-			|| !AddDistance(DistanceQ8))
+		bool bOk = false;
+		if (Plan.GeometryVersion == 1)
+			bOk = IntegerGeometry::TrySphereDistanceQ8(PositionCm, Chamber.CenterCm, Chamber.RadiusCm, DistanceQ8);
+		else
+		{
+			ProfileGeometry::FChamber Profile;
+			Profile.CenterCm = Chamber.CenterCm; Profile.RadiusCm = Chamber.RadiusCm;
+			Profile.FloorCm = Chamber.Profile.FloorCm; Profile.CeilingCm = Chamber.Profile.CeilingCm;
+			bOk = ProfileGeometry::TryChamberDistanceQ8(Profile, PositionCm, DistanceQ8);
+		}
+		if (!bOk || !AddDistance(DistanceQ8))
 		{
 			return false;
 		}
@@ -85,9 +97,18 @@ bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelL
 			return false;
 		}
 		int64 DistanceQ8 = 0;
-		if (!IntegerGeometry::TrySegmentDistanceQ8(
-				PositionCm, Segment.StartCm, Segment.EndCm, Segment.RadiusCm, DistanceQ8)
-			|| !AddDistance(DistanceQ8))
+		bool bOk = false;
+		if (Plan.GeometryVersion == 1)
+			bOk = IntegerGeometry::TrySegmentDistanceQ8(PositionCm, Segment.StartCm, Segment.EndCm, Segment.RadiusCm, DistanceQ8);
+		else
+		{
+			ProfileGeometry::FSegment Profile;
+			Profile.StartCm = Segment.StartCm; Profile.EndCm = Segment.EndCm; Profile.RadiusCm = Segment.RadiusCm;
+			Profile.StartFloorCm = Segment.Profile.StartFloorCm; Profile.EndFloorCm = Segment.Profile.EndFloorCm;
+			Profile.StartCeilingCm = Segment.Profile.StartCeilingCm; Profile.EndCeilingCm = Segment.Profile.EndCeilingCm;
+			bOk = ProfileGeometry::TrySegmentDistanceQ8(Profile, PositionCm, DistanceQ8);
+		}
+		if (!bOk || !AddDistance(DistanceQ8))
 		{
 			return false;
 		}
@@ -98,5 +119,21 @@ bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelL
 	}
 	Out = Result;
 	return true;
+}
+
+bool TryCompose(int16 M4Density, const FVoxelLandM5CavePlan& Plan, const FVoxelLandM5PointCm& PositionCm,
+	int32 VoxelSizeCm, bool bEnabled, bool bCarveAllowed, bool bProtected, bool bHasPocket, int64 PocketDistanceQ8,
+	TFunctionRef<bool()> IsCancelled, int16& Out)
+{
+	return TryComposeInternal(M4Density, Plan, PositionCm, VoxelSizeCm, bEnabled, bCarveAllowed, bProtected,
+		bHasPocket, PocketDistanceQ8, false, IsCancelled, Out);
+}
+
+bool Private::TryComposeOwned(int16 M4Density, const FVoxelLandM5CavePlan& Plan,
+	const FVoxelLandM5PointCm& PositionCm, int32 VoxelSizeCm, bool bEnabled, bool bCarveAllowed, bool bProtected,
+	bool bHasPocket, int64 PocketDistanceQ8, TFunctionRef<bool()> IsCancelled, int16& Out)
+{
+	return TryComposeInternal(M4Density, Plan, PositionCm, VoxelSizeCm, bEnabled, bCarveAllowed, bProtected,
+		bHasPocket, PocketDistanceQ8, true, IsCancelled, Out);
 }
 }

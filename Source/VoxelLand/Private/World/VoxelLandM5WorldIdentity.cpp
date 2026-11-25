@@ -53,7 +53,7 @@ bool FVoxelLandM5WorldIdentityInternals::M5ValidSettings(const FVoxelLandM5World
 	const auto& T = C.Topology;
 	const auto& N = C.Pockets;
 	const auto& L = C.Limits;
-	if (S.FormatVersion != 1 || (M.Descriptor != 1 && M.Descriptor != 2 && M.Descriptor != 3) || M.Seed != 1 || M.Topology != 1 || M.Geometry != 1
+	if (S.FormatVersion != 1 || (M.Descriptor != 1 && M.Descriptor != 2 && M.Descriptor != 3) || M.Seed != 1 || M.Topology != 1 || (M.Geometry != 1 && M.Geometry != 2)
 		|| M.RegionalOwnership != 1 || M.PocketNoise != 1 || M.SurfaceValidation != 1 || M.Composition != 2)
 	{
 		Error = TEXT("Unsupported M5 snapshot or algorithm version");

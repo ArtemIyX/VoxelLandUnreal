@@ -54,9 +54,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5DefinitionValidator::Validate(const FVoxelLan
 		|| !Inputs.bAuthoritativeDryWorld || Snapshot.Caves.Water.Policy != EVoxelLandM5WaterPolicy::DryWorld
 		|| (Snapshot.Manifest.Descriptor != 2 && Snapshot.Manifest.Descriptor != 3))
 		return Fail(E::InvalidInput, TEXT("Finite definition requires an authoritative dry-world declaration"));
-	if (!Inputs.bExplicitBounds)
-		return Fail(E::Unproven, TEXT("Full usable finite domain is not yet established"));
-	const auto& Bounds = Inputs.EffectiveBounds;
+	const FVoxelLandM5Bounds& Bounds = Inputs.bExplicitBounds ? Inputs.EffectiveBounds : Snapshot.Caves.Bounds;
 	const int64 Min[] = {Bounds.MinInclusive.X, Bounds.MinInclusive.Y, Bounds.MinInclusive.Z};
 	const int64 Max[] = {Bounds.MaxExclusive.X, Bounds.MaxExclusive.Y, Bounds.MaxExclusive.Z};
 	const int64 AuthoredMin[] = {Snapshot.Caves.Bounds.MinInclusive.X, Snapshot.Caves.Bounds.MinInclusive.Y, Snapshot.Caves.Bounds.MinInclusive.Z};
@@ -72,6 +70,11 @@ FVoxelLandM5Diagnostic FVoxelLandM5DefinitionValidator::Validate(const FVoxelLan
 		|| !TryAdd(Domain.OriginXCm, Width, EndX) || !TryAdd(Domain.OriginYCm, Height, EndY)
 		|| Min[0] < Domain.OriginXCm || Min[1] < Domain.OriginYCm || Max[0] - 1 > EndX || Max[1] - 1 > EndY)
 		return Fail(E::OutOfDomain, TEXT("Effective bounds exceed the finite M4 grid"));
+	// Without an explicit smaller declaration, the input must represent the
+	// entire finite XY grid; the influence builder computes its usable keys.
+	if (!Inputs.bExplicitBounds && (Min[0] != Domain.OriginXCm || Min[1] != Domain.OriginYCm
+		|| Max[0] - 1 != EndX || Max[1] - 1 != EndY))
+		return Fail(E::Unproven, TEXT("Full finite XY declaration is not established"));
 	if (Inputs.Protection)
 	{
 		const auto& Grid = *Inputs.Protection;
@@ -133,7 +136,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5DefinitionValidator::Validate(const FVoxelLan
 	Writer.U32(0x35444c56); // VLD5, little endian
 	Writer.U32(1); Writer.U32(uint32(Descriptor.Num())); Writer.Bytes.Append(Descriptor);
 	Writer.U8(1); // authoritative native dry declaration
-	Writer.U8(1); // explicit bounds declaration
+	Writer.U8(Inputs.bExplicitBounds ? 1 : 0); // explicit or full finite declaration
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
 		const uint64 Values[] = {uint64(Min[Axis]), uint64(Max[Axis])};
@@ -143,6 +146,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5DefinitionValidator::Validate(const FVoxelLan
 	TSharedPtr<FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> Built = MakeShareable(
 		new FVoxelLandM5ValidatedDefinition(FrozenSnapshot, Inputs.Protection, FrozenRegistry, Budget, MoveTemp(Lease), MoveTemp(FreezeLease)));
 	Built->EffectiveBounds = Bounds;
+	Built->bExplicitBounds = Inputs.bExplicitBounds;
 	Built->CanonicalBytes = MoveTemp(Writer.Bytes);
 	if (IsCancelled()) return Fail(E::Cancelled, TEXT("Definition validation cancelled"));
 	Out = MoveTemp(Built);

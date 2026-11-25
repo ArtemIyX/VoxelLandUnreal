@@ -19,6 +19,7 @@ public:
 	FVoxelLandM5ValidatedDefinition& operator=(const FVoxelLandM5ValidatedDefinition&) = delete;
 	const FVoxelLandM5WorldSnapshot& GetSnapshot() const { return Snapshot.Get(); }
 	const FVoxelLandM5Bounds& GetEffectiveBounds() const { return EffectiveBounds; }
+	bool HasExplicitBounds() const { return bExplicitBounds; }
 	TConstArrayView<uint8> GetCanonicalBytes() const { return CanonicalBytes; }
 	// Exact descriptor bytes inside the versioned definition envelope.
 	bool MatchesDescriptor(TConstArrayView<uint8> Descriptor) const;
@@ -39,5 +40,6 @@ private:
 	TVoxelLandM5ConstRef<FVoxelLandOperatorRegistrySnapshot> Registry;
 	FVoxelLandM5BudgetRef Budget;
 	FVoxelLandM5Bounds EffectiveBounds;
+	bool bExplicitBounds = false;
 	TArray<uint8> CanonicalBytes;
 };

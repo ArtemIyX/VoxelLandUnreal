@@ -12,8 +12,8 @@ class FVoxelLandM5ValidatedDefinition;
 class VOXELLAND_API FVoxelLandM5DefinitionValidator final
 {
 public:
-	// Worker thread; borrowed input is immutable throughout. Only explicitly
-	// declared finite bounds are accepted until the full usable domain is proved.
+	// Worker thread; borrowed input is immutable throughout. Default bounds
+	// require a complete typed finite XY declaration; usable chunks are derived later.
 	// Failure and cancellation leave Out unchanged.
 	static FVoxelLandM5Diagnostic Validate(const FVoxelLandM5DefinitionInputs& Inputs, FVoxelLandM5BudgetRef Budget,
 		TFunctionRef<bool()> IsCancelled, TVoxelLandM5ConstPtr<FVoxelLandM5ValidatedDefinition>& Out);

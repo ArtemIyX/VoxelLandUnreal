@@ -2,7 +2,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Async/Future.h"
-#include "Data/Structs/VoxelLandChunkData.h"
+#include "Data/Field/Chunks/VoxelLandChunkData.h"
 #include "VoxelLandWorld.generated.h"
 
 class FVoxelLandGenerator;
@@ -135,8 +135,11 @@ public:
 	int32 GetDemandedChunkCount() const;
 	bool IsChunkDemanded(FIntVector Coordinate) const;
 	bool HasWorldStateForTests() const { return State.IsValid(); }
-	bool TryInitializeWithStartupForTests(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
-		const FVoxelLandChunkKey& Startup) { return TryInitialize(MoveTemp(Generator), &Startup); }
+	bool TryInitializeWithStartupForTests(
+		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator, const FVoxelLandChunkKey& Startup)
+	{
+		return TryInitialize(MoveTemp(Generator), &Startup);
+	}
 	bool IsExplicitChunkForTests(const FVoxelLandChunkKey& Key) const;
 	uint64 GetM7PublishedTicketForTests() const;
 	bool IsM7ReplacementPendingForTests() const;
@@ -145,8 +148,11 @@ public:
 	void SetPresentationHookForTests(TFunction<void()>&& Hook) { PresentationHookForTests = MoveTemp(Hook); }
 	void SetShutdownHookForTests(TFunction<void()>&& Hook) { ShutdownHookForTests = MoveTemp(Hook); }
 #if WITH_EDITOR
-    void SetInitReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier) { InitReloadBarrierForTests = MoveTemp(Barrier); }
-    void OnInitObjectsReplacedForTests(const TMap<UObject*, UObject*>& Map) { HandleInitObjectsReplaced(Map); }
+	void SetInitReloadBarrierForTests(TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier)
+	{
+		InitReloadBarrierForTests = MoveTemp(Barrier);
+	}
+	void OnInitObjectsReplacedForTests(const TMap<UObject*, UObject*>& Map) { HandleInitObjectsReplaced(Map); }
 #endif
 #endif
 
@@ -192,6 +198,10 @@ private:
 	bool InitializeAuthoredM4(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk, UVoxelLandM6WorldConfig* M6);
 	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
 		const FVoxelLandChunkKey* Startup = nullptr, TArray<uint8> M6Identity = {});
+	bool ConfigureClipmap(FVoxelLandWorldState& Candidate);
+	bool QueueStartupChunk(FVoxelLandWorldState& Candidate, const FVoxelLandChunkKey& Startup);
+	bool StartTerrainWorkers(FVoxelLandWorldState& Candidate);
+	static void StopCandidateWorkers(FVoxelLandWorldState& Candidate);
 	void UpdateDemand();
 	void UpdateM7Demand(const FVector& LogicalView);
 	void DispatchM7Revision();
@@ -207,14 +217,14 @@ private:
 	void ShutdownInternal(bool bDestroyRegionActors);
 	void StopPendingInitialization();
 #if WITH_EDITOR
-    void HandleInitPackageReload(EPackageReloadPhase Phase, FPackageReloadedEvent* Event);
-    void HandleInitObjectsReplaced(const TMap<UObject*, UObject*>& Map);
-    void UnbindInitReloadHandlers();
+	void HandleInitPackageReload(EPackageReloadPhase Phase, FPackageReloadedEvent* Event);
+	void HandleInitObjectsReplaced(const TMap<UObject*, UObject*>& Map);
+	void UnbindInitReloadHandlers();
 #if WITH_DEV_AUTOMATION_TESTS
-    TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> InitReloadBarrierForTests;
+	TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> InitReloadBarrierForTests;
 #endif
-    FDelegateHandle InitPackageReloadHandle;
-    FDelegateHandle InitObjectsReplacedHandle;
+	FDelegateHandle InitPackageReloadHandle;
+	FDelegateHandle InitObjectsReplacedHandle;
 #endif
 	void PollInitialization();
 	void StopDemo();

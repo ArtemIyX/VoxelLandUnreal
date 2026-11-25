@@ -1,5 +1,5 @@
 #include "VoxelLandAlgo.h"
-#include "VoxelLandNativeNoise.h"
+#include "Generation/Noise/VoxelLandNativeNoise.h"
 #include "Operators/VoxelLandSquareRegistration.h"
 #include "Operators/VoxelLandExampleFilterRegistration.h"
 

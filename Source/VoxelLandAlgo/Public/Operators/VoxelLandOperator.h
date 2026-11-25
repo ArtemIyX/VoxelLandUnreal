@@ -1,10 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Data/Structs/VoxelLandExternalOperator.h"
-#include "Data/Enums/VoxelLandOperatorSimdRequirement.h"
+#include "Data/Program/Operators/VoxelLandExternalOperator.h"
+#include "Data/Program/Operators/VoxelLandOperatorSimdRequirement.h"
 #include "Operators/VoxelLandOperatorOutput.h"
-#include "Graph/VoxelLandWorldCapabilitiesRequirement.h"
+#include "Graph/Capabilities/VoxelLandWorldCapabilitiesRequirement.h"
 
 // Created, called, and destroyed exclusively on the same worker thread.
 class VOXELLANDALGO_API IVoxelLandOperatorWorker

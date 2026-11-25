@@ -7,11 +7,11 @@
 UCLASS()
 class UVoxelLandSampleGraphFactory : public UFactory
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
-    UVoxelLandSampleGraphFactory();
-    FText GetDisplayName() const override;
-    UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
-        UObject* Context, FFeedbackContext* Warn) override;
+	UVoxelLandSampleGraphFactory();
+	FText GetDisplayName() const override;
+	UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context,
+		FFeedbackContext* Warn) override;
 };

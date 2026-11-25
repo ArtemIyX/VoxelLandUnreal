@@ -1,7 +1,7 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VoxelLand.h"
-#include "World/VoxelLandM4Preparation.h"
+#include "World/Terrain/Worlds/VoxelLandTerrainPreparation.h"
 
 #define LOCTEXT_NAMESPACE "FVoxelLandModule"
 

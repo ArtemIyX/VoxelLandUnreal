@@ -1,5 +1,5 @@
 #include "Operators/VoxelLandOperator.h"
-#include "Data/Enums/VoxelLandBuiltinNode.h"
+#include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Misc/ScopeLock.h"
 #include "HAL/PlatformProcess.h"
 #include "Modules/ModuleManager.h"

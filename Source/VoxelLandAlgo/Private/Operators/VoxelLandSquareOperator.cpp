@@ -18,7 +18,7 @@ public:
 	class FSquareWorker final : public IVoxelLandOperatorWorker
 	{
 	public:
-		bool Evaluate(
+		virtual bool Evaluate(
 			TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
 		{
 			if (Inputs.Num() != 1 || !Inputs[0] || Output.Num() != Count || Count < 1 || Count > 256)
@@ -39,7 +39,7 @@ public:
 			return true;
 		}
 #if VOXELLAND_SQUARE_HAS_SSE2
-		bool EvaluateSimd(
+		virtual bool EvaluateSimd(
 			TConstArrayView<const void*> Inputs, FVoxelLandOperatorOutput& Output, int32 Count, FString& Error) override
 		{
 			if (Inputs.Num() != 1 || !Inputs[0] || Output.Num() != Count || Count < 4 || Count > 256 || Count % 4 != 0)
@@ -67,14 +67,20 @@ public:
 	class FSquareOperator final : public IVoxelLandOperator
 	{
 	public:
-		EVoxelLandWorldRequirement WorldRequirement() const override { return EVoxelLandWorldRequirement::SampleLocal; }
-		FGuid Id() const override { return VoxelLandSquareOperatorId(); }
-		int32 Version() const override { return 1; }
-		TArray<EVoxelLandGraphValueType> InputTypes() const override { return {EVoxelLandGraphValueType::Float}; }
-		EVoxelLandGraphValueType OutputType() const override { return EVoxelLandGraphValueType::Float; }
-		uint32 MaximumWorkerBytes() const override { return sizeof(FSquareWorker); }
+		virtual EVoxelLandWorldRequirement WorldRequirement() const override
+		{
+			return EVoxelLandWorldRequirement::SampleLocal;
+		}
+		virtual FGuid Id() const override { return VoxelLandSquareOperatorId(); }
+		virtual int32 Version() const override { return 1; }
+		virtual TArray<EVoxelLandGraphValueType> InputTypes() const override
+		{
+			return {EVoxelLandGraphValueType::Float};
+		}
+		virtual EVoxelLandGraphValueType OutputType() const override { return EVoxelLandGraphValueType::Float; }
+		virtual uint32 MaximumWorkerBytes() const override { return sizeof(FSquareWorker); }
 
-		EVoxelLandOperatorSimdRequirement SimdRequirement() const override
+		virtual EVoxelLandOperatorSimdRequirement SimdRequirement() const override
 		{
 #if VOXELLAND_SQUARE_HAS_SSE2
 			return EVoxelLandOperatorSimdRequirement::SSE2;

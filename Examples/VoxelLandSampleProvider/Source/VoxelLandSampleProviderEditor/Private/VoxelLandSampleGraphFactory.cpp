@@ -24,43 +24,43 @@ private:
 
 FVoxelLandGraphPinRecord FVoxelLandSampleGraphBuilder::MakePin(const TCHAR* Name, bool bOutput)
 {
-    FVoxelLandGraphPinRecord Pin;
-    Pin.Id = FGuid::NewGuid();
-    Pin.Name = Name;
-    Pin.Type = EVoxelLandGraphValueType::Float;
-    Pin.bOutput = bOutput;
-    return Pin;
+	FVoxelLandGraphPinRecord Pin;
+	Pin.Id = FGuid::NewGuid();
+	Pin.Name = Name;
+	Pin.Type = EVoxelLandGraphValueType::Float;
+	Pin.bOutput = bOutput;
+	return Pin;
 }
 
 void FVoxelLandSampleGraphBuilder::AddLink(UVoxelLandTerrainGraph& Graph, int32 From, int32 To)
 {
-    FVoxelLandGraphLinkRecord& Link = Graph.Links.AddDefaulted_GetRef();
-    Link.SourceNode = Graph.Nodes[From].Id;
-    Link.SourcePin = Graph.Nodes[From].Pins.Last().Id;
-    Link.TargetNode = Graph.Nodes[To].Id;
-    Link.TargetPin = Graph.Nodes[To].Pins[0].Id;
+	FVoxelLandGraphLinkRecord& Link = Graph.Links.AddDefaulted_GetRef();
+	Link.SourceNode = Graph.Nodes[From].Id;
+	Link.SourcePin = Graph.Nodes[From].Pins.Last().Id;
+	Link.TargetNode = Graph.Nodes[To].Id;
+	Link.TargetPin = Graph.Nodes[To].Pins[0].Id;
 }
 
 void FVoxelLandSampleGraphBuilder::PopulateSample(UVoxelLandTerrainGraph& Graph)
 {
-    FVoxelLandGraphNodeRecord Position;
-    Position.Id = FGuid::NewGuid();
-    Position.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::PositionZ);
-    Position.Pins.Add(MakePin(TEXT("Result"), true));
-    Graph.Nodes.Add(MoveTemp(Position));
+	FVoxelLandGraphNodeRecord Position;
+	Position.Id = FGuid::NewGuid();
+	Position.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::PositionZ);
+	Position.Pins.Add(MakePin(TEXT("Result"), true));
+	Graph.Nodes.Add(MoveTemp(Position));
 
-    FVoxelLandGraphNodeRecord Double;
-    Double.Id = FGuid::NewGuid();
-    Double.OperatorId = VoxelLandSampleDoubleId();
-    Double.Pins.Add(MakePin(TEXT("Value"), false));
-    Double.Pins.Add(MakePin(TEXT("Result"), true));
-    Graph.Nodes.Add(MoveTemp(Double));
+	FVoxelLandGraphNodeRecord Double;
+	Double.Id = FGuid::NewGuid();
+	Double.OperatorId = VoxelLandSampleDoubleId();
+	Double.Pins.Add(MakePin(TEXT("Value"), false));
+	Double.Pins.Add(MakePin(TEXT("Result"), true));
+	Graph.Nodes.Add(MoveTemp(Double));
 
-    FVoxelLandGraphNodeRecord Output;
-    Output.Id = FGuid::NewGuid();
-    Output.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
-    Output.Pins.Add(MakePin(TEXT("Density"), false));
-    Graph.Nodes.Add(MoveTemp(Output));
+	FVoxelLandGraphNodeRecord Output;
+	Output.Id = FGuid::NewGuid();
+	Output.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+	Output.Pins.Add(MakePin(TEXT("Density"), false));
+	Graph.Nodes.Add(MoveTemp(Output));
 	constexpr int32 PositionIndex = 0;
 	constexpr int32 DoubleIndex = 1;
 	constexpr int32 OutputIndex = 2;
@@ -70,51 +70,51 @@ void FVoxelLandSampleGraphBuilder::PopulateSample(UVoxelLandTerrainGraph& Graph)
 
 bool FVoxelLandSampleGraphBuilder::ValidateSample(UVoxelLandTerrainGraph& Graph, FString& Error)
 {
-    FVoxelLandGraphSnapshot Snapshot;
-    FVoxelLandProgramDraft Draft;
-    return Graph.CaptureSnapshot(Snapshot, Error) && FVoxelLandGraphCompiler::Compile(Snapshot, Draft, Error);
+	FVoxelLandGraphSnapshot Snapshot;
+	FVoxelLandProgramDraft Draft;
+	return Graph.CaptureSnapshot(Snapshot, Error) && FVoxelLandGraphCompiler::Compile(Snapshot, Draft, Error);
 }
 
 UVoxelLandSampleGraphFactory::UVoxelLandSampleGraphFactory()
 {
-    SupportedClass = UVoxelLandTerrainGraph::StaticClass();
-    bCreateNew = true;
-    bEditAfterNew = true;
+	SupportedClass = UVoxelLandTerrainGraph::StaticClass();
+	bCreateNew = true;
+	bEditAfterNew = true;
 }
 
 FText UVoxelLandSampleGraphFactory::GetDisplayName() const
 {
-    return LOCTEXT("SampleGraphName", "VoxelLand Sample Provider Graph");
+	return LOCTEXT("SampleGraphName", "VoxelLand Sample Provider Graph");
 }
 
-UObject* UVoxelLandSampleGraphFactory::FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name,
-    EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn)
+UObject* UVoxelLandSampleGraphFactory::FactoryCreateNew(
+	UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn)
 {
-    (void)Context;
-    (void)Warn;
-    if (InClass != UVoxelLandTerrainGraph::StaticClass() || !Parent || Name.IsNone() ||
-        FindObjectFast<UObject>(Parent, Name) || FPackageName::DoesPackageExist(Parent->GetOutermost()->GetName()))
-    {
-        UE_LOG(LogVoxelLandSampleGraphFactory, Error, TEXT("Sample graph destination is invalid or already exists"));
-        return nullptr;
-    }
-    if (!FVoxelLandOperatorRegistry::Resolve(VoxelLandSampleDoubleId(), 1))
-    {
-        UE_LOG(LogVoxelLandSampleGraphFactory, Error, TEXT("Sample provider version 1 is not registered"));
-        return nullptr;
-    }
-    UVoxelLandTerrainGraph* Candidate = NewObject<UVoxelLandTerrainGraph>(GetTransientPackage());
+	(void)Context;
+	(void)Warn;
+	if (InClass != UVoxelLandTerrainGraph::StaticClass() || !Parent || Name.IsNone()
+		|| FindObjectFast<UObject>(Parent, Name) || FPackageName::DoesPackageExist(Parent->GetOutermost()->GetName()))
+	{
+		UE_LOG(LogVoxelLandSampleGraphFactory, Error, TEXT("Sample graph destination is invalid or already exists"));
+		return nullptr;
+	}
+	if (!FVoxelLandOperatorRegistry::Resolve(VoxelLandSampleDoubleId(), 1))
+	{
+		UE_LOG(LogVoxelLandSampleGraphFactory, Error, TEXT("Sample provider version 1 is not registered"));
+		return nullptr;
+	}
+	UVoxelLandTerrainGraph* Candidate = NewObject<UVoxelLandTerrainGraph>(GetTransientPackage());
 	FVoxelLandSampleGraphBuilder::PopulateSample(*Candidate);
 	FString Error;
 	if (!FVoxelLandSampleGraphBuilder::ValidateSample(*Candidate, Error))
 	{
-        UE_LOG(LogVoxelLandSampleGraphFactory, Error, TEXT("Sample graph cannot compile: %s"), *Error);
-        return nullptr;
-    }
-    UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Parent, InClass, Name, Flags | RF_Transactional);
-    Graph->Nodes = MoveTemp(Candidate->Nodes);
-    Graph->Links = MoveTemp(Candidate->Links);
-    return Graph;
+		UE_LOG(LogVoxelLandSampleGraphFactory, Error, TEXT("Sample graph cannot compile: %s"), *Error);
+		return nullptr;
+	}
+	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Parent, InClass, Name, Flags | RF_Transactional);
+	Graph->Nodes = MoveTemp(Candidate->Nodes);
+	Graph->Links = MoveTemp(Candidate->Links);
+	return Graph;
 }
 
 #undef LOCTEXT_NAMESPACE

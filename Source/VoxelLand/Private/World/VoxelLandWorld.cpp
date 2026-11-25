@@ -1,16 +1,16 @@
 #include "World/VoxelLandWorld.h"
 #include "World/VoxelLandWorldCoordinates.h"
-#include "World/VoxelLandM7RenderWork.h"
+#include "Streaming/Clipmap/VoxelLandClipmapRenderWork.h"
 #if !UE_SERVER
-#include "Rendering/VoxelLandChunkComponent.h"
+#include "Rendering/Components/VoxelLandChunkComponent.h"
 #endif
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
-#include "Generation/VoxelLandGenerator.h"
-#include "Generation/VoxelLandMeshing.h"
-#include "Data/Structs/VoxelLandPublication.h"
-#include "Data/Structs/VoxelLandWorldState.h"
-#include "Data/Structs/VoxelLandTestBarrier.h"
+#include "Generation/Field/VoxelLandGenerator.h"
+#include "Generation/Meshing/VoxelLandMeshing.h"
+#include "Data/World/Streaming/VoxelLandPublication.h"
+#include "Data/World/Streaming/VoxelLandWorldState.h"
+#include "Data/World/Streaming/VoxelLandTestBarrier.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "Camera/PlayerCameraManager.h"
@@ -46,7 +46,9 @@ public:
 	static constexpr int32 MaxRecords = 8192;
 
 	explicit FWorker(TSharedRef<FSharedWork, ESPMode::ThreadSafe> InWork)
-		: Work(InWork) {}
+		: Work(InWork)
+	{
+	}
 
 	virtual uint32 Run() override
 	{
@@ -88,18 +90,21 @@ public:
 				}
 				if (Job.M7Visual)
 				{
-					const auto IsCancelled = [&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); };
+					const auto IsCancelled = [&] {
+						return Job.Cancel->bCancelled.Load() || Work->bStop.Load();
+					};
 					if (!Done.Error)
 					{
-						Done.Error = BuildM7RenderRevision(*Job.M7Visual, *Current, *Context, Scratch, IsCancelled, Done.M7Visual);
+						Done.Error = BuildM7RenderRevision(
+							*Job.M7Visual, *Current, *Context, Scratch, IsCancelled, Done.M7Visual);
 					}
 					Done.bCancelled = IsCancelled() || Done.Error.Code == EVoxelLandErrorCode::Cancelled;
 				}
 				else
 				{
 					const EVoxelLandChunkClassification Proof = !Done.Error && Job.bRender
-						                                            ? Current->ClassifyChunkBeforeSampling(Job.Key)
-						                                            : EVoxelLandChunkClassification::NeedsSamples;
+																  ? Current->ClassifyChunkBeforeSampling(Job.Key)
+																  : EVoxelLandChunkClassification::NeedsSamples;
 					if (!Done.Error)
 					{
 						TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_Generate);
@@ -107,14 +112,15 @@ public:
 							[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); });
 					}
 					Done.bCancelled = Job.Cancel->bCancelled.Load() || Work->bStop.Load();
-					if (!Done.Error && !Done.bCancelled && Job.bRender && Proof ==
-					    EVoxelLandChunkClassification::NeedsSamples
-					    && VoxelLandMeshing::Classify(*Done.Data) == EVoxelLandChunkClassification::Surface)
+					if (!Done.Error && !Done.bCancelled && Job.bRender
+						&& Proof == EVoxelLandChunkClassification::NeedsSamples
+						&& VoxelLandMeshing::Classify(*Done.Data) == EVoxelLandChunkClassification::Surface)
 					{
 						auto Mesh = MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>();
 						const auto Result = VoxelLandMeshing::BuildSurfaceNets(
 							*Done.Data, Current->GetProfile().VoxelSizeCm, Scratch, *Mesh,
-							[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); }, Current->IsM4Unlimited());
+							[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); },
+							Current->IsM4Unlimited());
 						if (Result == EVoxelLandMeshResult::Cancelled)
 						{
 							Done.bCancelled = true;
@@ -141,7 +147,9 @@ public:
 					Done.Data = Marked;
 				}
 				Job.Barrier->Reached->Trigger();
-				while (!Work->bStop.Load() && !Job.Barrier->Release->Wait(5)) {}
+				while (!Work->bStop.Load() && !Job.Barrier->Release->Wait(5))
+				{
+				}
 			}
 #endif
 			Work->Completed.Enqueue(MoveTemp(Done));
@@ -251,7 +259,10 @@ bool AVoxelLandRegion::Publish(const FIntVector&, const FVector&,
 	return false;
 }
 void AVoxelLandRegion::Remove(const FIntVector&) {}
-bool AVoxelLandRegion::IsChunkEffectivelyVisible(const FIntVector&) const { return false; }
+bool AVoxelLandRegion::IsChunkEffectivelyVisible(const FIntVector&) const
+{
+	return false;
+}
 void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface*) {}
 #endif
 
@@ -262,7 +273,10 @@ AVoxelLandWorld::AVoxelLandWorld()
 	SetActorEnableCollision(false);
 }
 
-AVoxelLandWorld::AVoxelLandWorld(FVTableHelper& Helper) : Super(Helper) {}
+AVoxelLandWorld::AVoxelLandWorld(FVTableHelper& Helper)
+	: Super(Helper)
+{
+}
 AVoxelLandWorld::~AVoxelLandWorld() = default;
 
 void AVoxelLandWorld::BeginPlay()
@@ -344,36 +358,19 @@ bool AVoxelLandWorld::GetM6WorldIdentity(TArray<uint8>& OutIdentity) const
 	return true;
 }
 
-bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
-	const FVoxelLandChunkKey* Startup, TArray<uint8> M6Identity)
+bool AVoxelLandWorld::ConfigureClipmap(FVoxelLandWorldState& Candidate)
 {
-	check(IsInGameThread());
-	UWorld* World = GetWorld();
-	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
-	    || World->bIsTearingDown)
-	{
-		return false;
-	}
-	if (!Generator)
-	{
-		LastInitializationError = TEXT("Generator is missing.");
-		return false;
-	}
-	TUniquePtr<FVoxelLandWorldState> Candidate = MakeUnique<FVoxelLandWorldState>();
-	Candidate->Generator = Generator;
-	Candidate->M6Identity = MoveTemp(M6Identity);
-	Candidate->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
 #if !UE_SERVER
-	if (bEnableM7Clipmap && !Candidate->bServer)
+	if (bEnableM7Clipmap && !Candidate.bServer)
 	{
-		if (!Generator->SupportsM7CompletedField())
+		if (!Candidate.Generator->SupportsM7CompletedField())
 		{
 			LastInitializationError = TEXT("The M7 clipmap requires supported ordinary finite or local M4 terrain.");
 			return false;
 		}
-		Candidate->M7Visual = MakeUnique<FM7VisualState>();
-		FVoxelLandM7ClipmapSettings& Clipmap = Candidate->M7Visual->Settings;
-		Clipmap.BaseVoxelSizeCm = Generator->GetProfile().VoxelSizeCm;
+		Candidate.M7Visual = MakeUnique<FM7VisualState>();
+		FVoxelLandM7ClipmapSettings& Clipmap = Candidate.M7Visual->Settings;
+		Clipmap.BaseVoxelSizeCm = Candidate.Generator->GetProfile().VoxelSizeCm;
 		Clipmap.MaxLod = FMath::Min<uint8>(M7MaxLOD, 5);
 		Clipmap.HorizontalRadiusCm = M7HorizontalRadiusCm;
 		Clipmap.FirstSplitDistanceCm = FMath::Min(Clipmap.FirstSplitDistanceCm, Clipmap.HorizontalRadiusCm);
@@ -382,30 +379,36 @@ bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMod
 		Clipmap.FallbackReserveLeaves = FMath::Min(Clipmap.FallbackReserveLeaves, Clipmap.MaxLeaves / 8);
 	}
 #endif
-	Candidate->RegionDimensions = FIntVector(
-		FMath::Clamp(RegionSize.X, 1, 32), FMath::Clamp(RegionSize.Y, 1, 32), FMath::Clamp(RegionSize.Z, 1, 8));
-	if (Startup)
+	return true;
+}
+
+bool AVoxelLandWorld::QueueStartupChunk(FVoxelLandWorldState& Candidate, const FVoxelLandChunkKey& Startup)
+{
+	if (Startup.LOD != 0
+		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
+			Startup.Coordinate, Candidate.Generator->GetProfile().VoxelSizeCm, Candidate.Generator->IsM4Unlimited()))
 	{
-		if (Startup->LOD != 0 || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
-				Startup->Coordinate, Generator->GetProfile().VoxelSizeCm, Generator->IsM4Unlimited()))
-		{
-			LastInitializationError = TEXT("Startup chunk exceeds the supported coordinate range.");
-			return false;
-		}
-		if (const FVoxelLandError Error = Generator->ValidateM4ChunkDemand(*Startup))
-		{
-			LastInitializationError = FString::Printf(TEXT("Startup chunk is invalid: %s"), *Error.Message);
-			return false;
-		}
-		FRecord& Record = Candidate->Records.Add(*Startup);
-		Record.bExplicit = true;
-		Record.bQueued = true;
-		Candidate->bDemandComplete = false;
+		LastInitializationError = TEXT("Startup chunk exceeds the supported coordinate range.");
+		return false;
 	}
+	if (const FVoxelLandError Error = Candidate.Generator->ValidateM4ChunkDemand(Startup))
+	{
+		LastInitializationError = FString::Printf(TEXT("Startup chunk is invalid: %s"), *Error.Message);
+		return false;
+	}
+	FRecord& Record = Candidate.Records.Add(Startup);
+	Record.bExplicit = true;
+	Record.bQueued = true;
+	Candidate.bDemandComplete = false;
+	return true;
+}
+
+bool AVoxelLandWorld::StartTerrainWorkers(FVoxelLandWorldState& Candidate)
+{
 	const int32 Count = FMath::Clamp(WorkerCount, 1, FWorker::MaxWorkers);
 	for (int32 I = 0; I < Count; ++I)
 	{
-		auto Worker = MakeUnique<FWorker>(Candidate->Work);
+		TUniquePtr<FWorker> Worker = MakeUnique<FWorker>(Candidate.Work);
 		FRunnableThread* Thread = nullptr;
 #if WITH_DEV_AUTOMATION_TESTS
 		if (!bFailWorkerStartForTests)
@@ -423,29 +426,70 @@ bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMod
 			}
 			continue;
 		}
-		Candidate->Workers.Add(MoveTemp(Worker));
-		Candidate->Threads.Add(Thread);
+		Candidate.Workers.Add(MoveTemp(Worker));
+		Candidate.Threads.Add(Thread);
 	}
-	if (Candidate->Threads.IsEmpty())
+	if (Candidate.Threads.IsEmpty())
 	{
 		LastInitializationError = TEXT("Unable to start terrain workers");
 		return false;
 	}
+	return true;
+}
+
+void AVoxelLandWorld::StopCandidateWorkers(FVoxelLandWorldState& Candidate)
+{
+	Candidate.Work->bStop.Store(true);
+	for (int32 Index = 0; Index < Candidate.Threads.Num(); ++Index)
+	{
+		Candidate.Work->Wake->Trigger();
+	}
+	for (FRunnableThread* Thread : Candidate.Threads)
+	{
+		Thread->WaitForCompletion();
+		delete Thread;
+	}
+}
+
+bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
+	const FVoxelLandChunkKey* Startup, TArray<uint8> M6Identity)
+{
+	check(IsInGameThread());
+	UWorld* World = GetWorld();
+	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
+		|| World->bIsTearingDown)
+	{
+		return false;
+	}
+	if (!Generator)
+	{
+		LastInitializationError = TEXT("Generator is missing.");
+		return false;
+	}
+	TUniquePtr<FVoxelLandWorldState> Candidate = MakeUnique<FVoxelLandWorldState>();
+	Candidate->Generator = Generator;
+	Candidate->M6Identity = MoveTemp(M6Identity);
+	Candidate->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
+	if (!ConfigureClipmap(*Candidate))
+	{
+		return false;
+	}
+	Candidate->RegionDimensions = FIntVector(
+		FMath::Clamp(RegionSize.X, 1, 32), FMath::Clamp(RegionSize.Y, 1, 32), FMath::Clamp(RegionSize.Z, 1, 8));
+	if (Startup && !QueueStartupChunk(*Candidate, *Startup))
+	{
+		return false;
+	}
+	if (!StartTerrainWorkers(*Candidate))
+	{
+		return false;
+	}
 	const uint64 PreviousEpoch = ConfigurationEpoch;
 	Shutdown();
-	if (ConfigurationEpoch != PreviousEpoch + 1 || bLifecycleEnded || IsActorBeingDestroyed()
-		|| !GetWorld() || GetWorld()->bIsTearingDown)
+	if (ConfigurationEpoch != PreviousEpoch + 1 || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
+		|| GetWorld()->bIsTearingDown)
 	{
-		Candidate->Work->bStop.Store(true);
-		for (int32 Index = 0; Index < Candidate->Threads.Num(); ++Index)
-		{
-			Candidate->Work->Wake->Trigger();
-		}
-		for (FRunnableThread* Thread : Candidate->Threads)
-		{
-			Thread->WaitForCompletion();
-			delete Thread;
-		}
+		StopCandidateWorkers(*Candidate);
 		return false;
 	}
 	BindWorldTearDown();
@@ -768,8 +812,7 @@ void AVoxelLandWorld::DumpStats() const
 	}
 	UE_LOG(LogTemp, Display,
 		TEXT(
-			"VoxelLand server=%d requested=%d queued=%d outstanding=%d ready=%d regions=%d vertices=%d triangles=%d fieldBytes=%lld meshBytes=%lld cancelled=%llu stale=%llu failed=%llu"
-		),
+			"VoxelLand server=%d requested=%d queued=%d outstanding=%d ready=%d regions=%d vertices=%d triangles=%d fieldBytes=%lld meshBytes=%lld cancelled=%llu stale=%llu failed=%llu"),
 		State->bServer, State->Records.Num(), Queued, State->Active, Ready, Regions.Num(), Vertices, Triangles,
 		FieldBytes, MeshBytes, State->Cancelled, State->Stale, State->Failed);
 }
@@ -812,8 +855,8 @@ void AVoxelLandWorld::UpdateDemand()
 	const FVector Position = GlobalLocation / Width;
 	constexpr double CoordinateLimit = double(MAX_int32) - 32.0;
 	if (!FMath::IsFinite(Position.X) || !FMath::IsFinite(Position.Y) || !FMath::IsFinite(Position.Z)
-	    || FMath::Abs(Position.X) > CoordinateLimit || FMath::Abs(Position.Y) > CoordinateLimit
-	    || FMath::Abs(Position.Z) > CoordinateLimit)
+		|| FMath::Abs(Position.X) > CoordinateLimit || FMath::Abs(Position.Y) > CoordinateLimit
+		|| FMath::Abs(Position.Z) > CoordinateLimit)
 	{
 		return;
 	}
@@ -827,7 +870,7 @@ void AVoxelLandWorld::UpdateDemand()
 	};
 	const FIntVector VelocitySector(SectorAxis(Direction.X), SectorAxis(Direction.Y), SectorAxis(Direction.Z));
 	if (State->bDemandComplete && State->bHasCamera && State->CameraChunk == NewChunk && State->LastHorizontal == H
-	    && State->LastVertical == V && State->LastLimit == Limit && State->LastVelocitySector == VelocitySector)
+		&& State->LastVertical == V && State->LastLimit == Limit && State->LastVelocitySector == VelocitySector)
 	{
 		return;
 	}
@@ -849,7 +892,7 @@ void AVoxelLandWorld::UpdateDemand()
 				FVoxelLandChunkKey Key;
 				Key.Coordinate = NewChunk + FIntVector(X, Y, Z);
 				if (VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
-					Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited()))
+						Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited()))
 				{
 					if (const FVoxelLandError Error = State->Generator->ValidateM4ChunkDemand(Key))
 					{
@@ -894,16 +937,14 @@ void AVoxelLandWorld::UpdateDemand()
 			return DistA < DistB;
 		}
 		const double AheadA = FVector::DotProduct(FVector(DA), Forward),
-		             AheadB = FVector::DotProduct(FVector(DB), Forward);
+					 AheadB = FVector::DotProduct(FVector(DB), Forward);
 		if (AheadA != AheadB)
 		{
 			return AheadA > AheadB;
 		}
-		return A.Coordinate.X != B.Coordinate.X
-			       ? A.Coordinate.X < B.Coordinate.X
-			       : (A.Coordinate.Y != B.Coordinate.Y
-				          ? A.Coordinate.Y < B.Coordinate.Y
-				          : A.Coordinate.Z < B.Coordinate.Z);
+		return A.Coordinate.X != B.Coordinate.X ? A.Coordinate.X < B.Coordinate.X
+												: (A.Coordinate.Y != B.Coordinate.Y ? A.Coordinate.Y < B.Coordinate.Y
+																					: A.Coordinate.Z < B.Coordinate.Z);
 	});
 	int32 ExplicitCount = 0;
 	for (auto& Pair : State->Records)
@@ -946,20 +987,18 @@ void AVoxelLandWorld::UpdateDemand()
 	}
 	Evictions.Sort([NewChunk](const FVoxelLandChunkKey& A, const FVoxelLandChunkKey& B) {
 		const int64 DistA = FMath::Abs(int64(A.Coordinate.X) - NewChunk.X)
-		                    + FMath::Abs(int64(A.Coordinate.Y) - NewChunk.Y)
-		                    + FMath::Abs(int64(A.Coordinate.Z) - NewChunk.Z);
+						  + FMath::Abs(int64(A.Coordinate.Y) - NewChunk.Y)
+						  + FMath::Abs(int64(A.Coordinate.Z) - NewChunk.Z);
 		const int64 DistB = FMath::Abs(int64(B.Coordinate.X) - NewChunk.X)
-		                    + FMath::Abs(int64(B.Coordinate.Y) - NewChunk.Y)
-		                    + FMath::Abs(int64(B.Coordinate.Z) - NewChunk.Z);
+						  + FMath::Abs(int64(B.Coordinate.Y) - NewChunk.Y)
+						  + FMath::Abs(int64(B.Coordinate.Z) - NewChunk.Z);
 		if (DistA != DistB)
 		{
 			return DistA > DistB;
 		}
-		return A.Coordinate.X != B.Coordinate.X
-			       ? A.Coordinate.X > B.Coordinate.X
-			       : (A.Coordinate.Y != B.Coordinate.Y
-				          ? A.Coordinate.Y > B.Coordinate.Y
-				          : A.Coordinate.Z > B.Coordinate.Z);
+		return A.Coordinate.X != B.Coordinate.X ? A.Coordinate.X > B.Coordinate.X
+												: (A.Coordinate.Y != B.Coordinate.Y ? A.Coordinate.Y > B.Coordinate.Y
+																					: A.Coordinate.Z > B.Coordinate.Z);
 	});
 	for (const auto& Key : Evictions)
 	{
@@ -1013,7 +1052,7 @@ void AVoxelLandWorld::PumpCompletions()
 		}
 		FRecord* Record = State->Records.Find(Done.Job.Key);
 		if (!VoxelLandPublication::IsCurrent(Record != nullptr, Done.Job.Epoch, State->Epoch, Done.Job.Ticket,
-			Record ? Record->Ticket : 0, Done.Job.Generator == State->Generator, true))
+				Record ? Record->Ticket : 0, Done.Job.Generator == State->Generator, true))
 		{
 			++State->Stale;
 			continue;
@@ -1029,9 +1068,8 @@ void AVoxelLandWorld::PumpCompletions()
 		{
 			Record->bFailed = true;
 			Record->Error = Done.Error.Message.IsEmpty()
-				                ? FString::Printf(TEXT("Chunk generation failed (error code %d)"),
-					                int32(Done.Error.Code))
-				                : Done.Error.Message.Left(1024);
+							  ? FString::Printf(TEXT("Chunk generation failed (error code %d)"), int32(Done.Error.Code))
+							  : Done.Error.Message.Left(1024);
 			++State->Failed;
 			UE_LOG(LogTemp, Error, TEXT("VoxelLand chunk (%d,%d,%d): %s"), Done.Job.Key.Coordinate.X,
 				Done.Job.Key.Coordinate.Y, Done.Job.Key.Coordinate.Z, *Done.Error.Message);
@@ -1066,7 +1104,7 @@ void AVoxelLandWorld::PumpCompletions()
 		}
 		const FIntVector C = Done.Job.Key.Coordinate;
 		if (!Region->Publish(C, VoxelLandMeshCoordinates::RenderOrigin(C, State->Generator->GetProfile().VoxelSizeCm),
-			Done.Mesh, TerrainMaterial))
+				Done.Mesh, TerrainMaterial))
 		{
 			Record->Data.Reset();
 			Record->bFailed = true;
@@ -1108,18 +1146,18 @@ void AVoxelLandWorld::Dispatch()
 			}
 			const FIntVector C = Pair.Key.Coordinate;
 			const int64 DX = int64(C.X) - State->CameraChunk.X, DY = int64(C.Y) - State->CameraChunk.Y,
-			            DZ = int64(C.Z) - State->CameraChunk.Z;
+						DZ = int64(C.Z) - State->CameraChunk.Z;
 			// Clamp to avoid overflow for explicit far-away requests.
 			const int64 Distance = FMath::Min<int64>(FMath::Abs(DX), 1000000)
-			                       + FMath::Min<int64>(FMath::Abs(DY), 1000000)
-			                       + FMath::Min<int64>(FMath::Abs(DZ), 1000000);
+								 + FMath::Min<int64>(FMath::Abs(DY), 1000000)
+								 + FMath::Min<int64>(FMath::Abs(DZ), 1000000);
 			const double Ahead = DX * Forward.X + DY * Forward.Y + DZ * Forward.Z;
 			const FIntVector B = BestKey.Coordinate;
 			if (!Best || Distance < BestDistance
-			    || (Distance == BestDistance
-			        && (Ahead > BestAhead
-			            || (Ahead == BestAhead
-			                && (C.X < B.X || (C.X == B.X && (C.Y < B.Y || (C.Y == B.Y && C.Z < B.Z))))))))
+				|| (Distance == BestDistance
+					&& (Ahead > BestAhead
+						|| (Ahead == BestAhead
+							&& (C.X < B.X || (C.X == B.X && (C.Y < B.Y || (C.Y == B.Y && C.Z < B.Z))))))))
 			{
 				Best = &R;
 				BestKey = Pair.Key;
@@ -1215,8 +1253,8 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
 		Vertices += R.Vertices;
 		Triangles += R.Triangles;
 		if (R.MeshBytes > 0
-		    && !State->HiddenRegions.Contains(
-			    VoxelLandCoordinates::RegionOf(Pair.Key.Coordinate, State->RegionDimensions)))
+			&& !State->HiddenRegions.Contains(
+				VoxelLandCoordinates::RegionOf(Pair.Key.Coordinate, State->RegionDimensions)))
 		{
 			++Visible;
 		}
@@ -1226,7 +1264,7 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
 		}
 		const FIntVector C = Pair.Key.Coordinate, Camera = State->CameraChunk;
 		const bool bRetain = !State->bServer && State->bHasCamera && FMath::Abs(int64(C.X) - Camera.X) <= H
-		                     && FMath::Abs(int64(C.Y) - Camera.Y) <= H && FMath::Abs(int64(C.Z) - Camera.Z) <= V;
+						  && FMath::Abs(int64(C.Y) - Camera.Y) <= H && FMath::Abs(int64(C.Z) - Camera.Z) <= V;
 		if (!bRetain)
 		{
 			Retire.Add(Pair.Key);
@@ -1271,7 +1309,7 @@ void AVoxelLandWorld::StartDemo()
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
 	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
-	    || World->bIsTearingDown || !HasActorBegunPlay())
+		|| World->bIsTearingDown || !HasActorBegunPlay())
 	{
 		return;
 	}
@@ -1307,15 +1345,13 @@ void AVoxelLandWorld::StartDemo()
 			return I;
 		};
 		Draft.Instructions = {Op(EVoxelLandOpcode::LoadX, 0), Op(EVoxelLandOpcode::LoadY, 1),
-		                      Op(EVoxelLandOpcode::LoadZ, 2), Op(EVoxelLandOpcode::Fbm2, 3, 0, 1, 2, 0),
-		                      Op(EVoxelLandOpcode::LoadConstant, 4, 0, 0, 0, 4),
-		                      Op(EVoxelLandOpcode::Multiply, 3, 3, 4),
-		                      Op(EVoxelLandOpcode::Subtract, 3, 2, 3), Op(EVoxelLandOpcode::Fbm3, 5, 0, 1, 2, 1),
-		                      Op(EVoxelLandOpcode::Abs, 5, 5), Op(EVoxelLandOpcode::LoadConstant, 6, 0, 0, 0, 6),
-		                      Op(EVoxelLandOpcode::Multiply, 5, 5, 6),
-		                      Op(EVoxelLandOpcode::LoadConstant, 7, 0, 0, 0, 7),
-		                      Op(EVoxelLandOpcode::Subtract, 5, 7, 5), Op(EVoxelLandOpcode::Max, 8, 3, 5),
-		                      Op(EVoxelLandOpcode::StoreDensity, 0, 8)};
+			Op(EVoxelLandOpcode::LoadZ, 2), Op(EVoxelLandOpcode::Fbm2, 3, 0, 1, 2, 0),
+			Op(EVoxelLandOpcode::LoadConstant, 4, 0, 0, 0, 4), Op(EVoxelLandOpcode::Multiply, 3, 3, 4),
+			Op(EVoxelLandOpcode::Subtract, 3, 2, 3), Op(EVoxelLandOpcode::Fbm3, 5, 0, 1, 2, 1),
+			Op(EVoxelLandOpcode::Abs, 5, 5), Op(EVoxelLandOpcode::LoadConstant, 6, 0, 0, 0, 6),
+			Op(EVoxelLandOpcode::Multiply, 5, 5, 6), Op(EVoxelLandOpcode::LoadConstant, 7, 0, 0, 0, 7),
+			Op(EVoxelLandOpcode::Subtract, 5, 7, 5), Op(EVoxelLandOpcode::Max, 8, 3, 5),
+			Op(EVoxelLandOpcode::StoreDensity, 0, 8)};
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 		FVoxelLandError Error = FVoxelLandProgram::Validate(Draft, Program);
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;

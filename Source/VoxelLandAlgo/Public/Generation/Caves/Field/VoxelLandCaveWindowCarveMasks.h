@@ -1,0 +1,63 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Data/Caves/Infrastructure/VoxelLandCaveDiagnostic.h"
+#include "Templates/Function.h"
+
+struct FVoxelLandM5CaveSettings;
+class FVoxelLandM5BaselineWindow;
+class FVoxelLandM5Budget;
+class FVoxelLandM5CandidateResult;
+class FVoxelLandM5CarveMasks;
+class FVoxelLandM5ProtectionGrid;
+class FVoxelLandM5BoundBaseline;
+class FVoxelLandM5InfluenceSet;
+class FVoxelLandM5PocketSurfaceColumns;
+class FVoxelLandM5FiniteContributorSeal;
+
+namespace VoxelLand::M5::WindowCarveMasks
+{
+// Finite scratch assembly only. Inputs must remain immutable for the call.
+// A network requires a candidate; a pocket-only stage requires a null candidate.
+// Each selected sample's entrance exception is obtained from EntranceMask,
+// which validates candidate settings/seed and the closed +/- two-voxel box.
+// Protection overrides exceptions. The dry-world input is an owner declaration,
+// not proof of water-free final geometry. The caller must establish baseline and
+// protection provenance, complete vertical/surface domains, actual filter and
+// mesher influence, and all final-field safety and route obligations. This is
+// neither a certificate nor permission to publish. Failure preserves OutMasks.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5BaselineWindow& Window,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+// Requires exact bound owners and complete streamed columns. Failure preserves output.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildOwned(const FVoxelLandM5BoundBaseline& Baseline,
+	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5PocketSurfaceColumns& Columns,
+	const FVoxelLandM5BaselineWindow& Window,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+// Source budget binds retained owners; job budget pays all new work and output.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildOwnedForJob(const FVoxelLandM5BoundBaseline& Baseline,
+	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5PocketSurfaceColumns& Columns,
+	const FVoxelLandM5BaselineWindow& Window, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+// Sealed finite inventory only; optional columns are required for active pockets.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildSealedForJob(const FVoxelLandM5BoundBaseline& Baseline,
+	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5FiniteContributorSeal& Seal,
+	const FVoxelLandM5PocketSurfaceColumns* Columns, const FVoxelLandM5BaselineWindow& Window, FIntVector Start,
+	FIntVector Count, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+// Compatibility overload for network candidates.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5BaselineWindow& Window,
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+}

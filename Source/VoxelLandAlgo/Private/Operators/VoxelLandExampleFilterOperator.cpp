@@ -55,13 +55,17 @@ public:
 		{
 			return EVoxelLandWorldRequirement::BoundedNeighborhood;
 		}
-		FGuid Id() const override { return VoxelLandExampleFilterOperatorId(); }
-		int32 Version() const override { return 1; }
-		TArray<EVoxelLandGraphValueType> InputTypes() const override { return {EVoxelLandGraphValueType::Float}; }
-		EVoxelLandGraphValueType OutputType() const override { return EVoxelLandGraphValueType::Float; }
-		uint32 MaximumWorkerBytes() const override { return sizeof(FExampleFilterWorker); }
 
-		bool ValidateConfiguration(TConstArrayView<uint8> Config, FString& Error) const override
+		virtual FGuid Id() const override { return VoxelLandExampleFilterOperatorId(); }
+		virtual int32 Version() const override { return 1; }
+		virtual TArray<EVoxelLandGraphValueType> InputTypes() const override
+		{
+			return {EVoxelLandGraphValueType::Float};
+		}
+		virtual EVoxelLandGraphValueType OutputType() const override { return EVoxelLandGraphValueType::Float; }
+		virtual uint32 MaximumWorkerBytes() const override { return sizeof(FExampleFilterWorker); }
+
+		virtual bool ValidateConfiguration(TConstArrayView<uint8> Config, FString& Error) const override
 		{
 			if (!Config.IsEmpty())
 			{
@@ -71,7 +75,7 @@ public:
 			return true;
 		}
 
-		TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(
+		virtual TUniquePtr<IVoxelLandOperatorWorker> CreateWorker(
 			TConstArrayView<uint8> Config, uint64, FString& Error) const override
 		{
 			if (!ValidateConfiguration(Config, Error))

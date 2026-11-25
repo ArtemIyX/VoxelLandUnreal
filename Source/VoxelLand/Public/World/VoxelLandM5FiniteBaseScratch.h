@@ -33,6 +33,8 @@ public:
 	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> GetGeneratorShared() const { return Generator.ToSharedRef(); }
 	const FVoxelLandM4HeightGrid& GetGrid() const { return *Grid; }
 	uint64 GetHash() const { return Hash; }
+	// Retains the admission covering profile and generator construction scratch.
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> GetLifetimeLease() const { return Lease; }
 private:
 	explicit FVoxelLandM5FiniteBaseScratch(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
 		: Lease(MoveTemp(InLease)) {}

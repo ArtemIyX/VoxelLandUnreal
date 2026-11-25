@@ -20,6 +20,8 @@ public:
 	const FVoxelLandM5WorldSnapshot& GetSnapshot() const { return Snapshot.Get(); }
 	const FVoxelLandM5Bounds& GetEffectiveBounds() const { return EffectiveBounds; }
 	TConstArrayView<uint8> GetCanonicalBytes() const { return CanonicalBytes; }
+	// Exact descriptor bytes inside the versioned definition envelope.
+	bool MatchesDescriptor(TConstArrayView<uint8> Descriptor) const;
 	const FVoxelLandM5ProtectionGrid* GetProtection() const { return Protection.Get(); }
 	const FVoxelLandOperatorRegistrySnapshot& GetRegistry() const { return Registry.Get(); }
 	bool UsesBudget(const FVoxelLandM5Budget& Other) const { return &Budget.Get() == &Other; }

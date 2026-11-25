@@ -11,6 +11,8 @@ class FVoxelLandM5BudgetLease;
 class FVoxelLandM5BaseCapture;
 class FVoxelLandM5MeteredIdentity;
 class FVoxelLandM5FiniteBaseScratch;
+class FVoxelLandM5ValidatedDefinition;
+class FVoxelLandM5BoundBaseline;
 
 // Captured input, metered descriptor and finite base scratch only. This does not
 // certify world freshness, providers, caves, final fields or publication.
@@ -28,6 +30,15 @@ public:
 			TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
 			TUniquePtr<FVoxelLandWorkerContext>&)> CreateWorker, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5CapturedFiniteScratch, ESPMode::ThreadSafe>& Out);
+	// Builds an exact baseline from the frozen definition after matching full
+	// captured descriptor bytes and mask owner. Claims the capture once; failure
+	// after claim consumes its process reservation. No publication proof.
+	static FVoxelLandM5Diagnostic BuildBound(TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Capture,
+		TSharedRef<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> Definition,
+		TFunctionRef<FVoxelLandM5Diagnostic(const FVoxelLandGenerator&,
+			TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
+			TUniquePtr<FVoxelLandWorkerContext>&)> CreateWorker, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5BoundBaseline, ESPMode::ThreadSafe>& Out);
 	const FVoxelLandM5BaseCapture& GetCapture() const { return *Capture; }
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> GetBudget() const;
 	const FVoxelLandM5MeteredIdentity& GetIdentity() const { return *Identity; }

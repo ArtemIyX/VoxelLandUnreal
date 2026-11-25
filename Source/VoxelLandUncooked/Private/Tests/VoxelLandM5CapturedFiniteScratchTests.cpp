@@ -10,6 +10,11 @@
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
 #include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BoundBaseline.h"
+#include "Generation/VoxelLandM5ValidatedDefinition.h"
+#include "Generation/VoxelLandM5DefinitionInputs.h"
+#include "Operators/VoxelLandOperator.h"
+#include "World/VoxelLandM5DefinitionValidator.h"
 #include "Graph/VoxelLandGraphCompiler.h"
 #include "Graph/VoxelLandProgramCodec.h"
 #include "Hash/xxhash.h"
@@ -130,8 +135,8 @@ bool FVoxelLandM5CapturedFiniteScratchTest::RunTest(const FString& Parameters)
 	}
 	if (ProcessBudget->GetInt() != 256)
 	{
-		AddWarning(TEXT("Captured finite fixture skipped: M4 budget is not 256 MiB"));
-		return true;
+		AddError(TEXT("Captured finite fixture requires the M4 process budget to be 256 MiB"));
+		return false;
 	}
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
 	if (!TestTrue(TEXT("budget"), FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 100000000, Budget)))
@@ -143,8 +148,8 @@ bool FVoxelLandM5CapturedFiniteScratchTest::RunTest(const FString& Parameters)
 	if (Captured.Code == EVoxelLandM5ErrorCode::BudgetExceeded
 		&& Captured.Message == TEXT("M4 preparation reservation unavailable"))
 	{
-		AddWarning(TEXT("Captured finite fixture skipped: M4 process admission unavailable"));
-		return true;
+		AddError(TEXT("Captured finite fixture requires an available M4 process admission"));
+		return false;
 	}
 	if (!TestTrue(FString::Printf(TEXT("typed mask capture: %s"), *Captured.Message),
 		Captured.Code == EVoxelLandM5ErrorCode::None && Capture.IsValid()))
@@ -211,6 +216,89 @@ bool FVoxelLandM5CapturedFiniteScratchTest::RunTest(const FString& Parameters)
 		bCancelConsumed = Again.Code == EVoxelLandM5ErrorCode::InvalidInput && !Scratch;
 	}).Wait();
 	TestTrue(TEXT("cancellation consumes reservation without output"), bCancelled && bCancelConsumed);
-	return bBuilt;
+	CancelCapture.Reset();
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> BoundBudget, ForeignBudget;
+	if (!FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 100000000, BoundBudget)
+		|| !FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 100000000, ForeignBudget)) return false;
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> BoundCapture;
+	const auto BoundAdmission = FVoxelLandM5BaseCapture::Capture(*Definition.Get(), BoundBudget.ToSharedRef(), BoundCapture);
+	if (!TestTrue(FString::Printf(TEXT("bound capture admission: %s"), *BoundAdmission.Message),
+		BoundAdmission.Code == EVoxelLandM5ErrorCode::None && BoundCapture)) return false;
+	bool bBound = false, bForeignBudget = false, bForeignIdentity = false, bBoundCancel = false, bBoundOneShot = false;
+	FString BoundFailure;
+	Async(EAsyncExecution::ThreadPool, [&] {
+		auto Snapshot = MakeShared<FVoxelLandM5WorldSnapshot, ESPMode::ThreadSafe>(BoundCapture->GetSnapshot());
+		auto Registry = MakeShared<FVoxelLandOperatorRegistrySnapshot, ESPMode::ThreadSafe>(FVoxelLandOperatorRegistry::Snapshot());
+		FVoxelLandM5DefinitionInputs Inputs{Snapshot, nullptr, Registry, Snapshot->Caves.Bounds, true, true};
+		TSharedPtr<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> Valid, Foreign, Different;
+		const auto ValidResult = FVoxelLandM5DefinitionValidator::Validate(Inputs, BoundBudget.ToSharedRef(), Never, Valid);
+		if (ValidResult.Code != EVoxelLandM5ErrorCode::None || !Valid) { BoundFailure = ValidResult.Message; return; }
+		const auto ForeignResult = FVoxelLandM5DefinitionValidator::Validate(Inputs, ForeignBudget.ToSharedRef(), Never, Foreign);
+		Snapshot->Base.Seed ^= 1;
+		const auto DifferentResult = FVoxelLandM5DefinitionValidator::Validate(Inputs, BoundBudget.ToSharedRef(), Never, Different);
+		Snapshot->Base.Seed ^= 1;
+		if (ForeignResult.Code != EVoxelLandM5ErrorCode::None || DifferentResult.Code != EVoxelLandM5ErrorCode::None || !Foreign || !Different) return;
+		TSharedPtr<const FVoxelLandM5BoundBaseline, ESPMode::ThreadSafe> Baseline;
+		const auto ForeignCheck = FVoxelLandM5CapturedFiniteScratch::BuildBound(BoundCapture.ToSharedRef(), Foreign.ToSharedRef(), Factory, Never, Baseline);
+		bForeignBudget = ForeignCheck.Code == EVoxelLandM5ErrorCode::InvalidInput && !Baseline;
+		const auto DifferentCheck = FVoxelLandM5CapturedFiniteScratch::BuildBound(BoundCapture.ToSharedRef(), Different.ToSharedRef(), Factory, Never, Baseline);
+		bForeignIdentity = DifferentCheck.Code == EVoxelLandM5ErrorCode::InvalidInput && !Baseline;
+		const auto CancelCheck = FVoxelLandM5CapturedFiniteScratch::BuildBound(BoundCapture.ToSharedRef(), Valid.ToSharedRef(), Factory, [] { return true; }, Baseline);
+		bBoundCancel = CancelCheck.Code == EVoxelLandM5ErrorCode::Cancelled && !Baseline;
+		const auto BuiltBound = FVoxelLandM5CapturedFiniteScratch::BuildBound(BoundCapture.ToSharedRef(), Valid.ToSharedRef(), Factory, Never, Baseline);
+		BoundFailure = BuiltBound.Message;
+		int32 Height = 0;
+		bBound = BuiltBound.Code == EVoxelLandM5ErrorCode::None && Baseline && &Baseline->GetDefinition() == Valid.Get()
+			&& Baseline->UsesBudget(*BoundBudget) && Baseline->GetGrid().Sample(0, 0, Height)
+			&& Baseline->GetGenerator().GetM4HeightGrid().Get() == &Baseline->GetGrid();
+		const auto Prior = Baseline;
+		const auto Again = FVoxelLandM5CapturedFiniteScratch::BuildBound(BoundCapture.ToSharedRef(), Valid.ToSharedRef(), Factory, Never, Baseline);
+		bBoundOneShot = Again.Code == EVoxelLandM5ErrorCode::InvalidInput && Baseline == Prior;
+	}).Wait();
+	TestTrue(FString::Printf(TEXT("bound baseline: %s"), *BoundFailure), bBound);
+	TestTrue(TEXT("foreign budget preserves output and capture"), bForeignBudget);
+	TestTrue(TEXT("foreign descriptor preserves output and capture"), bForeignIdentity);
+	TestTrue(TEXT("bound cancellation preserves output and capture"), bBoundCancel);
+	TestTrue(TEXT("bound capture consumed once"), bBoundOneShot);
+	BoundCapture.Reset();
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> WorkerBudget;
+	if (!FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 100000000, WorkerBudget)) return false;
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> WorkerCapture;
+	const auto WorkerAdmission = FVoxelLandM5BaseCapture::Capture(*Definition.Get(), WorkerBudget.ToSharedRef(), WorkerCapture);
+	if (!TestTrue(TEXT("foreign worker capture admission"), WorkerAdmission.Code == EVoxelLandM5ErrorCode::None && WorkerCapture)) return false;
+	bool bWrongWorker = false;
+	Async(EAsyncExecution::ThreadPool, [&] {
+		auto Snapshot = MakeShared<FVoxelLandM5WorldSnapshot, ESPMode::ThreadSafe>(WorkerCapture->GetSnapshot());
+		auto Registry = MakeShared<FVoxelLandOperatorRegistrySnapshot, ESPMode::ThreadSafe>(FVoxelLandOperatorRegistry::Snapshot());
+		FVoxelLandM5DefinitionInputs Inputs{Snapshot, nullptr, Registry, Snapshot->Caves.Bounds, true, true};
+		TSharedPtr<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> Valid;
+		if (FVoxelLandM5DefinitionValidator::Validate(Inputs, WorkerBudget.ToSharedRef(), Never, Valid).Code != EVoxelLandM5ErrorCode::None || !Valid) return;
+		int32 ForeignWorkers = 0;
+		const auto WrongFactory = [&ForeignWorkers](const FVoxelLandGenerator& Expected,
+			TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>, TUniquePtr<FVoxelLandWorkerContext>& Worker) {
+			FVoxelLandM5Diagnostic Result;
+			FVoxelLandProgramDraft Draft; Draft.RegisterCount = 1;
+			FVoxelLandInstruction Input, Store; Input.Op = EVoxelLandOpcode::LoadZ; Store.Op = EVoxelLandOpcode::StoreDensity;
+			Draft.Instructions = {Input, Store};
+			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+			FVoxelLandGeneratorSettings Settings;
+			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Other;
+			if (FVoxelLandProgram::Validate(Draft, Program) || !Program) { Result.Code = EVoxelLandM5ErrorCode::InvalidInput; return Result; }
+			Settings.Program = Program;
+			if (FVoxelLandGenerator::Create(Settings, Other) || !Other || Other->CreateWorker(Worker) || !Worker)
+				Result.Code = EVoxelLandM5ErrorCode::InvalidInput;
+			else if (!Expected.OwnsWorkerOnCurrentThread(*Worker)) ++ForeignWorkers;
+			return Result;
+		};
+		TSharedPtr<const FVoxelLandM5BoundBaseline, ESPMode::ThreadSafe> Output;
+		const auto Wrong = FVoxelLandM5CapturedFiniteScratch::BuildBound(WorkerCapture.ToSharedRef(), Valid.ToSharedRef(), WrongFactory, Never, Output);
+		const auto Again = FVoxelLandM5CapturedFiniteScratch::BuildBound(WorkerCapture.ToSharedRef(), Valid.ToSharedRef(), Factory, Never, Output);
+		bWrongWorker = ForeignWorkers == 3 && Wrong.Code == EVoxelLandM5ErrorCode::Unproven
+			&& Wrong.Stage == TEXT("M5.MeteredControlPipeline")
+			&& Wrong.Message == TEXT("Worker belongs to a different generator or thread") && !Output
+			&& Again.Code == EVoxelLandM5ErrorCode::InvalidInput && !Output;
+	}).Wait();
+	TestTrue(TEXT("foreign control worker cannot produce a bound baseline"), bWrongWorker);
+	return bBuilt && bBound && bForeignBudget && bForeignIdentity && bBoundCancel && bBoundOneShot && bWrongWorker;
 }
 #endif

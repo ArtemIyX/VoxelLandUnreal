@@ -24,7 +24,7 @@ struct VOXELLANDDATA_API FVoxelLandM5FinalFieldInputs
 	TConstArrayView<uint8> Protected;
 	FVoxelLandM5NoisePocketSettings Pockets;
 	int32 PocketNoiseVersion = 1;
-	int32 CompositionVersion = 1;
+	int32 CompositionVersion = 2;
 	int64 WorldSeed = 0;
 	FGuid StageId;
 };

@@ -167,13 +167,13 @@ bool FVoxelLandM5FinalFieldTest::RunTest(const FString& Parameters)
 	Inputs.StageId = FGuid();
 	Inputs.Pockets.AmplitudeCm = -1;
 	Inputs.PocketNoiseVersion = 2;
-	Inputs.CompositionVersion = 2;
+	Inputs.CompositionVersion = 1;
 	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Outside);
 	TestEqual(TEXT("disabled outside cave domain ignores unused settings"), Error.Code, EVoxelLandM5ErrorCode::None);
 	const TSharedPtr<const FVoxelLandM5FinalField, ESPMode::ThreadSafe> Before = Disabled;
 	Inputs.Pockets.bEnabled = true;
 	Inputs.Pockets.AmplitudeCm = 0;
-	Inputs.CompositionVersion = 1;
+	Inputs.CompositionVersion = 2;
 	Inputs.PocketNoiseVersion = 1;
 	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Disabled);
 	TestEqual(TEXT("enabled zero amplitude rejects invalid stage ID"), Error.Code, EVoxelLandM5ErrorCode::InvalidInput);
@@ -185,12 +185,12 @@ bool FVoxelLandM5FinalFieldTest::RunTest(const FString& Parameters)
 		EVoxelLandM5ErrorCode::UnsupportedVersion);
 	TestTrue(TEXT("version failure retains result"), Disabled == Before);
 	Inputs.PocketNoiseVersion = 1;
-	Inputs.CompositionVersion = 2;
+	Inputs.CompositionVersion = 1;
 	Error = FVoxelLandM5FinalField::Build(Inputs, Budget.ToSharedRef(), Never, Disabled);
 	TestEqual(TEXT("zero amplitude rejects unsupported composition version"), Error.Code,
 		EVoxelLandM5ErrorCode::UnsupportedVersion);
 	TestTrue(TEXT("composition version failure retains result"), Disabled == Before);
-	Inputs.CompositionVersion = 1;
+	Inputs.CompositionVersion = 2;
 	Inputs.OriginCm.X = 100;
 	Inputs.Pockets.AmplitudeCm = 400;
 	Inputs.PocketAllowed = Allowed;

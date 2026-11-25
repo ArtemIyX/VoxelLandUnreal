@@ -70,7 +70,9 @@ FVoxelLandM5Diagnostic FVoxelLandM5InfluenceSet::BuildFinite(TVoxelLandM5ConstRe
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 		if (DomainMin[Axis] < -1048576 || DomainMax[Axis] > 1048576 || DomainMin[Axis] > DomainMax[Axis])
 			return InfluenceError(E::OutOfDomain, TEXT("Finite domain exceeds the proved geometry backend"));
-	const int64 MaskHalo = CeilDiv(Snapshot.Caves.RoofThicknessCm, V) + 3;
+	// Roof radius includes two mesher cells; inverse FieldSafety sample
+	// dependencies require a further two samples on each side.
+	const int64 MaskHalo = CeilDiv(Snapshot.Caves.RoofThicknessCm, V) + 4;
 	if (MaskHalo > MAX_int32) return InfluenceError(E::OutOfDomain, TEXT("Influence halo exceeds supported range"));
 	const bool bSmooth = Snapshot.Base.Smooth.bEnabled && Snapshot.Base.Smooth.Strength > 0.f;
 	const int64 OwnerHalo = 2;

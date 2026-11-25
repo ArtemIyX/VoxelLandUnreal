@@ -23,5 +23,6 @@ struct VOXELLANDDATA_API FVoxelLandM5StageManifest
 	UPROPERTY()
 	int32 SurfaceValidation = 1;
 	UPROPERTY()
-	int32 Composition = 1;
+	// Version 2 protects zero-containing cells and complete roof sample dependencies.
+	int32 Composition = 2;
 };

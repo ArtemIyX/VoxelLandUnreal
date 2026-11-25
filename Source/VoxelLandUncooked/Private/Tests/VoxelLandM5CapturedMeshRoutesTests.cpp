@@ -289,12 +289,12 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 				Failure = Result.Message;
 				return;
 			}
-			// Stored footprint plus three mask-neighborhood samples on each side.
+			// Stored footprint plus four mask-neighborhood samples on each side.
 			// Seam case covers both X chunks using one exact captured baseline.
 			TUniquePtr<FVoxelLandWorkerContext> BoxWorker;
 			if (Scratch->GetScratch().GetGenerator().CreateWorker(BoxWorker) || !BoxWorker) return;
-			FVoxelLandM5PointCm BoxMin; BoxMin.X = Mode == 2 ? -36 : -4; BoxMin.Y = BoxMin.Z = -4;
-			const FIntVector BoxSize(Mode == 2 ? 73 : 41, 41, 41);
+			FVoxelLandM5PointCm BoxMin; BoxMin.X = Mode == 2 ? -37 : -5; BoxMin.Y = BoxMin.Z = -5;
+			const FIntVector BoxSize(Mode == 2 ? 75 : 43, 43, 43);
 			TSharedPtr<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> Source;
 			Result = FVoxelLandM5CapturedBaseline::BuildBox(Scratch.ToSharedRef(), *BoxWorker,
 				BoxMin, BoxSize, Never, Source);
@@ -310,7 +310,7 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 					BoxMin, BoxSize, [] { return true; }, Source);
 				bBoxCancel = CancelBox.Code == EVoxelLandM5ErrorCode::Cancelled && Source == Before;
 				const auto InvalidBox = FVoxelLandM5CapturedBaseline::BuildBox(Scratch.ToSharedRef(), *BoxWorker,
-					BoxMin, FIntVector(0, 41, 41), Never, Source);
+					BoxMin, FIntVector(0, 43, 43), Never, Source);
 				bBoxInvalid = InvalidBox.Code == EVoxelLandM5ErrorCode::InvalidInput && Source == Before;
 				FVoxelLandProgramDraft Draft;
 				Draft.RegisterCount = 1;

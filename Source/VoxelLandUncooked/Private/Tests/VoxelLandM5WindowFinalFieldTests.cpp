@@ -83,11 +83,11 @@ bool FVoxelLandM5WindowFinalFieldTest::RunTest(const FString& Parameters)
 		D = VoxelLand::M5::WindowFinalField::Build(Settings, Manifest, 42, *Window,
 			nullptr, nullptr, Start, One, Budget.ToSharedRef(), Never, Out);
 		bNetworkCandidateMissing = D.Code == EVoxelLandM5ErrorCode::InvalidInput && Out == Original;
-		Manifest.Composition = 2;
+		Manifest.Composition = 1;
 		D = VoxelLand::M5::WindowFinalField::Build(Settings, Manifest, 42, *Window,
 			Candidate.ToSharedRef(), nullptr, Start, One, Budget.ToSharedRef(), Never, Out);
 		bVersion = D.Code == EVoxelLandM5ErrorCode::UnsupportedVersion && Out == Original;
-		Manifest.Composition = 1;
+		Manifest.Composition = 2;
 		D = VoxelLand::M5::WindowFinalField::Build(Settings, Manifest, 41, *Window,
 			Candidate.ToSharedRef(), nullptr, Start, One, Budget.ToSharedRef(), Never, Out);
 		bSeed = D.Code != EVoxelLandM5ErrorCode::None && Out == Original;

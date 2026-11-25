@@ -65,7 +65,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5FinalField::Build(const FVoxelLandM5FinalFiel
 	const bool bPocket = Inputs.Pockets.bEnabled && Inputs.Pockets.AmplitudeCm != 0;
 	const bool bCompose = Inputs.bNetworkEnabled || bPocket;
 	if ((Inputs.Pockets.bEnabled && Inputs.PocketNoiseVersion != 1)
-		|| ((Inputs.bNetworkEnabled || Inputs.Pockets.bEnabled) && Inputs.CompositionVersion != 1))
+		|| ((Inputs.bNetworkEnabled || Inputs.Pockets.bEnabled) && Inputs.CompositionVersion != 2))
 	{
 		return FVoxelLandM5FinalFieldInternals::Error(
 			E::UnsupportedVersion, TEXT("Unsupported final field algorithm version"));

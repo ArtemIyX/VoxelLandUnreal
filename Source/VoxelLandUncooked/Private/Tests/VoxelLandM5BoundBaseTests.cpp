@@ -441,7 +441,7 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("enabled settings and version retained"),
 		Snapshot.Caves.bEnabled && Snapshot.Caves.StageId == Definition->Common.Caves.StageId
 			&& Snapshot.Caves.Water.Policy == EVoxelLandM5WaterPolicy::DryWorld
-			&& Snapshot.FormatVersion == 1 && Snapshot.Manifest.Descriptor == 2 && Snapshot.Manifest.Composition == 1);
+			&& Snapshot.FormatVersion == 1 && Snapshot.Manifest.Descriptor == 2 && Snapshot.Manifest.Composition == 2);
 	TestTrue(TEXT("control payload retained"),
 		Snapshot.Base.Continental.Payload.ProgramFingerprint == Control.Payload.ProgramFingerprint);
 

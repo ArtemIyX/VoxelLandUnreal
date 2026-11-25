@@ -84,10 +84,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Carve mask grid exceeds coordinate limit"));
 		}
 	}
-	// A mixed cell may contribute geometry up to a cell away from its samples;
-	// two extra cells conservatively cover mesher ownership and snap influence.
+	// A mixed or zero-containing cell may contribute geometry up to a cell
+	// away from its samples; two extra cells conservatively cover mesher
+	// ownership and snap influence.
 	const int64 Radius = RoofThicknessCm / SpacingCm + (RoofThicknessCm % SpacingCm != 0 ? 1 : 0) + 2;
-	const int64 Halo = Radius + 1;
+	// FieldSafety compares samples at offsets -1..+2 around each proof
+	// cell. Inverting that dependency adds two cells on each side of the
+	// roof search, including the final corner read.
+	const int64 Halo = Radius + 2;
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
 		const int64 N = Axis == 0 ? Size.X : Axis == 1 ? Size.Y : Size.Z;
@@ -99,9 +103,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Incomplete roof and mesher halo"));
 		}
 	}
-	int64 Side = 0, CellsXY = 0, Cells = 0, RoofWork = 0, PocketWork = 0, Bytes = 0;
-	if (!TryMultiply(Radius, 2, Side) || !TryAdd(Side, 2, Side) || !TryMultiplyNonNegative(Side, Side, CellsXY)
-		|| !TryMultiplyNonNegative(CellsXY, Side, Cells) || !TryMultiplyNonNegative(Cells, 12, RoofWork)
+	int64 Side = 0, PocketWork = 0, Bytes = 0;
+	if (!TryMultiply(Radius, 2, Side) || !TryAdd(Side, 4, Side)
 		|| (bPocketEnabled
 			&& (!TryMultiplyNonNegative(25, Columns ? 1 : Size.Z, PocketWork) || !TryMultiplyNonNegative(PocketWork, 3, PocketWork)))
 		|| !TryMultiplyNonNegative(Outputs, 3, Bytes) || !TryAdd(Bytes, 4096, Bytes))
@@ -145,11 +148,33 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 		}
 	}
 	int64 Work = 0, BaseWork = 0, SearchWork = 0;
+	int64 Grid[3] = {}, Prefix[3] = {}, GridCount = 1, PrefixCount = 1, PrefixBytes = 0;
+	if (Unprotected > 0)
+	{
+		for (int32 Axis = 0; Axis < 3; ++Axis)
+		{
+			if (!TryAdd(Count[Axis], Side - 1, Grid[Axis]) || !TryAdd(Grid[Axis], 1, Prefix[Axis])
+				|| !TryMultiplyNonNegative(GridCount, Grid[Axis], GridCount)
+				|| !TryMultiplyNonNegative(PrefixCount, Prefix[Axis], PrefixCount))
+				return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+					EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask roof grid overflow"));
+		}
+		if (GridCount > MAX_int32 || PrefixCount > MAX_int32
+			|| !TryMultiplyNonNegative(PrefixCount, 2 * int64(sizeof(uint32)), PrefixBytes)
+			|| !TryAdd(PrefixBytes, 4096, PrefixBytes)
+			|| !TryMultiplyNonNegative(GridCount, 20, SearchWork)
+			|| !TryAdd(SearchWork, PrefixCount, SearchWork))
+			return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+				EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask roof grid overflow"));
+		int64 QueryWork = 0;
+		if (!TryMultiplyNonNegative(Unprotected, 8, QueryWork) || !TryAdd(SearchWork, QueryWork, SearchWork))
+			return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+				EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask roof query overflow"));
+	}
 	// Seven output units remain after the charged scan; pocket validation is
 	// still required for protected samples because it can return Unproven.
 	if (!TryAdd(7, PocketWork, BaseWork) || !TryMultiplyNonNegative(Outputs, BaseWork, Work)
-		|| !TryMultiplyNonNegative(Unprotected, RoofWork, SearchWork) || !TryAdd(Work, SearchWork, Work)
-		|| !TryAdd(Work, 1, Work))
+		|| !TryAdd(Work, SearchWork, Work) || !TryAdd(Work, 1, Work))
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask work or memory overflow"));
@@ -158,6 +183,47 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask admission exhausted"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> PrefixLease;
+	TArray<uint32> RoofPrefix;
+	if (Unprotected > 0)
+	{
+		if (!Budget->TryReserveBytes(PrefixBytes, PrefixLease))
+			return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask roof grid admission exhausted"));
+		RoofPrefix.Init(0, int32(PrefixCount));
+		const int64 StrideY = Prefix[0], StrideZ = Prefix[0] * Prefix[1];
+		const auto At = [&](int64 X, int64 Y, int64 Z) -> uint32& {
+			return RoofPrefix[int32(X + StrideY * Y + StrideZ * Z)];
+		};
+		for (int64 Z = 0; Z < Grid[2]; ++Z)
+			for (int64 Y = 0; Y < Grid[1]; ++Y)
+			{
+				if (IsCancelled()) return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+					EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
+				for (int64 X = 0; X < Grid[0]; ++X)
+				{
+					if ((X & 63) == 0 && IsCancelled()) return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
+					const int64 CX = Start.X - Halo + X, CY = Start.Y - Halo + Y, CZ = Start.Z - Halo + Z;
+					bool bSolid = false, bAir = false, bZero = false;
+					for (int32 DZ = 0; DZ < 2; ++DZ)
+						for (int32 DY = 0; DY < 2; ++DY)
+							for (int32 DX = 0; DX < 2; ++DX)
+							{
+								const int16 Q = Baseline[(CX + DX) + int64(Size.X) * (CY + DY) + XY * (CZ + DZ)];
+								bSolid |= Q < 0; bAir |= Q >= 0; bZero |= Q == 0;
+							}
+					const int64 A = X + 1, B = Y + 1, C = Z + 1;
+					const int64 Sum = int64((bSolid && bAir) || bZero) + int64(At(A - 1, B, C))
+						+ int64(At(A, B - 1, C)) + int64(At(A, B, C - 1))
+						- int64(At(A - 1, B - 1, C)) - int64(At(A - 1, B, C - 1))
+						- int64(At(A, B - 1, C - 1)) + int64(At(A - 1, B - 1, C - 1));
+					if (Sum < 0 || Sum > MAX_uint32) return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask roof prefix overflow"));
+					At(A, B, C) = uint32(Sum);
+				}
+			}
 	}
 	TSharedPtr<FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Scratch =
 		MakeShareable(new FVoxelLandM5CarveMasks(MoveTemp(Lease)));
@@ -181,34 +247,18 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 				const int64 Dest = OX + int64(Count.X) * OY + OutputXY * OZ;
 				const bool bProtected = Protection[Source] != 0;
 				bool bRoof = false;
-				for (int64 CZ = Z - Radius - 1; !bProtected && CZ <= Z + Radius; ++CZ)
+				if (!bProtected)
 				{
-					for (int64 CY = Y - Radius - 1; CY <= Y + Radius; ++CY)
-					{
-						for (int64 CX = X - Radius - 1; CX <= X + Radius; ++CX)
-						{
-							if ((Visits++ & 63) == 0 && IsCancelled())
-							{
-								return FVoxelLandM5CarveMasksInternals::CarveMasksError(
-									EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
-							}
-							bool bSolid = false, bAir = false;
-							for (int32 DZ = 0; DZ < 2; ++DZ)
-							{
-								for (int32 DY = 0; DY < 2; ++DY)
-								{
-									for (int32 DX = 0; DX < 2; ++DX)
-									{
-										const int16 Q =
-											Baseline[(CX + DX) + int64(Size.X) * (CY + DY) + XY * (CZ + DZ)];
-										bSolid |= Q < 0;
-										bAir |= Q >= 0;
-									}
-								}
-							}
-							bRoof |= bSolid && bAir;
-						}
-					}
+					const int64 StrideY = Prefix[0], StrideZ = Prefix[0] * Prefix[1];
+					const auto At = [&](int64 PX, int64 PY, int64 PZ) -> int64 {
+						return RoofPrefix[int32(PX + StrideY * PY + StrideZ * PZ)];
+					};
+					const int64 A = OX, B = OY, C = OZ, D = OX + Side, E = OY + Side, F = OZ + Side;
+					const int64 Covered = At(D, E, F) - At(A, E, F) - At(D, B, F) - At(D, E, C)
+						+ At(A, B, F) + At(A, E, C) + At(D, B, C) - At(A, B, C);
+					if (Covered < 0) return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask roof query underflow"));
+					bRoof = Covered != 0;
 				}
 				bool bDepthAllowed = false;
 				if (bPocketEnabled)

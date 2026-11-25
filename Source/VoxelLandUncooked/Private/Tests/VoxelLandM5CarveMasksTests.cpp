@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5CarveMasks.h"
+#include "Generation/VoxelLandM5FieldSafety.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -59,8 +60,8 @@ bool FVoxelLandM5CarveMasksFlatTest::RunTest(const FString& Parameters)
 	};
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Masks;
 	FVoxelLandM5Diagnostic Error =
-		FVoxelLandM5CarveMasks::Build(Size, Origin, 100, FIntVector(5, 5, 5), FIntVector(1, 1, 2), Samples, Protection,
-			Entrance, 0, true, 200, 500, true, Budget.ToSharedRef(), Never, Masks);
+		FVoxelLandM5CarveMasks::Build(Size, Origin, 100, FIntVector(5, 5, 4), FIntVector(1, 1, 2), Samples, Protection,
+			Entrance, 0, true, 200, 600, true, Budget.ToSharedRef(), Never, Masks);
 	if (!TestEqual(TEXT("flat valid"), Error.Code, EVoxelLandM5ErrorCode::None)
 		|| !TestTrue(TEXT("output"), Masks.IsValid()))
 	{
@@ -184,7 +185,7 @@ bool FVoxelLandM5CarveMasksRoofBoundaryTest::RunTest(const FString& Parameters)
 {
 	// A plane lies between samples z=10 and z=11. At spacing 100 cm and
 	// roof 100 cm, the conservative radius is three cells. The search's last
-	// mixed-cell origin is z=10: it is included at output z=7, but not z=6.
+	// mixed-cell origin is z=10: it is included at output z=6, but not z=5.
 	const FIntVector Size(15, 15, 20);
 	const int32 Total = Size.X * Size.Y * Size.Z;
 	TArray<int16> Samples;
@@ -209,7 +210,7 @@ bool FVoxelLandM5CarveMasksRoofBoundaryTest::RunTest(const FString& Parameters)
 	}
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Masks;
 	const auto Error = FVoxelLandM5CarveMasks::Build(
-		Size, M5MaskPoint(-700, -700, -700), 100, FIntVector(7, 7, 6), FIntVector(1, 1, 2), Samples, Protection,
+		Size, M5MaskPoint(-700, -700, -700), 100, FIntVector(7, 7, 5), FIntVector(1, 1, 2), Samples, Protection,
 		Entrance, 100, false, 0, 0, true, Budget.ToSharedRef(), [] { return false; }, Masks);
 	if (!TestEqual(TEXT("positive roof valid"), Error.Code, EVoxelLandM5ErrorCode::None)
 		|| !TestTrue(TEXT("mask exists"), Masks.IsValid()))
@@ -218,6 +219,109 @@ bool FVoxelLandM5CarveMasksRoofBoundaryTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("outside conservative dilation"), Masks->GetNetworkAllowed()[0], uint8(1));
 	TestEqual(TEXT("last included mixed cell blocks sample"), Masks->GetNetworkAllowed()[1], uint8(0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5CarveMasksZeroRoofTest, "VoxelLand.M5.Masks.ZeroContainingRoof", M5CarveMasksFlags)
+bool FVoxelLandM5CarveMasksZeroRoofTest::RunTest(const FString& Parameters)
+{
+	const FIntVector Size(15, 15, 20), Start(7, 7, 5), Count(1, 1, 2);
+	const int32 Total = Size.X * Size.Y * Size.Z;
+	auto Index = [&Size](int32 X, int32 Y, int32 Z) { return X + Size.X * (Y + Size.Y * Z); };
+	TArray<int16> Samples;
+	TArray<uint8> Protection, Entrance;
+	Samples.Init(100, Total);
+	Protection.Init(0, Total);
+	Entrance.Init(0, Total);
+	// One zero among otherwise positive air samples. Output z=6 contributes
+	// to proof cell z=7 through FieldSafety's -1..+2 neighborhood; that cell
+	// sees the zero-containing cell at z=9 within roof radius two. Output z=5
+	// lies beyond the complete inverse sample-to-cell neighborhood.
+	Samples[Index(7, 7, 10)] = 0;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("budget"), FVoxelLandM5Budget::TryCreate(100000, 1000000, Budget))) return false;
+	const auto Never = [] { return false; };
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Masks;
+	auto Error = FVoxelLandM5CarveMasks::Build(Size, M5MaskPoint(-700, -700, -700), 100, Start, Count,
+		Samples, Protection, Entrance, 0, false, 0, 0, true, Budget.ToSharedRef(), Never, Masks);
+	if (!TestEqual(TEXT("zero roof valid"), Error.Code, EVoxelLandM5ErrorCode::None) || !Masks.IsValid()) return false;
+	TestEqual(TEXT("outside zero cell influence remains allowed"), Masks->GetNetworkAllowed()[0], uint8(1));
+	TestEqual(TEXT("below zero-containing air cell is suppressed"), Masks->GetNetworkAllowed()[1], uint8(0));
+	// Independently exercise the actual proof comparison for the roof cell at
+	// z=7. Its padded 4³ sample box begins at z=6, so changing that bottom
+	// sample would fail the roof proof even though the zero lies above it.
+	TArray<int16> OriginalCell, ChangedCell;
+	OriginalCell.Init(100, 64);
+	ChangedCell = OriginalCell;
+	ChangedCell[0] = 101;
+	const TArray<uint8> Empty = {0}, Roof = {1};
+	const auto Safety = VoxelLand::M5::FieldSafety::CheckUnchangedProtectedCells(
+		FIntVector(1, 1, 1), OriginalCell, ChangedCell, Empty, Roof, Empty, 64, Never);
+	TestEqual(TEXT("contributing sample change fails roof proof"), Safety.Code, EVoxelLandM5ErrorCode::Blocked);
+	Entrance[Index(7, 7, 6)] = 1;
+	Error = FVoxelLandM5CarveMasks::Build(Size, M5MaskPoint(-700, -700, -700), 100, Start, Count,
+		Samples, Protection, Entrance, 0, false, 0, 0, true, Budget.ToSharedRef(), Never, Masks);
+	if (!TestEqual(TEXT("opening valid"), Error.Code, EVoxelLandM5ErrorCode::None) || !Masks.IsValid()) return false;
+	TestEqual(TEXT("authorized opening permits network"), Masks->GetNetworkAllowed()[1], uint8(1));
+	TestEqual(TEXT("opening does not permit pocket"), Masks->GetPocketAllowed()[1], uint8(0));
+	Protection[Index(7, 7, 6)] = 1;
+	Error = FVoxelLandM5CarveMasks::Build(Size, M5MaskPoint(-700, -700, -700), 100, Start, Count,
+		Samples, Protection, Entrance, 0, false, 0, 0, true, Budget.ToSharedRef(), Never, Masks);
+	if (!TestEqual(TEXT("protected opening valid"), Error.Code, EVoxelLandM5ErrorCode::None) || !Masks.IsValid()) return false;
+	TestEqual(TEXT("protection overrides opening"), Masks->GetNetworkAllowed()[1], uint8(0));
+	TestEqual(TEXT("protected sample recorded"), Masks->GetProtected()[1], uint8(1));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVoxelLandM5CarveMasksPrefixOracleTest, "VoxelLand.M5.Masks.PrefixOracle", M5CarveMasksFlags)
+bool FVoxelLandM5CarveMasksPrefixOracleTest::RunTest(const FString& Parameters)
+{
+	const FIntVector Size(17, 17, 17), Start(6, 6, 6), Count(3, 3, 3);
+	const int32 N = Size.X * Size.Y * Size.Z;
+	TArray<int16> Samples;
+	TArray<uint8> Protection, Entrance;
+	Samples.Init(100, N); Protection.Init(0, N); Entrance.Init(0, N);
+	auto Index = [&Size](int32 X, int32 Y, int32 Z) { return X + Size.X * (Y + Size.Y * Z); };
+	// Isolated negative and zero samples produce spatially distinct mixed and
+	// zero-only cells, with empty regions in the same complete search box.
+	Samples[Index(2, 2, 2)] = -100;
+	Samples[Index(12, 12, 12)] = 0;
+	Samples[Index(10, 3, 7)] = -100;
+	Protection[Index(7, 7, 7)] = 1;
+	Entrance[Index(8, 8, 8)] = 1;
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
+	if (!TestTrue(TEXT("oracle budget"), FVoxelLandM5Budget::TryCreate(1000000, 10000000, Budget))) return false;
+	for (int32 RoofCm : {0, 100})
+	{
+		TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Masks;
+		const auto Result = FVoxelLandM5CarveMasks::Build(Size, M5MaskPoint(-800, -800, -800), 100,
+			Start, Count, Samples, Protection, Entrance, RoofCm, false, 0, 0, true,
+			Budget.ToSharedRef(), [] { return false; }, Masks);
+		if (!TestEqual(TEXT("prefix build"), Result.Code, EVoxelLandM5ErrorCode::None) || !Masks.IsValid()) return false;
+		const int32 R = RoofCm / 100 + 2;
+		for (int32 Z = 0; Z < Count.Z; ++Z) for (int32 Y = 0; Y < Count.Y; ++Y) for (int32 X = 0; X < Count.X; ++X)
+		{
+			const int32 SX = Start.X + X, SY = Start.Y + Y, SZ = Start.Z + Z;
+			bool bRoof = false;
+			for (int32 CZ = SZ - R - 2; CZ <= SZ + R + 1; ++CZ)
+				for (int32 CY = SY - R - 2; CY <= SY + R + 1; ++CY)
+					for (int32 CX = SX - R - 2; CX <= SX + R + 1; ++CX)
+					{
+						bool bSolid = false, bAir = false, bZero = false;
+						for (int32 DZ = 0; DZ < 2; ++DZ) for (int32 DY = 0; DY < 2; ++DY) for (int32 DX = 0; DX < 2; ++DX)
+						{
+							const int16 Q = Samples[Index(CX + DX, CY + DY, CZ + DZ)];
+							bSolid |= Q < 0; bAir |= Q >= 0; bZero |= Q == 0;
+						}
+						bRoof |= (bSolid && bAir) || bZero;
+					}
+			const int32 Source = Index(SX, SY, SZ), Dest = X + Count.X * (Y + Count.Y * Z);
+			const uint8 Expected = !Protection[Source] && (!bRoof || Entrance[Source]);
+			TestEqual(TEXT("prefix agrees with exhaustive mixed/zero-cell scan"), Masks->GetNetworkAllowed()[Dest], Expected);
+		}
+	}
 	return true;
 }
 
@@ -299,10 +403,11 @@ bool FVoxelLandM5CarveMasksAdmissionTest::RunTest(const FString& Parameters)
 	const auto Never = [] {
 		return false;
 	};
-	// A single sample at roof=0 visits 6^3 cells, charging 12 per cell,
-	// eight units for output and one final unit: 2601 work, 4096+3 bytes.
-	constexpr int64 ExactWork = 2601;
-	constexpr int64 ExactBytes = 4099;
+	// 8³ classified cells, 9³ prefix entries, eight query reads, eight
+	// output units and one final unit. Scratch and output have separate leases.
+	constexpr int64 ExactWork = 512 * 20 + 729 + 8 + 8 + 1;
+	constexpr int64 OutputBytes = 4099;
+	constexpr int64 ExactBytes = OutputBytes + 729 * 8 + 4096;
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Exact, LessWork, LessMemory;
 	if (!TestTrue(TEXT("exact budget"), FVoxelLandM5Budget::TryCreate(ExactBytes, ExactWork, Exact))
 		|| !TestTrue(TEXT("work budget"), FVoxelLandM5Budget::TryCreate(ExactBytes, ExactWork - 1, LessWork))
@@ -321,7 +426,7 @@ bool FVoxelLandM5CarveMasksAdmissionTest::RunTest(const FString& Parameters)
 	int64 Live = 0, Peak = 0, Work = 0;
 	Exact->GetUsage(Live, Peak, Work);
 	TestEqual(TEXT("exact work charged"), Work, ExactWork);
-	TestEqual(TEXT("output memory retained"), Live, ExactBytes);
+	TestEqual(TEXT("output memory retained"), Live, OutputBytes);
 	Error = FVoxelLandM5CarveMasks::Build(Size, Origin, 100, FIntVector(5, 5, 5), FIntVector(1, 1, 1), Samples,
 		Protection, Entrance, 0, false, 0, 0, true, LessWork.ToSharedRef(), Never, Masks);
 	TestEqual(TEXT("one less work fails"), Error.Code, EVoxelLandM5ErrorCode::BudgetExceeded);
@@ -334,7 +439,7 @@ bool FVoxelLandM5CarveMasksAdmissionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("one less byte fails"), Error.Code, EVoxelLandM5ErrorCode::BudgetExceeded);
 	TestTrue(TEXT("memory failure retains output"), Masks == Original);
 	LessMemory->GetUsage(Live, Peak, Work);
-	TestEqual(TEXT("memory failure does not charge work"), Work, int64(0));
+	TestEqual(TEXT("scratch memory failure follows work admission"), Work, ExactWork);
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> BinaryBudget;
 	if (!TestTrue(TEXT("binary budget"), FVoxelLandM5Budget::TryCreate(100000, 100000, BinaryBudget)))
 	{
@@ -366,10 +471,11 @@ bool FVoxelLandM5CarveMasksProtectedWorkTest::RunTest(const FString& Parameters)
 	const auto Never = [] { return false; };
 	Protection[M5MaskIndex(5, 5, 6)] = 1;
 	Entrance[M5MaskIndex(5, 5, 6)] = 1;
-	// One unprotected roof search: 2*8 + 6^3*12 + 1 = 2609.
+	// Two outputs need an 8×8×9 cell grid and 9×9×10 prefix;
+	// only the unprotected output performs a query.
 	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Exact, Less, More;
-	if (!TestTrue(TEXT("exact budget"), FVoxelLandM5Budget::TryCreate(4102, 2609, Exact))
-		|| !TestTrue(TEXT("less budget"), FVoxelLandM5Budget::TryCreate(4102, 2608, Less))
+	if (!TestTrue(TEXT("exact budget"), FVoxelLandM5Budget::TryCreate(14678, 12355, Exact))
+		|| !TestTrue(TEXT("less budget"), FVoxelLandM5Budget::TryCreate(14678, 12354, Less))
 		|| !TestTrue(TEXT("larger budget"), FVoxelLandM5Budget::TryCreate(100000, 1000000, More)))
 	{
 		return false;
@@ -381,7 +487,7 @@ bool FVoxelLandM5CarveMasksProtectedWorkTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestEqual(TEXT("unprotected network retains flat-field result"), Masks->GetNetworkAllowed()[0], uint8(1));
+	TestEqual(TEXT("unprotected contributing sample is roof-blocked"), Masks->GetNetworkAllowed()[0], uint8(0));
 	TestEqual(TEXT("protected entrance blocked"), Masks->GetNetworkAllowed()[1], uint8(0));
 	TestEqual(TEXT("protected bit retained"), Masks->GetProtected()[1], uint8(1));
 	TestEqual(TEXT("protected pocket blocked"), Masks->GetPocketAllowed()[1], uint8(0));

@@ -225,13 +225,13 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 					bDefaultInfluence = Gate.MinInclusive.X == -9299 && Gate.MaxExclusive.X == 9300
 						&& Gate.MinInclusive.Y == -9299 && Gate.MaxExclusive.Y == 9300
 						&& Gate.MinInclusive.Z == -6099 && Gate.MaxExclusive.Z == 6100
-						&& Read.MinInclusive.X == -11200 && Read.MaxExclusive.X == 11201
-						&& Read.MinInclusive.Z == -8000 && Read.MaxExclusive.Z == 8001;
+						&& Read.MinInclusive.X == -11300 && Read.MaxExclusive.X == 11301
+						&& Read.MinInclusive.Z == -8100 && Read.MaxExclusive.Z == 8101;
 					for (int32 Z = -4; Z <= 3; ++Z) for (int32 Y = -5; Y <= 4; ++Y) for (int32 X = -5; X <= 4; ++X)
 					{
 						FVoxelLandChunkKey Key; Key.Coordinate = FIntVector(X, Y, Z);
-						const auto FitsXY = [](int32 K) { return int64(K) * 3200 - 1600 >= -12800 && int64(K) * 3200 + 4800 <= 12800; };
-						const auto FitsZ = [](int32 K) { return int64(K) * 3200 - 1600 >= -9000 && int64(K) * 3200 + 4800 <= 10999; };
+						const auto FitsXY = [](int32 K) { return int64(K) * 3200 - 1700 >= -12800 && int64(K) * 3200 + 4900 <= 12800; };
+						const auto FitsZ = [](int32 K) { return int64(K) * 3200 - 1700 >= -9000 && int64(K) * 3200 + 4900 <= 10999; };
 						bDefaultInfluence &= FullSet->CoversChunk(Key) == (FitsXY(X) && FitsXY(Y) && FitsZ(Z));
 					}
 					// One centimetre of growth on either side admits an owner
@@ -250,12 +250,12 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 			{
 				const auto& Gate = ZeroRoofSet->GetDeclaredBounds(); const auto& Read = ZeroRoofSet->GetCoverage().ReadBoundsCm;
 				bZeroRoofGate = Gate.MinInclusive.X == -9299 && Gate.MaxExclusive.X == 9300
-					&& Read.MinInclusive.X == -10200 && Read.MaxExclusive.X == 10201
+					&& Read.MinInclusive.X == -10300 && Read.MaxExclusive.X == 10301
 					&& -4 * 3200 + 3500 == Gate.MinInclusive.X - 1 && 3 * 3200 - 300 == Gate.MaxExclusive.X;
 				for (int32 K = -6; K <= 6; ++K)
 				{
 					FVoxelLandChunkKey Key; Key.Coordinate = FIntVector(K, 0, 0);
-					const bool Fits = int64(K) * 3200 - 600 >= -12800 && int64(K) * 3200 + 3800 <= 12800;
+					const bool Fits = int64(K) * 3200 - 700 >= -12800 && int64(K) * 3200 + 3900 <= 12800;
 					bZeroRoofGate &= ZeroRoofSet->CoversChunk(Key) == Fits;
 				}
 			}
@@ -477,11 +477,11 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 		bChanged = ChangedResult.Code == EVoxelLandM5ErrorCode::None && Changed.IsValid()
 				&& Changed->GetIdentity().CanonicalBytes != Identity->GetIdentity().CanonicalBytes;
 		Snapshot.Caves.Salt--;
-		Snapshot.Manifest.Composition = 2;
+		Snapshot.Manifest.Composition = 1;
 		const FVoxelLandM5Diagnostic Invalid =
 			FVoxelLandM5MeteredIdentity::Capture(Snapshot, Budget.ToSharedRef(), [] { return false; }, Identity);
 		bInvalidAtomic = Invalid.Code == EVoxelLandM5ErrorCode::InvalidInput && Identity.Get() == Before;
-		Snapshot.Manifest.Composition = 1;
+		Snapshot.Manifest.Composition = 2;
 		Snapshot.Base.Continental.Payload.SourceFingerprint ^= 1;
 		const FVoxelLandM5Diagnostic Mismatch =
 			FVoxelLandM5MeteredIdentity::Capture(Snapshot, Budget.ToSharedRef(), [] { return false; }, Identity);

@@ -16,7 +16,8 @@ namespace VoxelLand::M5::FeetProposalBuilder
 // segment's ideal swept-ball volume. Its centerline slope is conservatively
 // bounded by MaxSlopeDegrees. No floor contact or final-mesh safety follows.
 // Rejects unsupported coordinates and geometry; Out is unchanged on failure.
-// Charges 32 work units and uses no heap scratch. Caller retains input storage.
+// Version 1 charges 32 units; version 2 charges 64. No heap scratch is used.
+// Version 2 proves ideal profile containment only and does not establish contact.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5Segment& Segment,
 	const FVoxelLandM5CapsuleProfile& Capsule, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 	TFunctionRef<bool()> IsCancelled, FVoxelLandM5FeetProposal& Out);

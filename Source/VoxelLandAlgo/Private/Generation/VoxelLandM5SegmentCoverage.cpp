@@ -2,6 +2,7 @@
 
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5FeetProposalBuilder.h"
+#include "Generation/VoxelLandM5ProfileContainment.h"
 
 class FVoxelLandM5SegmentCoverageInternals final
 {
@@ -82,10 +83,30 @@ FVoxelLandM5Diagnostic VoxelLand::M5::SegmentCoverage::Check(const FVoxelLandM5S
 		return FVoxelLandM5SegmentCoverageInternals::SegmentCoverageFailure(
 			EVoxelLandM5ErrorCode::Unproven, TEXT("Segment transition is not a straight walk"), Segment);
 	}
+	if (Segment.Profile.Version == 2)
+	{
+		if (!Budget->TryChargeWork(64))
+		{
+			return FVoxelLandM5SegmentCoverageInternals::SegmentCoverageFailure(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Profile containment work limit exceeded"), Segment);
+		}
+		const EVoxelLandM5ErrorCode Code = ProfileContainment::Check(Segment, Capsule, Leg.StartFeetCm, Leg.EndFeetCm);
+		if (Code != EVoxelLandM5ErrorCode::None)
+		{
+			return FVoxelLandM5SegmentCoverageInternals::SegmentCoverageFailure(
+				Code, TEXT("Profile capsule containment is unproven"), Segment);
+		}
+		if (IsCancelled())
+		{
+			return FVoxelLandM5SegmentCoverageInternals::SegmentCoverageFailure(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Segment coverage cancelled"), Segment);
+		}
+		return {};
+	}
 	if (Segment.Profile.Version != 1)
 	{
 		return FVoxelLandM5SegmentCoverageInternals::SegmentCoverageFailure(
-			EVoxelLandM5ErrorCode::Unproven, TEXT("Profile containment is not yet proven"), Segment);
+			EVoxelLandM5ErrorCode::UnsupportedVersion, TEXT("Unsupported profile geometry version"), Segment);
 	}
 	using I = FVoxelLandM5SegmentCoverageInternals;
 	const int64 Height = Capsule.StandingHeightCm;

@@ -1,6 +1,7 @@
 #include "Generation/VoxelLandM5FeetProposalBuilder.h"
 
 #include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5ProfileContainment.h"
 
 class FVoxelLandM5FeetProposalBuilderInternals final
 {
@@ -41,10 +42,32 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FeetProposalBuilder::Build(const FVoxelLan
 		return FVoxelLandM5FeetProposalBuilderInternals::M5FeetError(
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet proposal cancelled"));
 	}
+	if (Segment.Profile.Version == 2)
+	{
+		if (!Budget->TryChargeWork(64))
+		{
+			return FVoxelLandM5FeetProposalBuilderInternals::M5FeetError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Profile proposal work budget exceeded"));
+		}
+		FVoxelLandM5FeetProposal Scratch;
+		const EVoxelLandM5ErrorCode Code = VoxelLand::M5::ProfileContainment::Propose(Segment, Capsule, Scratch);
+		if (Code != EVoxelLandM5ErrorCode::None)
+		{
+			return FVoxelLandM5FeetProposalBuilderInternals::M5FeetError(
+				Code, TEXT("Profile capsule containment is unproven"));
+		}
+		if (IsCancelled())
+		{
+			return FVoxelLandM5FeetProposalBuilderInternals::M5FeetError(
+				EVoxelLandM5ErrorCode::Cancelled, TEXT("Feet proposal cancelled"));
+		}
+		Out = Scratch;
+		return {};
+	}
 	if (Segment.Profile.Version != 1)
 	{
 		return FVoxelLandM5FeetProposalBuilderInternals::M5FeetError(
-			EVoxelLandM5ErrorCode::Unproven, TEXT("Profile containment is not yet proven"));
+			EVoxelLandM5ErrorCode::UnsupportedVersion, TEXT("Unsupported profile geometry version"));
 	}
 	const int64 Height = Capsule.StandingHeightCm;
 	const int64 Radius = Capsule.RadiusCm;

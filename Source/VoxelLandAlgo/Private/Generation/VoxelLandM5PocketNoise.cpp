@@ -1,5 +1,7 @@
 #include "Generation/VoxelLandM5PocketNoise.h"
 
+#include "Generation/VoxelLandM5Budget.h"
+#include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
 #include "Generation/VoxelLandM5Seed.h"
 
@@ -40,6 +42,151 @@ int32 FVoxelLandM5PocketNoiseInternals::Interpolate(int32 A, int32 B, int64 Weig
 		--Value;
 	}
 	return static_cast<int32>(Value);
+}
+
+namespace
+{
+FVoxelLandM5Diagnostic CacheError(EVoxelLandM5ErrorCode Code, const TCHAR* Message)
+{
+	FVoxelLandM5Diagnostic Result;
+	Result.Code = Code;
+	Result.Stage = TEXT("M5.PocketNoiseCache");
+	Result.Message = Message;
+	return Result;
+}
+}
+
+FVoxelLandM5PocketNoiseCache::FVoxelLandM5PocketNoiseCache(
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
+	: Budget(InBudget), Lease(MoveTemp(InLease))
+{
+}
+
+FVoxelLandM5PocketNoiseCache::~FVoxelLandM5PocketNoiseCache() = default;
+
+FVoxelLandM5Diagnostic FVoxelLandM5PocketNoiseCache::Build(const FVoxelLandM5PointCm& MinCm,
+	const FVoxelLandM5PointCm& MaxCmInclusive, int64 PeriodCm, int64 WorldSeed, const FGuid& StageId,
+	uint64 Salt, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget, TFunctionRef<bool()> IsCancelled,
+	TUniquePtr<FVoxelLandM5PocketNoiseCache>& Out)
+{
+	using namespace VoxelLand::M5::CheckedMath;
+	using E = EVoxelLandM5ErrorCode;
+	if (IsCancelled())
+		return CacheError(E::Cancelled, TEXT("Pocket cache cancelled"));
+	constexpr int64 Limit = FVoxelLandM5PocketNoiseInternals::M5PocketLimitCm;
+	constexpr int64 MaxCorners = 1000000;
+	const int64 Min[3] = {MinCm.X, MinCm.Y, MinCm.Z};
+	const int64 Max[3] = {MaxCmInclusive.X, MaxCmInclusive.Y, MaxCmInclusive.Z};
+	if (PeriodCm <= 0 || PeriodCm > Limit)
+		return CacheError(E::InvalidInput, TEXT("Invalid pocket cache period"));
+	int64 MinCellLocal[3], Extents[3];
+	int64 Count = 1;
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		int64 LastCell = 0;
+		if (Min[Axis] < -Limit || Max[Axis] > Limit || Min[Axis] > Max[Axis])
+			return CacheError(E::OutOfDomain, TEXT("Invalid pocket cache bounds"));
+		if (!TryFloorDivide(Min[Axis], PeriodCm, MinCellLocal[Axis])
+			|| !TryFloorDivide(Max[Axis], PeriodCm, LastCell)
+			|| !TrySubtract(LastCell, MinCellLocal[Axis], Extents[Axis])
+			|| !TryAdd(Extents[Axis], 2, Extents[Axis])
+			|| !TryMultiplyNonNegative(Count, Extents[Axis], Count))
+			return CacheError(E::ArithmeticOverflow, TEXT("Pocket cache corner count overflow"));
+	}
+	if (Count > MaxCorners)
+		return CacheError(E::BudgetExceeded, TEXT("Pocket cache corner limit exceeded"));
+	int64 Bytes = 0, Work = 0;
+	// Two arrays, allocator slack, packet/digest scratch, object and control overhead.
+	if (!TryMultiplyNonNegative(Count, 2 * int64(sizeof(int32) + sizeof(uint8)), Bytes)
+		|| !TryAdd(Bytes, 12288, Bytes) || !TryMultiplyNonNegative(Count, 2, Work)
+		|| !TryAdd(Work, 64, Work))
+		return CacheError(E::ArithmeticOverflow, TEXT("Pocket cache admission overflow"));
+	if (!InBudget->TryChargeWork(Work))
+		return CacheError(E::BudgetExceeded, TEXT("Pocket cache initialization work exhausted"));
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> NewLease;
+	if (!InBudget->TryReserveBytes(Bytes, NewLease))
+		return CacheError(E::BudgetExceeded, TEXT("Pocket cache memory exhausted"));
+	TUniquePtr<FVoxelLandM5PocketNoiseCache> Result(new FVoxelLandM5PocketNoiseCache(InBudget, MoveTemp(NewLease)));
+	Result->MinPosition = MinCm;
+	Result->MaxPosition = MaxCmInclusive;
+	Result->Period = PeriodCm;
+	Result->Seed = WorldSeed;
+	Result->Stage = StageId;
+	Result->SaltValue = Salt;
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		Result->MinCell[Axis] = MinCellLocal[Axis];
+		Result->Extent[Axis] = static_cast<int32>(Extents[Axis]);
+	}
+	Result->Values.SetNumZeroed(static_cast<int32>(Count));
+	Result->Present.SetNumZeroed(static_cast<int32>(Count));
+	if (IsCancelled())
+		return CacheError(E::Cancelled, TEXT("Pocket cache cancelled"));
+	Out = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5PocketNoiseCache::Sample(int64 X, int64 Y, int64 Z,
+	TFunctionRef<bool()> IsCancelled, int32& OutValue)
+{
+	using E = EVoxelLandM5ErrorCode;
+	using namespace VoxelLand::M5;
+	if (IsCancelled())
+		return CacheError(E::Cancelled, TEXT("Pocket cache cancelled"));
+	if (X < MinPosition.X || X > MaxPosition.X || Y < MinPosition.Y || Y > MaxPosition.Y
+		|| Z < MinPosition.Z || Z > MaxPosition.Z)
+		return CacheError(E::OutOfDomain, TEXT("Pocket sample outside cache bounds"));
+	// Eight indexed lookups, floor/weights and seven interpolation steps.
+	if (!Budget->TryChargeWork(64))
+		return CacheError(E::BudgetExceeded, TEXT("Pocket cache lookup work exhausted"));
+	const int64 Position[3] = {X, Y, Z};
+	int64 Cell[3], Weight[3];
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		if (!CheckedMath::TryFloorDivide(Position[Axis], Period, Cell[Axis]))
+			return CacheError(E::ArithmeticOverflow, TEXT("Pocket cache coordinate overflow"));
+		const int64 Remainder = Position[Axis] - Cell[Axis] * Period;
+		Weight[Axis] = (Remainder * FVoxelLandM5PocketNoiseInternals::M5PocketOne) / Period;
+	}
+	int32 Corners[2][2][2];
+	for (int32 K = 0; K < 2; ++K)
+		for (int32 J = 0; J < 2; ++J)
+			for (int32 I = 0; I < 2; ++I)
+			{
+				if (IsCancelled())
+					return CacheError(E::Cancelled, TEXT("Pocket cache cancelled"));
+				const int64 A = Cell[0] + I - MinCell[0];
+				const int64 B = Cell[1] + J - MinCell[1];
+				const int64 C = Cell[2] + K - MinCell[2];
+				if (A < 0 || B < 0 || C < 0 || A >= Extent[0] || B >= Extent[1] || C >= Extent[2])
+					return CacheError(E::OutOfDomain, TEXT("Pocket cache corner outside bounds"));
+				const int32 Index = static_cast<int32>((C * Extent[1] + B) * Extent[0] + A);
+				if (!Present[Index])
+				{
+					// 512 is the existing per-corner portion of the scalar 4096 allowance.
+					if (!Budget->TryChargeWork(512))
+						return CacheError(E::BudgetExceeded, TEXT("Pocket cache hash work exhausted"));
+					TArray<uint8> Packet, Digest;
+					if (!PocketNoise::TryCornerPacket(Seed, Stage, SaltValue, Cell[0] + I, Cell[1] + J,
+							Cell[2] + K, Packet) || !VoxelLand::M5::Seed::TrySha256(Packet, Digest) || Digest.Num() != 32)
+						return CacheError(E::Unproven, TEXT("Pocket cache hashing failed"));
+					Values[Index] = int32(uint32(Digest[0]) | (uint32(Digest[1]) << 8)) - 32768;
+					Present[Index] = 1;
+				}
+				Corners[K][J][I] = Values[Index];
+			}
+	int32 AlongX[2][2];
+	for (int32 K = 0; K < 2; ++K)
+		for (int32 J = 0; J < 2; ++J)
+			AlongX[K][J] = FVoxelLandM5PocketNoiseInternals::Interpolate(Corners[K][J][0], Corners[K][J][1], Weight[0]);
+	const int32 Y0 = FVoxelLandM5PocketNoiseInternals::Interpolate(AlongX[0][0], AlongX[0][1], Weight[1]);
+	const int32 Y1 = FVoxelLandM5PocketNoiseInternals::Interpolate(AlongX[1][0], AlongX[1][1], Weight[1]);
+	const int32 Value = FVoxelLandM5PocketNoiseInternals::Interpolate(Y0, Y1, Weight[2]);
+	if (IsCancelled())
+		return CacheError(E::Cancelled, TEXT("Pocket cache cancelled"));
+	OutValue = Value;
+	return {};
 }
 
 namespace VoxelLand::M5::PocketNoise

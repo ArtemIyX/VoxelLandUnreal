@@ -1,5 +1,6 @@
 #include "World/VoxelLandWorld.h"
 #include "World/VoxelLandWorldCoordinates.h"
+#include "World/VoxelLandM7RenderWork.h"
 #if !UE_SERVER
 #include "Rendering/VoxelLandChunkComponent.h"
 #endif
@@ -85,36 +86,48 @@ public:
 				{
 					Done.Error.Code = EVoxelLandErrorCode::InvalidContext;
 				}
-				const EVoxelLandChunkClassification Proof = !Done.Error && Job.bRender
-					                                            ? Current->ClassifyChunkBeforeSampling(Job.Key)
-					                                            : EVoxelLandChunkClassification::NeedsSamples;
-				if (!Done.Error)
+				if (Job.M7Visual)
 				{
-					TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_Generate);
-					Done.Error = Current->GenerateChunkCancellable(Job.Key, *Context, Done.Data,
-						[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); });
+					const auto IsCancelled = [&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); };
+					if (!Done.Error)
+					{
+						Done.Error = BuildM7RenderRevision(*Job.M7Visual, *Current, *Context, Scratch, IsCancelled, Done.M7Visual);
+					}
+					Done.bCancelled = IsCancelled() || Done.Error.Code == EVoxelLandErrorCode::Cancelled;
 				}
-				Done.bCancelled = Job.Cancel->bCancelled.Load() || Work->bStop.Load();
-				if (!Done.Error && !Done.bCancelled && Job.bRender && Proof ==
-				    EVoxelLandChunkClassification::NeedsSamples
-				    && VoxelLandMeshing::Classify(*Done.Data) == EVoxelLandChunkClassification::Surface)
+				else
 				{
-					auto Mesh = MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>();
-					const auto Result = VoxelLandMeshing::BuildSurfaceNets(
-						*Done.Data, Current->GetProfile().VoxelSizeCm, Scratch, *Mesh,
-						[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); }, Current->IsM4Unlimited());
-					if (Result == EVoxelLandMeshResult::Cancelled)
+					const EVoxelLandChunkClassification Proof = !Done.Error && Job.bRender
+						                                            ? Current->ClassifyChunkBeforeSampling(Job.Key)
+						                                            : EVoxelLandChunkClassification::NeedsSamples;
+					if (!Done.Error)
 					{
-						Done.bCancelled = true;
+						TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_Generate);
+						Done.Error = Current->GenerateChunkCancellable(Job.Key, *Context, Done.Data,
+							[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); });
 					}
-					else if (Result == EVoxelLandMeshResult::InvalidInput)
+					Done.bCancelled = Job.Cancel->bCancelled.Load() || Work->bStop.Load();
+					if (!Done.Error && !Done.bCancelled && Job.bRender && Proof ==
+					    EVoxelLandChunkClassification::NeedsSamples
+					    && VoxelLandMeshing::Classify(*Done.Data) == EVoxelLandChunkClassification::Surface)
 					{
-						Done.Error.Code = EVoxelLandErrorCode::InvalidParameter;
-						Done.Error.Message = TEXT("Invalid mesh input");
-					}
-					else if (!Mesh->Indices.IsEmpty())
-					{
-						Done.Mesh = Mesh;
+						auto Mesh = MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>();
+						const auto Result = VoxelLandMeshing::BuildSurfaceNets(
+							*Done.Data, Current->GetProfile().VoxelSizeCm, Scratch, *Mesh,
+							[&] { return Job.Cancel->bCancelled.Load() || Work->bStop.Load(); }, Current->IsM4Unlimited());
+						if (Result == EVoxelLandMeshResult::Cancelled)
+						{
+							Done.bCancelled = true;
+						}
+						else if (Result == EVoxelLandMeshResult::InvalidInput)
+						{
+							Done.Error.Code = EVoxelLandErrorCode::InvalidParameter;
+							Done.Error.Message = TEXT("Invalid mesh input");
+						}
+						else if (!Mesh->Indices.IsEmpty())
+						{
+							Done.Mesh = Mesh;
+						}
 					}
 				}
 			}
@@ -159,7 +172,7 @@ AVoxelLandRegion::AVoxelLandRegion()
 }
 #if !UE_SERVER
 bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
-	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material)
+	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material, bool bCurtain)
 {
 	check(IsInGameThread());
 	FVector LocalOrigin;
@@ -167,7 +180,8 @@ bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 	{
 		return false;
 	}
-	TObjectPtr<UPrimitiveComponent>& Slot = Components.FindOrAdd(Key);
+	auto& Stream = bCurtain ? CurtainComponents : Components;
+	TObjectPtr<UPrimitiveComponent>& Slot = Stream.FindOrAdd(Key);
 	UVoxelLandChunkComponent* Component = Cast<UVoxelLandChunkComponent>(Slot.Get());
 	if (Slot && !Component)
 	{
@@ -196,15 +210,18 @@ bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 
 void AVoxelLandRegion::Remove(const FIntVector& Key)
 {
-	if (TObjectPtr<UPrimitiveComponent>* Found = Components.Find(Key))
+	for (auto* Stream : {&Components, &CurtainComponents})
 	{
-		if (UVoxelLandChunkComponent* Component = Cast<UVoxelLandChunkComponent>(Found->Get()))
+		if (TObjectPtr<UPrimitiveComponent>* Found = Stream->Find(Key))
 		{
-			Component->SetVisibility(false);
-			Component->ClearMesh();
-			Component->DestroyComponent();
+			if (UVoxelLandChunkComponent* Component = Cast<UVoxelLandChunkComponent>(Found->Get()))
+			{
+				Component->SetVisibility(false);
+				Component->ClearMesh();
+				Component->DestroyComponent();
+			}
+			Stream->Remove(Key);
 		}
-		Components.Remove(Key);
 	}
 }
 
@@ -216,17 +233,20 @@ bool AVoxelLandRegion::IsChunkEffectivelyVisible(const FIntVector& Key) const
 
 void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface* Material)
 {
-	for (auto& Pair : Components)
+	for (auto* Stream : {&Components, &CurtainComponents})
 	{
-		if (Pair.Value)
+		for (auto& Pair : *Stream)
 		{
-			Pair.Value->SetMaterial(0, Material);
+			if (Pair.Value)
+			{
+				Pair.Value->SetMaterial(0, Material);
+			}
 		}
 	}
 }
 #else
 bool AVoxelLandRegion::Publish(const FIntVector&, const FVector&,
-	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe>, UMaterialInterface*)
+	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe>, UMaterialInterface*, bool)
 {
 	return false;
 }
@@ -343,6 +363,25 @@ bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMod
 	Candidate->Generator = Generator;
 	Candidate->M6Identity = MoveTemp(M6Identity);
 	Candidate->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
+#if !UE_SERVER
+	if (bEnableM7Clipmap && !Candidate->bServer)
+	{
+		if (!Generator->SupportsM7CompletedField())
+		{
+			LastInitializationError = TEXT("The M7 clipmap requires supported ordinary finite or local M4 terrain.");
+			return false;
+		}
+		Candidate->M7Visual = MakeUnique<FM7VisualState>();
+		FVoxelLandM7ClipmapSettings& Clipmap = Candidate->M7Visual->Settings;
+		Clipmap.BaseVoxelSizeCm = Generator->GetProfile().VoxelSizeCm;
+		Clipmap.MaxLod = FMath::Min<uint8>(M7MaxLOD, 5);
+		Clipmap.HorizontalRadiusCm = M7HorizontalRadiusCm;
+		Clipmap.FirstSplitDistanceCm = FMath::Min(Clipmap.FirstSplitDistanceCm, Clipmap.HorizontalRadiusCm);
+		Clipmap.VerticalRadiusCm = M7VerticalRadiusCm;
+		Clipmap.MaxLeaves = FMath::Clamp(M7MaxLeaves, 8, 1024);
+		Clipmap.FallbackReserveLeaves = FMath::Min(Clipmap.FallbackReserveLeaves, Clipmap.MaxLeaves / 8);
+	}
+#endif
 	Candidate->RegionDimensions = FIntVector(
 		FMath::Clamp(RegionSize.X, 1, 32), FMath::Clamp(RegionSize.Y, 1, 32), FMath::Clamp(RegionSize.Z, 1, 8));
 	if (Startup)
@@ -426,6 +465,9 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 	SetActorTickEnabled(false);
 	M4RejectedCameraDemandCount = 0;
 	M4FirstCameraDemandRejection.Reset();
+	M7ClipmapError.Reset();
+	M7PublishedLeafCount = 0;
+	M7FallbackRefinements = 0;
 	++ConfigurationEpoch;
 	StopDemo();
 	StopPendingInitialization();
@@ -445,6 +487,16 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 				RetiredRegions.Emplace(Region);
 			}
 		}
+		if (Retired->M7Visual)
+		{
+			for (const auto& Pair : Retired->M7Visual->StagedRegions)
+			{
+				if (AVoxelLandRegion* Region = Pair.Value.Get())
+				{
+					RetiredRegions.Emplace(Region);
+				}
+			}
+		}
 	}
 	Regions.Empty();
 	++Retired->Epoch;
@@ -454,6 +506,10 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 		{
 			Pair.Value.Cancel->bCancelled.Store(true);
 		}
+	}
+	if (Retired->M7Visual && Retired->M7Visual->Cancel)
+	{
+		Retired->M7Visual->Cancel->bCancelled.Store(true);
 	}
 	Retired->Work->bStop.Store(true);
 	for (int32 I = 0; I < Retired->Threads.Num(); ++I)
@@ -606,6 +662,16 @@ void AVoxelLandWorld::SetRegionHidden(FIntVector Region, bool bRegionHidden)
 			Found->Get()->SetActorHiddenInGame(bRegionHidden);
 		}
 	}
+	if (State->M7Visual)
+	{
+		for (const auto& Pair : State->M7Visual->Regions)
+		{
+			if (Pair.Key.Coordinate == Region && Pair.Value.IsValid())
+			{
+				Pair.Value->SetActorHiddenInGame(bRegionHidden);
+			}
+		}
+	}
 }
 
 void AVoxelLandWorld::SetTerrainMaterial(UMaterialInterface* Material)
@@ -735,6 +801,11 @@ void AVoxelLandWorld::UpdateDemand()
 	FVector GlobalLocation;
 	if (!GetWorld() || !VoxelLandWorldCoordinates::ToGlobal(Location, GetWorld()->OriginLocation, GlobalLocation))
 	{
+		return;
+	}
+	if (State->M7Visual)
+	{
+		UpdateM7Demand(GlobalLocation);
 		return;
 	}
 	const double Width = double(State->Generator->GetProfile().VoxelSizeCm) * 32.0;
@@ -935,6 +1006,11 @@ void AVoxelLandWorld::PumpCompletions()
 	{
 		++Published;
 		--State->Active;
+		if (Done.Job.M7Visual)
+		{
+			AcceptM7Completion(Done);
+			continue;
+		}
 		FRecord* Record = State->Records.Find(Done.Job.Key);
 		if (!VoxelLandPublication::IsCurrent(Record != nullptr, Done.Job.Epoch, State->Epoch, Done.Job.Ticket,
 			Record ? Record->Ticket : 0, Done.Job.Generator == State->Generator, true))
@@ -1053,6 +1129,7 @@ void AVoxelLandWorld::Dispatch()
 		}
 		if (!Best)
 		{
+			DispatchM7Revision();
 			break;
 		}
 		FJob Job;
@@ -1060,7 +1137,7 @@ void AVoxelLandWorld::Dispatch()
 		Job.Generator = State->Generator;
 		Job.Epoch = State->Epoch;
 		Job.Ticket = ++State->NextTicket;
-		Job.bRender = !State->bServer;
+		Job.bRender = !State->bServer && !State->M7Visual;
 		Job.Cancel = MakeShared<FCancel, ESPMode::ThreadSafe>();
 #if WITH_DEV_AUTOMATION_TESTS
 		Job.Barrier = MoveTemp(State->NextBarrier);
@@ -1117,6 +1194,10 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
 		return;
 	}
 	UpdateDemand();
+	if (!State)
+	{
+		return;
+	}
 	TArray<FVoxelLandChunkKey> Retire;
 	int32 Queued = 0, Ready = 0, Visible = 0, Vertices = 0, Triangles = 0;
 	int64 FieldBytes = 0, MeshBytes = 0;
@@ -1156,6 +1237,11 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
 		RetireChunk(Key);
 	}
 	PumpCompletions();
+	AdvanceM7Publication();
+	if (!State)
+	{
+		return;
+	}
 	Dispatch();
 	// Counters report the latest ticked VoxelLand world; GPU allocations and deferred
 	// releases require Unreal's renderer/RHI memory tools.

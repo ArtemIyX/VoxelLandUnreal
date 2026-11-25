@@ -16,7 +16,7 @@ public:
 	static void WritePoint(FCanonicalWriter& Writer, const FInt64Vector& Point);
 	static FVoxelLandError ValidateStage(const FVoxelLandM6FilterStage& Stage);
 	static bool IntersectsStoredBox(const FVoxelLandM6FilterStage& Stage, const FInt64Vector& StoredMin,
-		int32 OutputHalo, int64 VoxelSizeCm);
+		int32 StoredAxis, int32 OutputHalo, int64 VoxelSizeCm);
 };
 
 int64 FVoxelLandM6FilterPlanning::DivideDown(int64 Value, int64 Divisor)
@@ -79,14 +79,15 @@ FVoxelLandError FVoxelLandM6FilterPlanning::ValidateStage(const FVoxelLandM6Filt
 }
 
 bool FVoxelLandM6FilterPlanning::IntersectsStoredBox(
-	const FVoxelLandM6FilterStage& Stage, const FInt64Vector& StoredMin, int32 OutputHalo, int64 VoxelSizeCm)
+	const FVoxelLandM6FilterStage& Stage, const FInt64Vector& StoredMin, int32 StoredAxis,
+	int32 OutputHalo, int64 VoxelSizeCm)
 {
 	const FInt64Vector MaskMin(DivideUp(Stage.MinCm.X, VoxelSizeCm), DivideUp(Stage.MinCm.Y, VoxelSizeCm),
 		DivideUp(Stage.MinCm.Z, VoxelSizeCm));
 	const FInt64Vector MaskMax(DivideDown(Stage.MaxCm.X, VoxelSizeCm), DivideDown(Stage.MaxCm.Y, VoxelSizeCm),
 		DivideDown(Stage.MaxCm.Z, VoxelSizeCm));
 	const FInt64Vector RequiredMin = StoredMin - FInt64Vector(OutputHalo);
-	const FInt64Vector RequiredMax = StoredMin + FInt64Vector(FVoxelLandChunkData::SamplesPerAxis - 1 + OutputHalo);
+	const FInt64Vector RequiredMax = StoredMin + FInt64Vector(StoredAxis - 1 + OutputHalo);
 	return Ordered(RequiredMin.ComponentMax(MaskMin), RequiredMax.ComponentMin(MaskMax));
 }
 
@@ -198,8 +199,13 @@ FVoxelLandError FVoxelLandGenerator::InitializeM6Redistance(const FVoxelLandM6Re
 
 FVoxelLandM6FilterPlan FVoxelLandGenerator::MakeM6FilterPlan(const FVoxelLandChunkKey& Key) const
 {
-	static_assert(FVoxelLandM6FilterSettings::MaxStages <= 8);
 	const FInt64Vector StoredMin = FInt64Vector(Key.Coordinate) * int64(FVoxelLandChunkData::Cells) - FInt64Vector(1);
+	return MakeM6FilterPlan(StoredMin, FVoxelLandChunkData::SamplesPerAxis);
+}
+
+FVoxelLandM6FilterPlan FVoxelLandGenerator::MakeM6FilterPlan(const FInt64Vector& StoredMin, int32 StoredAxis) const
+{
+	static_assert(FVoxelLandM6FilterSettings::MaxStages <= 8);
 	const int64 VoxelSizeCm = int64(Profile.VoxelSizeCm);
 	FVoxelLandM6FilterPlan Plan;
 	Plan.RedistanceBand = M6RedistanceBand;
@@ -207,7 +213,7 @@ FVoxelLandM6FilterPlan FVoxelLandGenerator::MakeM6FilterPlan(const FVoxelLandChu
 	for (int32 Index = M6Filters.Num() - 1; Index >= 0; --Index)
 	{
 		const FVoxelLandM6FilterStage& Stage = M6Filters[Index];
-		if (Stage.Strength == 0 || !FVoxelLandM6FilterPlanning::IntersectsStoredBox(Stage, StoredMin, Plan.Halo, VoxelSizeCm))
+		if (Stage.Strength == 0 || !FVoxelLandM6FilterPlanning::IntersectsStoredBox(Stage, StoredMin, StoredAxis, Plan.Halo, VoxelSizeCm))
 		{
 			continue;
 		}

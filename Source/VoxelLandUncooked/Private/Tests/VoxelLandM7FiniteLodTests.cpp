@@ -138,7 +138,7 @@ bool FVoxelLandM7FiniteLodFixture::CheckDemandAndCancellation(
 	}
 	Settings.M6Stamps.bEnabled = false;
 	if (!FFixture::CreateGenerator(Settings, WithSlope, false, false, Disabled)
-		|| Active->ValidateM4ChunkDemand(Coarse).Code != EVoxelLandErrorCode::UnsupportedLod
+		|| Active->ValidateM4ChunkDemand(Coarse)
 		|| Disabled->ValidateM4ChunkDemand(Coarse))
 	{
 		return false;
@@ -146,7 +146,7 @@ bool FVoxelLandM7FiniteLodFixture::CheckDemandAndCancellation(
 
 	const FVoxelLandChunkKey TooFarXY{FIntVector(32767, 0, 0), FFixture::CoarseLod};
 	const FVoxelLandChunkKey TooFarZ{FIntVector(0, 0, 313), FFixture::CoarseLod};
-	const FVoxelLandChunkKey TooCoarse{FIntVector::ZeroValue, 2};
+	const FVoxelLandChunkKey TooCoarse{FIntVector::ZeroValue, 6};
 	if (Generator.ValidateM4ChunkDemand(TooFarXY).Code != EVoxelLandErrorCode::NonFiniteCoordinate
 		|| Generator.ValidateM4ChunkDemand(TooFarZ).Code != EVoxelLandErrorCode::NonFiniteCoordinate
 		|| Generator.ValidateM4ChunkDemand(TooCoarse).Code != EVoxelLandErrorCode::UnsupportedLod)

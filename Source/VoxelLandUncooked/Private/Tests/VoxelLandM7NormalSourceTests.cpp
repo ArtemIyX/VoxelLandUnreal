@@ -141,7 +141,8 @@ bool FVoxelLandM7NormalSourceFixture::CheckFootprints(FVoxelLandGeneratorSetting
 		Shaped.Get(), ActiveM6.Get()};
 	const EVoxelLandErrorCode Expected[] = {EVoxelLandErrorCode::None, EVoxelLandErrorCode::InvalidParameter,
 		EVoxelLandErrorCode::None, EVoxelLandErrorCode::InvalidParameter, EVoxelLandErrorCode::None,
-		EVoxelLandErrorCode::UnsupportedLod};
+		EVoxelLandErrorCode::None};
+	FVoxelLandM7NormalFrame BaselineFrame;
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Sources); ++Index)
 	{
 		TUniquePtr<FVoxelLandWorkerContext> Worker;
@@ -156,6 +157,14 @@ bool FVoxelLandM7NormalSourceFixture::CheckFootprints(FVoxelLandGeneratorSetting
 		const bool bSuccess = Expected[Index] == EVoxelLandErrorCode::None;
 		if (Error.Code != Expected[Index] || Batch.Frames.Num() != int32(bSuccess)
 			|| Batch.FallbackCount != (bSuccess ? 0u : 42u))
+		{
+			return false;
+		}
+		if (Index == 0)
+		{
+			BaselineFrame = Batch.Frames[0];
+		}
+		if (Sources[Index] == ActiveM6.Get() && SameFrame(BaselineFrame, Batch.Frames[0]))
 		{
 			return false;
 		}

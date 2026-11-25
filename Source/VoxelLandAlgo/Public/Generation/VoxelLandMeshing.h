@@ -26,5 +26,6 @@ VOXELLANDALGO_API EVoxelLandMeshResult BuildSurfaceNets(const FVoxelLandChunkDat
 // Explicit opt-in. Positive owner candidates share the ordinary vertex buffer
 // and never enter the ordinary draw index stream.
 VOXELLANDALGO_API EVoxelLandMeshResult BuildM7SeamMesh(const FVoxelLandChunkData& Chunk, int64 BaseVoxelSizeCm,
-	FVoxelLandMeshingScratch& Scratch, FVoxelLandM7SeamMesh& OutMesh, TFunctionRef<bool()> IsCancelled);
+	FVoxelLandMeshingScratch& Scratch, FVoxelLandM7SeamMesh& OutMesh, TFunctionRef<bool()> IsCancelled,
+	bool bUnlimitedM4 = false);
 }

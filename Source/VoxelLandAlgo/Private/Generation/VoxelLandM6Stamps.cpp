@@ -202,9 +202,9 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6SphereFootprint(const FVoxelLandC
 }
 
 FVoxelLandError FVoxelLandGenerator::ApplyM6Stamps(const FInt64Vector& First, int32 Axis, TArray<int16>& Samples,
-	TFunctionRef<bool()> IsCancelled) const
+	TFunctionRef<bool()> IsCancelled, int32 Stride) const
 {
-	check(Samples.Num() == Axis * Axis * Axis);
+	check(Samples.Num() == Axis * Axis * Axis && Stride > 0);
 	static_assert(FVoxelLandM6StampSettings::MaxStamps * FVoxelLandChunkData::SampleCount == 686000);
 	const int64 VoxelSizeCm = int64(Profile.VoxelSizeCm);
 	int32 Index = 0;
@@ -219,7 +219,7 @@ FVoxelLandError FVoxelLandGenerator::ApplyM6Stamps(const FInt64Vector& First, in
 			}
 			for (int32 X = 0; X < Axis; ++X)
 			{
-				const FInt64Vector PositionCm = First + FInt64Vector(X, Y, Z) * VoxelSizeCm;
+				const FInt64Vector PositionCm = First + FInt64Vector(X, Y, Z) * (VoxelSizeCm * Stride);
 				int16& Density = Samples[Index++];
 				for (const FVoxelLandM6Stamp& Stamp : M6Stamps)
 				{

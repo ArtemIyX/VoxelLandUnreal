@@ -1,6 +1,6 @@
 # VoxelLand M7 task tracker
 
-**Progress** 1 of 6 phases verified through source and contract audit. **Implemented** M7.1–M7.3. **Next** M7.4 clipmap and publication.
+**Progress** 1 of 6 phases verified through source and contract audit. **Implemented** M7.1–M7.4. **Next** M7.5 acceptance evidence.
 
 See the example project's [M7 technical description](../../../Docs/VoxelLand_M7_Technical_Description.md) and [implementation plan](../../../Docs/VoxelLand_M7_Plan.md).
 
@@ -38,9 +38,10 @@ M7.1 uses level spacing `S × 2^L` and samples base-lattice coordinate `(32 × K
 
 ## M7.4 — Clipmap, hysteresis and runtime paths
 
-- [ ] Add aligned six-level demand, 2:1 balance, hysteresis, bounded queues/residency and coherent coverage swaps.
-- [ ] Wire LOD-aware render grouping, neighbor seam revision keys, cancellation and stale-result rejection.
-- [ ] Verify finite and erosion-disabled local M4 with supported M6 operations, full footprints and no render work on the data-only path.
+- [x] Add an opt-in six-level planner with aligned leaves, 2:1 balance, protected hysteresis, a bounded refinement reserve and source admission.
+- [x] Stage a complete LOD-keyed render revision through the existing worker queue. Validate and retain sources, seams and replacement components before retiring visible coverage. Keep explicit LOD0 and headless data demand separate.
+- [x] Extend ordinary finite and erosion-disabled local M4 coarse sampling and shared frames through the completed field, including supported M6 operations.
+- [ ] Execute planner, source, seam and runtime fixtures. Verify interactive transitions and render-frame timing, CPU/GPU resource use, actual server execution, and finite/local M6 cases at the required scene scale.
 
 ## M7.5 — Acceptance
 
@@ -58,5 +59,7 @@ M7.1 uses level spacing `S × 2^L` and samples base-lattice coordinate `(32 × K
 | 2026-11-25 | M7.2 | Added shared finite M4 normal frames with canonical Q16 anchor fractions, complete tiled base-stencil admission, and exact paired mesh-frame application. Central differences use base spacing, then interpolate raw gradients before normalization. Fallbacks follow the first canonical solid-to-air edge or +Z and are counted. Admission allows up to 1,024 anchors and 256 unique 4³ stencils. Existing actor and terrain topology are unchanged. Paired-frame fixtures use the API ahead of actual rim extraction in M7.3. Static review found no critical issues. Authored `VoxelLand.M7.Normals.FiniteSharedSource` and `VoxelLand.M7.Normals.ReferenceAndPairs`, and extended `VoxelLand.M7.Lod.MeshSeams` with raw and packed frame comparisons. No build or test execution. |
 
 | 2026-11-25 | M7.3 | Added optional positive-owner Surface Nets candidates, complete 2:1 X/Y rim clipping, shared knot subdivisions and bounded terrain shading. The separate coarse-owned curtain drops from the upper trace to below the lower, with one coarse voxel maximum depth. Unsupported single-face geometry rejects before publication. Static review found no critical issues. Multiple incident face composition, finer fallback and runtime publication remain M7.4. Authored `VoxelLand.M7.Seams.VerticalTerrain` through ordinary finite generation and real Surface Nets, including both signs, packed frames, four fine participants, nonzero curtain, missing/stacked/empty cases, depth, and cancellation. Build, automation and interactive inspection remain pending. |
+
+| 2026-11-25 | M7.4 | Added the six-level planner, completed-field coincident samples and stencil reads, and opt-in actor visual revisions. The existing worker/ticket queue prepares one replacement and keeps the last published coverage on failure. Data-only requests remain LOD0. The renderer stages up to four leaf records per tick and publishes terrain and curtain components separately. The retained source/clipped/curtain CPU buffer cap is 128 MiB per revision, or 256 MiB across two revisions plus bounded current work and scratch. Matching uniform padded slabs admit empty interfaces. Ambiguous shared-participant clips, incompatible incident curtain intervals, unproven horizontal faces, and rejected coarse reads request balanced finer coverage within the leaf reserve. Authored `VoxelLand.M7.Clipmap.Planner`, `VoxelLand.M7.Field.PointwiseAcrossLevels`, `VoxelLand.M7.Field.NeighborhoodPatches`, and `VoxelLand.M7.Runtime.VisualPublication`. Existing normal and coarse source fixtures now cover the widened source path. Final static review found no remaining critical issues. Build, automation, render-frame timing and interactive acceptance are pending. |
 
 Update the log after each phase with its commit, relevant paths, review findings and executed checks. Leave a checkbox open if its evidence is pending.

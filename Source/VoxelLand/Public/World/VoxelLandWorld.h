@@ -22,6 +22,10 @@ struct FVoxelLandM4SavedWorld;
 struct FVoxelLandWorldState;
 struct FVoxelLandTestBarrier;
 struct FVoxelLandReloadTestBarrier;
+namespace VoxelLandWorldPrivate
+{
+struct FCompletion;
+}
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FVoxelLandInitializationFinished, bool, bSuccess);
 
@@ -32,10 +36,11 @@ class VOXELLAND_API AVoxelLandRegion : public AActor
 public:
 	AVoxelLandRegion();
 	bool Publish(const FIntVector& Key, const FVector& Origin,
-		TSharedPtr<const struct FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material);
+		TSharedPtr<const struct FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material,
+		bool bCurtain = false);
 	void Remove(const FIntVector& Key);
 	void SetTerrainMaterial(UMaterialInterface* Material);
-	bool IsEmpty() const { return Components.IsEmpty(); }
+	bool IsEmpty() const { return Components.IsEmpty() && CurtainComponents.IsEmpty(); }
 	bool IsChunkEffectivelyVisible(const FIntVector& Key) const;
 
 private:
@@ -43,6 +48,8 @@ private:
 	TObjectPtr<USceneComponent> Root;
 	UPROPERTY()
 	TMap<FIntVector, TObjectPtr<UPrimitiveComponent>> Components;
+	UPROPERTY()
+	TMap<FIntVector, TObjectPtr<UPrimitiveComponent>> CurtainComponents;
 };
 
 UCLASS(BlueprintType)
@@ -131,6 +138,9 @@ public:
 	bool TryInitializeWithStartupForTests(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
 		const FVoxelLandChunkKey& Startup) { return TryInitialize(MoveTemp(Generator), &Startup); }
 	bool IsExplicitChunkForTests(const FVoxelLandChunkKey& Key) const;
+	uint64 GetM7PublishedTicketForTests() const;
+	bool IsM7ReplacementPendingForTests() const;
+	void CopyM7PublishedKeysForTests(TArray<FVoxelLandChunkKey>& Out) const;
 	void SetFailWorkerStartForTests(bool bFail) { bFailWorkerStartForTests = bFail; }
 	void SetPresentationHookForTests(TFunction<void()>&& Hook) { PresentationHookForTests = MoveTemp(Hook); }
 	void SetShutdownHookForTests(TFunction<void()>&& Hook) { ShutdownHookForTests = MoveTemp(Hook); }
@@ -143,6 +153,23 @@ public:
 	// Optional data-only mode for a headless consumer or automation; dedicated servers always use it.
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|Streaming")
 	bool bDataOnly = false;
+	// Captured on successful initialization. Data-only worlds ignore visual settings.
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|Clipmap")
+	bool bEnableM7Clipmap = false;
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|Clipmap", meta = (ClampMin = "0", ClampMax = "5"))
+	uint8 M7MaxLOD = 5;
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|Clipmap", meta = (ClampMin = "1"))
+	double M7HorizontalRadiusCm = 300000.0;
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|Clipmap", meta = (ClampMin = "1"))
+	double M7VerticalRadiusCm = 12800.0;
+	UPROPERTY(EditAnywhere, Category = "VoxelLand|Clipmap", meta = (ClampMin = "8", ClampMax = "1024"))
+	int32 M7MaxLeaves = 512;
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "VoxelLand|Clipmap")
+	FString M7ClipmapError;
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "VoxelLand|Clipmap")
+	int32 M7PublishedLeafCount = 0;
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "VoxelLand|Clipmap")
+	int32 M7FallbackRefinements = 0;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|Demo")
 	int32 Seed = 1234;
 	UPROPERTY(EditAnywhere, Category = "VoxelLand|Demo", meta = (ClampMin = "1"))
@@ -166,6 +193,11 @@ private:
 	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
 		const FVoxelLandChunkKey* Startup = nullptr, TArray<uint8> M6Identity = {});
 	void UpdateDemand();
+	void UpdateM7Demand(const FVector& LogicalView);
+	void DispatchM7Revision();
+	void AcceptM7Completion(const VoxelLandWorldPrivate::FCompletion& Done);
+	void AdvanceM7Publication();
+	void DiscardM7Staging();
 	void RetireChunk(const FVoxelLandChunkKey& Key);
 	void PumpCompletions();
 	void Dispatch();

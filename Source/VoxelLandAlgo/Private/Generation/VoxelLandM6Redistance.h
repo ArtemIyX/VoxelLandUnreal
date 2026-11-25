@@ -11,7 +11,7 @@ public:
 	{
 		return Band > 0 ? 3 * (2 * Band + 2) * (2 * Band + 1) * (2 * Band + 1) : 0;
 	}
-	static FVoxelLandError Apply(TConstArrayView<int16> Input, int32 InputAxis, int32 Band,
+	static FVoxelLandError Apply(TConstArrayView<int16> Input, int32 InputAxis, int32 OutputAxis, int32 Band,
 		TArray<int16>& Output, TFunctionRef<bool()> IsCancelled);
 
 private:

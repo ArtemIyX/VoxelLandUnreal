@@ -22,6 +22,8 @@ struct FVoxelLandM4UnlimitedConfig;
 struct FVoxelLandM4SmoothSettings;
 struct FVoxelLandM5PointCm;
 struct FVoxelLandM6FilterPlan;
+struct FVoxelLandM7CompletedBox;
+struct FVoxelLandM7SampleGrid;
 struct FVoxelLandM7NormalAnchor;
 struct FVoxelLandM7NormalFrameBatch;
 struct FVoxelLandWorkerContextImpl;
@@ -124,15 +126,15 @@ public:
 	bool OwnsWorkerOnCurrentThread(const FVoxelLandWorkerContext& Worker) const;
 	// Proof-only hint; chunk sampling still runs and remains authoritative.
 	EVoxelLandChunkClassification ClassifyChunkBeforeSampling(const FVoxelLandChunkKey& Key) const;
-	// Thread-safe read-only demand gate. M3 returns success and retains its
-	// existing scheduler validation; M4 checks padded/filter/stencil XY and Z.
+	// Thread-safe demand gate. LOD0 checks its complete admitted footprint.
+	// Coarse demand checks the baseline hull; the worker validates exact M6 tiles.
 	FVoxelLandError ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const;
 	FVoxelLandError GenerateChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const;
 	FVoxelLandError GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
-	// Finite M4 checkpoint. Samples canonical shared frames on the worker
-	// that owns the generator context. Errors preserve the caller's batch.
+	// Samples canonical shared frames from the completed M4/M6 field on the
+	// owner worker. Errors preserve the caller's batch.
 	FVoxelLandError GenerateM7NormalFrames(TConstArrayView<FVoxelLandM7NormalAnchor> Anchors,
 		FVoxelLandWorkerContext& Worker, FVoxelLandM7NormalFrameBatch& OutBatch,
 		TFunctionRef<bool()> IsCancelled) const;
@@ -150,6 +152,8 @@ public:
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
 	bool IsM4Unlimited() const { return M4Unlimited.IsValid(); }
+	// Coarse render sampling supports ordinary finite and erosion-disabled local worlds.
+	bool SupportsM7CompletedField() const;
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 	// This payload supplements the baseline generator inputs. An inactive stage has no bytes.
 	TConstArrayView<uint8> GetM6StampIdentity() const { return M6StampIdentity; }
@@ -183,6 +187,14 @@ private:
 	// Caller validates lattice range, thread ownership and dimensions (1..37).
 	FVoxelLandError GenerateM4DensityBox(const FVoxelLandM5PointCm& MinLattice, const FIntVector& Size,
 		FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateM4SampleGrid(const FVoxelLandM7SampleGrid& Grid,
+		FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled,
+		TFunctionRef<bool(int64, int64, int32&)>* LocalHeight = nullptr) const;
+	FVoxelLandError GenerateM4StridedDetail(const FVoxelLandM7SampleGrid& Grid, const FIntVector& BaseOffset,
+		FVoxelLandWorkerContext& Worker, TArray<int32>& Heights, TFunctionRef<bool()> IsCancelled,
+		TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const;
+	bool SampleM4BaseHeight(int64 X, int64 Y, int32& Height,
+		TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const;
 	FVoxelLandError ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const;
 	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const;
 	FVoxelLandError GenerateExpandedDensity(
@@ -196,18 +208,37 @@ private:
 	FVoxelLandError InitializeM6Stamps(const FVoxelLandM6StampSettings& Settings, float VoxelSizeCm);
 	FVoxelLandError ValidateM6SphereFootprint(const FVoxelLandChunkKey& Key, int32 Halo = 0) const;
 	FVoxelLandError ApplyM6Stamps(const FInt64Vector& FirstSampleCm, int32 Axis, TArray<int16>& Density,
-		TFunctionRef<bool()> IsCancelled) const;
+		TFunctionRef<bool()> IsCancelled, int32 Stride = 1) const;
 	FVoxelLandError InitializeM6Filters(const FVoxelLandM6FilterSettings& Settings, float VoxelSizeCm);
 	FVoxelLandError InitializeM6Redistance(const FVoxelLandM6RedistanceSettings& Settings, float VoxelSizeCm);
 	FVoxelLandM6FilterPlan MakeM6FilterPlan(const FVoxelLandChunkKey& Key) const;
+	FVoxelLandM6FilterPlan MakeM6FilterPlan(const FInt64Vector& StoredMin, int32 StoredAxis) const;
+	FVoxelLandError ApplyM6Box(const FInt64Vector& StoredFirst, int32 StoredAxis, const FVoxelLandM6FilterPlan& Plan,
+		TArray<int16>& Density, TFunctionRef<bool()> IsCancelled, int32 Stride = 1) const;
 	FVoxelLandError ValidateM6FilterDemand(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan) const;
 	int32 GetM6CompatibilityHalo() const;
 	FVoxelLandError ValidateM6BaselineFootprint(const FVoxelLandChunkKey& Key, int32 Halo) const;
 	FVoxelLandError GenerateM6BaselineBox(const FVoxelLandChunkKey& Key, int32 Halo,
 		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateM4TiledBaselineBox(const FInt64Vector& MinLattice, int32 Axis,
-		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
+		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled,
+		TFunctionRef<bool(int64, int64, int32&)>* LocalHeight = nullptr) const;
 	bool SupportsM7FiniteSource() const;
+	FVoxelLandError GenerateM7StridedBaseline(const FVoxelLandM7SampleGrid& Grid,
+		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled,
+		TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const;
+	FVoxelLandError ApplyM7CoarsePatches(const FVoxelLandM7SampleGrid& Grid, int32 GroupSize, bool bPlanOnly,
+		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled,
+		TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const;
+	FVoxelLandError ValidateM7CoarseDemand(const FVoxelLandChunkKey& Key) const;
+	FVoxelLandError GenerateM7CoarseChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError ValidateM7RawFootprint(const FInt64Vector& First, const FInt64Vector& Last) const;
+	FVoxelLandError ValidateM7StampBox(const FInt64Vector& First, const FInt64Vector& Last) const;
+	FVoxelLandError PlanM7CompletedBox(const FInt64Vector& First, int32 Axis, FVoxelLandM7CompletedBox& Out) const;
+	FVoxelLandError ReadM7CompletedBox(const FVoxelLandM7CompletedBox& Box,
+		FVoxelLandWorkerContext& Worker, TArray<int16>& Out, TFunctionRef<bool()> IsCancelled,
+		TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const;
 	FVoxelLandError ValidateM7FiniteBox(const FInt64Vector& First, int32 Axis) const;
 	FVoxelLandError ValidateM7FiniteDemand(const FVoxelLandChunkKey& Key) const;
 	FVoxelLandError GenerateM7FiniteChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,

@@ -10,6 +10,7 @@ class FVoxelLandGenerator;
 namespace VoxelLandWorldPrivate
 {
 class FWorker;
+struct FM7VisualState;
 }
 
 struct FVoxelLandWorldState
@@ -27,6 +28,7 @@ struct FVoxelLandWorldState
 	TMap<FVoxelLandChunkKey, VoxelLandWorldPrivate::FRecord> Records;
 	TMap<FIntVector, TWeakObjectPtr<AVoxelLandRegion>> RegionMap;
 	TSet<FIntVector> HiddenRegions;
+	TUniquePtr<VoxelLandWorldPrivate::FM7VisualState> M7Visual;
 #if WITH_DEV_AUTOMATION_TESTS
 	TSharedPtr<FVoxelLandTestBarrier, ESPMode::ThreadSafe> NextBarrier;
 #endif

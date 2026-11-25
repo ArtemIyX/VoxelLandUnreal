@@ -12,6 +12,7 @@
 #include "Data/Structs/VoxelLandM5ChunkFootprint.h"
 #include "Data/Structs/VoxelLandM4UnlimitedConfig.h"
 #include "Data/Structs/VoxelLandM4SmoothSettings.h"
+#include "Data/Structs/VoxelLandM7SampleGrid.h"
 #include "Data/Structs/VoxelLandWorkerContextImpl.h"
 #include "../VoxelLandNativeNoise.h"
 #include "HAL/PlatformTLS.h"
@@ -34,6 +35,26 @@ class FVoxelLandGeneratorValidation final
 public:
 	static constexpr int32 BatchSize = 256;
 	static constexpr int32 NoiseFamilyCount = 4;
+
+	static int32 SignedSeed(uint64 WorldSeed, const FGuid& NodeId, uint32 Salt)
+	{
+		const uint32 Bits = uint32(VoxelLandDeterminism::DeriveNodeSeed(WorldSeed, NodeId, Salt));
+		return Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll);
+	}
+
+	static bool ApplyHeightDetail(int32 Base, int32 NoiseQ, int32 AmplitudeQ8, int32& Out)
+	{
+		const int64 Product = int64(AmplitudeQ8) * NoiseQ;
+		const int64 Magnitude = Product < 0 ? -Product : Product;
+		const int64 Delta = (Magnitude + 16383) / 32767;
+		const int64 Height = int64(Base) + (Product < 0 ? -Delta : Delta);
+		if (Height < -512000000 || Height > 512000000)
+		{
+			return false;
+		}
+		Out = int32(Height);
+		return true;
+	}
 
 	static int32 NoiseVariant(EVoxelLandOpcode Op)
 	{
@@ -485,7 +506,7 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	LocalSettings.M6Filters = {};
 	LocalSettings.M6Redistance = {};
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
-	if (FVoxelLandError Error = CreateInternal(LocalSettings, nullptr, false, nullptr, Result))
+	if (FVoxelLandError Error = CreateInternal(LocalSettings, nullptr, Config.bNormalizeSlope, &Config.Overhang, Result))
 	{
 		return Error;
 	}
@@ -511,6 +532,15 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 		{
 			return Error;
 		}
+	}
+	Mutable->bM4FixedLatticeShaping = true;
+	Mutable->M4HeightDetail = Config.HeightDetail;
+	Mutable->M4HeightDetailSeed = FVoxelLandGeneratorValidation::SignedSeed(
+		Settings.WorldSeed, Config.HeightDetail.NodeId, Config.HeightDetail.Salt);
+	if (Config.SmoothOverride.IsSet())
+	{
+		Mutable->bSmoothEnabled = Config.SmoothOverride->bEnabled;
+		Mutable->SmoothStrength = Config.SmoothOverride->Strength;
 	}
 	Mutable->M4Unlimited = MakeShared<FVoxelLandM4UnlimitedConfig, ESPMode::ThreadSafe>(Config);
 	Mutable->M4UnlimitedSettings = MakeShared<FVoxelLandGeneratorSettings, ESPMode::ThreadSafe>(MoveTemp(LocalSettings));
@@ -543,8 +573,8 @@ FVoxelLandError FVoxelLandGenerator::CreateM4HeightField(const FVoxelLandGenerat
 	}
 	auto Mutable = ConstCastSharedPtr<FVoxelLandGenerator>(Result);
 	Mutable->M4HeightDetail = Detail;
-	const uint32 Bits = uint32(VoxelLandDeterminism::DeriveNodeSeed(Settings.WorldSeed, Detail.NodeId, Detail.Salt));
-	Mutable->M4HeightDetailSeed = Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll);
+	Mutable->M4HeightDetailSeed =
+		FVoxelLandGeneratorValidation::SignedSeed(Settings.WorldSeed, Detail.NodeId, Detail.Salt);
 	OutGenerator = MoveTemp(Result);
 	return {};
 }
@@ -647,9 +677,8 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	if (Overhang)
 	{
 		Result->M4Overhang = *Overhang;
-		const uint32 Bits =
-			uint32(VoxelLandDeterminism::DeriveNodeSeed(Settings.WorldSeed, Overhang->NodeId, Overhang->Salt));
-		Result->M4OverhangSeed = Bits <= uint32(MAX_int32) ? int32(Bits) : int32(int64(Bits) - 4294967296ll);
+		Result->M4OverhangSeed = FVoxelLandGeneratorValidation::SignedSeed(
+			Settings.WorldSeed, Overhang->NodeId, Overhang->Salt);
 	}
 	if (IsCancelled)
 	{
@@ -1480,7 +1509,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 {
 	if (Key.LOD != 0)
 	{
-		return GenerateM7FiniteChunk(Key, Worker, OutChunk, IsCancelled);
+		return Key.LOD == 1 && SupportsM7FiniteSource() ? GenerateM7FiniteChunk(Key, Worker, OutChunk, IsCancelled)
+			: GenerateM7CoarseChunk(Key, Worker, OutChunk, IsCancelled);
 	}
 	if (!M6Filters.IsEmpty() || M6RedistanceBand > 0)
 	{
@@ -1522,7 +1552,7 @@ FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunk
 {
 	if (Key.LOD != 0)
 	{
-		return ValidateM7FiniteDemand(Key);
+		return Key.LOD == 1 && SupportsM7FiniteSource() ? ValidateM7FiniteDemand(Key) : ValidateM7CoarseDemand(Key);
 	}
 	if (!M6Filters.IsEmpty() || M6RedistanceBand > 0)
 	{
@@ -1628,9 +1658,80 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5Poin
 	const FIntVector& Size, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity,
 	TFunctionRef<bool()> IsCancelled) const
 {
+	const FVoxelLandM7SampleGrid Grid{FInt64Vector(MinLattice.X, MinLattice.Y, MinLattice.Z), Size, 1};
+	return GenerateM4SampleGrid(Grid, Worker, OutDensity, IsCancelled);
+}
+
+FVoxelLandError FVoxelLandGenerator::GenerateM4StridedDetail(const FVoxelLandM7SampleGrid& Grid,
+	const FIntVector& Offset, FVoxelLandWorkerContext& Worker, TArray<int32>& Heights,
+	TFunctionRef<bool()> IsCancelled, TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const
+{
+	if (!bM4FixedLatticeShaping && (!Worker.Impl || !Worker.Impl->Noise))
+	{
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidContext, TEXT("M4 height detail worker missing"));
+	}
 	const int64 VoxelSize = int64(Profile.VoxelSizeCm);
-	const int64 BaseX = MinLattice.X, BaseY = MinLattice.Y, BaseZ = MinLattice.Z;
-	const int32 AxisX = Size.X, AxisY = Size.Y, AxisZ = Size.Z;
+	const int64 Step = VoxelSize * Grid.Stride;
+	const FInt64Vector First = (Grid.First + FInt64Vector(Offset)) * VoxelSize;
+	for (int32 Y = 0; Y < Grid.Size.Y; ++Y)
+	{
+		if (IsCancelled())
+		{
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::Cancelled, TEXT("M4 height detail generation cancelled"));
+		}
+		const int64 YCm = First.Y + Y * Step;
+		float XNoise[37], YNoise[37], Noise[37];
+		if (!bM4FixedLatticeShaping)
+		{
+			for (int32 X = 0; X < Grid.Size.X; ++X)
+			{
+				XNoise[X] = float(First.X + X * Step) * M4HeightDetail.FrequencyPerCm;
+				YNoise[X] = float(YCm) * M4HeightDetail.FrequencyPerCm;
+			}
+			FString Error;
+			if (!Worker.Impl->Noise->Sample(0, false, M4HeightDetailSeed,
+					Grid.Size.X, XNoise, YNoise, nullptr, Noise, Error))
+			{
+				return FVoxelLandGeneratorValidation::NativeError(Error);
+			}
+		}
+		for (int32 X = 0; X < Grid.Size.X; ++X)
+		{
+			const int64 XCm = First.X + X * Step;
+			int32 Base = 0, NoiseQ = 0;
+			const bool bNoiseValid = bM4FixedLatticeShaping
+				? VoxelLandM4FixedLattice::SampleShaping2D(XCm, YCm, M4HeightDetail.FrequencyPerCm,
+					  uint64(uint32(M4HeightDetailSeed)), NoiseQ)
+				: VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ);
+			if (!bNoiseValid || !SampleM4BaseHeight(XCm, YCm, Base, LocalHeight)
+				|| !FVoxelLandGeneratorValidation::ApplyHeightDetail(
+					Base, NoiseQ, M4HeightDetail.AmplitudeQ8, Heights[X + Grid.Size.X * Y]))
+			{
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 strided height detail sample"));
+			}
+		}
+	}
+	return {};
+}
+
+bool FVoxelLandGenerator::SampleM4BaseHeight(int64 X, int64 Y, int32& Height,
+	TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const
+{
+	return LocalHeight ? (*LocalHeight)(X, Y, Height) : M4HeightGrid->Sample(X, Y, Height);
+}
+
+FVoxelLandError FVoxelLandGenerator::GenerateM4SampleGrid(const FVoxelLandM7SampleGrid& Grid,
+	FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity, TFunctionRef<bool()> IsCancelled,
+	TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const
+{
+	const int64 VoxelSize = int64(Profile.VoxelSizeCm);
+	const int64 Stride = Grid.Stride;
+	const int64 BaseX = Grid.First.X, BaseY = Grid.First.Y, BaseZ = Grid.First.Z;
+	const int32 AxisX = Grid.Size.X, AxisY = Grid.Size.Y, AxisZ = Grid.Size.Z;
+	check(AxisX > 0 && AxisX <= 37 && AxisY > 0 && AxisY <= 37 && AxisZ > 0 && AxisZ <= 37 && Stride > 0);
 	// Height and stencil inputs are 2D; evaluate each XY column once rather
 	// than repeating the same bilinear lookups for every Z sample.
 	TArray<int32> Centers, PlusX, MinusX, PlusY, MinusY;
@@ -1649,28 +1750,43 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5Poin
 			return FVoxelLandGeneratorValidation::Fail(
 				EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 		}
-		const int64 YCm = (BaseY + Y) * VoxelSize;
+		const int64 YCm = (BaseY + Y * Stride) * VoxelSize;
 		for (int32 X = 0; X < AxisX; ++X)
 		{
-			const int64 XCm = (BaseX + X) * VoxelSize;
+			const int64 XCm = (BaseX + X * Stride) * VoxelSize;
 			const int32 Column = X + AxisX * Y;
-			if (!M4HeightGrid->Sample(XCm, YCm, Centers[Column]))
+			if (!SampleM4BaseHeight(XCm, YCm, Centers[Column], LocalHeight))
 			{
 				return FVoxelLandGeneratorValidation::Fail(
 					EVoxelLandErrorCode::InvalidParameter, TEXT("M4 height sample outside grid"));
 			}
 			if (bM4NormalizeSlope
-				&& (!M4HeightGrid->Sample(XCm + VoxelSize, YCm, PlusX[Column])
-					|| !M4HeightGrid->Sample(XCm - VoxelSize, YCm, MinusX[Column])
-					|| !M4HeightGrid->Sample(XCm, YCm + VoxelSize, PlusY[Column])
-					|| !M4HeightGrid->Sample(XCm, YCm - VoxelSize, MinusY[Column])))
+				&& (!SampleM4BaseHeight(XCm + VoxelSize, YCm, PlusX[Column], LocalHeight)
+					|| !SampleM4BaseHeight(XCm - VoxelSize, YCm, MinusX[Column], LocalHeight)
+					|| !SampleM4BaseHeight(XCm, YCm + VoxelSize, PlusY[Column], LocalHeight)
+					|| !SampleM4BaseHeight(XCm, YCm - VoxelSize, MinusY[Column], LocalHeight)))
 			{
 				return FVoxelLandGeneratorValidation::Fail(
 					EVoxelLandErrorCode::InvalidParameter, TEXT("M4 slope stencil outside grid"));
 			}
 		}
 	}
-	if (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0)
+	const bool bDetail = M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0;
+	if (bDetail && Stride != 1 && bM4NormalizeSlope)
+	{
+		const FIntVector Offsets[] = {FIntVector::ZeroValue, FIntVector(1, 0, 0), FIntVector(-1, 0, 0),
+			FIntVector(0, 1, 0), FIntVector(0, -1, 0)};
+		TArray<int32>* Heights[] = {&Centers, &PlusX, &MinusX, &PlusY, &MinusY};
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Offsets); ++Index)
+		{
+			if (const FVoxelLandError Error = GenerateM4StridedDetail(
+					Grid, Offsets[Index], Worker, *Heights[Index], IsCancelled, LocalHeight))
+			{
+				return Error;
+			}
+		}
+	}
+	else if (bDetail)
 	{
 		if (!bM4FixedLatticeShaping && (!Worker.Impl || !Worker.Impl->Noise))
 		{
@@ -1689,13 +1805,13 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5Poin
 				return FVoxelLandGeneratorValidation::Fail(
 					EVoxelLandErrorCode::Cancelled, TEXT("M4 height detail generation cancelled"));
 			}
-			const int64 YCm = (BaseY + Y - Margin) * VoxelSize;
+			const int64 YCm = (BaseY + (Y - Margin) * Stride) * VoxelSize;
 			float XNoise[39], YNoise[39], Noise[39];
 			if (!bM4FixedLatticeShaping)
 			{
 				for (int32 X = 0; X < DetailAxisX; ++X)
 				{
-					XNoise[X] = float((BaseX + X - Margin) * VoxelSize) * M4HeightDetail.FrequencyPerCm;
+					XNoise[X] = float((BaseX + (X - Margin) * Stride) * VoxelSize) * M4HeightDetail.FrequencyPerCm;
 					YNoise[X] = float(YCm) * M4HeightDetail.FrequencyPerCm;
 				}
 				FString Error;
@@ -1708,30 +1824,22 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5Poin
 			for (int32 X = 0; X < DetailAxisX; ++X)
 			{
 				int32 BaseHeight = 0, NoiseQ = 0;
-				const int64 XCm = (BaseX + X - Margin) * VoxelSize;
+				const int64 XCm = (BaseX + (X - Margin) * Stride) * VoxelSize;
 				const bool bNoiseValid = bM4FixedLatticeShaping ? VoxelLandM4FixedLattice::SampleShaping2D(XCm, YCm,
 																	  M4HeightDetail.FrequencyPerCm,
 																	  uint64(uint32(M4HeightDetailSeed)), NoiseQ)
 																: VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ);
-				if (!M4HeightGrid->Sample(XCm, YCm, BaseHeight) || !bNoiseValid)
+				if (!SampleM4BaseHeight(XCm, YCm, BaseHeight, LocalHeight) || !bNoiseValid)
 				{
 					return FVoxelLandGeneratorValidation::Fail(
 						EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid M4 height detail sample"));
 				}
-				const int64 Product = int64(M4HeightDetail.AmplitudeQ8) * NoiseQ;
-				const int64 Magnitude = Product < 0 ? -Product : Product;
-				int64 Delta = (Magnitude + 16383) / 32767;
-				if (Product < 0)
-				{
-					Delta = -Delta;
-				}
-				const int64 Height = int64(BaseHeight) + Delta;
-				if (Height < -512000000 || Height > 512000000)
+				if (!FVoxelLandGeneratorValidation::ApplyHeightDetail(
+						BaseHeight, NoiseQ, M4HeightDetail.AmplitudeQ8, DetailedHeights[X + DetailAxisX * Y]))
 				{
 					return FVoxelLandGeneratorValidation::Fail(
 						EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 detailed height exceeds fixed-point range"));
 				}
-				DetailedHeights[X + DetailAxisX * Y] = int32(Height);
 			}
 		}
 		for (int32 Y = 0; Y < AxisY; ++Y)
@@ -1761,7 +1869,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5Poin
 				EVoxelLandErrorCode::Cancelled, TEXT("M4 height-field generation cancelled"));
 		}
 		int64 ZCm = 0;
-		if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Z, VoxelSize, ZCm) || ZCm < -2000000
+		if (!VoxelLandM4Control::LatticePositionCm(BaseZ + Z * Stride, VoxelSize, ZCm) || ZCm < -2000000
 			|| ZCm > 2000000)
 		{
 			return FVoxelLandGeneratorValidation::Fail(
@@ -1787,8 +1895,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5Poin
 				{
 					for (int32 X = 0; X < AxisX; ++X)
 					{
-						NX[X] = float((BaseX + X) * VoxelSize) * M4Overhang.FrequencyPerCm;
-						NY[X] = float((BaseY + Y) * VoxelSize) * M4Overhang.FrequencyPerCm;
+						NX[X] = float((BaseX + X * Stride) * VoxelSize) * M4Overhang.FrequencyPerCm;
+						NY[X] = float((BaseY + Y * Stride) * VoxelSize) * M4Overhang.FrequencyPerCm;
 						NZ[X] = float(ZCm) * M4Overhang.FrequencyPerCm;
 					}
 					FString Error;
@@ -1817,8 +1925,8 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4DensityBox(const FVoxelLandM5Poin
 					int32 NoiseQ = 0, DeltaQ8 = 0;
 					const bool bNoiseValid =
 						bM4FixedLatticeShaping
-							? VoxelLandM4FixedLattice::SampleShaping3D((BaseX + X) * VoxelSize,
-								  (BaseY + Y) * VoxelSize, ZCm, M4Overhang.FrequencyPerCm,
+							? VoxelLandM4FixedLattice::SampleShaping3D((BaseX + X * Stride) * VoxelSize,
+								  (BaseY + Y * Stride) * VoxelSize, ZCm, M4Overhang.FrequencyPerCm,
 								  uint64(uint32(M4OverhangSeed)), NoiseQ)
 							: VoxelLandM4Overhang::QuantizeNoise(Noise[X], NoiseQ);
 					if (!bNoiseValid

@@ -83,29 +83,29 @@ int16 FVoxelLandM6Redistance::ProcessSample(TConstArrayView<int16> Input, int32 
 	return int16(Original < 0 ? -Magnitude : Magnitude);
 }
 
-FVoxelLandError FVoxelLandM6Redistance::Apply(TConstArrayView<int16> Input, int32 InputAxis, int32 Band,
-	TArray<int16>& Output, TFunctionRef<bool()> IsCancelled)
+FVoxelLandError FVoxelLandM6Redistance::Apply(TConstArrayView<int16> Input, int32 InputAxis, int32 OutputAxis,
+	int32 Band, TArray<int16>& Output, TFunctionRef<bool()> IsCancelled)
 {
-	constexpr int32 StoredAxis = FVoxelLandChunkData::SamplesPerAxis;
 	constexpr int32 MaxBand = FVoxelLandM6RedistanceSettings::MaxBandVoxels;
 	constexpr int32 MaxOffsetQ = (MaxBand + 1) * UnitsPerVoxel;
 	static_assert(MaxOffsetQ <= (MAX_int32 / 3) / MaxOffsetQ);
 	static_assert(EdgeChecksPerSample(MaxBand) * FVoxelLandChunkData::SampleCount == 19293750);
 	const int32 Halo = HaloForBand(Band);
-	check(Band > 0 && Band <= MaxBand && InputAxis == StoredAxis + 2 * Halo);
+	check(OutputAxis > 0 && OutputAxis <= FVoxelLandChunkData::SamplesPerAxis);
+	check(Band > 0 && Band <= MaxBand && InputAxis == OutputAxis + 2 * Halo);
 	check(Input.Num() == InputAxis * InputAxis * InputAxis);
-	Output.SetNumUninitialized(FVoxelLandChunkData::SampleCount);
+	Output.SetNumUninitialized(OutputAxis * OutputAxis * OutputAxis);
 	int32 Destination = 0;
-	for (int32 Z = 0; Z < StoredAxis; ++Z)
+	for (int32 Z = 0; Z < OutputAxis; ++Z)
 	{
-		for (int32 Y = 0; Y < StoredAxis; ++Y)
+		for (int32 Y = 0; Y < OutputAxis; ++Y)
 		{
 			if (IsCancelled())
 			{
 				return {EVoxelLandErrorCode::Cancelled, TEXT("M6 re-distance cancelled")};
 			}
 			const int32 FirstCenter = Halo + InputAxis * ((Y + Halo) + InputAxis * (Z + Halo));
-			for (int32 X = 0; X < StoredAxis; ++X)
+			for (int32 X = 0; X < OutputAxis; ++X)
 			{
 				Output[Destination++] = ProcessSample(Input, FirstCenter + X, InputAxis, Band);
 			}

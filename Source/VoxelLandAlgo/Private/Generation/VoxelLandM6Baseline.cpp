@@ -1,7 +1,7 @@
 #include "Generation/VoxelLandGenerator.h"
 
 #include "Data/Structs/VoxelLandM4LatticeGeometry.h"
-#include "Data/Structs/VoxelLandM5PointCm.h"
+#include "Data/Structs/VoxelLandM7SampleGrid.h"
 #include "Generation/VoxelLandM4HeightGrid.h"
 #include "Generation/VoxelLandM4LocalBaseline.h"
 #include "Generation/VoxelLandM4Unlimited.h"
@@ -89,9 +89,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateM6BaselineBox(const FVoxelLandChunk
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateM4TiledBaselineBox(const FInt64Vector& MinLattice, int32 Axis,
-	FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const
+	FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled,
+	TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const
 {
-	check(M4HeightGrid && !M4Unlimited && OwnsWorkerOnCurrentThread(Worker));
+	check((M4HeightGrid || LocalHeight) && OwnsWorkerOnCurrentThread(Worker));
 	// Both callers admit their complete box before tiling. The two-level
 	// checkpoint is the larger allowed box: 35 outputs at stride two.
 	constexpr int32 MaxTile = FVoxelLandChunkData::SamplesPerAxis;
@@ -108,12 +109,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4TiledBaselineBox(const FInt64Vect
 				const FIntVector Tile(FMath::Min(MaxTile, Axis - X), FMath::Min(MaxTile, Axis - Y),
 					FMath::Min(MaxTile, Axis - Z));
 				const FIntVector RawSize = Tile + FIntVector(2 * CompatibilityHalo);
-				FVoxelLandM5PointCm RawMin;
-				RawMin.X = MinLattice.X + X - CompatibilityHalo;
-				RawMin.Y = MinLattice.Y + Y - CompatibilityHalo;
-				RawMin.Z = MinLattice.Z + Z - CompatibilityHalo;
+				const FVoxelLandM7SampleGrid RawGrid{
+					MinLattice + FInt64Vector(X, Y, Z) - FInt64Vector(CompatibilityHalo), RawSize, 1};
 				TArray<int16> Raw;
-				if (const FVoxelLandError Error = GenerateM4DensityBox(RawMin, RawSize, Worker, Raw, IsCancelled))
+				if (const FVoxelLandError Error = GenerateM4SampleGrid(RawGrid, Worker, Raw, IsCancelled, LocalHeight))
 				{
 					return Error;
 				}

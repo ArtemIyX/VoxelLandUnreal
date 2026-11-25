@@ -10,7 +10,7 @@ class FVoxelLandM6FilterExecution final
 public:
 	static FVoxelLandError Apply(const FVoxelLandM6FilterStage& Stage, const FInt64Vector& FirstCm,
 		int64 VoxelSizeCm, int32 OutputAxis, const TArray<int16>& Input, int32 InputAxis,
-		TArray<int16>& Output, TFunctionRef<bool()> IsCancelled);
+		TArray<int16>& Output, TFunctionRef<bool()> IsCancelled, int32 Stride);
 
 private:
 	static int32 Index(int32 X, int32 Y, int32 Z, int32 Axis)
@@ -88,11 +88,11 @@ int16 FVoxelLandM6FilterExecution::MakeSpace(int16 Original, const FVoxelLandM6F
 
 FVoxelLandError FVoxelLandM6FilterExecution::Apply(const FVoxelLandM6FilterStage& Stage, const FInt64Vector& FirstCm,
 	int64 VoxelSizeCm, int32 OutputAxis, const TArray<int16>& Input, int32 InputAxis,
-	TArray<int16>& Output, TFunctionRef<bool()> IsCancelled)
+	TArray<int16>& Output, TFunctionRef<bool()> IsCancelled, int32 Stride)
 {
 	const int32 Inset = (InputAxis - OutputAxis) / 2;
 	const FIntVector InputSize(InputAxis);
-	check(Input.Num() == InputAxis * InputAxis * InputAxis);
+	check(Input.Num() == InputAxis * InputAxis * InputAxis && (Stride == 1 || Inset == 0));
 	check(Inset == (Stage.Kind == EVoxelLandM6FilterKind::MakeSpace ? 0 : 1));
 	Output.SetNumUninitialized(OutputAxis * OutputAxis * OutputAxis);
 	int32 Destination = 0;
@@ -106,7 +106,7 @@ FVoxelLandError FVoxelLandM6FilterExecution::Apply(const FVoxelLandM6FilterStage
 			}
 			for (int32 X = 0; X < OutputAxis; ++X)
 			{
-				const FInt64Vector Point = FirstCm + FInt64Vector(X, Y, Z) * VoxelSizeCm;
+				const FInt64Vector Point = FirstCm + FInt64Vector(X, Y, Z) * (VoxelSizeCm * Stride);
 				int16 Value = Input[Index(X + Inset, Y + Inset, Z + Inset, InputAxis)];
 				if (Contains(Stage, Point))
 				{
@@ -161,12 +161,26 @@ FVoxelLandError FVoxelLandGenerator::GenerateM6ProcessedChunk(const FVoxelLandCh
 		return Baseline;
 	}
 
-	constexpr int32 StoredAxis = FVoxelLandChunkData::SamplesPerAxis;
+	if (const FVoxelLandError Error = ApplyM6Box(StoredFirst, FVoxelLandChunkData::SamplesPerAxis, Plan, Current, IsCancelled))
+	{
+		return Error;
+	}
+	const TSharedRef<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
+	Chunk->Key = Key;
+	Chunk->Density = MoveTemp(Current);
+	return FinalizeDensityChunk(Chunk, Worker, OutChunk, IsCancelled, false);
+}
+
+FVoxelLandError FVoxelLandGenerator::ApplyM6Box(const FInt64Vector& StoredFirst, int32 StoredAxis,
+	const FVoxelLandM6FilterPlan& Plan, TArray<int16>& Current, TFunctionRef<bool()> IsCancelled, int32 Stride) const
+{
+	check(Stride == 1 || Plan.Halo == 0);
+	const int64 VoxelSizeCm = int64(Profile.VoxelSizeCm);
 	int32 InputAxis = StoredAxis + 2 * Plan.Halo;
 	if (!M6Stamps.IsEmpty())
 	{
 		const FInt64Vector InputFirst = StoredFirst - FInt64Vector(Plan.Halo * VoxelSizeCm);
-		if (const FVoxelLandError Error = ApplyM6Stamps(InputFirst, InputAxis, Current, IsCancelled))
+		if (const FVoxelLandError Error = ApplyM6Stamps(InputFirst, InputAxis, Current, IsCancelled, Stride))
 		{
 			return Error;
 		}
@@ -184,7 +198,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM6ProcessedChunk(const FVoxelLandCh
 		const FInt64Vector First = StoredFirst - FInt64Vector(OutputHalo * VoxelSizeCm);
 		if (const FVoxelLandError Error =
 				FVoxelLandM6FilterExecution::Apply(M6Filters[Index], First, VoxelSizeCm, OutputAxis, Current, InputAxis,
-					Next, IsCancelled))
+					Next, IsCancelled, Stride))
 		{
 			return Error;
 		}
@@ -195,7 +209,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateM6ProcessedChunk(const FVoxelLandCh
 	if (Plan.RedistanceBand > 0)
 	{
 		if (const FVoxelLandError Error =
-				FVoxelLandM6Redistance::Apply(Current, InputAxis, Plan.RedistanceBand, Next, IsCancelled))
+				FVoxelLandM6Redistance::Apply(Current, InputAxis, StoredAxis, Plan.RedistanceBand, Next, IsCancelled))
 		{
 			return Error;
 		}
@@ -203,8 +217,5 @@ FVoxelLandError FVoxelLandGenerator::GenerateM6ProcessedChunk(const FVoxelLandCh
 		InputAxis = StoredAxis;
 	}
 	check(InputAxis == StoredAxis);
-	const TSharedRef<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
-	Chunk->Key = Key;
-	Chunk->Density = MoveTemp(Current);
-	return FinalizeDensityChunk(Chunk, Worker, OutChunk, IsCancelled, false);
+	return {};
 }

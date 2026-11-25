@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Structs/VoxelLandMeshVertex.h"
+#include "Data/Structs/VoxelLandChunkKey.h"
 #include <cmath>
 
 struct FVoxelLandMeshData
@@ -57,6 +58,34 @@ inline bool IsKeyInPrecisionRange(const FIntVector& Key, float Size, bool bUnlim
 {
 	return bUnlimitedM4 ? IsUnlimitedM4KeyInPrecisionRange(Key, Size) : IsKeyInPrecisionRange(Key);
 }
+inline bool IsMeshKeyInPrecisionRange(const FVoxelLandChunkKey& Key, float BaseVoxelSizeCm, bool bUnlimitedM4)
+{
+	float LevelSpacing = 0.f;
+	if (!TryGetLevelSpacing(BaseVoxelSizeCm, Key.LOD, LevelSpacing))
+	{
+		return false;
+	}
+	if (!bUnlimitedM4)
+	{
+		return IsKeyInPrecisionRange(Key.Coordinate);
+	}
+	if (!IsUnlimitedM4KeyInPrecisionRange(FIntVector::ZeroValue, BaseVoxelSizeCm))
+	{
+		return false;
+	}
+	constexpr int64 MaxBaseChunk = (int64(1) << 22) - 2;
+	const int64 Stride = int64(1) << Key.LOD;
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		const int64 First = int64(Key.Coordinate[Axis]) * Stride;
+		if (First < -MaxBaseChunk || First + Stride - 1 > MaxBaseChunk)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 inline double Grid(float Size)
 {
 	int Exponent = 0;

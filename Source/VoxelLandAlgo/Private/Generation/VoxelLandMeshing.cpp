@@ -15,6 +15,7 @@ public:
 	static int32 CellIndex(int32 X, int32 Y, int32 Z);
 	static int16 Sample(const FVoxelLandChunkData& Chunk, int32 X, int32 Y, int32 Z);
 	static bool IsSolid(int16 Q);
+	static EVoxelLandChunkClassification ClassifyFace(const FVoxelLandChunkData& Chunk, int32 Axis, bool bPositive);
 	static FVector3f Gradient(const int16* Q, const FVector3f& P);
 	static bool AddTriangle(const FVoxelLandMeshData& Mesh, TArray<uint32>& Indices,
 		uint32 A, uint32 B, uint32 C, float Scale);
@@ -111,23 +112,64 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 	return FVoxelLandMeshingInternals::Build(Chunk, VoxelSizeCm, Scratch, OutMesh, IsCancelled, bUnlimitedM4, nullptr);
 }
 
-EVoxelLandMeshResult VoxelLandMeshing::BuildM7SeamMesh(const FVoxelLandChunkData& Chunk, int64 BaseVoxelSizeCm,
-	FVoxelLandMeshingScratch& Scratch, FVoxelLandM7SeamMesh& OutMesh, TFunctionRef<bool()> IsCancelled)
+EVoxelLandChunkClassification FVoxelLandMeshingInternals::ClassifyFace(
+	const FVoxelLandChunkData& Chunk, int32 Axis, bool bPositive)
 {
-	if (BaseVoxelSizeCm < 1 || BaseVoxelSizeCm > 134217)
+	const int32 Plane = bPositive ? FVoxelLandChunkData::Cells : 0;
+	const int32 U = (Axis + 1) % 3, V = (Axis + 2) % 3;
+	int32 P[3] = {};
+	P[Axis] = Plane;
+	const bool bSolid = IsSolid(Sample(Chunk, P[0], P[1], P[2]));
+	for (P[Axis] = Plane - 1; P[Axis] <= Plane + 1; ++P[Axis])
+	{
+		for (P[V] = -1; P[V] <= 33; ++P[V])
+		{
+			for (P[U] = -1; P[U] <= 33; ++P[U])
+			{
+				if (IsSolid(Sample(Chunk, P[0], P[1], P[2])) != bSolid)
+				{
+					return EVoxelLandChunkClassification::Surface;
+				}
+			}
+		}
+	}
+	return bSolid ? EVoxelLandChunkClassification::Solid : EVoxelLandChunkClassification::Empty;
+}
+
+EVoxelLandMeshResult VoxelLandMeshing::BuildM7SeamMesh(const FVoxelLandChunkData& Chunk, int64 BaseVoxelSizeCm,
+	FVoxelLandMeshingScratch& Scratch, FVoxelLandM7SeamMesh& OutMesh, TFunctionRef<bool()> IsCancelled,
+	bool bUnlimitedM4)
+{
+	if (BaseVoxelSizeCm < 1 || BaseVoxelSizeCm > 134217
+		|| !VoxelLandMeshCoordinates::IsMeshKeyInPrecisionRange(Chunk.Key, float(BaseVoxelSizeCm), bUnlimitedM4)
+		|| Chunk.Density.Num() != FVoxelLandChunkData::SampleCount)
 	{
 		return EVoxelLandMeshResult::InvalidInput;
 	}
 	FVoxelLandM7SeamMesh Mesh;
-	const EVoxelLandMeshResult Result = FVoxelLandMeshingInternals::Build(Chunk, float(BaseVoxelSizeCm),
-		Scratch, Mesh.Terrain, IsCancelled, false, &Mesh);
-	if (Result != EVoxelLandMeshResult::Success)
-	{
-		return Result;
-	}
 	Mesh.Key = Chunk.Key;
 	Mesh.BaseVoxelSizeCm = BaseVoxelSizeCm;
+	Mesh.bUnlimitedM4 = bUnlimitedM4;
 	Mesh.Classification = Classify(Chunk);
+	if (Mesh.Classification == EVoxelLandChunkClassification::Surface)
+	{
+		const EVoxelLandMeshResult Result = FVoxelLandMeshingInternals::Build(Chunk, float(BaseVoxelSizeCm),
+			Scratch, Mesh.Terrain, IsCancelled, bUnlimitedM4, &Mesh);
+		if (Result != EVoxelLandMeshResult::Success)
+		{
+			return Result;
+		}
+	}
+	for (int32 Face = 0; Face < UE_ARRAY_COUNT(Mesh.FaceSigns); ++Face)
+	{
+		if (IsCancelled())
+		{
+			return EVoxelLandMeshResult::Cancelled;
+		}
+		Mesh.FaceSigns[Face] = Mesh.Classification == EVoxelLandChunkClassification::Surface
+			? FVoxelLandMeshingInternals::ClassifyFace(Chunk, Face / 2, (Face & 1) != 0)
+			: Mesh.Classification;
+	}
 	if (IsCancelled())
 	{
 		return EVoxelLandMeshResult::Cancelled;
@@ -142,9 +184,8 @@ EVoxelLandMeshResult FVoxelLandMeshingInternals::Build(const FVoxelLandChunkData
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SurfaceNets);
 	float LevelSpacingCm = 0.f;
-	if (Chunk.Key.LOD > 1 || (Chunk.Key.LOD != 0 && bUnlimitedM4)
-		|| !VoxelLandMeshCoordinates::TryGetLevelSpacing(VoxelSizeCm, Chunk.Key.LOD, LevelSpacingCm)
-		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, LevelSpacingCm, bUnlimitedM4)
+	if (!VoxelLandMeshCoordinates::TryGetLevelSpacing(VoxelSizeCm, Chunk.Key.LOD, LevelSpacingCm)
+		|| !VoxelLandMeshCoordinates::IsMeshKeyInPrecisionRange(Chunk.Key, VoxelSizeCm, bUnlimitedM4)
 		|| Chunk.Density.Num() != FVoxelLandChunkData::SampleCount)
 	{
 		return EVoxelLandMeshResult::InvalidInput;

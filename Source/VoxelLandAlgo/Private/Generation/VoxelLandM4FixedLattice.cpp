@@ -1,5 +1,7 @@
 #include "Generation/VoxelLandM4FixedLattice.h"
 
+#include "Generation/VoxelLandM4FixedLatticeSampling.h"
+
 #include "Data/Structs/VoxelLandM4LatticeGeometry.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM4Control.h"
@@ -378,9 +380,7 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 	{
 		return Error;
 	}
-	const auto& D = Generator.GetProgram().GetData();
 	TArray<int64> Registers;
-	Registers.SetNumZeroed(D.RegisterCount);
 	TArray<uint16> Values;
 	Values.Reserve((CellsX + 1) * (CellsY + 1));
 	for (int32 Y = 0; Y <= CellsY; ++Y)
@@ -393,76 +393,12 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 		for (int32 X = 0; X <= CellsX; ++X)
 		{
 			const int64 WorldX = OriginX + int64(X) * SpacingCm, WorldY = OriginY + int64(Y) * SpacingCm;
-			for (int32 Index = 0; Index < D.Instructions.Num(); ++Index)
+			uint16 Value = 0;
+			if (const FVoxelLandError Error = EvaluateValidatedPoint(Generator, WorldX, WorldY, Registers, Value))
 			{
-				const auto& I = D.Instructions[Index];
-				int64 V = 0;
-				switch (I.Op)
-				{
-					case EVoxelLandOpcode::LoadX:
-					case EVoxelLandOpcode::LoadY:
-					{
-						// Noise uses the exact world coordinates directly. A coordinate stored
-						// as control output can saturate before conversion to avoid overflow.
-						const int64 Coordinate = I.Op == EVoxelLandOpcode::LoadX ? WorldX : WorldY;
-						V = FMath::Clamp<int64>(Coordinate, -1, 1) * FVoxelLandM4FixedLatticeInternals::Q;
-						break;
-					}
-					case EVoxelLandOpcode::LoadConstant:
-						FVoxelLandM4FixedLatticeInternals::Quantize(D.Constants[I.Imm], V);
-						break;
-					case EVoxelLandOpcode::LoadFloatParameter:
-						FVoxelLandM4FixedLatticeInternals::Quantize(Generator.GetResolvedFloatParameters()[I.Imm], V);
-						break;
-					case EVoxelLandOpcode::Value2:
-					case EVoxelLandOpcode::Fbm2:
-						if (!FVoxelLandM4FixedLatticeInternals::RunNoise(Generator, I, WorldX, WorldY, V))
-						{
-							return FVoxelLandM4FixedLatticeInternals::Fail(
-								TEXT("Fixed lattice noise coordinate or frequency overflow"), Index,
-								EVoxelLandErrorCode::InvalidMathDomain);
-						}
-						break;
-					case EVoxelLandOpcode::Add:
-						V = Registers[I.A] + Registers[I.B];
-						break;
-					case EVoxelLandOpcode::Subtract:
-						V = Registers[I.A] - Registers[I.B];
-						break;
-					case EVoxelLandOpcode::Multiply:
-						V = FVoxelLandM4FixedLatticeInternals::Mul(Registers[I.A], Registers[I.B]);
-						break;
-					case EVoxelLandOpcode::Min:
-						V = FMath::Min(Registers[I.A], Registers[I.B]);
-						break;
-					case EVoxelLandOpcode::Max:
-						V = FMath::Max(Registers[I.A], Registers[I.B]);
-						break;
-					case EVoxelLandOpcode::Negate:
-						V = -Registers[I.A];
-						break;
-					case EVoxelLandOpcode::Abs:
-						V = FMath::Abs(Registers[I.A]);
-						break;
-					case EVoxelLandOpcode::StoreDensity:
-					{
-						const int64 Clamped = FMath::Clamp<int64>(Registers[I.A], -FVoxelLandM4FixedLatticeInternals::Q,
-							FVoxelLandM4FixedLatticeInternals::Q);
-						Values.Add(uint16(((Clamped + FVoxelLandM4FixedLatticeInternals::Q) * 65535
-											  + FVoxelLandM4FixedLatticeInternals::Q)
-										  / (2 * FVoxelLandM4FixedLatticeInternals::Q)));
-						continue;
-					}
-					default:
-						return FVoxelLandM4FixedLatticeInternals::Fail(TEXT("Unsupported fixed lattice opcode"), Index);
-				}
-				if (V < -FVoxelLandM4FixedLatticeInternals::Limit || V > FVoxelLandM4FixedLatticeInternals::Limit)
-				{
-					return FVoxelLandM4FixedLatticeInternals::Fail(
-						TEXT("Fixed lattice scalar exceeds [-64,64]"), Index, EVoxelLandErrorCode::InvalidMathDomain);
-				}
-				Registers[I.Dst] = V;
+				return Error;
 			}
+			Values.Add(Value);
 		}
 	}
 	if (IsCancelled())
@@ -471,6 +407,95 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 			TEXT("Fixed lattice evaluation cancelled"), INDEX_NONE, EVoxelLandErrorCode::Cancelled);
 	}
 	Out = MoveTemp(Values);
+	return {};
+}
+
+FVoxelLandError EvaluateValidatedPoint(const FVoxelLandGenerator& Generator, int64 WorldX, int64 WorldY,
+	TArray<int64>& Registers, uint16& OutValue)
+{
+	const FVoxelLandProgramDraft& D = Generator.GetProgram().GetData();
+	if (Registers.Num() != D.RegisterCount)
+	{
+		Registers.SetNumZeroed(D.RegisterCount);
+	}
+	uint16 StoredValue = 0;
+	bool bStored = false;
+	for (int32 Index = 0; Index < D.Instructions.Num(); ++Index)
+	{
+		const FVoxelLandInstruction& I = D.Instructions[Index];
+		int64 V = 0;
+		switch (I.Op)
+		{
+			case EVoxelLandOpcode::LoadX:
+			case EVoxelLandOpcode::LoadY:
+			{
+				// Noise uses the exact world coordinates directly. A coordinate stored
+				// as control output can saturate before conversion to avoid overflow.
+				const int64 Coordinate = I.Op == EVoxelLandOpcode::LoadX ? WorldX : WorldY;
+				V = FMath::Clamp<int64>(Coordinate, -1, 1) * FVoxelLandM4FixedLatticeInternals::Q;
+				break;
+			}
+			case EVoxelLandOpcode::LoadConstant:
+				FVoxelLandM4FixedLatticeInternals::Quantize(D.Constants[I.Imm], V);
+				break;
+			case EVoxelLandOpcode::LoadFloatParameter:
+				FVoxelLandM4FixedLatticeInternals::Quantize(Generator.GetResolvedFloatParameters()[I.Imm], V);
+				break;
+			case EVoxelLandOpcode::Value2:
+			case EVoxelLandOpcode::Fbm2:
+				if (!FVoxelLandM4FixedLatticeInternals::RunNoise(Generator, I, WorldX, WorldY, V))
+				{
+					return FVoxelLandM4FixedLatticeInternals::Fail(
+						TEXT("Fixed lattice noise coordinate or frequency overflow"), Index,
+						EVoxelLandErrorCode::InvalidMathDomain);
+				}
+				break;
+			case EVoxelLandOpcode::Add:
+				V = Registers[I.A] + Registers[I.B];
+				break;
+			case EVoxelLandOpcode::Subtract:
+				V = Registers[I.A] - Registers[I.B];
+				break;
+			case EVoxelLandOpcode::Multiply:
+				V = FVoxelLandM4FixedLatticeInternals::Mul(Registers[I.A], Registers[I.B]);
+				break;
+			case EVoxelLandOpcode::Min:
+				V = FMath::Min(Registers[I.A], Registers[I.B]);
+				break;
+			case EVoxelLandOpcode::Max:
+				V = FMath::Max(Registers[I.A], Registers[I.B]);
+				break;
+			case EVoxelLandOpcode::Negate:
+				V = -Registers[I.A];
+				break;
+			case EVoxelLandOpcode::Abs:
+				V = FMath::Abs(Registers[I.A]);
+				break;
+			case EVoxelLandOpcode::StoreDensity:
+			{
+				const int64 Clamped = FMath::Clamp<int64>(Registers[I.A], -FVoxelLandM4FixedLatticeInternals::Q,
+					FVoxelLandM4FixedLatticeInternals::Q);
+				StoredValue = uint16(((Clamped + FVoxelLandM4FixedLatticeInternals::Q) * 65535
+									  + FVoxelLandM4FixedLatticeInternals::Q)
+									  / (2 * FVoxelLandM4FixedLatticeInternals::Q));
+				bStored = true;
+				continue;
+			}
+			default:
+				return FVoxelLandM4FixedLatticeInternals::Fail(TEXT("Unsupported fixed lattice opcode"), Index);
+		}
+		if (V < -FVoxelLandM4FixedLatticeInternals::Limit || V > FVoxelLandM4FixedLatticeInternals::Limit)
+		{
+			return FVoxelLandM4FixedLatticeInternals::Fail(
+				TEXT("Fixed lattice scalar exceeds [-64,64]"), Index, EVoxelLandErrorCode::InvalidMathDomain);
+		}
+		Registers[I.Dst] = V;
+	}
+	if (!bStored)
+	{
+		return FVoxelLandM4FixedLatticeInternals::Fail(TEXT("Fixed lattice program did not store density"));
+	}
+	OutValue = StoredValue;
 	return {};
 }
 }

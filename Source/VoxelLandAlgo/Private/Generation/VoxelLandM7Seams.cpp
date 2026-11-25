@@ -94,11 +94,11 @@ FVoxelLandError Cancel()
 	return {EVoxelLandErrorCode::Cancelled, TEXT("M7 vertical seam cancelled")};
 }
 
-bool ValidSource(const FVoxelLandM7SeamMesh& Source, uint8 LOD, int64 BaseSpacing)
+bool ValidSource(const FVoxelLandM7SeamMesh& Source, uint8 LOD, int64 BaseSpacing, bool bUnlimitedM4)
 {
 	const FVoxelLandMeshData& Mesh = Source.Terrain;
-	return Source.Key.LOD == LOD && Source.BaseVoxelSizeCm == BaseSpacing
-		&& VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Source.Key.Coordinate)
+	return Source.Key.LOD == LOD && Source.BaseVoxelSizeCm == BaseSpacing && Source.bUnlimitedM4 == bUnlimitedM4
+		&& VoxelLandMeshCoordinates::IsMeshKeyInPrecisionRange(Source.Key, float(BaseSpacing), bUnlimitedM4)
 		&& Source.Classification != EVoxelLandChunkClassification::NeedsSamples
 		&& Mesh.Vertices.Num() <= MaxInputVertices && Mesh.Indices.Num() <= MaxOwnedIndices
 		&& Mesh.Indices.Num() % 3 == 0 && Source.PositiveOwnerEdges.Num() <= MaxCandidateTriangles
@@ -745,22 +745,36 @@ FVoxelLandError VoxelLandM7Seams::BuildVerticalFace(const FVoxelLandM7SeamMesh& 
 	TFunctionRef<FVoxelLandError(TConstArrayView<FVoxelLandM7NormalAnchor>, FVoxelLandM7NormalFrameBatch&)> EvaluateFrames,
 	TFunctionRef<bool()> IsCancelled, FVoxelLandM7SeamPatch& OutPatch)
 {
+	if (Fine.Num() != 4)
+	{
+		return Reject(TEXT("M7 vertical seam requires four fine children"));
+	}
+	const FVoxelLandM7SeamMesh* Children[] = {&Fine[0], &Fine[1], &Fine[2], &Fine[3]};
+	return BuildVerticalFace(Coarse, Children, Face, EvaluateFrames, IsCancelled, OutPatch);
+}
+
+FVoxelLandError VoxelLandM7Seams::BuildVerticalFace(const FVoxelLandM7SeamMesh& Coarse,
+	TConstArrayView<const FVoxelLandM7SeamMesh*> Fine, const FVoxelLandM7VerticalFace& Face,
+	TFunctionRef<FVoxelLandError(TConstArrayView<FVoxelLandM7NormalAnchor>, FVoxelLandM7NormalFrameBatch&)> EvaluateFrames,
+	TFunctionRef<bool()> IsCancelled, FVoxelLandM7SeamPatch& OutPatch)
+{
 	if (IsCancelled())
 	{
 		return Cancel();
 	}
-	if (Face.Axis > 1 || Fine.Num() != 4 || Coarse.Key.LOD != 1
+	if (Face.Axis > 1 || Fine.Num() != 4 || Coarse.Key.LOD == 0 || Coarse.Key.LOD > 5
 		|| Coarse.BaseVoxelSizeCm < 1 || Coarse.BaseVoxelSizeCm > 134217
-		|| !ValidSource(Coarse, 1, Coarse.BaseVoxelSizeCm))
+		|| !ValidSource(Coarse, Coarse.Key.LOD, Coarse.BaseVoxelSizeCm, Coarse.bUnlimitedM4))
 	{
-		return Reject(TEXT("M7 requires one LOD1 vertical face and four LOD0 children"));
+		return Reject(TEXT("M7 requires a coarse vertical face and four adjacent-level children"));
 	}
 	FCut Cut;
 	Cut.Axis = Face.Axis;
 	Cut.Across = uint8(1 - Face.Axis);
 	Cut.CoarseSide = Face.bPositiveFace ? -1 : 1;
 	Cut.BaseSpacing = double(Coarse.BaseVoxelSizeCm);
-	const double CoarseSpacing = 2.0 * Cut.BaseSpacing;
+	const double CoarseSpacing = double(1 << Coarse.Key.LOD) * Cut.BaseSpacing;
+	const double FineSpacing = CoarseSpacing * 0.5;
 	Cut.Width = 32.0 * CoarseSpacing;
 	Cut.Grid = VoxelLandMeshCoordinates::Grid(float(CoarseSpacing));
 	Cut.Clearance = FMath::Max(4.0, FMath::CeilToDouble(Cut.BaseSpacing * 0.0001 / Cut.Grid)) * Cut.Grid;
@@ -782,12 +796,12 @@ FVoxelLandError VoxelLandM7Seams::BuildVerticalFace(const FVoxelLandM7SeamMesh& 
 	uint8 ChildMask = 0;
 	for (int32 Index = 0; Index < Fine.Num(); ++Index)
 	{
-		const FVoxelLandM7SeamMesh& Child = Fine[Index];
-		if (!ValidSource(Child, 0, Coarse.BaseVoxelSizeCm))
+		const FVoxelLandM7SeamMesh* Child = Fine[Index];
+		if (!Child || !ValidSource(*Child, uint8(Coarse.Key.LOD - 1), Coarse.BaseVoxelSizeCm, Coarse.bUnlimitedM4))
 		{
 			return Reject(TEXT("Invalid fine terrain input for M7 vertical seam"));
 		}
-		const FIntVector Offset = Child.Key.Coordinate - BaseChild;
+		const FIntVector Offset = Child->Key.Coordinate - BaseChild;
 		const int32 Across = Offset[Cut.Across];
 		if (Offset[Cut.Axis] != (Face.bPositiveFace ? 2 : -1) || Across < 0 || Across > 1
 			|| Offset.Z < 0 || Offset.Z > 1)
@@ -800,7 +814,7 @@ FVoxelLandError VoxelLandM7Seams::BuildVerticalFace(const FVoxelLandM7SeamMesh& 
 			return Reject(TEXT("Duplicate fine terrain child in M7 vertical seam"));
 		}
 		ChildMask |= Bit;
-		SetParticipant(FineWork[Index], Child, Cut, -Cut.CoarseSide, Cut.BaseSpacing, Across == 1, Offset.Z == 1);
+		SetParticipant(FineWork[Index], *Child, Cut, -Cut.CoarseSide, FineSpacing, Across == 1, Offset.Z == 1);
 	}
 
 	TArray<FSegment> CoarseTrace;
@@ -825,10 +839,10 @@ FVoxelLandError VoxelLandM7Seams::BuildVerticalFace(const FVoxelLandM7SeamMesh& 
 		{
 			return Reject(TEXT("M7 cannot prove the absent vertical rim is empty"));
 		}
-		for (const FVoxelLandM7SeamMesh& Child : Fine)
+		for (const FVoxelLandM7SeamMesh* Child : Fine)
 		{
-			if (Child.Classification != Classification || !Child.Terrain.Indices.IsEmpty()
-				|| !Child.PositiveOwnerIndices.IsEmpty())
+			if (Child->Classification != Classification || !Child->Terrain.Indices.IsEmpty()
+				|| !Child->PositiveOwnerIndices.IsEmpty())
 			{
 				return Reject(TEXT("M7 cannot prove the absent fine vertical rim is empty"));
 			}

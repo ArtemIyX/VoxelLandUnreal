@@ -32,7 +32,9 @@ public:
 		FVoxelLandMeshData& First, FVoxelLandMeshData& Second);
 
 private:
-	static constexpr int64 MaxBaseCell = int64(1) << 26;
+	// The local mesh envelope stays inside 2^27 base cells. Logical doubles
+	// retain at least 25 fractional bits here, comfortably finer than Q16.
+	static constexpr int64 MaxBaseCell = int64(1) << 27;
 	static constexpr int32 FractionOne = 1 << 16;
 	static constexpr double GradientToleranceSquared = 1.e-12;
 

@@ -1,6 +1,8 @@
 #include "Generation/VoxelLandGenerator.h"
 
 #include "Data/Structs/VoxelLandM7NormalFrameBatch.h"
+#include "Generation/VoxelLandM7CompletedBox.h"
+#include "Generation/VoxelLandM7LocalHeightSource.h"
 #include "Generation/VoxelLandM7NormalFrames.h"
 
 FVoxelLandError FVoxelLandGenerator::GenerateM7NormalFrames(TConstArrayView<FVoxelLandM7NormalAnchor> Anchors,
@@ -15,9 +17,9 @@ FVoxelLandError FVoxelLandGenerator::GenerateM7NormalFrames(TConstArrayView<FVox
 	{
 		return {EVoxelLandErrorCode::InvalidContext, TEXT("Shared normal worker belongs to a different generator or thread")};
 	}
-	if (!SupportsM7FiniteSource())
+	if (!SupportsM7CompletedField())
 	{
-		return {EVoxelLandErrorCode::UnsupportedLod, TEXT("Shared terrain normals require ordinary finite M4 with M6 disabled")};
+		return {EVoxelLandErrorCode::UnsupportedLod, TEXT("Shared terrain normals require ordinary finite or local M4")};
 	}
 	if (Anchors.Num() > FFrames::MaxAnchorsPerBatch)
 	{
@@ -26,8 +28,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateM7NormalFrames(TConstArrayView<FVox
 
 	TMap<FInt64Vector, int32> Cells;
 	Cells.Reserve(FMath::Min(Anchors.Num(), FFrames::MaxStencilCellsPerBatch));
-	TArray<FInt64Vector> UniqueCells;
+	TArray<FVoxelLandM7CompletedBox> UniqueCells;
 	UniqueCells.Reserve(FMath::Min(Anchors.Num(), FFrames::MaxStencilCellsPerBatch));
+	constexpr int64 MaxNormalWork = 16 * 1024 * 1024;
+	int64 Work = 0;
 	TArray<int32> TileForAnchor;
 	TileForAnchor.Reserve(Anchors.Num());
 	for (const FVoxelLandM7NormalAnchor& Anchor : Anchors)
@@ -49,15 +53,24 @@ FVoxelLandError FVoxelLandGenerator::GenerateM7NormalFrames(TConstArrayView<FVox
 		{
 			return {EVoxelLandErrorCode::InvalidParameter, TEXT("Shared terrain normals exceed the unique stencil budget")};
 		}
-		if (const FVoxelLandError Error = ValidateM7FiniteBox(Anchor.BaseCell - FInt64Vector(1), FFrames::StencilAxis))
+		FVoxelLandM7CompletedBox Box;
+		if (const FVoxelLandError Error = PlanM7CompletedBox(Anchor.BaseCell - FInt64Vector(1), FFrames::StencilAxis, Box))
 		{
 			return Error;
 		}
-		const int32 Index = UniqueCells.Add(Anchor.BaseCell);
+		Work += Box.Work;
+		if (Work > MaxNormalWork)
+		{
+			return {EVoxelLandErrorCode::InvalidParameter, TEXT("Shared terrain normal sampling exceeds the field work budget")};
+		}
+		const int32 Index = UniqueCells.Add(Box);
 		Cells.Add(Anchor.BaseCell, Index);
 		TileForAnchor.Add(Index);
 	}
 
+	FVoxelLandM7LocalHeightSource LocalSource(M4Unlimited.Get());
+	TFunctionRef<bool(int64, int64, int32&)> LocalHeight(LocalSource);
+	TFunctionRef<bool(int64, int64, int32&)>* Height = M4Unlimited ? &LocalHeight : nullptr;
 	TArray<TArray<int16>> Stencils;
 	Stencils.SetNum(UniqueCells.Num());
 	for (int32 Index = 0; Index < UniqueCells.Num(); ++Index)
@@ -66,10 +79,9 @@ FVoxelLandError FVoxelLandGenerator::GenerateM7NormalFrames(TConstArrayView<FVox
 		{
 			return {EVoxelLandErrorCode::Cancelled, TEXT("Shared terrain normal stencil reads cancelled")};
 		}
-		if (const FVoxelLandError Error = GenerateM4TiledBaselineBox(
-				UniqueCells[Index] - FInt64Vector(1), FFrames::StencilAxis, Worker, Stencils[Index], IsCancelled))
+		if (const FVoxelLandError Error = ReadM7CompletedBox(UniqueCells[Index], Worker, Stencils[Index], IsCancelled, Height))
 		{
-			return Error;
+			return LocalSource.PreferSourceError(Error);
 		}
 	}
 

@@ -14,11 +14,17 @@ struct FVoxelLandM7SeamMesh
 {
 	FVoxelLandChunkKey Key;
 	int64 BaseVoxelSizeCm = 0;
+	bool bUnlimitedM4 = false;
 	FVoxelLandMeshData Terrain;
 	TArray<uint32> PositiveOwnerIndices;
 	// X-fastest 33^3 lower endpoint, then edge axis. Same ID for both halves.
 	TArray<uint32> PositiveOwnerEdges;
 	EVoxelLandChunkClassification Classification = EVoxelLandChunkClassification::NeedsSamples;
+	// Uniform sign in the full stored face slab [-1,1] or [31,33] on that axis.
+	EVoxelLandChunkClassification FaceSigns[6] = {
+		EVoxelLandChunkClassification::NeedsSamples, EVoxelLandChunkClassification::NeedsSamples,
+		EVoxelLandChunkClassification::NeedsSamples, EVoxelLandChunkClassification::NeedsSamples,
+		EVoxelLandChunkClassification::NeedsSamples, EVoxelLandChunkClassification::NeedsSamples};
 };
 
 struct FVoxelLandM7VerticalFace
@@ -57,6 +63,10 @@ namespace VoxelLandM7Seams
 // All streams are replaced together on success. Failure leaves OutPatch unchanged.
 VOXELLANDALGO_API FVoxelLandError BuildVerticalFace(const FVoxelLandM7SeamMesh& Coarse,
 	TConstArrayView<FVoxelLandM7SeamMesh> Fine, const FVoxelLandM7VerticalFace& Face,
+	TFunctionRef<FVoxelLandError(TConstArrayView<FVoxelLandM7NormalAnchor>, FVoxelLandM7NormalFrameBatch&)> EvaluateFrames,
+	TFunctionRef<bool()> IsCancelled, FVoxelLandM7SeamPatch& OutPatch);
+VOXELLANDALGO_API FVoxelLandError BuildVerticalFace(const FVoxelLandM7SeamMesh& Coarse,
+	TConstArrayView<const FVoxelLandM7SeamMesh*> Fine, const FVoxelLandM7VerticalFace& Face,
 	TFunctionRef<FVoxelLandError(TConstArrayView<FVoxelLandM7NormalAnchor>, FVoxelLandM7NormalFrameBatch&)> EvaluateFrames,
 	TFunctionRef<bool()> IsCancelled, FVoxelLandM7SeamPatch& OutPatch);
 }

@@ -7,6 +7,7 @@
 #include "Generation/VoxelLandM5SupportPlane.h"
 #include "Generation/VoxelLandM5SupportMargin.h"
 #include "Generation/VoxelLandM5TriangleSupport.h"
+#include "Generation/VoxelLandM5WidePiecewise.h"
 
 class FVoxelLandM5PiecewiseSupportInternals final
 {
@@ -199,7 +200,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PiecewiseSupport::CertifyLinearContactWith
 	}
 	if (!Scale)
 	{
-		return I::Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Exact local representation unavailable"));
+		return VoxelLand::M5::WidePiecewise::Certify(StartQ, EndQ, RadiusQ18, HeightQ18, SkinQ18, MarginQ18,
+			MaxSlopeNumerator, MaxSlopeDenominator, Triangles, Budget, IsCancelled);
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	if (!Budget->TryReserveBytes(4096 + Count * int64(sizeof(I::FFace) + sizeof(FVoxelLandM5FloorTriangleCm)), Lease))
@@ -239,11 +241,15 @@ FVoxelLandM5Diagnostic VoxelLand::M5::PiecewiseSupport::CertifyLinearContactWith
 		F.NX /= Divisor;
 		F.NY /= Divisor;
 		F.NZ /= Divisor;
-		if (FMath::Abs(F.NX) > 32767 || FMath::Abs(F.NY) > 32767 || F.NZ > 32767
-			|| (F.NX * F.NX + F.NY * F.NY) * int64(MaxSlopeDenominator) * MaxSlopeDenominator
-				   > F.NZ * F.NZ * int64(MaxSlopeNumerator) * MaxSlopeNumerator)
+		if (FMath::Abs(F.NX) > 32767 || FMath::Abs(F.NY) > 32767 || F.NZ > 32767)
 		{
-			return I::Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Face slope or normal unsupported"));
+			return VoxelLand::M5::WidePiecewise::Certify(StartQ, EndQ, RadiusQ18, HeightQ18, SkinQ18, MarginQ18,
+				MaxSlopeNumerator, MaxSlopeDenominator, Triangles, Budget, IsCancelled);
+		}
+		if ((F.NX * F.NX + F.NY * F.NY) * int64(MaxSlopeDenominator) * MaxSlopeDenominator
+			> F.NZ * F.NZ * int64(MaxSlopeNumerator) * MaxSlopeNumerator)
+		{
+			return I::Error(EVoxelLandM5ErrorCode::Unproven, TEXT("Face slope exceeds limit"));
 		}
 		Faces.Add(F);
 		FVoxelLandM5FloorTriangleCm P = F.Triangle;

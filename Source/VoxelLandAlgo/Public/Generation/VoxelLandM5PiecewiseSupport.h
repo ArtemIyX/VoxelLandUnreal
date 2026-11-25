@@ -10,9 +10,9 @@ class FVoxelLandM5Budget;
 
 namespace VoxelLand::M5::PiecewiseSupport
 {
-// Scratch certificate only. Inputs require exact renderer coordinates and a
-// lossless local integer representation within +/-256 units, with Q18 data
-// divided by one exact power of two. At most 256 faces and depth 8 are supported;
+// Scratch certificate only. Inputs require exact renderer coordinates. A fast
+// lossless local proof falls back to checked 512-bit Q18 predicates. At most
+// 256 faces and depth 8 are supported;
 // overflow or unresolved intervals return Unproven. Both variants prove support
 // contact and nominal nonpenetration. The nominal variant does not establish a
 // lower-cap exemption. WithMargin additionally bounds every selected plane's

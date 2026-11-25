@@ -3,6 +3,7 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CheckedMath.h"
+#include "Generation/VoxelLandM5PocketSurfaceColumns.h"
 
 class FVoxelLandM5CarveMasksInternals final
 {
@@ -28,6 +29,18 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 	bool bPocketEnabled, int64 MinPocketDepthCm, int64 MaxPocketDepthCm, bool bWaterPolicySatisfied,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks)
+{
+	return BuildImpl(Size, OriginCm, SpacingCm, Start, Count, Baseline, Protection, EntranceAuthorized,
+		RoofThicknessCm, bPocketEnabled, MinPocketDepthCm, MaxPocketDepthCm, bWaterPolicySatisfied,
+		Budget, IsCancelled, OutMasks, nullptr);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const FVoxelLandM5PointCm& OriginCm,
+	int64 SpacingCm, FIntVector Start, FIntVector Count, TConstArrayView<int16> Baseline,
+	TConstArrayView<uint8> Protection, TConstArrayView<uint8> EntranceAuthorized, int64 RoofThicknessCm,
+	bool bPocketEnabled, int64 MinPocketDepthCm, int64 MaxPocketDepthCm, bool bWaterPolicySatisfied,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks, const FVoxelLandM5PocketSurfaceColumns* Columns)
 {
 	using namespace VoxelLand::M5::CheckedMath;
 	constexpr int64 Limit = 1048576;
@@ -90,7 +103,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 	if (!TryMultiply(Radius, 2, Side) || !TryAdd(Side, 2, Side) || !TryMultiplyNonNegative(Side, Side, CellsXY)
 		|| !TryMultiplyNonNegative(CellsXY, Side, Cells) || !TryMultiplyNonNegative(Cells, 12, RoofWork)
 		|| (bPocketEnabled
-			&& (!TryMultiplyNonNegative(25, Size.Z, PocketWork) || !TryMultiplyNonNegative(PocketWork, 3, PocketWork)))
+			&& (!TryMultiplyNonNegative(25, Columns ? 1 : Size.Z, PocketWork) || !TryMultiplyNonNegative(PocketWork, 3, PocketWork)))
 		|| !TryMultiplyNonNegative(Outputs, 3, Bytes) || !TryAdd(Bytes, 4096, Bytes))
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
@@ -201,6 +214,23 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 				if (bPocketEnabled)
 				{
 					int64 Lowest = MAX_int64, Highest = MIN_int64;
+					if (Columns)
+					{
+						if (OriginCm.X % SpacingCm || OriginCm.Y % SpacingCm || OriginCm.Z % SpacingCm)
+							return FVoxelLandM5CarveMasksInternals::CarveMasksError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Pocket window is off lattice"));
+						for (int64 DY = -2; DY <= 2; ++DY)
+							for (int64 DX = -2; DX <= 2; ++DX)
+							{
+								int64 Lo = 0, Hi = 0;
+								if (!Columns->GetSurfaceBounds(OriginCm.X / SpacingCm + X + DX, OriginCm.Y / SpacingCm + Y + DY, Lo, Hi))
+									return FVoxelLandM5CarveMasksInternals::CarveMasksError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Pocket column tile is incomplete"));
+								Lowest = FMath::Min(Lowest, Lo); Highest = FMath::Max(Highest, Hi);
+							}
+						const int64 SampleZ = OriginCm.Z + Z * SpacingCm;
+						bDepthAllowed = Lowest - SampleZ >= MinPocketDepthCm && Highest - SampleZ <= MaxPocketDepthCm;
+					}
+					else
+					{
 					for (int64 DY = -2; DY <= 2; ++DY)
 					{
 						for (int64 DX = -2; DX <= 2; ++DX)
@@ -239,6 +269,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::Build(FIntVector Size, const FVox
 					const int64 LowerDepth = (Lowest - Z) * SpacingCm;
 					const int64 UpperDepth = (Highest - Z) * SpacingCm;
 					bDepthAllowed = LowerDepth >= MinPocketDepthCm && UpperDepth <= MaxPocketDepthCm;
+					}
 				}
 				Scratch->Protected[Dest] = bProtected ? 1 : 0;
 				Scratch->NetworkAllowed[Dest] = !bProtected && (!bRoof || EntranceAuthorized[Source]) ? 1 : 0;

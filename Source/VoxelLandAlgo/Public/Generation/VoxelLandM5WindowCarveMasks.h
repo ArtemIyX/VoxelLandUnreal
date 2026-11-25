@@ -10,6 +10,9 @@ class FVoxelLandM5Budget;
 class FVoxelLandM5CandidateResult;
 class FVoxelLandM5CarveMasks;
 class FVoxelLandM5ProtectionGrid;
+class FVoxelLandM5BoundBaseline;
+class FVoxelLandM5InfluenceSet;
+class FVoxelLandM5PocketSurfaceColumns;
 
 namespace VoxelLand::M5::WindowCarveMasks
 {
@@ -28,6 +31,12 @@ VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& S
 	const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+// Requires exact bound owners and complete streamed columns. Failure preserves output.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildOwned(const FVoxelLandM5BoundBaseline& Baseline,
+	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5PocketSurfaceColumns& Columns,
+	const FVoxelLandM5BaselineWindow& Window, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	FIntVector Start, FIntVector Count, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
 // Compatibility overload for network candidates.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
 	const FVoxelLandM5BaselineWindow& Window,

@@ -2,6 +2,11 @@
 
 #include "Data/Structs/VoxelLandM5CaveSettings.h"
 #include "Generation/VoxelLandM5BaselineWindow.h"
+#include "Data/Structs/VoxelLandM5WorldSnapshot.h"
+#include "Generation/VoxelLandM5BoundBaseline.h"
+#include "Generation/VoxelLandM5InfluenceSet.h"
+#include "Generation/VoxelLandM5PocketSurfaceColumns.h"
+#include "Generation/VoxelLandM5ValidatedDefinition.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5CandidateResult.h"
@@ -11,6 +16,15 @@
 #include "Generation/VoxelLandM5ProtectionGrid.h"
 #include "Generation/VoxelLandM5ProtectionSamples.h"
 
+class FVoxelLandM5OwnedWindowCarveMasks final
+{
+public:
+	static FVoxelLandM5Diagnostic Build(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+		const FVoxelLandM5BaselineWindow& Window, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+		const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks, const FVoxelLandM5PocketSurfaceColumns* Columns);
+};
 class FVoxelLandM5WindowCarveMasksInternals final
 {
 public:
@@ -42,6 +56,16 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::Build(const FVoxelLandM5
 	const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks)
+{
+	return FVoxelLandM5OwnedWindowCarveMasks::Build(Settings, WorldSeed, Window, Candidate, Protection, Start, Count, Budget, IsCancelled, OutMasks, nullptr);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5OwnedWindowCarveMasks::Build(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5BaselineWindow& Window,
+	TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	const FVoxelLandM5ProtectionGrid* Protection, FIntVector Start, FIntVector Count,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks, const FVoxelLandM5PocketSurfaceColumns* Columns)
 {
 	using namespace VoxelLand::M5::CheckedMath;
 	using E = EVoxelLandM5ErrorCode;
@@ -169,8 +193,23 @@ FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::Build(const FVoxelLandM5
 			}
 		}
 	}
-	return FVoxelLandM5CarveMasks::Build(Size, Window.GetOriginCm(), Spacing, Start, Count, Window.GetDensity(),
+	return FVoxelLandM5CarveMasks::BuildImpl(Size, Window.GetOriginCm(), Spacing, Start, Count, Window.GetDensity(),
 		FullProtection, FullEntrance, Settings.RoofThicknessCm,
 		Settings.Pockets.bEnabled && Settings.Pockets.AmplitudeCm != 0,
-		Settings.Pockets.MinDepthCm, Settings.Pockets.MaxDepthCm, true, Budget, IsCancelled, OutMasks);
+		Settings.Pockets.MinDepthCm, Settings.Pockets.MaxDepthCm, true, Budget, IsCancelled, OutMasks, Columns);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::WindowCarveMasks::BuildOwned(const FVoxelLandM5BoundBaseline& Baseline,
+	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5PocketSurfaceColumns& Columns,
+	const FVoxelLandM5BaselineWindow& Window, TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	FIntVector Start, FIntVector Count, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks)
+{
+	if (&Baseline.GetDefinition() != &Influence.GetDefinition() || !Baseline.UsesBudget(*Budget)
+		|| !Influence.UsesBudget(*Budget) || !Columns.Matches(Baseline, Influence, *Budget)
+		|| &Window.GetGenerator() != &Baseline.GetGenerator() || !Window.IsOwnedBy(*Budget))
+		return FVoxelLandM5WindowCarveMasksInternals::Error(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Owned mask source mismatch"));
+	const auto& Snapshot = Baseline.GetDefinition().GetSnapshot();
+	return FVoxelLandM5OwnedWindowCarveMasks::Build(Snapshot.Caves, Snapshot.Base.Seed, Window, Candidate,
+		Baseline.GetDefinition().GetProtection(), Start, Count, Budget, IsCancelled, OutMasks, &Columns);
 }

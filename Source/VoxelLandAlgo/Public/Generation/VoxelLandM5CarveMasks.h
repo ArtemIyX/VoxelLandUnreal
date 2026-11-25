@@ -7,6 +7,7 @@
 
 class FVoxelLandM5Budget;
 class FVoxelLandM5BudgetLease;
+class FVoxelLandM5PocketSurfaceColumns;
 
 // Immutable X-fastest output; the retained admission outlives all arrays.
 class VOXELLANDALGO_API FVoxelLandM5CarveMasks final
@@ -52,6 +53,13 @@ public:
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
 
 private:
+	friend class FVoxelLandM5OwnedWindowCarveMasks;
+	static FVoxelLandM5Diagnostic BuildImpl(FIntVector Size, const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm,
+		FIntVector Start, FIntVector Count, TConstArrayView<int16> Baseline, TConstArrayView<uint8> Protection,
+		TConstArrayView<uint8> EntranceAuthorized, int64 RoofThicknessCm, bool bPocketEnabled, int64 MinPocketDepthCm,
+		int64 MaxPocketDepthCm, bool bWaterPolicySatisfied, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks,
+		const FVoxelLandM5PocketSurfaceColumns* Columns);
 	explicit FVoxelLandM5CarveMasks(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	TArray<uint8> NetworkAllowed;

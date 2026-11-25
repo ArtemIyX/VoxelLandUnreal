@@ -20,14 +20,16 @@ public:
 	}
 };
 
-FVoxelLandM5Diagnostic VoxelLand::M5::MultiRouteChecks::CheckAll(const FVoxelLandM5CaveSettings& Settings,
+static FVoxelLandM5Diagnostic CheckAllInternal(const FVoxelLandM5CaveSettings& Settings,
 	int64 WorldSeed, const FVoxelLandM5RegionCoord& Region,
 	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	TConstArrayView<FVoxelLandChunkData> Chunks, const FIntVector& MinInclusive, const FIntVector& MaxExclusive,
 	int32 VoxelSizeCm, bool bUnlimitedM4, int64 ContactSkinCm,
 	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> Selections,
-	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	const FVoxelLandM5ScratchMesh* RetainedMesh)
 {
+	using namespace VoxelLand::M5;
 	using E = EVoxelLandM5ErrorCode;
 	if (IsCancelled())
 	{
@@ -112,10 +114,14 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiRouteChecks::CheckAll(const FVoxelLan
 			}
 			const FVoxelLandM5RouteLeg& Leg = Route.Legs[LegIndex];
 			// degrees/90 is a conservative lower bound for tan(degrees) on [0,90).
-			const auto Check = MultiChunkRoute::Certify(Chunks, MinInclusive, MaxExclusive, VoxelSizeCm, bUnlimitedM4,
-				Leg.StartFeetCm, Leg.EndFeetCm, Settings.Capsule.RadiusCm, Settings.Capsule.StandingHeightCm,
-				Settings.Capsule.ClearanceMarginCm, ContactSkinCm, Settings.Capsule.MaxSlopeDegrees, 90,
-				Selected->SupportFaces, Budget, IsCancelled);
+			const auto Check = RetainedMesh
+				? MultiChunkRoute::Certify(*RetainedMesh, Leg.StartFeetCm, Leg.EndFeetCm,
+					Settings.Capsule.RadiusCm, Settings.Capsule.StandingHeightCm, Settings.Capsule.ClearanceMarginCm,
+					ContactSkinCm, Settings.Capsule.MaxSlopeDegrees, 90, Selected->SupportFaces, Budget, IsCancelled)
+				: MultiChunkRoute::Certify(Chunks, MinInclusive, MaxExclusive, VoxelSizeCm, bUnlimitedM4,
+					Leg.StartFeetCm, Leg.EndFeetCm, Settings.Capsule.RadiusCm, Settings.Capsule.StandingHeightCm,
+					Settings.Capsule.ClearanceMarginCm, ContactSkinCm, Settings.Capsule.MaxSlopeDegrees, 90,
+					Selected->SupportFaces, Budget, IsCancelled);
 			if (Check.Code != E::None)
 			{
 				return Check;
@@ -128,4 +134,27 @@ FVoxelLandM5Diagnostic VoxelLand::M5::MultiRouteChecks::CheckAll(const FVoxelLan
 			E::Cancelled, TEXT("Route checks cancelled"));
 	}
 	return FVoxelLandM5Diagnostic();
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::MultiRouteChecks::CheckAll(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5RegionCoord& Region,
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TConstArrayView<FVoxelLandChunkData> Chunks, const FIntVector& MinInclusive, const FIntVector& MaxExclusive,
+	int32 VoxelSizeCm, bool bUnlimitedM4, int64 ContactSkinCm,
+	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> Selections,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
+	return CheckAllInternal(Settings, WorldSeed, Region, Candidate, Chunks, MinInclusive, MaxExclusive,
+		VoxelSizeCm, bUnlimitedM4, ContactSkinCm, Selections, Budget, IsCancelled, nullptr);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::MultiRouteChecks::CheckAll(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5RegionCoord& Region,
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	const FVoxelLandM5ScratchMesh& Mesh, int64 ContactSkinCm,
+	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> Selections,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
+	return CheckAllInternal(Settings, WorldSeed, Region, Candidate, {}, FIntVector::ZeroValue,
+		FIntVector::ZeroValue, 0, false, ContactSkinCm, Selections, Budget, IsCancelled, &Mesh);
 }

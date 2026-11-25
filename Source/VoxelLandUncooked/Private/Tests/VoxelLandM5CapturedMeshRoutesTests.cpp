@@ -23,6 +23,7 @@
 #include "World/VoxelLandM5CapturedBaseline.h"
 #include "World/VoxelLandM5CapturedFiniteCandidate.h"
 #include "World/VoxelLandM5CapturedFiniteScratch.h"
+#include "World/VoxelLandM5FiniteBaseScratch.h"
 #include "World/VoxelLandM5CapturedScratchChunks.h"
 #include "World/VoxelLandM5CapturedMeshRoutes.h"
 class FVoxelLandM5CapturedRoutesFixture final
@@ -89,9 +90,39 @@ public:
 class FVoxelLandM5CapturedMeshRoutesFixture final
 {
 public:
+	// Controlled fixture mutations occur only after previous mesh readers finish.
+	static TArray<int16> SetWall(const FVoxelLandM5ScratchChunks& Source)
+	{
+		TArray<int16> Saved;
+		auto& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
+		for (auto& Chunk : Mutable.Chunks)
+			for (int32 Z = 12; Z <= 14; ++Z)
+				for (int32 Y = 4; Y <= 6; ++Y)
+				{
+					int16& Density = Chunk.Density[(6 + 1) + 35 * ((Y + 1) + 35 * (Z + 1))];
+					Saved.Add(Density);
+					Density = -100;
+				}
+		return Saved;
+	}
+	static void RestoreWall(const FVoxelLandM5ScratchChunks& Source, const TArray<int16>& Saved)
+	{
+		int32 Index = 0;
+		auto& Mutable = const_cast<FVoxelLandM5ScratchChunks&>(Source);
+		for (auto& Chunk : Mutable.Chunks)
+			for (int32 Z = 12; Z <= 14; ++Z)
+				for (int32 Y = 4; Y <= 6; ++Y)
+					Chunk.Density[(6 + 1) + 35 * ((Y + 1) + 35 * (Z + 1))] = Saved[Index++];
+	}
+	static void ShiftPlan(const FVoxelLandM5CandidateResult& Source, int64 Delta)
+	{
+		auto& Plan = const_cast<FVoxelLandM5CandidateResult&>(Source).Plan;
+		for (auto& Chamber : Plan.Chambers) Chamber.CenterCm.X += Delta;
+		for (auto& Segment : Plan.Segments) { Segment.StartCm.X += Delta; Segment.EndCm.X += Delta; }
+	}
 	static TSharedPtr<const FVoxelLandM5CapturedFiniteCandidate, ESPMode::ThreadSafe> Make(
 		TSharedRef<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> Baseline,
-		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget)
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, bool bSeam = false)
 	{
 		const FVoxelLandM5WorldSnapshot& Snapshot = Baseline->GetCaptured().GetCapture().GetSnapshot();
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> PlanLease, WrapperLease;
@@ -104,13 +135,13 @@ public:
 		FVoxelLandM5Chamber A;
 		A.bHasId = true;
 		A.Id = 1;
-		A.CenterCm.X = 475;
-		A.CenterCm.Y = 530;
+		A.CenterCm.X = bSeam ? -150 : 475;
+		A.CenterCm.Y = bSeam ? 1450 : 530;
 		A.CenterCm.Z = 1150;
 		A.RadiusCm = 100;
 		FVoxelLandM5Chamber B = A;
 		B.Id = 2;
-		B.CenterCm.X = 675;
+		B.CenterCm.X = bSeam ? 150 : 675;
 		Plan.Chambers = {A, B};
 		FVoxelLandM5Connection Connection;
 		Connection.bHasId = true;
@@ -175,7 +206,7 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 	Definition->Common.Caves.Topology.MaxChamberRadiusCm = 100;
 	Definition->Common.Caves.Topology.MinTunnelRadiusCm = 100;
 	Definition->Common.Caves.Topology.MaxTunnelRadiusCm = 100;
-	Definition->Common.Caves.Capsule.ClearanceMarginCm = 0;
+	Definition->Common.Caves.Capsule.ClearanceMarginCm = 10;
 	Definition->Common.Caves.Pockets.LatticeSpacingCm = 16;
 	Definition->Common.Caves.Pockets.Salt = 0x0102030405060708ll;
 	Definition->Common.Caves.Pockets.ThresholdQ16 = 0;
@@ -186,6 +217,8 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 	Definition->Common.Caves.Topology.MinLoops = 0;
 	Definition->Common.Caves.Topology.MaxLoops = 0;
 	Definition->Common.Caves.Topology.EntranceCount = 0;
+	// Mode zero admits the extra adversarial re-meshing checks; the positive
+	// one- and two-chunk paths below use the unmodified default work cap.
 	Definition->Common.Caves.Limits.MaxValidationWork = 1000000000;
 	Definition->Finite.bGlobalErosion = false;
 
@@ -202,8 +235,8 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 	}
 	if (ProcessBudget->GetInt() != 256)
 	{
-		AddWarning(TEXT("Captured chunks fixture skipped: M4 budget is not 256 MiB"));
-		return true;
+		AddError(TEXT("Captured chunks fixture requires the M4 process budget to be 256 MiB"));
+		return false;
 	}
 	const auto Factory = [](const FVoxelLandGenerator& Generator,
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
@@ -216,15 +249,21 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 		return Result;
 	};
 	const auto Never = [] { return false; };
-	bool bNetwork = false, bPockets = false, bHalo = false, bWrongMode = false, bCancelled = false, bLifetime = false;
+	bool bNetwork = false, bHalo = false, bWrongMode = false, bCancelled = false, bLifetime = false;
 	bool bMesh = false, bMismatch = false, bBounds = false, bRouteCancelled = false, bConnectedRoute = false;
-	for (int32 Mode = 0; Mode < 1; ++Mode)
+	bool bSupport = false, bSupportCancelled = false, bMiddleObstruction = false, bOmittedOwner = false;
+	bool bDefaultCapture = false, bSeamCapture = false, bBoxCancel = false;
+	bool bBoxForeign = false, bBoxThread = false, bBoxInvalid = false;
+	for (int32 Mode = 0; Mode < 3; ++Mode)
 	{
-		Definition->Common.Caves.bEnabled = Mode == 0;
-		Definition->Common.Caves.Pockets.bEnabled = Mode == 1;
-		Definition->Common.Caves.Pockets.AmplitudeCm = Mode == 1 ? 1000 : 0;
+		Definition->Common.Caves.bEnabled = true;
+		Definition->Common.Caves.Pockets.bEnabled = false;
+		Definition->Common.Caves.Pockets.AmplitudeCm = 0;
+		Definition->Common.Caves.Limits.MaxValidationWork = Mode == 0
+			? 1000000000 : FVoxelLandM5ResourceLimits().MaxValidationWork;
 		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
-		if (!FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 1000000000, Budget))
+		if (!FVoxelLandM5Budget::TryCreate(Definition->Common.Caves.Limits.MaxBytes,
+			Definition->Common.Caves.Limits.MaxValidationWork, Budget))
 		{
 			return false;
 		}
@@ -233,8 +272,8 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 		if (Admission.Code == EVoxelLandM5ErrorCode::BudgetExceeded
 			&& Admission.Message == TEXT("M4 preparation reservation unavailable"))
 		{
-			AddWarning(TEXT("Captured chunks fixture skipped: M4 process admission unavailable"));
-			return true;
+			AddError(TEXT("Captured chunks fixture requires an available M4 process admission"));
+			return false;
 		}
 		if (!TestTrue(FString::Printf(TEXT("captured source: %s"), *Admission.Message),
 			Admission.Code == EVoxelLandM5ErrorCode::None && Capture.IsValid()))
@@ -250,41 +289,75 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 				Failure = Result.Message;
 				return;
 			}
-			// Three chunks per axis include the extra carve-mask halo for chunk zero.
+			// Stored footprint plus three mask-neighborhood samples on each side.
+			// Seam case covers both X chunks using one exact captured baseline.
+			TUniquePtr<FVoxelLandWorkerContext> BoxWorker;
+			if (Scratch->GetScratch().GetGenerator().CreateWorker(BoxWorker) || !BoxWorker) return;
+			FVoxelLandM5PointCm BoxMin; BoxMin.X = Mode == 2 ? -36 : -4; BoxMin.Y = BoxMin.Z = -4;
+			const FIntVector BoxSize(Mode == 2 ? 73 : 41, 41, 41);
 			TSharedPtr<const FVoxelLandM5CapturedBaseline, ESPMode::ThreadSafe> Source;
-			Result = FVoxelLandM5CapturedBaseline::Build(Scratch.ToSharedRef(),
-				FIntVector(-1, -1, -1), FIntVector(2, 2, 2), 27, Never, Source);
+			Result = FVoxelLandM5CapturedBaseline::BuildBox(Scratch.ToSharedRef(), *BoxWorker,
+				BoxMin, BoxSize, Never, Source);
 			if (Result.Code != EVoxelLandM5ErrorCode::None || !Source)
 			{
 				Failure = Result.Message;
 				return;
 			}
-			TSharedPtr<const FVoxelLandM5CapturedFiniteCandidate, ESPMode::ThreadSafe> Candidate;
 			if (Mode == 0)
 			{
-				Candidate = FVoxelLandM5CapturedMeshRoutesFixture::Make(Source.ToSharedRef(), Budget.ToSharedRef());
-				if (!Candidate)
+				const auto Before = Source;
+				const auto CancelBox = FVoxelLandM5CapturedBaseline::BuildBox(Scratch.ToSharedRef(), *BoxWorker,
+					BoxMin, BoxSize, [] { return true; }, Source);
+				bBoxCancel = CancelBox.Code == EVoxelLandM5ErrorCode::Cancelled && Source == Before;
+				const auto InvalidBox = FVoxelLandM5CapturedBaseline::BuildBox(Scratch.ToSharedRef(), *BoxWorker,
+					BoxMin, FIntVector(0, 41, 41), Never, Source);
+				bBoxInvalid = InvalidBox.Code == EVoxelLandM5ErrorCode::InvalidInput && Source == Before;
+				FVoxelLandProgramDraft Draft;
+				Draft.RegisterCount = 1;
+				FVoxelLandInstruction Input, Store;
+				Input.Op = EVoxelLandOpcode::LoadZ; Store.Op = EVoxelLandOpcode::StoreDensity;
+				Draft.Instructions = {Input, Store};
+				TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+				FVoxelLandGeneratorSettings OtherSettings;
+				TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> OtherGenerator;
+				TUniquePtr<FVoxelLandWorkerContext> OtherWorker;
+				if (!FVoxelLandProgram::Validate(Draft, Program) && Program)
 				{
-					Failure = TEXT("Controlled connected candidate admission failed");
-					return;
+					OtherSettings.Program = Program;
+					if (!FVoxelLandGenerator::Create(OtherSettings, OtherGenerator) && OtherGenerator
+						&& !OtherGenerator->CreateWorker(OtherWorker) && OtherWorker)
+					{
+						int64 LiveBefore = 0, PeakBefore = 0, WorkBefore = 0, LiveAfter = 0, PeakAfter = 0, WorkAfter = 0;
+						Budget->GetUsage(LiveBefore, PeakBefore, WorkBefore);
+						const auto Foreign = FVoxelLandM5CapturedBaseline::BuildBox(Scratch.ToSharedRef(), *OtherWorker,
+							BoxMin, BoxSize, Never, Source);
+						Budget->GetUsage(LiveAfter, PeakAfter, WorkAfter);
+						bBoxForeign = Foreign.Code == EVoxelLandM5ErrorCode::InvalidInput && Source == Before
+							&& LiveBefore == LiveAfter && PeakBefore == PeakAfter && WorkBefore == WorkAfter;
+						const auto WrongThread = Async(EAsyncExecution::Thread, [&] {
+							return FVoxelLandM5CapturedBaseline::BuildBox(Scratch.ToSharedRef(), *BoxWorker, BoxMin, BoxSize, Never, Source);
+						}).Get();
+						Budget->GetUsage(LiveAfter, PeakAfter, WorkAfter);
+						bBoxThread = WrongThread.Code == EVoxelLandM5ErrorCode::InvalidInput && Source == Before
+							&& LiveBefore == LiveAfter && PeakBefore == PeakAfter && WorkBefore == WorkAfter;
+					}
 				}
 			}
+			TSharedPtr<const FVoxelLandM5CapturedFiniteCandidate, ESPMode::ThreadSafe> Candidate =
+				FVoxelLandM5CapturedMeshRoutesFixture::Make(Source.ToSharedRef(), Budget.ToSharedRef(), Mode == 2);
+			if (!Candidate)
+			{
+				Failure = TEXT("Controlled connected candidate admission failed");
+				return;
+			}
 			TSharedPtr<const FVoxelLandM5CapturedScratchChunks, ESPMode::ThreadSafe> Chunks;
-			if (Mode == 0)
-			{
-				Result = FVoxelLandM5CapturedScratchChunks::BuildNetwork(Candidate.ToSharedRef(),
-					FIntVector(0, 0, 0), FIntVector(1, 1, 1), 1, Never, Chunks);
-			}
-			else
-			{
-				Result = FVoxelLandM5CapturedScratchChunks::BuildPocketOnly(Source.ToSharedRef(),
-					FIntVector(0, 0, 0), FIntVector(1, 1, 1), 1, Never, Chunks);
-			}
+			Result = FVoxelLandM5CapturedScratchChunks::BuildNetwork(Candidate.ToSharedRef(),
+				FIntVector(Mode == 2 ? -1 : 0, 0, 0), FIntVector(1, 1, 1), Mode == 2 ? 2 : 1, Never, Chunks);
 			Failure = Result.Message;
 			const FVoxelLandM5WorldSnapshot& Snapshot = Capture->GetSnapshot();
 			const bool bMatches = Result.Code == EVoxelLandM5ErrorCode::None && Chunks
 				&& &Chunks->GetSource() == Source.Get() && Chunks->GetCandidate() == Candidate.Get()
-				&& Chunks->GetChunks().IsOwnedBy(*Budget) && Chunks->GetChunks().GetChunks().Num() == 1
+				&& Chunks->GetChunks().IsOwnedBy(*Budget) && Chunks->GetChunks().GetChunks().Num() == (Mode == 2 ? 2 : 1)
 				&& Chunks->GetChunks().MatchesDependencies(Source->GetWindow(),
 					Candidate ? &Candidate->GetCandidate() : nullptr, nullptr, Snapshot.Base.Seed, Snapshot.Manifest)
 				&& Chunks->GetChunks().MatchesSettings(Snapshot.Caves);
@@ -292,11 +365,11 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 			{
 				bNetwork = bMatches;
 			}
-			if (bMatches && Mode == 0 && Candidate)
+			if (bMatches && Candidate)
 			{
 				TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Mesh;
 				const FVoxelLandM5Diagnostic Meshed = FVoxelLandM5ScratchMesh::Build(
-					Chunks->GetChunksShared(), 1, 10000, Budget.ToSharedRef(), Never, Mesh);
+					Chunks->GetChunksShared(), Mode == 2 ? 2 : 1, 10000, Budget.ToSharedRef(), Never, Mesh);
 				Failure = Meshed.Message;
 				bMesh = Meshed.Code == EVoxelLandM5ErrorCode::None && Mesh && Mesh->GetTriangles().Num() > 0;
 				if (bMesh)
@@ -305,6 +378,28 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 					const FVoxelLandM5Diagnostic Connected = FVoxelLandM5CapturedMeshRoutes::Build(
 						Chunks.ToSharedRef(), Mesh.ToSharedRef(), 200, Never, Routes);
 					Failure = Connected.Message;
+					if (Mode != 0)
+					{
+						if (Connected.Code == EVoxelLandM5ErrorCode::None && Routes)
+						{
+							const auto Check = Routes->CheckSupport(0, 256, Never);
+							Failure = Check.Message;
+							if (Mode == 1) bDefaultCapture = Check.Code == EVoxelLandM5ErrorCode::None;
+							else
+							{
+								const auto& Plan = Routes->GetCandidate().GetPlan();
+								bSeamCapture = Check.Code == EVoxelLandM5ErrorCode::None && Plan.Routes.Num() == 1
+									&& Plan.Routes[0].Legs.Num() == 1
+									&& Plan.Routes[0].Legs[0].StartFeetCm.X == -150
+									&& Plan.Routes[0].Legs[0].EndFeetCm.X == 150
+									&& Plan.Routes[0].Legs[0].StartFeetCm.Y == 1450
+									&& Plan.Routes[0].Legs[0].EndFeetCm.Y == 1450
+									&& Plan.Routes[0].Legs[0].StartFeetCm.Z == 1050
+									&& Plan.Routes[0].Legs[0].EndFeetCm.Z == 1050;
+							}
+						}
+						return;
+					}
 					bConnectedRoute = Connected.Code == EVoxelLandM5ErrorCode::None && Routes
 						&& Routes->GetCandidate().GetPlan().Routes.Num() == 1
 						&& Routes->GetCandidate().GetPlan().Routes[0].Id == 7
@@ -315,6 +410,12 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 						&& Routes->GetCandidate().GetPlan().Routes[0].Legs[0].EndFeetCm.X == 675
 						&& Routes->GetCandidate().GetPlan().Routes[0].Legs[0].EndFeetCm.Y == 530
 						&& Routes->GetCandidate().GetPlan().Routes[0].Legs[0].EndFeetCm.Z == 1050;
+					if (!bConnectedRoute) return;
+					const auto Support = Routes->CheckSupport(0, 256, Never);
+					bSupport = Support.Code == EVoxelLandM5ErrorCode::None;
+					if (!bSupport) Failure = Support.Message;
+					const auto CancelSupport = Routes->CheckSupport(0, 256, [] { return true; });
+					bSupportCancelled = CancelSupport.Code == EVoxelLandM5ErrorCode::Cancelled;
 					const TSharedPtr<const FVoxelLandM5CapturedMeshRoutes, ESPMode::ThreadSafe> PreviousRoutes = Routes;
 					const FVoxelLandM5Diagnostic Bounds = FVoxelLandM5CapturedMeshRoutes::Build(
 						Chunks.ToSharedRef(), Mesh.ToSharedRef(), 1000, Never, Routes);
@@ -334,6 +435,27 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 							OtherChunks.ToSharedRef(), Mesh.ToSharedRef(), 100, Never, Routes);
 						bMismatch = Mismatch.Code == EVoxelLandM5ErrorCode::InvalidInput && Routes == PreviousRoutes;
 					}
+					// Re-mesh a controlled suspended wall crossing the middle of the leg.
+					const TArray<int16> SavedDensity = FVoxelLandM5CapturedMeshRoutesFixture::SetWall(Chunks->GetChunks());
+					TSharedPtr<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> WallMesh;
+					TSharedPtr<const FVoxelLandM5CapturedMeshRoutes, ESPMode::ThreadSafe> WallRoutes;
+					const auto WallBuild = FVoxelLandM5ScratchMesh::Build(Chunks->GetChunksShared(), 1, 10000, Budget.ToSharedRef(), Never, WallMesh);
+					if (WallBuild.Code == EVoxelLandM5ErrorCode::None && WallMesh
+						&& FVoxelLandM5CapturedMeshRoutes::Build(Chunks.ToSharedRef(), WallMesh.ToSharedRef(), 200, Never, WallRoutes).Code == EVoxelLandM5ErrorCode::None && WallRoutes)
+					{
+						const auto WallCheck = WallRoutes->CheckSupport(0, 256, Never);
+						bMiddleObstruction = WallCheck.Code == EVoxelLandM5ErrorCode::Unproven && WallCheck.Stage == TEXT("M5.SweptTriangle");
+					}
+					FVoxelLandM5CapturedMeshRoutesFixture::RestoreWall(Chunks->GetChunks(), SavedDensity);
+					// Feet search stays inside its owner rectangle, but the capsule sweep does not.
+					FVoxelLandM5CapturedMeshRoutesFixture::ShiftPlan(Candidate->GetCandidate(), -250);
+					TSharedPtr<const FVoxelLandM5CapturedMeshRoutes, ESPMode::ThreadSafe> EdgeRoutes;
+					if (FVoxelLandM5CapturedMeshRoutes::Build(Chunks.ToSharedRef(), Mesh.ToSharedRef(), 200, Never, EdgeRoutes).Code == EVoxelLandM5ErrorCode::None && EdgeRoutes)
+					{
+						const auto EdgeCheck = EdgeRoutes->CheckSupport(0, 256, Never);
+						bOmittedOwner = EdgeCheck.Code == EVoxelLandM5ErrorCode::Unproven && EdgeCheck.Message == TEXT("Sweep requires omitted neighboring mesh owners");
+					}
+					FVoxelLandM5CapturedMeshRoutesFixture::ShiftPlan(Candidate->GetCandidate(), 250);
 				}
 			}
 			const TSharedPtr<const FVoxelLandM5CapturedScratchChunks, ESPMode::ThreadSafe> Prior = Chunks;
@@ -356,7 +478,8 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 				bLifetime = Chunks.IsValid() && WeakSource.IsValid();
 			}
 		}).Wait();
-		TestTrue(FString::Printf(TEXT("captured chunks mode %d: %s"), Mode, *Failure), Mode == 0 ? bNetwork : bPockets);
+		TestTrue(FString::Printf(TEXT("captured route mode %d: %s"), Mode, *Failure),
+			Mode == 0 ? bNetwork : Mode == 1 ? bDefaultCapture : bSeamCapture);
 		Capture.Reset();
 	}
 	TestTrue(TEXT("actual captured scratch mesh"), bMesh);
@@ -364,10 +487,21 @@ bool FVoxelLandM5CapturedMeshRoutesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("invalid search depth rejected"), bBounds);
 	TestTrue(TEXT("route cancellation preserves output"), bRouteCancelled);
 	TestTrue(TEXT("controlled connected source resolves actual mesh feet"), bConnectedRoute);
+	TestTrue(TEXT("captured route passes retained CPU support and positive-margin clearance"), bSupport);
+	TestTrue(TEXT("captured route support observes cancellation"), bSupportCancelled);
+	TestTrue(TEXT("captured baseline box cancellation preserves output"), bBoxCancel);
+	TestTrue(TEXT("captured baseline box rejects invalid size atomically"), bBoxInvalid);
+	TestTrue(TEXT("captured baseline box rejects foreign worker before admission"), bBoxForeign);
+	TestTrue(TEXT("captured baseline box rejects wrong thread before admission"), bBoxThread);
+	TestTrue(TEXT("captured one-chunk route fits default admission"), bDefaultCapture);
+	TestTrue(TEXT("captured seam route fits default admission"), bSeamCapture);
+	TestTrue(TEXT("middle obstruction fails retained obstacle sweep"), bMiddleObstruction);
+	TestTrue(TEXT("omitted owner rejects capsule sweep"), bOmittedOwner);
 	TestTrue(TEXT("network mode rejects pocket entry"), bWrongMode);
 	TestTrue(TEXT("cancellation preserves output"), bCancelled);
 	TestTrue(TEXT("missing halo preserves output"), bHalo);
 	TestTrue(TEXT("chunks retain captured source"), bLifetime);
-	return bNetwork && bMesh && bMismatch && bBounds && bRouteCancelled && bConnectedRoute;
+	return bNetwork && bMesh && bMismatch && bBounds && bRouteCancelled && bConnectedRoute && bSupport && bSupportCancelled && bMiddleObstruction && bOmittedOwner
+		&& bBoxCancel && bBoxInvalid && bBoxForeign && bBoxThread && bDefaultCapture && bSeamCapture;
 }
 #endif

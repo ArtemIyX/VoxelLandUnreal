@@ -24,6 +24,8 @@ public:
 		TSharedRef<const FVoxelLandM5ScratchMesh, ESPMode::ThreadSafe> Mesh, int64 MaxSearchDepthCm,
 		TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5CapturedMeshRoutes, ESPMode::ThreadSafe>& Out);
+	// CPU route check only; no publication or final-field authority.
+	FVoxelLandM5Diagnostic CheckSupport(int64 ContactSkinCm, int32 MaxTotalFaces, TFunctionRef<bool()> IsCancelled) const;
 	const FVoxelLandM5CapturedScratchChunks& GetSource() const { return *Source; }
 	const FVoxelLandM5ScratchMesh& GetMesh() const { return *Mesh; }
 	const FVoxelLandM5CandidateResult& GetCandidate() const { return *Candidate; }

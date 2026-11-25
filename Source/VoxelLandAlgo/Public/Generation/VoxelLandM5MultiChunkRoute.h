@@ -7,6 +7,7 @@
 #include "Templates/Function.h"
 
 class FVoxelLandM5Budget;
+class FVoxelLandM5ScratchMesh;
 struct FVoxelLandChunkData;
 
 namespace VoxelLand::M5::MultiChunkRoute
@@ -26,6 +27,13 @@ namespace VoxelLand::M5::MultiChunkRoute
 // a plan. Unsupported geometry, incomplete chunks or uncertain predicates fail.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic Certify(TConstArrayView<FVoxelLandChunkData> Chunks,
 	const FIntVector& MinInclusive, const FIntVector& MaxExclusive, int32 VoxelSizeCm, bool bUnlimitedM4,
+	const FVoxelLandM5PointCm& StartFeet, const FVoxelLandM5PointCm& EndFeet, int64 RadiusCm, int64 HeightCm,
+	int64 MarginCm, int64 ContactSkinCm, int32 MaxSlopeNumerator, int32 MaxSlopeDenominator,
+	TConstArrayView<FVoxelLandM5ChunkFaceSelection> SupportFaces,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);
+
+// Uses the retained, exact CPU mesh and its complete source rectangle.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic Certify(const FVoxelLandM5ScratchMesh& Mesh,
 	const FVoxelLandM5PointCm& StartFeet, const FVoxelLandM5PointCm& EndFeet, int64 RadiusCm, int64 HeightCm,
 	int64 MarginCm, int64 ContactSkinCm, int32 MaxSlopeNumerator, int32 MaxSlopeDenominator,
 	TConstArrayView<FVoxelLandM5ChunkFaceSelection> SupportFaces,

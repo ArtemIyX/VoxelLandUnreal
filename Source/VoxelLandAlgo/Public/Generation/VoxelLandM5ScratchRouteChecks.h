@@ -13,9 +13,14 @@ class FVoxelLandM5Budget;
 class FVoxelLandM5CandidateResult;
 class FVoxelLandM5ProtectionGrid;
 class FVoxelLandM5ScratchChunks;
+struct FVoxelLandM5RetainedRouteInputs;
 
 namespace VoxelLand::M5::ScratchRouteChecks
 {
+// Checks exact retained mesh and composition lineage; no publication authority.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic CheckAll(const FVoxelLandM5RetainedRouteInputs& Inputs,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);
+
 // Synchronous finite CPU route checks over the supplied scratch chunks.
 // Exact immediate source owners, seed, manifest and candidate settings must
 // match those used for composition; every retained input must share Budget.

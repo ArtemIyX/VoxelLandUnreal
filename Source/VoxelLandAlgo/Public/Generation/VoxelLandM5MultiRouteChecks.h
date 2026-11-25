@@ -10,6 +10,7 @@
 
 class FVoxelLandM5Budget;
 class FVoxelLandM5CandidateResult;
+class FVoxelLandM5ScratchMesh;
 struct FVoxelLandChunkData;
 
 namespace VoxelLand::M5::MultiRouteChecks
@@ -27,6 +28,12 @@ VOXELLANDALGO_API FVoxelLandM5Diagnostic CheckAll(const FVoxelLandM5CaveSettings
 	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	TConstArrayView<FVoxelLandChunkData> Chunks, const FIntVector& MinInclusive, const FIntVector& MaxExclusive,
 	int32 VoxelSizeCm, bool bUnlimitedM4, int64 ContactSkinCm,
+	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> Selections,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);
+
+VOXELLANDALGO_API FVoxelLandM5Diagnostic CheckAll(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	const FVoxelLandM5ScratchMesh& Mesh, int64 ContactSkinCm,
 	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> Selections,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled);
 }

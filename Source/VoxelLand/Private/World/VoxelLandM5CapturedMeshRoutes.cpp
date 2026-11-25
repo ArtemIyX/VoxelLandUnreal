@@ -9,6 +9,9 @@
 #include "Generation/VoxelLandM5MeshFeetProposal.h"
 #include "Generation/VoxelLandM5ScratchChunks.h"
 #include "Generation/VoxelLandM5ScratchMesh.h"
+#include "Generation/VoxelLandM5SupportSelector.h"
+#include "Generation/VoxelLandM5RetainedRouteInputs.h"
+#include "Generation/VoxelLandM5ScratchRouteChecks.h"
 #include "World/VoxelLandM5BoundBase.h"
 #include "World/VoxelLandM5CapturedBaseline.h"
 #include "World/VoxelLandM5CapturedFiniteCandidate.h"
@@ -128,4 +131,31 @@ FVoxelLandM5Diagnostic FVoxelLandM5CapturedMeshRoutes::Build(
 	}
 	Out = MoveTemp(Built);
 	return {};
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5CapturedMeshRoutes::CheckSupport(
+	int64 ContactSkinCm, int32 MaxTotalFaces, TFunctionRef<bool()> IsCancelled) const
+{
+	using E = EVoxelLandM5ErrorCode;
+	using I = FVoxelLandM5CapturedMeshRoutesInternals;
+	if (IsCancelled()) return I::Error(E::Cancelled, TEXT("Captured mesh routes cancelled"));
+	const FVoxelLandM5CapturedFiniteCandidate* Proposal = Source->GetCandidate();
+	const FVoxelLandM5CapturedBaseline& Baseline = Source->GetSource();
+	const FVoxelLandM5CapturedFiniteScratch& Captured = Baseline.GetCaptured();
+	const auto& Capture = Captured.GetCapture();
+	const auto& Snapshot = Capture.GetSnapshot();
+	const auto Budget = Captured.GetBudget();
+	if (!Proposal || !Candidate || &Proposal->GetSource() != &Baseline || &Mesh->GetSource() != &Source->GetChunks())
+		return I::Error(E::InvalidInput, TEXT("Mesh routes require the exact captured network"));
+	TSharedPtr<const FVoxelLandM5SupportSelector, ESPMode::ThreadSafe> Selector;
+	const auto Result = FVoxelLandM5SupportSelector::Build(Snapshot.Caves, Snapshot.Base.Seed,
+		Proposal->GetCandidateShared(), Candidate.ToSharedRef(), Mesh, ContactSkinCm, MaxTotalFaces, Budget,
+		IsCancelled, Selector);
+	if (Result.Code != E::None) return Result;
+	if (!Selector || !Selector->MatchesSources(*Mesh, *Candidate))
+		return I::Error(E::Unproven, TEXT("Support selector source mismatch"));
+	const FVoxelLandM5RetainedRouteInputs Inputs{Snapshot.Caves, Snapshot.Base.Seed, Snapshot.Manifest,
+		Baseline.GetWindow(), Proposal->GetCandidateShared(), Candidate.ToSharedRef(), Capture.GetProtectionGrid(),
+		*Mesh, ContactSkinCm, Selector->GetSelections()};
+	return VoxelLand::M5::ScratchRouteChecks::CheckAll(Inputs, Budget, IsCancelled);
 }

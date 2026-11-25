@@ -75,6 +75,7 @@ public:
 private:
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FVoxelLandM5SupportSelectorFixture;
+	friend class FVoxelLandM5CapturedMeshRoutesFixture;
 	friend class FVoxelLandM5ScratchMeshFixture;
 	friend class FVoxelLandM5CapturedSolidMutationFixture;
 	friend class FVoxelLandM5ScratchRoofFixtureFactory;

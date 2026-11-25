@@ -1,8 +1,10 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "VoxelLandM7CheckpointTestFixture.h"
+#include "VoxelLandM7PackedFrameTest.h"
 
 #include "Async/Async.h"
 #include "Generation/VoxelLandMeshing.h"
+#include "Generation/VoxelLandM7NormalFrames.h"
 #include "Misc/AutomationTest.h"
 
 class FVoxelLandM7MeshSeamFixture final
@@ -93,7 +95,18 @@ bool FVoxelLandM7MeshSeamFixture::CompareShared(const FVoxelLandChunkData& A, co
 				}
 				if (VA != INDEX_NONE)
 				{
-					if (OriginA + FVector(MeshA.Vertices[VA].Position) != OriginB + FVector(MeshB.Vertices[VB].Position))
+					const FVoxelLandMeshVertex& First = MeshA.Vertices[VA];
+					const FVoxelLandMeshVertex& Second = MeshB.Vertices[VB];
+					const FVector LogicalA = OriginA + FVector(First.Position);
+					const FVector LogicalB = OriginB + FVector(Second.Position);
+					const FVector Rebase(-51200.0, 38400.0, -6400.0);
+					const FVector RebasedB = (OriginB - Rebase) + FVector(Second.Position);
+					FVoxelLandM7NormalAnchor AAnchor, BAnchor;
+					if (LogicalA != LogicalB
+						|| !FVoxelLandM7NormalFrames::MakeAnchor(LogicalA, FFixture::VoxelSizeCm, AAnchor)
+						|| !FVoxelLandM7NormalFrames::MakeAnchor(RebasedB + Rebase, FFixture::VoxelSizeCm, BAnchor)
+						|| !(AAnchor == BAnchor)
+						|| !FVoxelLandM7PackedFrameTest::Matches(First.Normal, First.Tangent, Second.Normal, Second.Tangent))
 					{
 						return false;
 					}
@@ -172,7 +185,10 @@ bool FVoxelLandM7MeshSeamFixture::CheckLevel(const FVoxelLandGenerator& Generato
 		}
 		for (int32 Vertex = 0; Vertex < Mesh.Vertices.Num(); ++Vertex)
 		{
-			if (Mesh.Vertices[Vertex].Position != Meshes[Index].Vertices[Vertex].Position)
+			const FVoxelLandMeshVertex& First = Meshes[Index].Vertices[Vertex];
+			const FVoxelLandMeshVertex& Second = Mesh.Vertices[Vertex];
+			if (First.Position != Second.Position
+				|| !FVoxelLandM7PackedFrameTest::Matches(First.Normal, First.Tangent, Second.Normal, Second.Tangent))
 			{
 				return false;
 			}

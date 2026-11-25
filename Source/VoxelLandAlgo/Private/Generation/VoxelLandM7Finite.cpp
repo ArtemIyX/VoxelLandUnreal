@@ -17,11 +17,16 @@ public:
 	}
 };
 
+bool FVoxelLandGenerator::SupportsM7FiniteSource() const
+{
+	return M4HeightGrid.IsValid() && !M4Unlimited && !M5Lease.IsValid()
+		&& M6Stamps.IsEmpty() && M6Filters.IsEmpty() && M6RedistanceBand == 0;
+}
+
 FVoxelLandError FVoxelLandGenerator::ValidateM7FiniteDemand(const FVoxelLandChunkKey& Key) const
 {
 	using FFootprint = FVoxelLandM7FiniteFootprint;
-	if (Key.LOD != FFootprint::Level || !M4HeightGrid || M4Unlimited || M5Lease.IsValid()
-		|| !M6Stamps.IsEmpty() || !M6Filters.IsEmpty() || M6RedistanceBand > 0)
+	if (Key.LOD != FFootprint::Level || !SupportsM7FiniteSource())
 	{
 		return {EVoxelLandErrorCode::UnsupportedLod, TEXT("LOD 1 requires ordinary finite M4 with M6 disabled")};
 	}
@@ -32,22 +37,26 @@ FVoxelLandError FVoxelLandGenerator::ValidateM7FiniteDemand(const FVoxelLandChun
 		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("LOD 1 exceeds the finite mesh precision range")};
 	}
 
-	// Finite M4 setup admits integral base spacing up to 2,000,000 cm.
-	// The finite mesh key cap and this fixed level keep every lattice
-	// index and its centimetre conversion in signed int64.
+	static_assert(FFootprint::BaseAxis == 69);
+	return ValidateM7FiniteBox(FFootprint::BaseMin(Key), FFootprint::BaseAxis);
+}
+
+FVoxelLandError FVoxelLandGenerator::ValidateM7FiniteBox(const FInt64Vector& First, int32 Axis) const
+{
+	// Finite M4 setup admits integral spacing up to 2,000,000 cm.
+	// Both callers admit their bounded lattice coordinates first.
+	check(M4HeightGrid && Axis >= 1 && Axis <= FVoxelLandM7FiniteFootprint::BaseAxis);
 	const int64 VoxelSizeCm = int64(Profile.VoxelSizeCm);
 	const int32 CompatibilityHalo = GetM6CompatibilityHalo();
 	const int32 HeightMargin = CompatibilityHalo + int32(bM4NormalizeSlope);
 	const FInt64Vector Margin(HeightMargin, HeightMargin, CompatibilityHalo);
-	const FInt64Vector First = FFootprint::BaseMin(Key);
 	const FInt64Vector Min = (First - Margin) * VoxelSizeCm;
-	const FInt64Vector Max = (First + FInt64Vector(FFootprint::BaseAxis - 1) + Margin) * VoxelSizeCm;
-	static_assert(FFootprint::BaseAxis == 69);
+	const FInt64Vector Max = (First + FInt64Vector(Axis - 1) + Margin) * VoxelSizeCm;
 
 	constexpr int64 MaxBaselineZCm = 2000000;
 	if (Min.Z < -MaxBaselineZCm || Max.Z > MaxBaselineZCm)
 	{
-		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("LOD 1 input including compatibility smoothing exceeds the M4 Z range")};
+		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M7 finite input including compatibility smoothing exceeds the M4 Z range")};
 	}
 	const bool bNative = !bM4FixedLatticeShaping
 		&& ((M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0)
@@ -56,12 +65,12 @@ FVoxelLandError FVoxelLandGenerator::ValidateM7FiniteDemand(const FVoxelLandChun
 	if (bNative && (Min.X < -MaxExactFloatCm || Max.X > MaxExactFloatCm
 		|| Min.Y < -MaxExactFloatCm || Max.Y > MaxExactFloatCm))
 	{
-		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("LOD 1 input exceeds the native exact XY lattice")};
+		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M7 finite input exceeds the native exact XY lattice")};
 	}
 	int32 HeightQ8 = 0;
 	if (!M4HeightGrid->Sample(Min.X, Min.Y, HeightQ8) || !M4HeightGrid->Sample(Max.X, Max.Y, HeightQ8))
 	{
-		return {EVoxelLandErrorCode::InvalidParameter, TEXT("LOD 1 input including smoothing and slope reads is outside the M4 height grid")};
+		return {EVoxelLandErrorCode::InvalidParameter, TEXT("M7 finite input including smoothing and slope reads is outside the M4 height grid")};
 	}
 	return {};
 }

@@ -22,6 +22,8 @@ struct FVoxelLandM4UnlimitedConfig;
 struct FVoxelLandM4SmoothSettings;
 struct FVoxelLandM5PointCm;
 struct FVoxelLandM6FilterPlan;
+struct FVoxelLandM7NormalAnchor;
+struct FVoxelLandM7NormalFrameBatch;
 struct FVoxelLandWorkerContextImpl;
 
 // Copies and validates the draft before publishing it. Safe to share across workers.
@@ -129,6 +131,11 @@ public:
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk) const;
 	FVoxelLandError GenerateChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
+	// Finite M4 checkpoint. Samples canonical shared frames on the worker
+	// that owns the generator context. Errors preserve the caller's batch.
+	FVoxelLandError GenerateM7NormalFrames(TConstArrayView<FVoxelLandM7NormalAnchor> Anchors,
+		FVoxelLandWorkerContext& Worker, FVoxelLandM7NormalFrameBatch& OutBatch,
+		TFunctionRef<bool()> IsCancelled) const;
 	// Explicit compatibility-filter API. Use GenerateChunk for the configured
 	// M6 region pipeline. Strength maps to uint16 by rounding Strength * 65535 to nearest; integer averages
 	// and blends round to nearest, ties away from zero. The source has a one-cell halo.
@@ -200,6 +207,8 @@ private:
 		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateM4TiledBaselineBox(const FInt64Vector& MinLattice, int32 Axis,
 		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
+	bool SupportsM7FiniteSource() const;
+	FVoxelLandError ValidateM7FiniteBox(const FInt64Vector& First, int32 Axis) const;
 	FVoxelLandError ValidateM7FiniteDemand(const FVoxelLandChunkKey& Key) const;
 	FVoxelLandError GenerateM7FiniteChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;

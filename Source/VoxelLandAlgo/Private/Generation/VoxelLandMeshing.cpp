@@ -1,4 +1,5 @@
 #include "Generation/VoxelLandMeshing.h"
+#include "Generation/VoxelLandM7NormalFrames.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 class FVoxelLandMeshingInternals final
@@ -13,7 +14,6 @@ public:
 	static int32 CellIndex(int32 X, int32 Y, int32 Z);
 	static int16 Sample(const FVoxelLandChunkData& Chunk, int32 X, int32 Y, int32 Z);
 	static bool IsSolid(int16 Q);
-	static FVector3f Axis(int32 I);
 	static FVector3f Gradient(const int16* Q, const FVector3f& P);
 	static void AddTriangle(FVoxelLandMeshData& Mesh, uint32 A, uint32 B, uint32 C, float Scale);
 };
@@ -36,11 +36,6 @@ int16 FVoxelLandMeshingInternals::Sample(const FVoxelLandChunkData& Chunk, int32
 bool FVoxelLandMeshingInternals::IsSolid(int16 Q)
 {
 	return Q < 0;
-}
-
-FVector3f FVoxelLandMeshingInternals::Axis(int32 I)
-{
-	return I == 0 ? FVector3f(1, 0, 0) : I == 1 ? FVector3f(0, 1, 0) : FVector3f(0, 0, 1);
 }
 
 FVector3f FVoxelLandMeshingInternals::Gradient(const int16* Q, const FVector3f& P)
@@ -174,11 +169,6 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 						N = FVector3f::UpVector;
 					}
 				}
-				const FVector3f Abs = N.GetAbs();
-				const FVector3f Reference =
-					Abs.X <= Abs.Y && Abs.X <= Abs.Z
-						? FVoxelLandMeshingInternals::Axis(0)
-						: (Abs.Y <= Abs.Z ? FVoxelLandMeshingInternals::Axis(1) : FVoxelLandMeshingInternals::Axis(2));
 				FVoxelLandMeshVertex V;
 				// Construct shared cell vertices in global integer-cell space, then snap
 				// once to a scale-derived binary grid shared by all chunks.
@@ -190,7 +180,7 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 					VoxelLandMeshCoordinates::Snap((double(GZ) + P.Z) * LevelSpacingCm, Grid));
 				V.Position = FVector3f(World - Origin);
 				V.Normal = N;
-				V.Tangent = FVector3f::CrossProduct(Reference, N).GetSafeNormal();
+				V.Tangent = FVoxelLandM7NormalFrames::TangentForNormal(N);
 				V.UV = FVector2f(V.Position.X, V.Position.Y) / 100.f;
 				Mesh.Bounds += V.Position;
 				Scratch.CellVertices[FVoxelLandMeshingInternals::CellIndex(X, Y, Z)] = Mesh.Vertices.Add(V);

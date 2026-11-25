@@ -262,19 +262,7 @@ FVoxelLandError FVoxelLandGenerator::GenerateSmoothedChunkCancellable(const FVox
 			}
 		}
 	}
-	if (IsCancelled())
-	{
-		return FVoxelLandSmoothDensityInternals::SmoothError(
-			EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
-	}
-	Chunk->Hash = Worker.Impl->HashChunkDensity(Chunk->Density);
-	if (IsCancelled())
-	{
-		return FVoxelLandSmoothDensityInternals::SmoothError(
-			EVoxelLandErrorCode::Cancelled, TEXT("Chunk generation cancelled"));
-	}
-	OutChunk = Chunk;
-	return {};
+	return FinalizeDensityChunk(Chunk.ToSharedRef(), Worker, OutChunk, IsCancelled);
 }
 
 FVoxelLandError FVoxelLandGenerator::GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key,

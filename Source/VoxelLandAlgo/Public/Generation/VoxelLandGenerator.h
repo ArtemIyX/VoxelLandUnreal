@@ -143,6 +143,8 @@ public:
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
 	bool IsM4Unlimited() const { return M4Unlimited.IsValid(); }
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
+	// This payload supplements the baseline generator inputs. An inactive stage has no bytes.
+	TConstArrayView<uint8> GetM6SphereIdentity() const { return M6SphereIdentity; }
 	// Immutable resolved values used by the versioned fixed-lattice control backend.
 	TConstArrayView<float> GetResolvedFloatParameters() const { return FloatParameters; }
 	TConstArrayView<int32> GetResolvedIntParameters() const { return IntParameters; }
@@ -176,6 +178,12 @@ private:
 		TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GeneratePureChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError InitializeM6Spheres(const FVoxelLandM6SphereSettings& Settings);
+	FVoxelLandError ValidateM6SphereFootprint(const FVoxelLandChunkKey& Key) const;
+	FVoxelLandError ApplyM6Spheres(FVoxelLandChunkData& Chunk, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError FinalizeDensityChunk(TSharedRef<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk,
+		FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
+		TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandGenerator() = default;
 	FVoxelLandGenerator(const FVoxelLandGenerator&) = delete;
 	FVoxelLandGenerator& operator=(const FVoxelLandGenerator&) = delete;
@@ -199,6 +207,8 @@ private:
 	TArray<int32> IntParameters;
 	TArray<int32> Seeds;
 	TArray<uint64> FullSeeds;
+	TArray<FVoxelLandM6SphereStamp> M6Spheres;
+	TArray<uint8> M6SphereIdentity;
 	friend class FVoxelLandWorkerContext;
 	friend struct FVoxelLandWorkerContextImpl;
 };

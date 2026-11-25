@@ -81,7 +81,7 @@ bool FVoxelLandM5FiniteContributorSealTest::RunTest(const FString& Parameters)
 	Asset->Common.Caves.bEnabled = true; Asset->Common.Caves.StageId = FGuid(11, 22, 33, 44);
 	Asset->Common.Caves.Water.Policy = EVoxelLandM5WaterPolicy::DryWorld;
 	Asset->Common.Caves.RoofThicknessCm = 0;
-	Asset->Common.Caves.Topology.MinChambers = Asset->Common.Caves.Topology.MaxChambers = 1;
+	Asset->Common.Caves.Topology.MinChambers = Asset->Common.Caves.Topology.MaxChambers = 2;
 	Asset->Common.Caves.Topology.MinChamberRadiusCm = Asset->Common.Caves.Topology.MaxChamberRadiusCm = 100;
 	Asset->Common.Caves.Topology.MinTunnelRadiusCm = Asset->Common.Caves.Topology.MaxTunnelRadiusCm = 100;
 	Asset->Common.Caves.Topology.MinLoops = Asset->Common.Caves.Topology.MaxLoops = 0;
@@ -188,7 +188,9 @@ bool FVoxelLandM5FiniteContributorSealTest::RunTest(const FString& Parameters)
 				{
 					const auto Previous = Chunk;
 					Result = VoxelLand::M5::FinalField::EvaluateChunk(*Field, Key, *Worker, Job.ToSharedRef(), Never, Chunk);
-					bSealedNetwork = Result.Code == EVoxelLandM5ErrorCode::Unproven && Chunk == Previous;
+					bSealedNetwork = Plan.Chambers.Num() == 2 && Plan.Connections.Num() == 1 && Plan.Segments.Num() > 0
+						&& Result.Code == EVoxelLandM5ErrorCode::None && Chunk && Chunk != Previous
+						&& Chunk->Key.Coordinate == Key.Coordinate && Chunk->Key.LOD == Key.LOD;
 				}
 			}
 			Field.Reset();
@@ -235,7 +237,7 @@ bool FVoxelLandM5FiniteContributorSealTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(FString::Printf(TEXT("real contributor build: %s"), *Failure), bBuilt);
 	TestTrue(TEXT("sealed field retains exact contributor owner"), bSealedBinding);
-	TestTrue(TEXT("sealed network is not yet field authority"), bSealedNetwork);
+	TestTrue(TEXT("sealed network produces scratch chunk"), bSealedNetwork);
 	TestTrue(TEXT("canonical finite region"), bRegion); TestTrue(TEXT("candidate uses exact declared gate"), bGate);
 	TestTrue(TEXT("same source and gate generate same candidate"), bDeterministic);
 	TestTrue(TEXT("foreign budget preserves prior seal"), bForeignBudget);

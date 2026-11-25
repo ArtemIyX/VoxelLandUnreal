@@ -123,12 +123,20 @@ FVoxelLandM5Diagnostic VoxelLand::M5::Topology::Validate(const FVoxelLandM5CaveS
 	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
 {
+	return ValidateForJob(Settings, WorldSeed, Region, Candidate, Budget, Budget, IsCancelled);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::Topology::ValidateForJob(const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	const FVoxelLandM5RegionCoord& Region, TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
 	if (IsCancelled())
 	{
 		return FVoxelLandM5TopologyInternals::M5TopologyError(
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Topology validation cancelled"));
 	}
-	if (!Candidate->UsesBudget(Budget.Get()) || !Candidate->MatchesSource(Settings, WorldSeed, Region))
+	if (!Candidate->UsesBudget(SourceBudget.Get()) || !Candidate->MatchesSource(Settings, WorldSeed, Region))
 	{
 		return FVoxelLandM5TopologyInternals::M5TopologyError(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate provenance or budget mismatch"));

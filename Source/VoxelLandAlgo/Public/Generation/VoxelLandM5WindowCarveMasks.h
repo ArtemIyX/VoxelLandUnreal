@@ -13,6 +13,7 @@ class FVoxelLandM5ProtectionGrid;
 class FVoxelLandM5BoundBaseline;
 class FVoxelLandM5InfluenceSet;
 class FVoxelLandM5PocketSurfaceColumns;
+class FVoxelLandM5FiniteContributorSeal;
 
 namespace VoxelLand::M5::WindowCarveMasks
 {
@@ -42,6 +43,13 @@ VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildOwnedForJob(const FVoxelLandM5Boun
 	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5PocketSurfaceColumns& Columns,
 	const FVoxelLandM5BaselineWindow& Window, FIntVector Start, FIntVector Count,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
+// Sealed finite inventory only; optional columns are required for active pockets.
+VOXELLANDALGO_API FVoxelLandM5Diagnostic BuildSealedForJob(const FVoxelLandM5BoundBaseline& Baseline,
+	const FVoxelLandM5InfluenceSet& Influence, const FVoxelLandM5FiniteContributorSeal& Seal,
+	const FVoxelLandM5PocketSurfaceColumns* Columns, const FVoxelLandM5BaselineWindow& Window,
+	FIntVector Start, FIntVector Count, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
 // Compatibility overload for network candidates.

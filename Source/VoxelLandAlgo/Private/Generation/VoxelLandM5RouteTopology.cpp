@@ -99,12 +99,21 @@ FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructure(const FVo
 	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
 {
+	return ValidateStructureForJob(Settings, WorldSeed, Region, Candidate, Budget, Budget, IsCancelled);
+}
+
+FVoxelLandM5Diagnostic VoxelLand::M5::RouteTopology::ValidateStructureForJob(const FVoxelLandM5CaveSettings& Settings,
+	int64 WorldSeed, const FVoxelLandM5RegionCoord& Region,
+	TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> Candidate,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled)
+{
 	if (IsCancelled())
 	{
 		return FVoxelLandM5RouteTopologyInternals::Failure(
 			EVoxelLandM5ErrorCode::Cancelled, TEXT("Route validation cancelled"));
 	}
-	if (!Candidate->UsesBudget(Budget.Get()) || !Candidate->MatchesSource(Settings, WorldSeed, Region))
+	if (!Candidate->UsesBudget(SourceBudget.Get()) || !Candidate->MatchesSource(Settings, WorldSeed, Region))
 	{
 		return FVoxelLandM5RouteTopologyInternals::Failure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("Candidate source or budget mismatch"));

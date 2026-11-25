@@ -25,6 +25,7 @@ public:
 	bool Matches(const FVoxelLandM5BoundBaseline& InBaseline, const FVoxelLandM5InfluenceSet& InInfluence,
 		const FVoxelLandM5Budget& InBudget) const;
 	const FVoxelLandM5CandidateResult& GetCandidate() const { return Candidate.Get(); }
+	TVoxelLandM5ConstRef<FVoxelLandM5CandidateResult> GetCandidateShared() const { return Candidate; }
 private:
 	FVoxelLandM5FiniteContributorSeal(TVoxelLandM5ConstRef<FVoxelLandM5BoundBaseline> InBaseline,
 		TVoxelLandM5ConstRef<FVoxelLandM5InfluenceSet> InInfluence, FVoxelLandM5BudgetRef InBudget,

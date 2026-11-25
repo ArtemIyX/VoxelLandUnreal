@@ -179,6 +179,42 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 	TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask)
 {
+	return BuildForJob(Size, OriginCm, SpacingCm, Start, Count, Protection, Settings, WorldSeed, Candidates,
+		Budget, Budget, IsCancelled, OutMask);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::BuildForJob(FIntVector Size, const FVoxelLandM5PointCm& OriginCm,
+	int64 SpacingCm, FIntVector Start, FIntVector Count, TConstArrayView<uint8> Protection,
+	const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	TConstArrayView<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask)
+{
+	return BuildImpl(Size, OriginCm, SpacingCm, Start, Count, Protection, Settings, WorldSeed, Candidates,
+		SourceBudget, Budget, IsCancelled, OutMask, false);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::BuildGatedForJob(FIntVector Size, const FVoxelLandM5PointCm& OriginCm,
+	int64 SpacingCm, FIntVector Start, FIntVector Count, TConstArrayView<uint8> Protection,
+	const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	TConstArrayView<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask)
+{
+	return BuildImpl(Size, OriginCm, SpacingCm, Start, Count, Protection, Settings, WorldSeed, Candidates,
+		SourceBudget, Budget, IsCancelled, OutMask, true);
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::BuildImpl(FIntVector Size, const FVoxelLandM5PointCm& OriginCm,
+	int64 SpacingCm, FIntVector Start, FIntVector Count, TConstArrayView<uint8> Protection,
+	const FVoxelLandM5CaveSettings& Settings, int64 WorldSeed,
+	TConstArrayView<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask, bool bGated)
+{
 	using namespace VoxelLand::M5::CheckedMath;
 	if (IsCancelled())
 	{
@@ -224,8 +260,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 			|| !TryMultiply(S, SpacingCm, FirstDelta) || !TryMultiply(S + C - 1, SpacingCm, LastDelta)
 			|| !TryAdd(O, FirstDelta, First) || !TryAdd(O, LastDelta, Last) || !TrySubtract(First, Influence, First)
 			|| !TryAdd(Last, Influence, Last)
-			|| First < FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MinInclusive, Axis)
-			|| Last >= FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MaxExclusive, Axis))
+			|| (!bGated && (First < FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MinInclusive, Axis)
+				|| Last >= FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MaxExclusive, Axis))))
 		{
 			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Missing entrance influence halo"));
@@ -256,7 +292,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 				EVoxelLandM5ErrorCode::Cancelled, TEXT("Entrance mask cancelled"));
 		}
-		if (!Candidates[I].IsValid() || !Candidates[I]->UsesBudget(Budget.Get()))
+		if (!Candidates[I].IsValid() || !Candidates[I]->UsesBudget(SourceBudget.Get()))
 		{
 			return FVoxelLandM5EntranceMaskInternals::M5EntranceMaskError(
 				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Missing plan or mismatched budget"));
@@ -318,10 +354,10 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 		const FVoxelLandM5CavePlan& Plan = Candidate->GetPlan();
 		const FVoxelLandM5Diagnostic Diagnostic =
 			Plan.Routes.IsEmpty() && Plan.Junctions.IsEmpty()
-				? VoxelLand::M5::Topology::Validate(
-					  Settings, WorldSeed, Plan.Region, Candidate.ToSharedRef(), Budget, IsCancelled)
-				: VoxelLand::M5::RouteTopology::ValidateStructure(
-					  Settings, WorldSeed, Plan.Region, Candidate.ToSharedRef(), Budget, IsCancelled);
+				? VoxelLand::M5::Topology::ValidateForJob(
+					  Settings, WorldSeed, Plan.Region, Candidate.ToSharedRef(), SourceBudget, Budget, IsCancelled)
+				: VoxelLand::M5::RouteTopology::ValidateStructureForJob(
+					  Settings, WorldSeed, Plan.Region, Candidate.ToSharedRef(), SourceBudget, Budget, IsCancelled);
 		if (Diagnostic.Code != EVoxelLandM5ErrorCode::None)
 		{
 			return Diagnostic;
@@ -393,6 +429,11 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 				}
 				const int64 Point[3] = {OriginCm.X + (int64(Start.X) + X) * SpacingCm,
 					OriginCm.Y + (int64(Start.Y) + Y) * SpacingCm, OriginCm.Z + (int64(Start.Z) + Z) * SpacingCm};
+				bool bInsideGate = true;
+				if (bGated)
+					for (int32 Axis = 0; Axis < 3; ++Axis)
+						bInsideGate &= Point[Axis] - Influence >= FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MinInclusive, Axis)
+							&& Point[Axis] + Influence < FVoxelLandM5EntranceMaskInternals::M5EntranceMaskAxis(Settings.Bounds.MaxExclusive, Axis);
 				bool bInside = false;
 				for (const FVoxelLandM5Bounds& Opening : Openings)
 				{
@@ -411,7 +452,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5EntranceMask::Build(FIntVector Size, const FV
 					}
 					bInside |= bFits;
 				}
-				Scratch->Authorized[Index] = bInside && Protection[Index] == 0 ? 1 : 0;
+				Scratch->Authorized[Index] = bInsideGate && bInside && Protection[Index] == 0 ? 1 : 0;
 			}
 		}
 	}

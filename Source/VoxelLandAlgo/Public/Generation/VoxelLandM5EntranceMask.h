@@ -49,7 +49,26 @@ public:
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, TFunctionRef<bool()> IsCancelled,
 		TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask);
 
+	static FVoxelLandM5Diagnostic BuildForJob(FIntVector Size, const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm,
+		FIntVector Start, FIntVector Count, TConstArrayView<uint8> Protection, const FVoxelLandM5CaveSettings& Settings,
+		int64 WorldSeed, TConstArrayView<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask);
+	// Only samples whose full influence fits the settings gate can be authorized.
+	static FVoxelLandM5Diagnostic BuildGatedForJob(FIntVector Size, const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm,
+		FIntVector Start, FIntVector Count, TConstArrayView<uint8> Protection, const FVoxelLandM5CaveSettings& Settings,
+		int64 WorldSeed, TConstArrayView<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask);
 private:
+	static FVoxelLandM5Diagnostic BuildImpl(FIntVector Size, const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm,
+		FIntVector Start, FIntVector Count, TConstArrayView<uint8> Protection, const FVoxelLandM5CaveSettings& Settings,
+		int64 WorldSeed, TConstArrayView<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Candidates,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> SourceBudget,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5EntranceMask, ESPMode::ThreadSafe>& OutMask, bool bGated);
 	explicit FVoxelLandM5EntranceMask(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	TArray<TSharedPtr<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe>> Plans;

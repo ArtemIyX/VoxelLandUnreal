@@ -11,8 +11,8 @@ struct FVoxelLandChunkData;
 
 namespace VoxelLand::M5::FinalField
 {
-// Scratch-only pocket evaluation. Network contributors lack a completeness
-// seal and therefore fail closed. No final-field or publication certificate.
+// Scratch-only finite evaluation. An enabled network requires the exact sealed
+// contributor inventory. No final-field or publication certificate.
 VOXELLANDALGO_API FVoxelLandM5Diagnostic EvaluateChunk(const FVoxelLandM5FieldInputs& Inputs,
 	const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> JobBudget, TFunctionRef<bool()> IsCancelled,

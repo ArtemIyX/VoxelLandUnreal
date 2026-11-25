@@ -11,6 +11,8 @@
 #include "Generation/VoxelLandM5CarveMasks.h"
 #include "Generation/VoxelLandM5ChunkFootprint.h"
 #include "Generation/VoxelLandM5FieldInputs.h"
+#include "Generation/VoxelLandM5FiniteContributorSeal.h"
+#include "Generation/VoxelLandM5CandidateResult.h"
 #include "Generation/VoxelLandM5FinalField.h"
 #include "Generation/VoxelLandM5InfluenceSet.h"
 #include "Generation/VoxelLandM5PocketSurfaceColumns.h"
@@ -24,6 +26,7 @@ FVoxelLandM5Diagnostic FieldError(EVoxelLandM5ErrorCode Code, const TCHAR* Messa
 {
 	FVoxelLandM5Diagnostic Result; Result.Code = Code; Result.Stage = TEXT("M5.EvaluateChunk"); Result.Message = Message; return Result;
 }
+struct FBorrowedPlanDeleter { void operator()(const FVoxelLandM5CavePlan*) const {} };
 struct FChunkLeaseDeleter
 {
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
@@ -50,7 +53,8 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FinalField::EvaluateChunk(const FVoxelLand
 		return FieldError(E::UnsupportedVersion, TEXT("Unsupported composition version"));
 	if (Snapshot.Caves.Pockets.bEnabled && Snapshot.Manifest.PocketNoise != 1)
 		return FieldError(E::UnsupportedVersion, TEXT("Unsupported pocket noise version"));
-	if (Snapshot.Caves.bEnabled)
+	const FVoxelLandM5FiniteContributorSeal* Seal = Inputs.GetSeal();
+	if (Snapshot.Caves.bEnabled && (!Seal || !Seal->Matches(Baseline, Influence, *Inputs.GetSourceBudget())))
 		return FieldError(E::Unproven, TEXT("Network contributor completeness unavailable"));
 	if (!Influence.CoversChunk(Key))
 		return FieldError(E::OutOfDomain, TEXT("Chunk is outside influence coverage"));
@@ -64,7 +68,7 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FinalField::EvaluateChunk(const FVoxelLand
 	if (!Job->TryChargeWork(FVoxelLandChunkData::SampleCount) || !Job->TryReserveBytes(OutputBytes, OutputLease))
 		return FieldError(E::BudgetExceeded, TEXT("Chunk output admission exhausted"));
 	const bool bPocket = Snapshot.Caves.Pockets.bEnabled && Snapshot.Caves.Pockets.AmplitudeCm != 0;
-	if (!bPocket)
+	if (!bPocket && !Snapshot.Caves.bEnabled)
 	{
 		FVoxelLandM5ChunkFootprint Stored;
 		if (!VoxelLand::M5::ChunkFootprint::TryBuild(Key, Snapshot.Base.VoxelSizeCm, false, false, Stored))
@@ -109,25 +113,35 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FinalField::EvaluateChunk(const FVoxelLand
 	FVoxelLandM5PointCm OutputMin;
 	OutputMin.X = Footprint.StoredMin.X / V; OutputMin.Y = Footprint.StoredMin.Y / V; OutputMin.Z = Footprint.StoredMin.Z / V;
 	TVoxelLandM5ConstPtr<FVoxelLandM5PocketSurfaceColumns> Columns;
-	Result = FVoxelLandM5PocketSurfaceColumns::BuildForJob(Inputs.GetBaselineShared(), Inputs.GetInfluenceShared(),
-		Worker, OutputMin, FIntPoint(35, 35), Inputs.GetSourceBudget(), Job, IsCancelled, Columns);
-	if (Result.Code != E::None) return Result;
-	if (!Columns) return FieldError(E::Unproven, TEXT("Pocket columns missing"));
+	if (bPocket)
+	{
+		Result = FVoxelLandM5PocketSurfaceColumns::BuildForJob(Inputs.GetBaselineShared(), Inputs.GetInfluenceShared(),
+			Worker, OutputMin, FIntPoint(35, 35), Inputs.GetSourceBudget(), Job, IsCancelled, Columns);
+		if (Result.Code != E::None) return Result;
+		if (!Columns) return FieldError(E::Unproven, TEXT("Pocket columns missing"));
+	}
 	TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Masks;
-	Result = VoxelLand::M5::WindowCarveMasks::BuildOwnedForJob(Baseline, Influence, *Columns, *Window,
-		FIntVector(Halo, Halo, Halo), FIntVector(35, 35, 35), Inputs.GetSourceBudget(), Job, IsCancelled, Masks);
+	if (Snapshot.Caves.bEnabled)
+		Result = VoxelLand::M5::WindowCarveMasks::BuildSealedForJob(Baseline, Influence, *Seal, Columns.Get(), *Window,
+			FIntVector(Halo, Halo, Halo), FIntVector(35, 35, 35), Inputs.GetSourceBudget(), Job, IsCancelled, Masks);
+	else
+		Result = VoxelLand::M5::WindowCarveMasks::BuildOwnedForJob(Baseline, Influence, *Columns, *Window,
+			FIntVector(Halo, Halo, Halo), FIntVector(35, 35, 35), Inputs.GetSourceBudget(), Job, IsCancelled, Masks);
 	if (Result.Code != E::None) return Result;
 	if (!Masks || Masks->GetPocketAllowed().Num() != FVoxelLandChunkData::SampleCount
+		|| Masks->GetNetworkAllowed().Num() != FVoxelLandChunkData::SampleCount
 		|| Masks->GetProtected().Num() != FVoxelLandChunkData::SampleCount)
 		return FieldError(E::Unproven, TEXT("Chunk masks missing or incomplete"));
 	const int32 Count = FVoxelLandChunkData::SampleCount;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> CropLease;
-	if (!Job->TryChargeWork(Count * 3) || !Job->TryReserveBytes(int64(Count) * 5 + 4096, CropLease))
+	if (!Job->TryChargeWork(Count * 4) || !Job->TryReserveBytes(int64(Count) * 6 + 4096, CropLease))
 		return FieldError(E::BudgetExceeded, TEXT("Chunk crop admission exhausted"));
 	TArray<int16> Cropped; Cropped.SetNumUninitialized(Count);
 	TArray<uint8> GatePocket; GatePocket.SetNumUninitialized(Count);
+	TArray<uint8> GateNetwork; GateNetwork.SetNumUninitialized(Count);
 	const auto Source = Window->GetDensity();
 	const auto Allowed = Masks->GetPocketAllowed();
+	const auto NetworkAllowed = Masks->GetNetworkAllowed();
 	const auto& Gate = Influence.GetDeclaredBounds();
 	int32 I = 0;
 	for (int32 Z = 0; Z < 35; ++Z) for (int32 Y = 0; Y < 35; ++Y) for (int32 X = 0; X < 35; ++X, ++I)
@@ -137,11 +151,16 @@ FVoxelLandM5Diagnostic VoxelLand::M5::FinalField::EvaluateChunk(const FVoxelLand
 		Cropped[I] = Source[int32(SX + int64(Side) * (SY + int64(Side) * SZ))];
 		const int64 CX = Footprint.StoredMin.X + int64(X) * V, CY = Footprint.StoredMin.Y + int64(Y) * V,
 			CZ = Footprint.StoredMin.Z + int64(Z) * V;
-		GatePocket[I] = Allowed[I] && CX >= Gate.MinInclusive.X && CX < Gate.MaxExclusive.X
+		const bool bInside = CX >= Gate.MinInclusive.X && CX < Gate.MaxExclusive.X
 			&& CY >= Gate.MinInclusive.Y && CY < Gate.MaxExclusive.Y
-			&& CZ >= Gate.MinInclusive.Z && CZ < Gate.MaxExclusive.Z ? 1 : 0;
+			&& CZ >= Gate.MinInclusive.Z && CZ < Gate.MaxExclusive.Z;
+		GatePocket[I] = Allowed[I] && bInside ? 1 : 0;
+		GateNetwork[I] = NetworkAllowed[I] && bInside ? 1 : 0;
 	}
+	TArray<TSharedPtr<const FVoxelLandM5CavePlan, ESPMode::ThreadSafe>> Plans;
+	if (Seal) Plans.Add(MakeShareable(&Seal->GetCandidate().GetPlan(), FBorrowedPlanDeleter{}));
 	FVoxelLandM5FinalFieldInputs Field;
+	Field.bNetworkEnabled = Snapshot.Caves.bEnabled; Field.Plans = Plans; Field.NetworkAllowed = GateNetwork;
 	Field.Size = FIntVector(35, 35, 35); Field.OriginCm = Footprint.StoredMin; Field.SpacingCm = V;
 	Field.VoxelSizeCm = int32(V); Field.Baseline = Cropped; Field.PocketAllowed = GatePocket;
 	Field.Protected = Masks->GetProtected(); Field.Pockets = Snapshot.Caves.Pockets;

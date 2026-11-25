@@ -28,6 +28,32 @@
 #include "World/VoxelLandM5DefinitionValidator.h"
 #include <type_traits>
 
+// Controlled extrema only; this seam creates no field certificate or publication authority.
+class FVoxelLandM5PocketColumnsExtremaFixture final
+{
+public:
+	static void SetNonuniform(const FVoxelLandM5PocketSurfaceColumns& Source)
+	{
+		auto& Mutable = const_cast<FVoxelLandM5PocketSurfaceColumns&>(Source);
+		for (int32 Y = 0; Y < Mutable.TileSizeY; ++Y) for (int32 X = 0; X < Mutable.TileSizeX; ++X)
+		{
+			const int32 I = X + Mutable.TileSizeX * Y;
+			Mutable.Lower[I] = X == 0 && Y == 0 ? 1000 : 1900;
+			Mutable.Upper[I] = X == Mutable.TileSizeX - 1 && Y == Mutable.TileSizeY - 1 ? 3000 : 2200;
+		}
+	}
+	static FVoxelLandM5Diagnostic Build(const FVoxelLandM5BaselineWindow& Window,
+		const FVoxelLandM5PocketSurfaceColumns& Columns, FIntVector Start, FIntVector Count,
+		TConstArrayView<uint8> Protection, TConstArrayView<uint8> Entrance,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
+		TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& Out)
+	{
+		return FVoxelLandM5CarveMasks::BuildImpl(Window.GetSize(), Window.GetOriginCm(), Window.GetVoxelSizeCm(),
+			Start, Count, Window.GetDensity(), Protection, Entrance, 0, true, 2000, 3500, true,
+			Budget, [] { return false; }, Out, &Columns);
+	}
+};
+
 static_assert(!std::is_copy_constructible_v<FVoxelLandM5PocketSurfaceColumns>);
 static_assert(!std::is_copy_assignable_v<FVoxelLandM5PocketSurfaceColumns>);
 
@@ -124,7 +150,8 @@ bool FVoxelLandM5PocketSurfaceColumnsTest::RunTest(const FString& Parameters)
 		FVoxelLandM5Diagnostic Result; if (Generator.CreateWorker(Worker)) Result.Code = EVoxelLandM5ErrorCode::InvalidInput; return Result;
 	};
 	bool bSetup = false, bTall = false, bAllNeighbors = false, bMask = false, bForeign = false, bCancel = false, bBounds = false;
-	bool bWrongThread = false, bForeignInfluence = false, bMissingColumn = false;
+	bool bWrongThread = false, bForeignInfluence = false, bMissingColumn = false, bMultiDepth = false, bColumnWork = false, bColumnCancel = false;
+	bool bExtremaOracle = false, bExtremaMissing = false;
 	FString Failure;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		auto Snapshot = MakeShared<FVoxelLandM5WorldSnapshot, ESPMode::ThreadSafe>(Capture->GetSnapshot());
@@ -193,7 +220,7 @@ bool FVoxelLandM5PocketSurfaceColumnsTest::RunTest(const FString& Parameters)
 		bCancel = Result.Code == EVoxelLandM5ErrorCode::Cancelled && Polls > 8 && Columns == Prior;
 		FVoxelLandM5PointCm WindowMin; WindowMin.X = -4; WindowMin.Y = -4; WindowMin.Z = -14;
 		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> Window;
-		Result = FVoxelLandM5BaselineWindow::BuildBox(Baseline->GetGeneratorShared(), *Worker, WindowMin, FIntVector(9, 9, 9), Budget.ToSharedRef(), Never, Window);
+		Result = FVoxelLandM5BaselineWindow::BuildBox(Baseline->GetGeneratorShared(), *Worker, WindowMin, FIntVector(10, 9, 11), Budget.ToSharedRef(), Never, Window);
 		if (Result.Code != EVoxelLandM5ErrorCode::None || !Window) { Failure = Result.Message; return; }
 		TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Masks;
 		Result = VoxelLand::M5::WindowCarveMasks::BuildOwned(*Baseline, *Influence, *Columns, *Window, nullptr,
@@ -201,10 +228,77 @@ bool FVoxelLandM5PocketSurfaceColumnsTest::RunTest(const FString& Parameters)
 		Failure = Result.Message;
 		bMask = Result.Code == EVoxelLandM5ErrorCode::None && Masks && Masks->GetPocketAllowed().Num() == 1
 			&& Masks->GetPocketAllowed()[0] == 1 && Masks->GetProtected()[0] == 0;
+		int64 Live = 0, Peak = 0, BeforeWork = 0, AfterWork = 0;
+		Budget->GetUsage(Live, Peak, BeforeWork);
+		TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> Multi;
+		Result = VoxelLand::M5::WindowCarveMasks::BuildOwned(*Baseline, *Influence, *Columns, *Window, nullptr,
+			FIntVector(4, 4, 4), FIntVector(1, 1, 3), Budget.ToSharedRef(), Never, Multi);
+		Budget->GetUsage(Live, Peak, AfterWork);
+		bMultiDepth = Result.Code == EVoxelLandM5ErrorCode::None && Multi && Multi->GetPocketAllowed().Num() == 3
+			&& Multi->GetPocketAllowed()[0] == 1 && Multi->GetPocketAllowed()[1] == 1 && Multi->GetPocketAllowed()[2] == 0;
+		// Independent accounting: wrapper 2*990+2*3+1; mask scan and
+		// output 3+3*10, one 25-column query (75), roof 8*8*10 cells
+		// (20 each), 9*9*11 prefix entries, three 8-read queries, final 1.
+		bColumnWork = AfterWork - BeforeWork == (2 * 990 + 2 * 3 + 1)
+			+ (3 + 3 * 10 + 75 + 8 * 8 * 10 * 20 + 9 * 9 * 11 + 3 * 8 + 1);
+		const auto PriorMulti = Multi;
+		const int64 CancelThreshold = AfterWork + (2 * 990 + 2 * 3 + 1) + 3;
+		const auto CancelDuringColumns = [&Budget, CancelThreshold] {
+			int64 A = 0, B = 0, C = 0; Budget->GetUsage(A, B, C);
+			return C > CancelThreshold;
+		};
+		Result = VoxelLand::M5::WindowCarveMasks::BuildOwned(*Baseline, *Influence, *Columns, *Window, nullptr,
+			FIntVector(4, 4, 4), FIntVector(1, 1, 3), Budget.ToSharedRef(), CancelDuringColumns, Multi);
+		bColumnCancel = Result.Code == EVoxelLandM5ErrorCode::Cancelled && Multi == PriorMulti;
 		const auto PriorMasks = Masks;
 		Result = VoxelLand::M5::WindowCarveMasks::BuildOwned(*Baseline, *Influence, *Columns, *Window, nullptr,
 			FIntVector(5, 4, 4), FIntVector(1, 1, 1), Budget.ToSharedRef(), Never, Masks);
 		bMissingColumn = Result.Code == EVoxelLandM5ErrorCode::OutOfDomain && Masks == PriorMasks;
+		// Build real owner-bound columns, then use a guarded test-only seam to
+		// vary their evidence. Extremes at opposite tile corners appear in
+		// different 5×5 neighborhoods; one selected sample is protected.
+		TSharedPtr<const FVoxelLandM5PocketSurfaceColumns, ESPMode::ThreadSafe> Varying;
+		Result = FVoxelLandM5PocketSurfaceColumns::Build(Baseline.ToSharedRef(), Influence.ToSharedRef(), *Worker,
+			Min, FIntPoint(2, 2), Budget.ToSharedRef(), Never, Varying);
+		TSharedPtr<const FVoxelLandM5BaselineWindow, ESPMode::ThreadSafe> OracleWindow;
+		if (Result.Code != EVoxelLandM5ErrorCode::None || !Varying
+			|| FVoxelLandM5BaselineWindow::BuildBox(Baseline->GetGeneratorShared(), *Worker, WindowMin,
+				FIntVector(11, 10, 11), Budget.ToSharedRef(), Never, OracleWindow).Code != EVoxelLandM5ErrorCode::None
+			|| !OracleWindow) return;
+		FVoxelLandM5PocketColumnsExtremaFixture::SetNonuniform(*Varying);
+		TArray<uint8> Protected, Authorized;
+		Protected.Init(0, 11 * 10 * 11); Authorized.Init(0, Protected.Num());
+		Protected[5 + 11 * (4 + 10 * 4)] = 1;
+		TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe> OracleMasks;
+		Result = FVoxelLandM5PocketColumnsExtremaFixture::Build(*OracleWindow, *Varying, FIntVector(4, 4, 4),
+			FIntVector(2, 2, 3), Protected, Authorized, Budget.ToSharedRef(), OracleMasks);
+		bExtremaOracle = Result.Code == EVoxelLandM5ErrorCode::None && OracleMasks
+			&& OracleMasks->GetPocketAllowed().Num() == 12;
+		if (bExtremaOracle)
+		{
+			for (int32 Z = 0; Z < 3; ++Z) for (int32 Y = 0; Y < 2; ++Y) for (int32 X = 0; X < 2; ++X)
+			{
+				int64 Lowest = MAX_int64, Highest = MIN_int64;
+				for (int32 DY = -2; DY <= 2; ++DY) for (int32 DX = -2; DX <= 2; ++DX)
+				{
+					int64 Lo = 0, Hi = 0;
+					bExtremaOracle &= Varying->GetSurfaceBounds(X + DX, Y + DY, Lo, Hi);
+					Lowest = FMath::Min(Lowest, Lo); Highest = FMath::Max(Highest, Hi);
+				}
+				const int64 SampleZ = -1000 + 100 * Z;
+				const bool bProtected = X == 1 && Y == 0 && Z == 0;
+				const uint8 Expected = !bProtected && Lowest - SampleZ >= 2000 && Highest - SampleZ <= 3500;
+				bExtremaOracle &= OracleMasks->GetPocketAllowed()[X + 2 * (Y + 2 * Z)] == Expected;
+			}
+			// Explicit cases detect missing minimum, missing maximum and protection.
+			bExtremaOracle &= OracleMasks->GetPocketAllowed()[0] == 1
+				&& OracleMasks->GetPocketAllowed()[4] == 0 && OracleMasks->GetPocketAllowed()[3] == 0
+				&& OracleMasks->GetPocketAllowed()[1] == 0;
+		}
+		const auto PriorOracle = OracleMasks;
+		Result = FVoxelLandM5PocketColumnsExtremaFixture::Build(*OracleWindow, *Varying, FIntVector(5, 4, 4),
+			FIntVector(2, 2, 3), Protected, Authorized, Budget.ToSharedRef(), OracleMasks);
+		bExtremaMissing = Result.Code == EVoxelLandM5ErrorCode::OutOfDomain && OracleMasks == PriorOracle;
 	}).Wait();
 	// A second real M4 source puts the surface exactly on lattice Z=20.
 	// The zero lies far outside the local window used above and must reject.
@@ -300,6 +394,11 @@ bool FVoxelLandM5PocketSurfaceColumnsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("missing neighboring column preserves prior masks"), bMissingColumn);
 	TestTrue(TEXT("mid-scan cancellation preserves prior columns"), bCancel);
 	TestTrue(FString::Printf(TEXT("owned mask uses complete column bounds: %s"), *Failure), bMask);
-	return bSetup && bTall && bAllNeighbors && bBounds && bForeign && bForeignInfluence && bWrongThread && bMissingColumn && bCancel && bMask && bZeroRejected && bCrossingSamples && bCrossingRejected;
+	TestTrue(TEXT("reused extrema preserve per-Z pocket depth boundaries"), bMultiDepth);
+	TestTrue(TEXT("owned extrema work is charged once per XY"), bColumnWork);
+	TestTrue(TEXT("cancellation during extrema precompute preserves output"), bColumnCancel);
+	TestTrue(TEXT("nonuniform 5x5 extrema agree with independent oracle"), bExtremaOracle);
+	TestTrue(TEXT("missing nonuniform neighbor preserves output"), bExtremaMissing);
+	return bSetup && bTall && bAllNeighbors && bBounds && bForeign && bForeignInfluence && bWrongThread && bMissingColumn && bCancel && bMask && bMultiDepth && bColumnWork && bColumnCancel && bExtremaOracle && bExtremaMissing && bZeroRejected && bCrossingSamples && bCrossingRejected;
 }
 #endif

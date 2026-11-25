@@ -103,10 +103,14 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 				EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Incomplete roof and mesher halo"));
 		}
 	}
-	int64 Side = 0, PocketWork = 0, Bytes = 0;
+	int64 Side = 0, PocketWork = 0, ColumnWork = 0, ColumnBytes = 0, Bytes = 0;
 	if (!TryMultiply(Radius, 2, Side) || !TryAdd(Side, 4, Side)
-		|| (bPocketEnabled
-			&& (!TryMultiplyNonNegative(25, Columns ? 1 : Size.Z, PocketWork) || !TryMultiplyNonNegative(PocketWork, 3, PocketWork)))
+		|| (bPocketEnabled && Columns
+			&& (!TryMultiplyNonNegative(OutputXY, 75, ColumnWork)
+				|| !TryMultiplyNonNegative(OutputXY, 4 * int64(sizeof(int64)), ColumnBytes)
+				|| !TryAdd(ColumnBytes, 4096, ColumnBytes)))
+		|| (bPocketEnabled && !Columns
+			&& (!TryMultiplyNonNegative(25, Size.Z, PocketWork) || !TryMultiplyNonNegative(PocketWork, 3, PocketWork)))
 		|| !TryMultiplyNonNegative(Outputs, 3, Bytes) || !TryAdd(Bytes, 4096, Bytes))
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
@@ -147,6 +151,9 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 			}
 		}
 	}
+	// Cached owned columns require only one depth comparison per voxel; all
+	// 25 extrema queries are charged once per XY and retain both bounds.
+	if (bPocketEnabled && Columns) PocketWork = 3;
 	int64 Work = 0, BaseWork = 0, SearchWork = 0;
 	int64 Grid[3] = {}, Prefix[3] = {}, GridCount = 1, PrefixCount = 1, PrefixBytes = 0;
 	if (Unprotected > 0)
@@ -174,7 +181,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 	// Seven output units remain after the charged scan; pocket validation is
 	// still required for protected samples because it can return Unproven.
 	if (!TryAdd(7, PocketWork, BaseWork) || !TryMultiplyNonNegative(Outputs, BaseWork, Work)
-		|| !TryAdd(Work, SearchWork, Work) || !TryAdd(Work, 1, Work))
+		|| !TryAdd(Work, SearchWork, Work) || !TryAdd(Work, ColumnWork, Work) || !TryAdd(Work, 1, Work))
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 			EVoxelLandM5ErrorCode::ArithmeticOverflow, TEXT("Carve mask work or memory overflow"));
@@ -183,6 +190,39 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 	{
 		return FVoxelLandM5CarveMasksInternals::CarveMasksError(
 			EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask admission exhausted"));
+	}
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> ColumnLease;
+	TArray<int64> ColumnLower, ColumnUpper;
+	if (bPocketEnabled && Columns)
+	{
+		if (OriginCm.X % SpacingCm || OriginCm.Y % SpacingCm || OriginCm.Z % SpacingCm)
+			return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+				EVoxelLandM5ErrorCode::InvalidInput, TEXT("Pocket window is off lattice"));
+		if (!Budget->TryReserveBytes(ColumnBytes, ColumnLease))
+			return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+				EVoxelLandM5ErrorCode::BudgetExceeded, TEXT("Carve mask column admission exhausted"));
+		ColumnLower.SetNumUninitialized(int32(OutputXY));
+		ColumnUpper.SetNumUninitialized(int32(OutputXY));
+		for (int64 OY = 0; OY < Count.Y; ++OY)
+			for (int64 OX = 0; OX < Count.X; ++OX)
+			{
+				if (((OX + int64(Count.X) * OY) & 63) == 0 && IsCancelled())
+					return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+						EVoxelLandM5ErrorCode::Cancelled, TEXT("Carve mask generation cancelled"));
+				int64 Lowest = MAX_int64, Highest = MIN_int64;
+				for (int64 DY = -2; DY <= 2; ++DY)
+					for (int64 DX = -2; DX <= 2; ++DX)
+					{
+						int64 Lo = 0, Hi = 0;
+						if (!Columns->GetSurfaceBounds(OriginCm.X / SpacingCm + Start.X + OX + DX,
+							OriginCm.Y / SpacingCm + Start.Y + OY + DY, Lo, Hi))
+							return FVoxelLandM5CarveMasksInternals::CarveMasksError(
+								EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Pocket column tile is incomplete"));
+						Lowest = FMath::Min(Lowest, Lo); Highest = FMath::Max(Highest, Hi);
+					}
+				const int32 I = int32(OX + int64(Count.X) * OY);
+				ColumnLower[I] = Lowest; ColumnUpper[I] = Highest;
+			}
 	}
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> PrefixLease;
 	TArray<uint32> RoofPrefix;
@@ -266,16 +306,8 @@ FVoxelLandM5Diagnostic FVoxelLandM5CarveMasks::BuildImpl(FIntVector Size, const 
 					int64 Lowest = MAX_int64, Highest = MIN_int64;
 					if (Columns)
 					{
-						if (OriginCm.X % SpacingCm || OriginCm.Y % SpacingCm || OriginCm.Z % SpacingCm)
-							return FVoxelLandM5CarveMasksInternals::CarveMasksError(EVoxelLandM5ErrorCode::InvalidInput, TEXT("Pocket window is off lattice"));
-						for (int64 DY = -2; DY <= 2; ++DY)
-							for (int64 DX = -2; DX <= 2; ++DX)
-							{
-								int64 Lo = 0, Hi = 0;
-								if (!Columns->GetSurfaceBounds(OriginCm.X / SpacingCm + X + DX, OriginCm.Y / SpacingCm + Y + DY, Lo, Hi))
-									return FVoxelLandM5CarveMasksInternals::CarveMasksError(EVoxelLandM5ErrorCode::OutOfDomain, TEXT("Pocket column tile is incomplete"));
-								Lowest = FMath::Min(Lowest, Lo); Highest = FMath::Max(Highest, Hi);
-							}
+						const int32 ColumnIndex = int32(OX + int64(Count.X) * OY);
+						Lowest = ColumnLower[ColumnIndex]; Highest = ColumnUpper[ColumnIndex];
 						const int64 SampleZ = OriginCm.Z + Z * SpacingCm;
 						bDepthAllowed = Lowest - SampleZ >= MinPocketDepthCm && Highest - SampleZ <= MaxPocketDepthCm;
 					}

@@ -27,6 +27,9 @@ public:
 		const FVoxelLandM5Budget& Budget) const;
 	bool GetSurfaceBounds(int64 LatticeX, int64 LatticeY, int64& OutMinCm, int64& OutMaxCm) const;
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5PocketColumnsExtremaFixture;
+#endif
 	FVoxelLandM5PocketSurfaceColumns(TVoxelLandM5ConstRef<FVoxelLandM5BoundBaseline> InBaseline,
 		TVoxelLandM5ConstRef<FVoxelLandM5InfluenceSet> InInfluence, FVoxelLandM5BudgetRef InBudget,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);

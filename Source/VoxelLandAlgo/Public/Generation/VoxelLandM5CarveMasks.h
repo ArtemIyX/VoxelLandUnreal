@@ -53,6 +53,9 @@ public:
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5CarveMasks, ESPMode::ThreadSafe>& OutMasks);
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FVoxelLandM5PocketColumnsExtremaFixture;
+#endif
 	friend class FVoxelLandM5OwnedWindowCarveMasks;
 	static FVoxelLandM5Diagnostic BuildImpl(FIntVector Size, const FVoxelLandM5PointCm& OriginCm, int64 SpacingCm,
 		FIntVector Start, FIntVector Count, TConstArrayView<int16> Baseline, TConstArrayView<uint8> Protection,

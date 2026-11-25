@@ -4,6 +4,10 @@
 #include "Data/Enums/VoxelLandM5WaterPolicy.h"
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Data/Structs/VoxelLandM5WorldSnapshot.h"
+#include "Generation/VoxelLandM5DefinitionInputs.h"
+#include "Generation/VoxelLandM5ValidatedDefinition.h"
+#include "Operators/VoxelLandOperator.h"
+#include "World/VoxelLandM5DefinitionValidator.h"
 #include "Generation/VoxelLandGenerator.h"
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5ProtectionGrid.h"
@@ -26,6 +30,8 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	bool bMismatchAtomic = false;
 	bool bPolicyAtomic = false;
 	bool bDryIdentity = false, bDryMismatchAtomic = false;
+	bool bDefinition = false, bDefinitionBounds = false, bDefinitionAtomic = false, bDefinitionDefault = false;
+	bool bDefinitionFrozen = false, bTooltipHistory = false;
 	bool bMaskIdentity = false, bMaskCellChanged = false, bMaskGeometryChanged = false;
 	bool bMaskEncoding = false;
 	bool bMaskMissing = false, bMaskForeign = false, bMaskWater = false, bMaskCancelled = false;
@@ -35,6 +41,15 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	bool bReleased = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
+		FVoxelLandM5WorldSnapshot Presentation;
+		auto& ParameterText = Presentation.Base.Continental.Source.Parameters.AddDefaulted_GetRef().Tooltip;
+		auto& FunctionText = Presentation.Base.Continental.Source.Functions.AddDefaulted_GetRef().Inputs.AddDefaulted_GetRef().Tooltip;
+		ParameterText = FText::Format(FText::FromString(TEXT("{0}")), FText::GetEmpty());
+		FunctionText = FText::Format(FText::FromString(TEXT("{0}")), FText::GetEmpty());
+		const bool bHistoryExists = ParameterText.IsEmpty() && FunctionText.IsEmpty()
+			&& !ParameterText.IdenticalTo(FText::GetEmpty()) && !FunctionText.IdenticalTo(FText::GetEmpty());
+		FVoxelLandM5DefinitionValidator::TestSanitizeTooltips(Presentation);
+		bTooltipHistory = bHistoryExists && ParameterText.IdenticalTo(FText::GetEmpty()) && FunctionText.IdenticalTo(FText::GetEmpty());
 		FVoxelLandM5WorldSnapshot Snapshot;
 		Snapshot.Base.Domain.bGlobalErosion = false;
 		Snapshot.Base.OverhangNodeId = FGuid(1, 2, 3, 4);
@@ -68,6 +83,11 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 		{
 			Channel->Source.Nodes = {Constant, Output};
 			Channel->Source.Links = {Link};
+			FVoxelLandGraphParameter Parameter;
+			Parameter.Id = FGuid(9, 8, 7, 6); Parameter.Name = TEXT("Unused");
+			// Empty display text with a nontrivial format history.
+			Parameter.Tooltip = FText::Format(FText::FromString(TEXT("{0}")), FText::GetEmpty());
+			Channel->Source.Parameters.Add(Parameter);
 			FVoxelLandProgramDraft Draft;
 			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 			if (!FVoxelLandGraphCompiler::Compile(Channel->Source, Draft, Error)
@@ -133,6 +153,46 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 				Snapshot, DryBudget.ToSharedRef(), [] { return false; }, DryIdentity);
 			bDryMismatchAtomic = DryBefore && DryMismatch.Code == EVoxelLandM5ErrorCode::InvalidInput
 				&& DryIdentity.Get() == DryBefore;
+		}
+		// Native explicit finite definition binds complete descriptor and declared bounds.
+		Snapshot.Manifest.Descriptor = 2;
+		auto SnapshotOwner = MakeShared<FVoxelLandM5WorldSnapshot, ESPMode::ThreadSafe>(Snapshot);
+		auto RegistryOwner = MakeShared<FVoxelLandOperatorRegistrySnapshot, ESPMode::ThreadSafe>(FVoxelLandOperatorRegistry::Snapshot());
+		TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> DefinitionBudget;
+		if (FVoxelLandM5Budget::TryCreate(64ll * 1024 * 1024, 100000000, DefinitionBudget))
+		{
+			FVoxelLandM5DefinitionInputs Inputs{SnapshotOwner, nullptr, RegistryOwner, Snapshot.Caves.Bounds, true, true};
+			TVoxelLandM5ConstPtr<FVoxelLandM5ValidatedDefinition> Definition;
+			const auto Valid = FVoxelLandM5DefinitionValidator::Validate(Inputs, DefinitionBudget.ToSharedRef(), [] { return false; }, Definition);
+			bDefinition = Valid.Code == EVoxelLandM5ErrorCode::None && Definition
+				&& &Definition->GetSnapshot() != &SnapshotOwner.Get() && &Definition->GetRegistry() != &RegistryOwner.Get()
+				&& Definition->UsesBudget(*DefinitionBudget) && Definition->GetCanonicalBytes().Num() > DryExpected.CanonicalBytes.Num();
+			if (Definition)
+			{
+				const auto BeforeDefinition = Definition;
+				const int64 OriginalSeed = Definition->GetSnapshot().Base.Seed;
+				SnapshotOwner->Base.Seed ^= 1;
+				bDefinitionFrozen = Definition->GetSnapshot().Base.Seed == OriginalSeed
+					&& SnapshotOwner->Base.Continental.Source.Parameters[0].Tooltip.IsEmpty()
+					&& !SnapshotOwner->Base.Continental.Source.Parameters[0].Tooltip.IdenticalTo(FText::GetEmpty())
+					&& Definition->GetSnapshot().Base.Continental.Source.Parameters[0].Tooltip.IdenticalTo(FText::GetEmpty());
+				SnapshotOwner->Base.Seed ^= 1;
+				Inputs.bAuthoritativeDryWorld = false;
+				const auto Dry = FVoxelLandM5DefinitionValidator::Validate(Inputs, DefinitionBudget.ToSharedRef(), [] { return false; }, Definition);
+				Inputs.bAuthoritativeDryWorld = true;
+				const auto Cancel = FVoxelLandM5DefinitionValidator::Validate(Inputs, DefinitionBudget.ToSharedRef(), [] { return true; }, Definition);
+				bDefinitionAtomic = Dry.Code == EVoxelLandM5ErrorCode::InvalidInput && Cancel.Code == EVoxelLandM5ErrorCode::Cancelled && Definition == BeforeDefinition;
+				Inputs.bExplicitBounds = false;
+				const auto Default = FVoxelLandM5DefinitionValidator::Validate(Inputs, DefinitionBudget.ToSharedRef(), [] { return false; }, Definition);
+				bDefinitionDefault = Default.Code == EVoxelLandM5ErrorCode::Unproven && Definition == BeforeDefinition;
+				Inputs.bExplicitBounds = true;
+				++Inputs.EffectiveBounds.MinInclusive.X;
+				const auto Changed = FVoxelLandM5DefinitionValidator::Validate(Inputs, DefinitionBudget.ToSharedRef(), [] { return false; }, Definition);
+				bDefinitionBounds = Changed.Code == EVoxelLandM5ErrorCode::None && Definition
+					&& Definition->GetCanonicalBytes().Num() == BeforeDefinition->GetCanonicalBytes().Num()
+					&& FMemory::Memcmp(Definition->GetCanonicalBytes().GetData(), BeforeDefinition->GetCanonicalBytes().GetData(),
+						Definition->GetCanonicalBytes().Num()) != 0;
+			}
 		}
 		// Descriptor 3 retains the full mask rather than only its hash.
 		Snapshot.Manifest.Descriptor = 3;
@@ -283,6 +343,12 @@ bool FVoxelLandM5MeteredIdentityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("unimplemented water and masks reject atomically"), bPolicyAtomic);
 	TestTrue(TEXT("metered dry identity matches unmetered identity"), bDryIdentity);
 	TestTrue(TEXT("metered dry descriptor mismatch preserves output"), bDryMismatchAtomic);
+	TestTrue(TEXT("native finite definition retains source owners and canonical descriptor"), bDefinition);
+	TestTrue(TEXT("declared effective bounds change full identity"), bDefinitionBounds);
+	TestTrue(TEXT("definition snapshot is independent of mutable input alias"), bDefinitionFrozen);
+	TestTrue(TEXT("parameter and function-input empty-display histories are canonicalized"), bTooltipHistory);
+	TestTrue(TEXT("definition rejects missing dry declaration and cancellation atomically"), bDefinitionAtomic);
+	TestTrue(TEXT("unproved default domain rejects atomically"), bDefinitionDefault);
 	TestTrue(TEXT("dry mask descriptor has an identity"), bMaskIdentity);
 	TestTrue(TEXT("mask descriptor uses the independent canonical suffix"), bMaskEncoding);
 	TestTrue(TEXT("mask cell changes identity"), bMaskCellChanged);

@@ -107,16 +107,17 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 	FVoxelLandMeshingScratch& Scratch, FVoxelLandMeshData& OutMesh, TFunctionRef<bool()> IsCancelled, bool bUnlimitedM4)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SurfaceNets);
-	if (Chunk.Key.LOD != 0
-	    || !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, VoxelSizeCm, bUnlimitedM4)
-	    || Chunk.Density.Num() != FVoxelLandChunkData::SampleCount || !FMath::IsFinite(VoxelSizeCm) || VoxelSizeCm <= 0
-	    || !FMath::IsFinite(VoxelSizeCm * 34.f))
+	float LevelSpacingCm = 0.f;
+	if (Chunk.Key.LOD > 1 || (Chunk.Key.LOD != 0 && bUnlimitedM4)
+		|| !VoxelLandMeshCoordinates::TryGetLevelSpacing(VoxelSizeCm, Chunk.Key.LOD, LevelSpacingCm)
+		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(Chunk.Key.Coordinate, LevelSpacingCm, bUnlimitedM4)
+		|| Chunk.Density.Num() != FVoxelLandChunkData::SampleCount)
 	{
 		return EVoxelLandMeshResult::InvalidInput;
 	}
 	FVoxelLandMeshData Mesh;
-	const double Grid = VoxelLandMeshCoordinates::Grid(VoxelSizeCm);
-	const FVector Origin = VoxelLandMeshCoordinates::RenderOrigin(Chunk.Key.Coordinate, VoxelSizeCm);
+	const double Grid = VoxelLandMeshCoordinates::Grid(LevelSpacingCm);
+	const FVector Origin = VoxelLandMeshCoordinates::RenderOrigin(Chunk.Key.Coordinate, LevelSpacingCm);
 	Scratch.CellVertices.Init(INDEX_NONE, FVoxelLandMeshingInternals::CellCount * FVoxelLandMeshingInternals::CellCount
 											  * FVoxelLandMeshingInternals::CellCount);
 	for (int32 Z = -1; Z <= 32; ++Z)
@@ -184,9 +185,9 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 				const int64 GX = int64(Chunk.Key.Coordinate.X) * 32 + X;
 				const int64 GY = int64(Chunk.Key.Coordinate.Y) * 32 + Y;
 				const int64 GZ = int64(Chunk.Key.Coordinate.Z) * 32 + Z;
-				const FVector World(VoxelLandMeshCoordinates::Snap((double(GX) + P.X) * VoxelSizeCm, Grid),
-					VoxelLandMeshCoordinates::Snap((double(GY) + P.Y) * VoxelSizeCm, Grid),
-					VoxelLandMeshCoordinates::Snap((double(GZ) + P.Z) * VoxelSizeCm, Grid));
+				const FVector World(VoxelLandMeshCoordinates::Snap((double(GX) + P.X) * LevelSpacingCm, Grid),
+					VoxelLandMeshCoordinates::Snap((double(GY) + P.Y) * LevelSpacingCm, Grid),
+					VoxelLandMeshCoordinates::Snap((double(GZ) + P.Z) * LevelSpacingCm, Grid));
 				V.Position = FVector3f(World - Origin);
 				V.Normal = N;
 				V.Tangent = FVector3f::CrossProduct(Reference, N).GetSafeNormal();
@@ -240,8 +241,8 @@ EVoxelLandMeshResult VoxelLandMeshing::BuildSurfaceNets(const FVoxelLandChunkDat
 					{
 						Swap(Vertices[1], Vertices[3]);
 					}
-					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[1], Vertices[2], VoxelSizeCm);
-					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[2], Vertices[3], VoxelSizeCm);
+					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[1], Vertices[2], LevelSpacingCm);
+					FVoxelLandMeshingInternals::AddTriangle(Mesh, Vertices[0], Vertices[2], Vertices[3], LevelSpacingCm);
 				}
 			}
 		}

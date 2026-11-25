@@ -1,6 +1,6 @@
 # VoxelLand M7 task tracker
 
-**Progress** 1 of 6 phases verified through source and contract audit. **Next** M7.1 finite two-level generation and meshing.
+**Progress** 1 of 6 phases verified through source and contract audit. **Implemented** M7.1 finite two-level generation and meshing. **Next** M7.2 edge normals and tangents.
 
 See the example project's [M7 technical description](../../../Docs/VoxelLand_M7_Technical_Description.md) and [implementation plan](../../../Docs/VoxelLand_M7_Plan.md).
 
@@ -22,7 +22,7 @@ M7.1 uses level spacing `S × 2^L` and samples base-lattice coordinate `(32 × K
 
 ## M7.1 — Two levels through ordinary generation
 
-- [ ] Add checked aligned LOD1 sampling and ordinary CPU meshing. Preserve legacy LOD0 density, hashes and mesh behavior when M7 is disabled.
+- [x] Add checked aligned LOD1 sampling and ordinary CPU meshing. Preserve legacy LOD0 density, hashes and mesh behavior when M7 is disabled.
 - [ ] Verify coincident samples and same-LOD positions/ownership across faces, edges and corners. Include negative coordinates, limits and request order.
 
 ## M7.2 — Edge normals and tangents
@@ -54,5 +54,6 @@ M7.1 uses level spacing `S × 2^L` and samples base-lattice coordinate `(32 × K
 | --- | --- | --- |
 | 2026-11-25 | Planning | Tracker initialized on `VOXEL-7` at `5932627`. |
 | 2026-11-25 | M7.0 | Audited project `7b936eb` and plugin `5932627`. Graphify traced Surface Nets and finite/local M4/M6 field paths across 339 C++ files, 5,070 nodes and 10,436 edges. Corroborated the integration points in source because Unreal macros and unresolved graph endpoints limit extraction. Recorded numeric footprints, LOD0 compatibility and the finite two-level reference. Static review found no critical issues. No build, test or editor execution. |
+| 2026-11-25 | M7.1 | Added ordinary finite LOD1 generation, full-footprint admission, base-lattice compatibility tile reuse, exact stride-two sampling and level spacing in Surface Nets. Actor coarse demand and publication are still gated. Static review found no critical issues. Authored `VoxelLand.M7.Lod.FiniteCoincidence` and `VoxelLand.M7.Lod.MeshSeams`. Build and tests remain unexecuted. |
 
 Update the log after each phase with its commit, relevant paths, review findings and executed checks. Leave a checkbox open if its evidence is pending.

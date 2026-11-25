@@ -1478,6 +1478,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
+	if (Key.LOD != 0)
+	{
+		return GenerateM7FiniteChunk(Key, Worker, OutChunk, IsCancelled);
+	}
 	if (!M6Filters.IsEmpty() || M6RedistanceBand > 0)
 	{
 		const FVoxelLandM6FilterPlan Plan = MakeM6FilterPlan(Key);
@@ -1516,6 +1520,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 
 FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const
 {
+	if (Key.LOD != 0)
+	{
+		return ValidateM7FiniteDemand(Key);
+	}
 	if (!M6Filters.IsEmpty() || M6RedistanceBand > 0)
 	{
 		const FVoxelLandM6FilterPlan Plan = MakeM6FilterPlan(Key);

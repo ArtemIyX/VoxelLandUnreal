@@ -17,6 +17,22 @@ struct FVoxelLandMeshData
 // from the maximum local extent, not from an assumed voxel size.
 namespace VoxelLandMeshCoordinates
 {
+inline bool TryGetLevelSpacing(float BaseVoxelSizeCm, uint8 Lod, float& OutSpacingCm)
+{
+	constexpr uint8 MaxPlannedLod = 5;
+	if (Lod > MaxPlannedLod || !FMath::IsFinite(BaseVoxelSizeCm) || BaseVoxelSizeCm <= 0.f)
+	{
+		return false;
+	}
+	const float Spacing = BaseVoxelSizeCm * float(1 << Lod);
+	if (!FMath::IsFinite(Spacing * 34.f))
+	{
+		return false;
+	}
+	OutSpacingCm = Spacing;
+	return true;
+}
+
 // Keep local fractional-cell interpolation above double precision noise.
 // This is a conservative 2^20-voxel envelope, not a measured M1 limit.
 inline bool IsKeyInPrecisionRange(const FIntVector& Key)

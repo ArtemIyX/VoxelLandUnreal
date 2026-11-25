@@ -198,6 +198,11 @@ private:
 	FVoxelLandError ValidateM6BaselineFootprint(const FVoxelLandChunkKey& Key, int32 Halo) const;
 	FVoxelLandError GenerateM6BaselineBox(const FVoxelLandChunkKey& Key, int32 Halo,
 		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateM4TiledBaselineBox(const FInt64Vector& MinLattice, int32 Axis,
+		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError ValidateM7FiniteDemand(const FVoxelLandChunkKey& Key) const;
+	FVoxelLandError GenerateM7FiniteChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateM6LocalBaselineBox(const FVoxelLandChunkKey& Key, int32 Halo,
 		TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateM6ProcessedChunk(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan,

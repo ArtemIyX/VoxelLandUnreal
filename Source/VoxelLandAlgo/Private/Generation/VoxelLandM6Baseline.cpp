@@ -82,13 +82,22 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6BaselineFootprint(const FVoxelLan
 FVoxelLandError FVoxelLandGenerator::GenerateM6BaselineBox(const FVoxelLandChunkKey& Key, int32 Halo,
 	FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const
 {
-	check(M4HeightGrid && !M4Unlimited && OwnsWorkerOnCurrentThread(Worker));
-	constexpr int32 MaxTile = FVoxelLandChunkData::SamplesPerAxis;
-	const int32 Axis = MaxTile + 2 * Halo;
-	const int32 CompatibilityHalo = GetM6CompatibilityHalo();
-	const int32 Strength = int32(double(SmoothStrength) * MAX_uint16 + 0.5);
+	const int32 Axis = FVoxelLandChunkData::SamplesPerAxis + 2 * Halo;
 	const FInt64Vector MinLattice =
 		FInt64Vector(Key.Coordinate) * int64(FVoxelLandChunkData::Cells) - FInt64Vector(1 + Halo);
+	return GenerateM4TiledBaselineBox(MinLattice, Axis, Worker, Density, IsCancelled);
+}
+
+FVoxelLandError FVoxelLandGenerator::GenerateM4TiledBaselineBox(const FInt64Vector& MinLattice, int32 Axis,
+	FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const
+{
+	check(M4HeightGrid && !M4Unlimited && OwnsWorkerOnCurrentThread(Worker));
+	// Both callers admit their complete box before tiling. The two-level
+	// checkpoint is the larger allowed box: 35 outputs at stride two.
+	constexpr int32 MaxTile = FVoxelLandChunkData::SamplesPerAxis;
+	check(Axis >= 1 && Axis <= 2 * (MaxTile - 1) + 1);
+	const int32 CompatibilityHalo = GetM6CompatibilityHalo();
+	const int32 Strength = int32(double(SmoothStrength) * MAX_uint16 + 0.5);
 	Density.SetNumUninitialized(Axis * Axis * Axis);
 	for (int32 Z = 0; Z < Axis; Z += MaxTile)
 	{

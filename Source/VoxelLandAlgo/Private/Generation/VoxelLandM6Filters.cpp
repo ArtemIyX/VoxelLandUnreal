@@ -1,6 +1,7 @@
 #include "Generation/VoxelLandGenerator.h"
 
 #include "Generation/VoxelLandM6FilterPlan.h"
+#include "Generation/VoxelLandM6Redistance.h"
 #include "Generation/VoxelLandM6StampMath.h"
 #include "Generation/VoxelLandQuantizedDensity.h"
 
@@ -129,21 +130,21 @@ FVoxelLandError FVoxelLandM6FilterExecution::Apply(const FVoxelLandM6FilterStage
 	return {};
 }
 
-FVoxelLandError FVoxelLandGenerator::GenerateM6FilteredChunk(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan,
+FVoxelLandError FVoxelLandGenerator::GenerateM6ProcessedChunk(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan,
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
 	if (IsInGameThread())
 	{
-		return {EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("M6 filter generation requires a worker thread")};
+		return {EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("M6 pipeline requires a worker thread")};
 	}
 	if (!OwnsWorkerOnCurrentThread(Worker))
 	{
-		return {EVoxelLandErrorCode::InvalidContext, TEXT("M6 filter worker belongs to a different generator or thread")};
+		return {EVoxelLandErrorCode::InvalidContext, TEXT("M6 pipeline worker belongs to a different generator or thread")};
 	}
 	if (IsCancelled())
 	{
-		return {EVoxelLandErrorCode::Cancelled, TEXT("M6 filter generation cancelled")};
+		return {EVoxelLandErrorCode::Cancelled, TEXT("M6 pipeline cancelled")};
 	}
 	if (const FVoxelLandError Error = ValidateM6FilterDemand(Key, Plan))
 	{
@@ -191,6 +192,16 @@ FVoxelLandError FVoxelLandGenerator::GenerateM6FilteredChunk(const FVoxelLandChu
 		InputAxis = OutputAxis;
 	}
 
+	if (Plan.RedistanceBand > 0)
+	{
+		if (const FVoxelLandError Error =
+				FVoxelLandM6Redistance::Apply(Current, InputAxis, Plan.RedistanceBand, Next, IsCancelled))
+		{
+			return Error;
+		}
+		Swap(Current, Next);
+		InputAxis = StoredAxis;
+	}
 	check(InputAxis == StoredAxis);
 	const TSharedRef<FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk = MakeShared<FVoxelLandChunkData, ESPMode::ThreadSafe>();
 	Chunk->Key = Key;

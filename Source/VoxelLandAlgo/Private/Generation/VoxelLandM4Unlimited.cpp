@@ -125,6 +125,7 @@ FVoxelLandError PrepareFiniteBaseline(const FVoxelLandGeneratorSettings& FinalSe
 	ShapingSettings.M6Spheres = {};
 	ShapingSettings.M6Stamps = {};
 	ShapingSettings.M6Filters = {};
+	ShapingSettings.M6Redistance = {};
 	return Config.SmoothOverride.IsSet()
 		? FVoxelLandGenerator::CreateM4HeightField(ShapingSettings, Grid, Config.bNormalizeSlope, Config.Overhang,
 			Config.SmoothOverride.GetValue(), Config.HeightDetail, OutGenerator)

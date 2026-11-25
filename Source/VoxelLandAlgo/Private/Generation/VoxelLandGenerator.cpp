@@ -483,6 +483,7 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	LocalSettings.M6Spheres = {};
 	LocalSettings.M6Stamps = {};
 	LocalSettings.M6Filters = {};
+	LocalSettings.M6Redistance = {};
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Result;
 	if (FVoxelLandError Error = CreateInternal(LocalSettings, nullptr, false, nullptr, Result))
 	{
@@ -500,6 +501,13 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	if (Settings.M6Filters.IsActive())
 	{
 		if (const FVoxelLandError Error = Mutable->InitializeM6Filters(Settings.M6Filters, Size))
+		{
+			return Error;
+		}
+	}
+	if (Settings.M6Redistance.bEnabled)
+	{
+		if (const FVoxelLandError Error = Mutable->InitializeM6Redistance(Settings.M6Redistance, Size))
 		{
 			return Error;
 		}
@@ -573,12 +581,13 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	const bool bLegacySpheres = Settings.M6Spheres.IsActive();
 	const bool bGenericStamps = Settings.M6Stamps.IsActive();
 	const bool bRegionFilters = Settings.M6Filters.IsActive();
+	const bool bRedistance = Settings.M6Redistance.bEnabled;
 	if (bLegacySpheres && bGenericStamps)
 	{
 		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("Only one M6 stamp list can be active"));
 	}
-	if ((bLegacySpheres || bGenericStamps || bRegionFilters) && (!HeightGrid || IsCancelled))
+	if ((bLegacySpheres || bGenericStamps || bRegionFilters || bRedistance) && (!HeightGrid || IsCancelled))
 	{
 		return FVoxelLandGeneratorValidation::Fail(EVoxelLandErrorCode::InvalidParameter,
 			TEXT("M6 settings require an ordinary supported M4 generator"));
@@ -622,6 +631,13 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	if (bRegionFilters)
 	{
 		if (const FVoxelLandError Error = Result->InitializeM6Filters(Settings.M6Filters, Profile.VoxelSizeCm))
+		{
+			return Error;
+		}
+	}
+	if (bRedistance)
+	{
+		if (const FVoxelLandError Error = Result->InitializeM6Redistance(Settings.M6Redistance, Profile.VoxelSizeCm))
 		{
 			return Error;
 		}
@@ -1462,12 +1478,12 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 	TFunctionRef<bool()> IsCancelled) const
 {
-	if (!M6Filters.IsEmpty())
+	if (!M6Filters.IsEmpty() || M6RedistanceBand > 0)
 	{
 		const FVoxelLandM6FilterPlan Plan = MakeM6FilterPlan(Key);
-		if (Plan.ActiveStages != 0)
+		if (Plan.IsActive())
 		{
-			return GenerateM6FilteredChunk(Key, Plan, Worker, OutChunk, IsCancelled);
+			return GenerateM6ProcessedChunk(Key, Plan, Worker, OutChunk, IsCancelled);
 		}
 	}
 	if (M4Unlimited)
@@ -1500,10 +1516,10 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 
 FVoxelLandError FVoxelLandGenerator::ValidateM4ChunkDemand(const FVoxelLandChunkKey& Key) const
 {
-	if (!M6Filters.IsEmpty())
+	if (!M6Filters.IsEmpty() || M6RedistanceBand > 0)
 	{
 		const FVoxelLandM6FilterPlan Plan = MakeM6FilterPlan(Key);
-		if (Plan.ActiveStages != 0)
+		if (Plan.IsActive())
 		{
 			return ValidateM6FilterDemand(Key, Plan);
 		}

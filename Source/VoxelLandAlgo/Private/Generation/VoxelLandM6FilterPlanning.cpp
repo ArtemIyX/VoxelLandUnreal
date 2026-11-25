@@ -2,6 +2,7 @@
 
 #include "Data/Structs/VoxelLandCanonicalWriter.h"
 #include "Generation/VoxelLandM6FilterPlan.h"
+#include "Generation/VoxelLandM6Redistance.h"
 #include "Generation/VoxelLandM6StampMath.h"
 
 class FVoxelLandM6FilterPlanning final
@@ -11,11 +12,6 @@ public:
 	static int64 DivideUp(int64 Value, int64 Divisor);
 	static bool Ordered(const FInt64Vector& Min, const FInt64Vector& Max);
 	static bool IsWithinMaskLimit(const FInt64Vector& Point);
-	static int32 Radius(const FVoxelLandM6FilterStage& Stage)
-	{
-		return Stage.Kind == EVoxelLandM6FilterKind::MakeSpace || Stage.Strength == 0 ? 0 : 1;
-	}
-
 	static void WritePoint(FCanonicalWriter& Writer, const FInt64Vector& Point);
 	static FVoxelLandError ValidateStage(const FVoxelLandM6FilterStage& Stage);
 	static bool IntersectsStoredBox(const FVoxelLandM6FilterStage& Stage, const FInt64Vector& StoredMin,
@@ -119,7 +115,7 @@ FVoxelLandError FVoxelLandGenerator::InitializeM6Filters(const FVoxelLandM6Filte
 				return {EVoxelLandErrorCode::InvalidParameter, TEXT("Duplicate M6 region filter ID")};
 			}
 		}
-		ConfiguredHalo += FVoxelLandM6FilterPlanning::Radius(Stage);
+		ConfiguredHalo += FVoxelLandM6FilterPlan::FilterRadius(Stage);
 	}
 	if (ConfiguredHalo > FVoxelLandM6FilterSettings::MaxHalo)
 	{
@@ -149,12 +145,46 @@ FVoxelLandError FVoxelLandGenerator::InitializeM6Filters(const FVoxelLandM6Filte
 	return {};
 }
 
+FVoxelLandError FVoxelLandGenerator::InitializeM6Redistance(const FVoxelLandM6RedistanceSettings& Settings, float VoxelSizeCm)
+{
+	if (Settings.Version != FVoxelLandM6RedistanceSettings::CurrentVersion || Settings.BandVoxels < 1
+		|| Settings.BandVoxels > FVoxelLandM6RedistanceSettings::MaxBandVoxels)
+	{
+		return {EVoxelLandErrorCode::InvalidParameter, TEXT("Unsupported M6 re-distance version or band")};
+	}
+	if (VoxelSizeCm > float(FVoxelLandM6StampMath::MaxVoxelSizeCm))
+	{
+		return {EVoxelLandErrorCode::InvalidProfile, TEXT("M6 re-distance exceeds the supported voxel size")};
+	}
+
+	int32 ConfiguredHalo = FVoxelLandM6Redistance::HaloForBand(Settings.BandVoxels);
+	for (const FVoxelLandM6FilterStage& Stage : M6Filters)
+	{
+		ConfiguredHalo += FVoxelLandM6FilterPlan::FilterRadius(Stage);
+	}
+	if (ConfiguredHalo > FVoxelLandM6FilterSettings::MaxHalo)
+	{
+		return {EVoxelLandErrorCode::InvalidParameter, TEXT("Configured M6 filters and re-distance exceed the accumulated halo limit")};
+	}
+
+	FCanonicalWriter Writer;
+	constexpr uint32 IdentityTag = 0x4452364d; // M6RD in little endian.
+	Writer.U32(IdentityTag);
+	Writer.U32(Settings.Version);
+	Writer.U8(Settings.BandVoxels);
+	M6RedistanceIdentity = MoveTemp(Writer.Bytes);
+	M6RedistanceBand = Settings.BandVoxels;
+	return {};
+}
+
 FVoxelLandM6FilterPlan FVoxelLandGenerator::MakeM6FilterPlan(const FVoxelLandChunkKey& Key) const
 {
 	static_assert(FVoxelLandM6FilterSettings::MaxStages <= 8);
 	const FInt64Vector StoredMin = FInt64Vector(Key.Coordinate) * int64(FVoxelLandChunkData::Cells) - FInt64Vector(1);
 	const int64 VoxelSizeCm = int64(Profile.VoxelSizeCm);
 	FVoxelLandM6FilterPlan Plan;
+	Plan.RedistanceBand = M6RedistanceBand;
+	Plan.Halo = FVoxelLandM6Redistance::HaloForBand(Plan.RedistanceBand);
 	for (int32 Index = M6Filters.Num() - 1; Index >= 0; --Index)
 	{
 		const FVoxelLandM6FilterStage& Stage = M6Filters[Index];
@@ -164,14 +194,14 @@ FVoxelLandM6FilterPlan FVoxelLandGenerator::MakeM6FilterPlan(const FVoxelLandChu
 		}
 		Plan.ActiveStages |= uint8(1 << Index);
 		Plan.OutputHalo[Index] = uint8(Plan.Halo);
-		Plan.Halo += FVoxelLandM6FilterPlanning::Radius(Stage);
+		Plan.Halo += FVoxelLandM6FilterPlan::FilterRadius(Stage);
 	}
 	return Plan;
 }
 
 FVoxelLandError FVoxelLandGenerator::ValidateM6FilterDemand(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan) const
 {
-	constexpr int64 MaxWorkUnits = 40000000;
+	constexpr int64 MaxWorkUnits = 64000000;
 	constexpr int64 MaxLogicalScratchBytes = 2 * 1024 * 1024;
 	constexpr int64 StoredAxis = FVoxelLandChunkData::SamplesPerAxis;
 	const int64 BaseAxis = StoredAxis + 2 * Plan.Halo;
@@ -180,8 +210,10 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6FilterDemand(const FVoxelLandChun
 	// compatibility halos on each tile and both slope rows/columns per tile.
 	const int64 RawAxis = BaseAxis + 4 * GetM6CompatibilityHalo();
 	const int64 HeightAxis = RawAxis + 4;
+	const int64 RedistanceChecks =
+		int64(FVoxelLandM6Redistance::EdgeChecksPerSample(Plan.RedistanceBand)) * FVoxelLandChunkData::SampleCount;
 	int64 Work = RawAxis * RawAxis * RawAxis * 8 + HeightAxis * HeightAxis * 8
-		+ BaseSamples * (M6Stamps.Num() + 30);
+		+ BaseSamples * (M6Stamps.Num() + 30) + RedistanceChecks;
 	for (int32 Index = 0; Index < M6Filters.Num(); ++Index)
 	{
 		if (Plan.HasStage(Index))
@@ -198,7 +230,7 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6FilterDemand(const FVoxelLandChun
 		+ FVoxelLandChunkData::SampleCount * (sizeof(int16) + 2 * sizeof(uint8));
 	if (Work > MaxWorkUnits || ScratchBytes > MaxLogicalScratchBytes)
 	{
-		return {EVoxelLandErrorCode::InvalidParameter, TEXT("M6 filter work or scratch budget exceeded")};
+		return {EVoxelLandErrorCode::InvalidParameter, TEXT("M6 pipeline work or scratch budget exceeded")};
 	}
 	return ValidateM6BaselineFootprint(Key, Plan.Halo);
 }

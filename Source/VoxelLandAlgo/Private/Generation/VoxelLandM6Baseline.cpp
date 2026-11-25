@@ -20,11 +20,11 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6BaselineFootprint(const FVoxelLan
 {
 	if (Key.LOD != 0)
 	{
-		return {EVoxelLandErrorCode::UnsupportedLod, TEXT("M6 region filters require LOD 0")};
+		return {EVoxelLandErrorCode::UnsupportedLod, TEXT("M6 pipeline requires LOD 0")};
 	}
 	if (Halo < 0 || Halo > FVoxelLandM6FilterSettings::MaxHalo || (!M4HeightGrid && !M4Unlimited))
 	{
-		return {EVoxelLandErrorCode::InvalidContext, TEXT("Invalid M6 region filter baseline context")};
+		return {EVoxelLandErrorCode::InvalidContext, TEXT("Invalid M6 baseline context")};
 	}
 	if (M4Unlimited)
 	{
@@ -55,7 +55,7 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6BaselineFootprint(const FVoxelLan
 	constexpr int64 MaxBaselineZCm = 2000000;
 	if (MinCm.Z < -MaxBaselineZCm || MaxCm.Z > MaxBaselineZCm)
 	{
-		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M6 filter input Z exceeds the M4 fixed range")};
+		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M6 pipeline input Z exceeds the M4 fixed range")};
 	}
 	if (M4Unlimited)
 	{
@@ -69,12 +69,12 @@ FVoxelLandError FVoxelLandGenerator::ValidateM6BaselineFootprint(const FVoxelLan
 	if (bNative && (MinCm.X < -MaxExactFloatCm || MaxCm.X > MaxExactFloatCm
 		|| MinCm.Y < -MaxExactFloatCm || MaxCm.Y > MaxExactFloatCm))
 	{
-		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M6 filter input exceeds the native exact XY lattice")};
+		return {EVoxelLandErrorCode::NonFiniteCoordinate, TEXT("M6 pipeline input exceeds the native exact XY lattice")};
 	}
 	int32 HeightQ8 = 0;
 	if (!M4HeightGrid->Sample(MinCm.X, MinCm.Y, HeightQ8) || !M4HeightGrid->Sample(MaxCm.X, MaxCm.Y, HeightQ8))
 	{
-		return {EVoxelLandErrorCode::InvalidParameter, TEXT("M6 filter input including compatibility halo and slope stencil is outside the M4 grid")};
+		return {EVoxelLandErrorCode::InvalidParameter, TEXT("M6 pipeline input including compatibility halo and slope stencil is outside the M4 grid")};
 	}
 	return {};
 }

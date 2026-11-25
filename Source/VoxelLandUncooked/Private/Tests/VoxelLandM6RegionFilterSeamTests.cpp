@@ -10,9 +10,11 @@
 class FVoxelLandM6RegionSeamFixture final
 {
 public:
-	static FString Run();
+	static FString Run() { return RunMode(false); }
+	static FString RunRedistance() { return RunMode(true); }
 
 private:
+	static FString RunMode(bool bRedistance);
 	using FBase = FVoxelLandM6RegionFilterTestFixture;
 	using FFixture = FBase::FFixture;
 	using FChunkPtr = FBase::FChunkPtr;
@@ -152,13 +154,18 @@ FString FVoxelLandM6RegionSeamFixture::CheckChunks(const FVoxelLandGenerator& Fi
 	FChunkPtr Chunks[ChunkCount];
 	FVoxelLandMeshData Meshes[ChunkCount];
 	FVoxelLandMeshingScratch Scratch[ChunkCount];
+	TUniquePtr<FVoxelLandWorkerContext> FiniteWorker, LocalWorker, BaselineWorker;
+	if (Finite.CreateWorker(FiniteWorker) || Local.CreateWorker(LocalWorker) || Baseline.CreateWorker(BaselineWorker))
+	{
+		return TEXT("Filtered seam workers could not be created");
+	}
 	bool bChanged = false;
 	for (int32 Index = 0; Index < ChunkCount; ++Index)
 	{
 		const FVoxelLandChunkKey Coord = Key(Index);
 		FChunkPtr LocalChunk, BeforeFilters;
-		if (!FBase::Generate(Finite, Coord, Chunks[Index]) || !FBase::Generate(Local, Coord, LocalChunk)
-			|| !FBase::Generate(Baseline, Coord, BeforeFilters)
+		if (Finite.GenerateChunk(Coord, *FiniteWorker, Chunks[Index]) || Local.GenerateChunk(Coord, *LocalWorker, LocalChunk)
+			|| Baseline.GenerateChunk(Coord, *BaselineWorker, BeforeFilters)
 			|| Chunks[Index]->Hash != LocalChunk->Hash || Chunks[Index]->Density != LocalChunk->Density)
 		{
 			return TEXT("Finite and erosion-disabled local filtered fields differ");
@@ -173,7 +180,7 @@ FString FVoxelLandM6RegionSeamFixture::CheckChunks(const FVoxelLandGenerator& Fi
 	}
 	if (!bChanged)
 	{
-		return TEXT("No real chunk was changed by the sequential region filters");
+		return TEXT("No real chunk was changed by the stage under test");
 	}
 
 	int32 AxisCounts[3] = {};
@@ -209,7 +216,7 @@ FString FVoxelLandM6RegionSeamFixture::CheckChunks(const FVoxelLandGenerator& Fi
 	for (int32 Index = ChunkCount - 1; Index >= 0; --Index)
 	{
 		FChunkPtr Reverse;
-		if (!FBase::Generate(Local, Key(Index), Reverse) || Chunks[Index]->Hash != Reverse->Hash
+		if (Local.GenerateChunk(Key(Index), *LocalWorker, Reverse) || Chunks[Index]->Hash != Reverse->Hash
 			|| Chunks[Index]->Density != Reverse->Density)
 		{
 			return TEXT("Reversed requests changed filtered local density");
@@ -218,7 +225,7 @@ FString FVoxelLandM6RegionSeamFixture::CheckChunks(const FVoxelLandGenerator& Fi
 	return {};
 }
 
-FString FVoxelLandM6RegionSeamFixture::Run()
+FString FVoxelLandM6RegionSeamFixture::RunMode(bool bRedistance)
 {
 	FVoxelLandGeneratorSettings Settings;
 	FVoxelLandM4UnlimitedConfig Config;
@@ -243,6 +250,15 @@ FString FVoxelLandM6RegionSeamFixture::Run()
 		FBase::Stage(2, EVoxelLandM6FilterKind::Flatten, FInt64Vector(-750, -500, -550), FInt64Vector(450), 8192),
 		FBase::Stage(3, EVoxelLandM6FilterKind::Smooth, FInt64Vector(-500, -600, -500), FInt64Vector(300), 10000)};
 	Settings.M6Filters.Stages = MakeArrayView(Stages);
+	if (bRedistance)
+	{
+		if (FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, true, {}, Config.SmoothOverride.GetValue(), {}, Baseline))
+		{
+			return TEXT("Pre-re-distance filtered baseline setup failed");
+		}
+		Settings.M6Redistance.bEnabled = true;
+		Settings.M6Redistance.BandVoxels = 2;
+	}
 	if (FVoxelLandGenerator::CreateM4HeightField(Settings, Grid, true, {}, Config.SmoothOverride.GetValue(), {}, Finite)
 		|| FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Local))
 	{
@@ -257,5 +273,13 @@ bool FVoxelLandM6RegionFilterSeamTest::RunTest(const FString& Parameters)
 {
 	const FString Error = Async(EAsyncExecution::ThreadPool, &FVoxelLandM6RegionSeamFixture::Run).Get();
 	return TestTrue(Error.IsEmpty() ? TEXT("Sequential region filters across finite and local chunk seams") : Error, Error.IsEmpty());
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM6RedistanceSeamTest, "VoxelLand.M6.Redistance.FilteredFiniteAndLocalSeams",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandM6RedistanceSeamTest::RunTest(const FString& Parameters)
+{
+	const FString Error = Async(EAsyncExecution::ThreadPool, &FVoxelLandM6RegionSeamFixture::RunRedistance).Get();
+	return TestTrue(Error.IsEmpty() ? TEXT("Re-distance across filtered finite and local chunk seams") : Error, Error.IsEmpty());
 }
 #endif

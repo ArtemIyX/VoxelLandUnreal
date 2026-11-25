@@ -147,6 +147,7 @@ public:
 	// This payload supplements the baseline generator inputs. An inactive stage has no bytes.
 	TConstArrayView<uint8> GetM6StampIdentity() const { return M6StampIdentity; }
 	TConstArrayView<uint8> GetM6FilterIdentity() const { return M6FilterIdentity; }
+	TConstArrayView<uint8> GetM6RedistanceIdentity() const { return M6RedistanceIdentity; }
 	TConstArrayView<uint8> GetM6SphereIdentity() const
 	{
 		return bM6LegacySphereEnvelope ? GetM6StampIdentity() : TConstArrayView<uint8>();
@@ -190,6 +191,7 @@ private:
 	FVoxelLandError ApplyM6Stamps(const FInt64Vector& FirstSampleCm, int32 Axis, TArray<int16>& Density,
 		TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError InitializeM6Filters(const FVoxelLandM6FilterSettings& Settings, float VoxelSizeCm);
+	FVoxelLandError InitializeM6Redistance(const FVoxelLandM6RedistanceSettings& Settings, float VoxelSizeCm);
 	FVoxelLandM6FilterPlan MakeM6FilterPlan(const FVoxelLandChunkKey& Key) const;
 	FVoxelLandError ValidateM6FilterDemand(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan) const;
 	int32 GetM6CompatibilityHalo() const;
@@ -198,7 +200,7 @@ private:
 		FVoxelLandWorkerContext& Worker, TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateM6LocalBaselineBox(const FVoxelLandChunkKey& Key, int32 Halo,
 		TArray<int16>& Density, TFunctionRef<bool()> IsCancelled) const;
-	FVoxelLandError GenerateM6FilteredChunk(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan,
+	FVoxelLandError GenerateM6ProcessedChunk(const FVoxelLandChunkKey& Key, const FVoxelLandM6FilterPlan& Plan,
 		FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 		TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateM4LocalChunkWithStamps(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
@@ -233,6 +235,8 @@ private:
 	TArray<uint8> M6StampIdentity;
 	TArray<FVoxelLandM6FilterStage> M6Filters;
 	TArray<uint8> M6FilterIdentity;
+	TArray<uint8> M6RedistanceIdentity;
+	uint8 M6RedistanceBand = 0;
 	bool bM6LegacySphereEnvelope = false;
 	friend class FVoxelLandWorkerContext;
 	friend struct FVoxelLandWorkerContextImpl;

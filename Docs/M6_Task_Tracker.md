@@ -1,6 +1,6 @@
 # VoxelLand M6 task tracker
 
-**Progress:** 1 of 6 slices verified · **Implemented:** M6.1–M6.3 · **Next implementation:** M6.4 bounded re-distance
+**Progress:** 1 of 6 slices verified · **Implemented:** M6.1–M6.4 · **Next implementation:** M6.5 authoring and acceptance
 
 M6 adds generation-time stamps and filters to cave-disabled M4 terrain. The first checkpoint is one hard sphere stamp across real finite M4 chunk seams. M6 acceptance also requires the remaining stamps, filters with accumulated halos, and bounded re-distance. M5 remains open and deferred. Runtime terrain editing is out of v1 scope.
 
@@ -37,6 +37,8 @@ Implementation and static review complete. The following items remain open for e
 
 ### M6.4 — Bounded re-distance
 
+Implementation and static review complete. Executable verification and measured reference error remain pending.
+
 - [ ] **M6.4a** Define and implement deterministic narrow-band behavior with a documented error metric, halo, limits and cancellation.
 - [ ] **M6.4b** Measure error against analytic sphere, plane and box references and filter-altered fields. Verify band and halo boundaries, adjacent chunk consistency and explicit rejection of unsupported requests.
 
@@ -59,9 +61,15 @@ Update this tracker after each task. Check a box after its deliverable and any r
 
 | 2026-11-25 | M6.3 | Added ordered box-masked smooth, flatten and make-space stages with backward lattice demand planning. Reused the existing M4 compatibility smooth kernel and local fixed-lattice baseline path. Static review found no critical issues. Authored `VoxelLand.M6.Filters.Contract` and `VoxelLand.M6.Filters.FiniteAndLocalSeams`. Build and tests were not run at the owner's request. |
 
+| 2026-11-25 | M6.4 | Implemented a final one- or two-voxel band with fixed-point edge crossings, deterministic nearest distance, combined halo admission, and a versioned re-distance identity. Static review found no critical issues. Authored `VoxelLand.M6.Redistance.Contract`, `VoxelLand.M6.Redistance.AnalyticError` and `VoxelLand.M6.Redistance.FilteredFiniteAndLocalSeams`. Build, automation and measured reference error remain pending at the owner's request. |
+
+### M6.4 band and work admission
+
+Re-distance compares Q10 squared distances to interpolated sign-crossing points on axis-aligned lattice edges. It reads a halo of band plus one before earlier region stages, tests band inclusion before magnitude rounding, retains input sign and zeros, and leaves a sample unchanged if no candidate lies inside its band. The two-voxel case admits at most 19,293,750 edge checks per stored chunk. With re-distance, the pipeline accounts for up to 64 million logical units and retains the same 2 MiB logical scratch ceiling. The authored sphere and box fixtures report peak and RMS error for near-surface samples. The plane fixture expects exact density. These results have not been measured.
+
 ### M6.3 filter footprint
 
-The planner uses ordered masks and skips a stage if its mask contains no lattice samples in the stage's demanded box. Active neighborhood stages expand the earlier input by one voxel. Each chunk admits at most eight filter stages and eight voxels of accumulated M6 halo. The largest baseline field is 51³ samples, with separate M4 compatibility smoothing and slope reads. The workload gate admits up to 40 million logical stamp/stencil and baseline units, and 2 MiB of logical filter and field scratch per chunk. Existing worker/provider resources remain governed by M4. Make-space clears only inside its box, with an inclusive mask and hard field subtraction.
+The planner uses ordered masks and skips a stage if its mask contains no lattice samples in the stage's demanded box. Active neighborhood stages expand the earlier input by one voxel. Each chunk admits at most eight filter stages and eight voxels of accumulated M6 halo. The largest baseline field is 51³ samples, with separate M4 compatibility smoothing and slope reads. Before re-distance, the workload gate allowed up to 40 million logical stamp/stencil and baseline units, with 2 MiB of logical filter and field scratch per chunk. Existing worker/provider resources remain governed by M4. Make-space clears only inside its box, with an inclusive mask and hard field subtraction.
 
 ### M6.2 arithmetic and ownership
 

@@ -2,6 +2,7 @@
 
 #include "VoxelLandWorldEditorValidation.h"
 
+#include "Async/Async.h"
 #include "Data/Assets/VoxelLandFiniteWorld.h"
 #include "Data/Assets/VoxelLandInfiniteWorld.h"
 #include "Data/Enums/VoxelLandBuiltinNode.h"
@@ -101,7 +102,7 @@ FVoxelLandGraphSnapshot WorldEditorValidationLocalGraph()
 		WorldEditorValidationNode(VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput), 6, 1, false));
 	FVoxelLandGraphLinkRecord Link;
 	Link.SourceNode = Graph.Nodes[0].Id;
-	Link.SourcePin = Graph.Nodes[0].Pins[0].Id;
+	Link.SourcePin = Graph.Nodes[0].Pins.Last().Id;
 	Link.TargetNode = Graph.Nodes[1].Id;
 	Link.TargetPin = Graph.Nodes[1].Pins[0].Id;
 	Graph.Links.Add(Link);
@@ -160,26 +161,27 @@ bool FVoxelLandWorldEditorValidationTest::RunTest(const FString& Parameters)
 			Last.InputQ16 = 65535;
 			Last.OutputQ8 = 256;
 		}
-		const auto NeverCancel = [] {
-			return false;
+		// Full program validation can invoke providers and requires a worker thread.
+		const auto ValidateOnWorker = [&Snapshot, &Providers, &Error](EVoxelLandWorldKind Kind) {
+			return Async(EAsyncExecution::ThreadPool, [&Snapshot, &Providers, &Error, Kind] {
+				return VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, Kind, Providers,
+					WorldEditorValidationBudget().ToSharedRef(), [] { return false; }, Error);
+			}).Get();
 		};
 		TestFalse(TEXT("finite grid rejects unsupported external operator"),
-			VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Finite, Providers,
-				WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+			ValidateOnWorker(EVoxelLandWorldKind::Finite));
 		TestTrue(TEXT("finite diagnostic names unsupported provider"), Error.Contains(TEXT("external")));
 		for (FVoxelLandM4ControlSnapshot* Channel : Channels)
 		{
 			Channel->Source = WorldEditorValidationLocalGraph();
 		}
-		TestTrue(TEXT("finite control grid accepts local constant graphs"),
-			VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Finite, Providers,
-				WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+		const bool bFiniteAccepted = ValidateOnWorker(EVoxelLandWorldKind::Finite);
+		TestTrue(FString::Printf(TEXT("finite accepts local control graphs (diagnostic: %s)"), *Error), bFiniteAccepted);
 		for (FVoxelLandM4ControlSnapshot* Channel : Channels)
 		{
 			Channel->Source = WorldEditorValidationFilteredGraph();
 			TestFalse(TEXT("finite control grid rejects smooth filter"),
-				VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Finite, Providers,
-					WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+				ValidateOnWorker(EVoxelLandWorldKind::Finite));
 			TestTrue(TEXT("finite filter diagnostic explains restriction"), Error.Contains(TEXT("filter")));
 			Channel->Source = WorldEditorValidationLocalGraph();
 		}
@@ -205,19 +207,16 @@ bool FVoxelLandWorldEditorValidationTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("preflight never calls external provider"), Provider->ValidationCalls.Load(), 0);
 			Channel->Source = WorldEditorValidationLocalGraph();
 		}
-		TestTrue(TEXT("infinite world accepts local control graphs"),
-			VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Infinite, Providers,
-				WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+		const bool bInfiniteAccepted = ValidateOnWorker(EVoxelLandWorldKind::Infinite);
+		TestTrue(FString::Printf(TEXT("infinite accepts local control graphs (diagnostic: %s)"), *Error), bInfiniteAccepted);
 		TestFalse(TEXT("unknown world kind is rejected"),
-			VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, static_cast<EVoxelLandWorldKind>(255), Providers,
-				WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+			ValidateOnWorker(static_cast<EVoxelLandWorldKind>(255)));
 		TestTrue(TEXT("unknown world kind has an explicit diagnostic"), Error.Contains(TEXT("Unsupported world kind")));
 		Snapshot.Mountain.Overrides.AddDefaulted();
 		for (const EVoxelLandWorldKind Kind : {EVoxelLandWorldKind::Finite, EVoxelLandWorldKind::Infinite})
 		{
 			TestFalse(TEXT("unknown override is rejected in both modes"),
-				VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, Kind, Providers,
-					WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+				ValidateOnWorker(Kind));
 			TestTrue(TEXT("override diagnostic identifies the control"), Error.Contains(TEXT("Mountain control overrides")));
 		}
 		Snapshot.Mountain.Overrides.Reset();
@@ -226,8 +225,7 @@ bool FVoxelLandWorldEditorValidationTest::RunTest(const FString& Parameters)
 		{
 			Channels[Index]->Source = WorldEditorValidationNestedGraph();
 			TestFalse(TEXT("infinite world rejects nested finite-global requirement in every channel"),
-				VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Infinite, Providers,
-					WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+				ValidateOnWorker(EVoxelLandWorldKind::Infinite));
 			TestTrue(TEXT("diagnostic names affected control"), Error.Contains(ChannelNames[Index]));
 			TestTrue(TEXT("diagnostic names containing function"),
 				Error.Contains(TEXT("/Game/Test/WorldEditorFunction.WorldEditorFunction")));
@@ -237,8 +235,7 @@ bool FVoxelLandWorldEditorValidationTest::RunTest(const FString& Parameters)
 		}
 		Snapshot.Peaks.CurveKeys[1].InputQ16 = 0;
 		TestFalse(TEXT("finite world rejects invalid curve"),
-			VoxelLandWorldEditorValidation::ValidateSnapshot(Snapshot, EVoxelLandWorldKind::Finite, Providers,
-				WorldEditorValidationBudget().ToSharedRef(), NeverCancel, Error));
+			ValidateOnWorker(EVoxelLandWorldKind::Finite));
 		TestTrue(TEXT("diagnostic names invalid curve"), Error.Contains(TEXT("Peaks curve")));
 	}
 	TestTrue(TEXT("unregister finite-only provider"),

@@ -83,7 +83,8 @@ FVoxelLandGraphSnapshot WorldCompilerNoiseGraph(EVoxelLandBuiltinNode Kind, bool
 	const int32 Dimensions = b3D ? 3 : 2;
 	if (b3D)
 	{
-		Graph.Nodes.Add(WorldCompilerNode(VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::PositionZ), 3, 0, true));
+		// Keep the third input supported so the diagnostic reaches the 3D noise instruction.
+		Graph.Nodes.Add(WorldCompilerNode(VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::FloatConstant), 3, 1, true));
 	}
 	const int32 NoiseIndex = Graph.Nodes.Num();
 	Graph.Nodes.Add(WorldCompilerNode(VoxelLandBuiltinNodeId(Kind), 4, Dimensions + 4, true));

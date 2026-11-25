@@ -147,6 +147,7 @@ public:
 			Test->TestTrue(TEXT("finite data-only world initialized"), Actor->HasWorldStateForTests());
 			Test->TestTrue(TEXT("startup chunk reaches data-ready"), Actor->HasDataChunk(FIntVector::ZeroValue));
 			Test->TestTrue(TEXT("success reports no error"), Actor->LastInitializationError.IsEmpty());
+			PublishedStartupChunk = Actor->FindChunk(FVoxelLandChunkKey{});
 			if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
 			{
 				Test->AddError(TEXT("M4 stale-result fixture did not start"));
@@ -159,7 +160,8 @@ public:
 		}
 		if (Phase == 1)
 		{
-			Test->TestFalse(TEXT("changed settings cannot publish stale world"), Actor->HasWorldStateForTests());
+			Test->TestTrue(TEXT("changed settings preserve the published startup chunk"),
+				PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 			Test->TestTrue(
 				TEXT("stale rejection is reported"), Actor->LastInitializationError.Contains(TEXT("superseded")));
 			if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
@@ -174,7 +176,8 @@ public:
 		}
 		if (Phase == 2)
 		{
-			Test->TestFalse(TEXT("changed graph cannot publish stale world"), Actor->HasWorldStateForTests());
+			Test->TestTrue(TEXT("changed graph preserves the published startup chunk"),
+				PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 			Test->TestTrue(TEXT("graph change reports stale rejection"),
 				Actor->LastInitializationError.Contains(TEXT("superseded")));
 			Config->Continental.Graph->Nodes[0].Pins[0].FloatDefault = 0.f;
@@ -189,14 +192,16 @@ public:
 		}
 		if (Phase == 3)
 		{
-			Test->TestFalse(TEXT("out-of-domain startup cannot publish world"), Actor->HasWorldStateForTests());
+			Test->TestTrue(TEXT("out-of-domain startup preserves the published startup chunk"),
+				PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 			Test->TestTrue(TEXT("boundary rejection identifies startup"),
 				Actor->LastInitializationError.Contains(TEXT("startup")));
 			if (Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
 			{
 				Actor->CancelInitialization();
 				Test->TestFalse(TEXT("cancel detaches initialization"), Actor->bInitializing);
-				Test->TestFalse(TEXT("cancel cannot publish world"), Actor->HasWorldStateForTests());
+				Test->TestTrue(TEXT("cancellation preserves the published startup chunk"),
+					PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 			}
 			else
 			{
@@ -227,7 +232,11 @@ public:
 			}
 			Test->TestTrue(
 				TEXT("saved world initializes independently of caller mutations"), Actor->HasWorldStateForTests());
-			Test->TestTrue(TEXT("saved startup chunk is available"), Actor->HasDataChunk(FIntVector::ZeroValue));
+			const TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> SavedStartupChunk =
+				Actor->FindChunk(FVoxelLandChunkKey{});
+			Test->TestTrue(TEXT("saved startup chunk is newly published"),
+				SavedStartupChunk.IsValid() && SavedStartupChunk != PublishedStartupChunk);
+			PublishedStartupChunk = SavedStartupChunk;
 			if (!Actor->InitializeM4FromSavedWorld(Saved, FIntVector::ZeroValue))
 			{
 				Test->AddError(TEXT("Tampered saved-world fixture did not dispatch"));
@@ -237,7 +246,8 @@ public:
 			Phase = 5;
 			return false;
 		}
-		Test->TestFalse(TEXT("tampered saved identity publishes no world"), Actor->HasWorldStateForTests());
+		Test->TestTrue(TEXT("tampered saved identity preserves the published startup chunk"),
+			PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 		Test->TestTrue(
 			TEXT("tampered identity reports a mismatch"), Actor->LastInitializationError.Contains(TEXT("identity")));
 		Saved.Snapshot.HorizontalRadius = 0;
@@ -279,6 +289,7 @@ private:
 		}
 	}
 	FVoxelLandM4SavedWorld Saved;
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> PublishedStartupChunk;
 	FAutomationTestBase* Test;
 	UWorld* World;
 	AVoxelLandWorld* Actor;

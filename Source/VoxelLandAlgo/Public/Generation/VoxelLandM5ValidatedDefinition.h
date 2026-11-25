@@ -9,6 +9,8 @@ class FVoxelLandM5BudgetLease;
 class FVoxelLandM5ProtectionGrid;
 class FVoxelLandOperatorRegistrySnapshot;
 class FVoxelLandM5DefinitionValidator;
+class FVoxelLandM5BoundBase;
+class FVoxelLandM5FiniteNativeSource;
 
 // Validated native inputs and complete canonical bytes, not a final-field,
 // water observation, source freshness, renderer, route or publication proof.
@@ -28,11 +30,14 @@ public:
 	bool UsesBudget(const FVoxelLandM5Budget& Other) const { return &Budget.Get() == &Other; }
 private:
 	friend class FVoxelLandM5DefinitionValidator;
+	friend class FVoxelLandM5BoundBase;
 	FVoxelLandM5ValidatedDefinition(TVoxelLandM5ConstRef<FVoxelLandM5WorldSnapshot> InSnapshot,
 		TVoxelLandM5ConstPtr<FVoxelLandM5ProtectionGrid> InProtection,
 		TVoxelLandM5ConstRef<FVoxelLandOperatorRegistrySnapshot> InRegistry, FVoxelLandM5BudgetRef InBudget,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease,
 		TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InFreezeLease);
+	// Optional pre-capture native admission, assigned only by its private producer.
+	TSharedPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> NativeSource;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
 	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> FreezeLease;
 	TVoxelLandM5ConstRef<FVoxelLandM5WorldSnapshot> Snapshot;

@@ -9,6 +9,12 @@
 #include "Generation/VoxelLandM5Budget.h"
 #include "Generation/VoxelLandM5BudgetLease.h"
 #include "Generation/VoxelLandM5ProtectionGrid.h"
+#include "Generation/VoxelLandM5BoundBaseline.h"
+#include "Generation/VoxelLandM5ValidatedDefinition.h"
+#include "World/VoxelLandM5FiniteBaseScratch.h"
+#include "Generation/VoxelLandM5DefinitionInputs.h"
+#include "Operators/VoxelLandOperator.h"
+#include "World/VoxelLandM5DefinitionValidator.h"
 #include "Misc/ScopeLock.h"
 #include "UObject/StrongObjectPtr.h"
 #include "World/VoxelLandFiniteSnapshotAdapter.h"
@@ -272,6 +278,98 @@ TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> FVoxelLandM5BaseCap
 	FScopeLock Lock(&GridLeaseMutex);
 	return MoveTemp(GridLease);
 }
+
+FVoxelLandM5FiniteNativeSource::FVoxelLandM5FiniteNativeSource(
+	TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> InCapture, uint32 InGeometryVersion,
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease)
+	: Capture(MoveTemp(InCapture)), GeometryVersion(InGeometryVersion), Lease(MoveTemp(InLease)) {}
+FVoxelLandM5FiniteNativeSource::~FVoxelLandM5FiniteNativeSource() = default;
+
+FVoxelLandM5Diagnostic FVoxelLandM5BoundBase::CaptureFiniteNative(UVoxelLandFiniteWorld& Asset,
+	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, uint32 GeometryVersion,
+	TSharedPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe>& OutSource)
+{
+	using E = EVoxelLandM5ErrorCode; using I = FVoxelLandM5BoundBaseInternals;
+	if (!IsInGameThread()) return I::M5BoundBaseFailure(E::InvalidInput, TEXT("Native finite capture requires the game thread"));
+	if (GeometryVersion != 1 && GeometryVersion != 2) return I::M5BoundBaseFailure(E::InvalidInput, TEXT("Unsupported native geometry version"));
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	if (!Budget->TryReserveBytes(4096, Lease)) return I::M5BoundBaseFailure(E::BudgetExceeded, TEXT("Native finite source memory exhausted"));
+	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Capture;
+	const auto Captured = FVoxelLandM5BaseCapture::Capture(Asset, Budget, Capture);
+	if (Captured.Code != E::None) return Captured;
+	if (!Capture) return I::M5BoundBaseFailure(E::Unproven, TEXT("Native finite capture missing"));
+	// The capture is private to this call. Freeze the explicitly selected geometry
+	// version before any owner or identity can observe the native snapshot.
+	ConstCastSharedPtr<FVoxelLandM5BaseCapture>(Capture)->Snapshot.Manifest.Geometry = GeometryVersion;
+	TSharedPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> Result = MakeShareable(
+		new FVoxelLandM5FiniteNativeSource(Capture.ToSharedRef(), GeometryVersion, MoveTemp(Lease)));
+	OutSource = MoveTemp(Result);
+	return {};
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5BoundBase::ValidateFiniteNative(
+	TSharedRef<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> Source,
+	TSharedRef<const FVoxelLandOperatorRegistrySnapshot, ESPMode::ThreadSafe> Registry,
+	const FVoxelLandM5Bounds& EffectiveBounds, bool bExplicitBounds, bool bAuthoritativeDryWorld,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe>& OutDefinition)
+{
+	using E = EVoxelLandM5ErrorCode; using I = FVoxelLandM5BoundBaseInternals;
+	if (IsInGameThread()) return I::M5BoundBaseFailure(E::InvalidInput, TEXT("Native finite validation requires a worker thread"));
+	if (IsCancelled()) return I::M5BoundBaseFailure(E::Cancelled, TEXT("Native finite validation cancelled"));
+	const auto Budget = Source->Capture->Budget;
+	// Alias the admitted immutable capture without copying; the deleter retains
+	// Source for the whole synchronous validation. Validator makes its own
+	// metered private snapshot before publishing the definition.
+	TSharedRef<const FVoxelLandM5WorldSnapshot, ESPMode::ThreadSafe> Snapshot = MakeShareable(
+		&Source->Capture->GetSnapshot(), [Source](const FVoxelLandM5WorldSnapshot*) { (void)Source; });
+	FVoxelLandM5DefinitionInputs Inputs{Snapshot, Source->Capture->GetProtectionGrid(), Registry,
+		EffectiveBounds, bExplicitBounds, bAuthoritativeDryWorld};
+	TSharedPtr<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> Definition;
+	const auto Result = FVoxelLandM5DefinitionValidator::Validate(Inputs, Budget, IsCancelled, Definition);
+	if (Result.Code != E::None) return Result;
+	if (!Definition) return I::M5BoundBaseFailure(E::Unproven, TEXT("Native finite definition missing"));
+	if (IsCancelled()) return I::M5BoundBaseFailure(E::Cancelled, TEXT("Native finite validation cancelled"));
+	auto Mutable = ConstCastSharedPtr<FVoxelLandM5ValidatedDefinition>(Definition);
+	Mutable->NativeSource = Source;
+	OutDefinition = MoveTemp(Definition);
+	return {};
+}
+
+FVoxelLandM5Diagnostic FVoxelLandM5BoundBase::BuildFinite(
+	TSharedRef<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> Source,
+	TSharedRef<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> Definition,
+	TFunctionRef<FVoxelLandM5Diagnostic(const FVoxelLandGenerator&, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>,
+		TFunctionRef<bool()>, TUniquePtr<FVoxelLandWorkerContext>&)> CreateWorker,
+	TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5BoundBaseline, ESPMode::ThreadSafe>& OutBaseline)
+{
+	using E = EVoxelLandM5ErrorCode; using I = FVoxelLandM5BoundBaseInternals;
+	if (IsInGameThread()) return I::M5BoundBaseFailure(E::InvalidInput, TEXT("Native finite baseline requires a worker thread"));
+	if (IsCancelled()) return I::M5BoundBaseFailure(E::Cancelled, TEXT("Native finite baseline cancelled"));
+	const auto Budget = Source->Capture->Budget;
+	if (Definition->NativeSource.Get() != &Source.Get() || !Definition->UsesBudget(*Budget))
+		return I::M5BoundBaseFailure(E::InvalidInput, TEXT("Native finite definition or budget differs from source"));
+	auto Process = Source->Capture->ClaimGridLease();
+	if (!Process) return I::M5BoundBaseFailure(E::InvalidInput, TEXT("Native finite admission already consumed"));
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+	if (!Budget->TryReserveBytes(4096, Lease)) return I::M5BoundBaseFailure(E::BudgetExceeded, TEXT("Native finite baseline memory exhausted"));
+	TSharedPtr<const FVoxelLandM5FiniteBaseScratch, ESPMode::ThreadSafe> Scratch;
+	const auto Result = FVoxelLandM5FiniteBaseScratch::Build(Definition->GetSnapshot().Base, Budget,
+		MoveTemp(Process), CreateWorker, IsCancelled, Scratch);
+	if (Result.Code != E::None) return Result;
+	if (!Scratch) return I::M5BoundBaseFailure(E::Unproven, TEXT("Finite base scratch missing"));
+	const auto Generator = Scratch->GetGeneratorShared();
+	const auto Grid = Generator->GetM4HeightGrid();
+	auto ScratchLease = Scratch->GetLifetimeLease();
+	if (!Grid || !ScratchLease || !Budget->OwnsLease(*ScratchLease) || &Scratch->GetGrid() != Grid.Get())
+		return I::M5BoundBaseFailure(E::Unproven, TEXT("Finite baseline generator or grid provenance missing"));
+	if (IsCancelled()) return I::M5BoundBaseFailure(E::Cancelled, TEXT("Native finite baseline cancelled"));
+	TSharedPtr<FVoxelLandM5BoundBaseline, ESPMode::ThreadSafe> Built = MakeShareable(
+		new FVoxelLandM5BoundBaseline(Definition, Generator, Grid.ToSharedRef(), MoveTemp(ScratchLease), MoveTemp(Lease)));
+	if (IsCancelled()) return I::M5BoundBaseFailure(E::Cancelled, TEXT("Native finite baseline cancelled"));
+	OutBaseline = MoveTemp(Built);
+	return {};
+}
+
 
 FVoxelLandM5BoundBase::FVoxelLandM5BoundBase(TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> InCapture,
 	TSharedRef<const FVoxelLandGenerator, ESPMode::ThreadSafe> InGenerator, FVoxelLandM5IdentityRecord&& InIdentity)

@@ -15,6 +15,30 @@ class FVoxelLandM5Budget;
 class FVoxelLandM5BudgetLease;
 class FVoxelLandM5BoundBase;
 class FVoxelLandM5ProtectionGrid;
+class FVoxelLandM5ValidatedDefinition;
+class FVoxelLandM5BoundBaseline;
+class FVoxelLandWorkerContext;
+class FVoxelLandOperatorRegistrySnapshot;
+
+class FVoxelLandM5BaseCapture;
+
+// Source constructed only by a real admitted typed capture. It owns the
+// validation permit for the whole source/definition lifetime and a one-shot
+// process permit until the bound finite grid claims it.
+class VOXELLAND_API FVoxelLandM5FiniteNativeSource final
+{
+public:
+	~FVoxelLandM5FiniteNativeSource();
+	FVoxelLandM5FiniteNativeSource(const FVoxelLandM5FiniteNativeSource&) = delete;
+	FVoxelLandM5FiniteNativeSource& operator=(const FVoxelLandM5FiniteNativeSource&) = delete;
+private:
+	friend class FVoxelLandM5BoundBase;
+	FVoxelLandM5FiniteNativeSource(TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> InCapture,
+		uint32 InGeometryVersion, TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease);
+	TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Capture;
+	uint32 GeometryVersion;
+	TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe> Lease;
+};
 
 // Immutable UObject-free game-thread capture, with real M4 admission tokens.
 // It is a private input to base preparation, not a validated cave plan.
@@ -93,6 +117,35 @@ public:
 	// freshness and complete provider/process admission remain separate work.
 	static FVoxelLandM5Diagnostic Prepare(TSharedRef<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe> Capture,
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5BoundBase, ESPMode::ThreadSafe>& OutBase);
+
+	// Game-thread typed capture, with actual process and validation admission
+	// acquired before snapshot capture. Geometry is explicitly identity-bound.
+	static FVoxelLandM5Diagnostic CaptureFiniteNative(UVoxelLandFiniteWorld& Asset,
+		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, uint32 GeometryVersion,
+		TSharedPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe>& OutSource);
+
+	// Worker thread. The definition retains the exact admitted source. The dry
+	// declaration and bounds have the same native semantics as DefinitionValidator;
+	// they are not runtime water observations or publication authority.
+	static FVoxelLandM5Diagnostic ValidateFiniteNative(
+		TSharedRef<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> Source,
+		TSharedRef<const FVoxelLandOperatorRegistrySnapshot, ESPMode::ThreadSafe> Registry,
+		const FVoxelLandM5Bounds& EffectiveBounds, bool bExplicitBounds, bool bAuthoritativeDryWorld,
+		TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe>& OutDefinition);
+
+	// Synchronous worker only. The callback admits worker/provider resources
+	// separately. A valid call claims the source process permit once, including
+	// on later failure; preclaim cancellation and wrong-thread calls preserve it.
+	// The definition and source must be the exact bound owners. No publication granted.
+	static FVoxelLandM5Diagnostic BuildFinite(
+		TSharedRef<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> Source,
+		TSharedRef<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> Definition,
+		TFunctionRef<FVoxelLandM5Diagnostic(const FVoxelLandGenerator&,
+			TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe>, TFunctionRef<bool()>,
+			TUniquePtr<FVoxelLandWorkerContext>&)> CreateWorker,
+		TFunctionRef<bool()> IsCancelled,
+		TSharedPtr<const FVoxelLandM5BoundBaseline, ESPMode::ThreadSafe>& OutBaseline);
 
 	const FVoxelLandM5WorldSnapshot& GetSnapshot() const { return Capture->Snapshot; }
 	const FVoxelLandM5IdentityRecord& GetIdentity() const { return Identity; }

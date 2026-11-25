@@ -22,6 +22,7 @@
 #include "Misc/AutomationTest.h"
 #include "UObject/StrongObjectPtr.h"
 #include "World/VoxelLandM5BoundBase.h"
+#include "World/VoxelLandM4Preparation.h"
 #include "World/VoxelLandM5CapturedFiniteScratch.h"
 #include "World/VoxelLandM5FiniteBaseScratch.h"
 #include "World/VoxelLandM5MeteredIdentity.h"
@@ -299,6 +300,81 @@ bool FVoxelLandM5CapturedFiniteScratchTest::RunTest(const FString& Parameters)
 			&& Again.Code == EVoxelLandM5ErrorCode::InvalidInput && !Output;
 	}).Wait();
 	TestTrue(TEXT("foreign control worker cannot produce a bound baseline"), bWrongWorker);
-	return bBuilt && bBound && bForeignBudget && bForeignIdentity && bBoundCancel && bBoundOneShot && bWrongWorker;
+
+	// Native capture reserves its process and validation permits before copying
+	// authoring inputs; its private source remains bound to the definition.
+	const auto NativeBounds = WorkerCapture->GetSnapshot().Caves.Bounds;
+	WorkerCapture.Reset();
+	TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> NativeBudget;
+	if (!FVoxelLandM5Budget::TryCreate(256ll * 1024 * 1024, 100000000, NativeBudget)) return false;
+	TSharedPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> Source;
+	const auto CapturedNative = FVoxelLandM5BoundBase::CaptureFiniteNative(*Definition.Get(), NativeBudget.ToSharedRef(), 1, Source);
+	if (!TestTrue(FString::Printf(TEXT("native capture: %s"), *CapturedNative.Message),
+		CapturedNative.Code == EVoxelLandM5ErrorCode::None && Source)) return false;
+	auto Registry = MakeShared<FVoxelLandOperatorRegistrySnapshot, ESPMode::ThreadSafe>(FVoxelLandOperatorRegistry::Snapshot());
+	TSharedPtr<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> NativeDefinition;
+	bool bNative = false, bNativeCancel = false, bNativeOneShot = false, bNativeWrongThread = false;
+	Async(EAsyncExecution::ThreadPool, [&] {
+		const auto Validated = FVoxelLandM5BoundBase::ValidateFiniteNative(Source.ToSharedRef(), Registry,
+			NativeBounds, true, true, Never, NativeDefinition);
+		if (Validated.Code != EVoxelLandM5ErrorCode::None || !NativeDefinition) return;
+	}).Wait();
+	if (!TestTrue(TEXT("native definition admitted"), NativeDefinition.IsValid())) return false;
+	// ReserveValidation has four slots. Hold the remaining three so the next
+	// native capture must fail before asset capture, preserving its output.
+	TArray<TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe>> ValidationProbes;
+	for (int32 ProbeIndex = 0; ProbeIndex < 3; ++ProbeIndex)
+	{
+		auto Permit = VoxelLandM4Preparation::ReserveValidation();
+		if (!TestTrue(TEXT("validation isolation permit available"), Permit.IsValid())) return false;
+		ValidationProbes.Add(MoveTemp(Permit));
+	}
+	bool bExhausted = false;
+	{
+		const auto PriorSource = Source;
+		const auto Exhausted = FVoxelLandM5BoundBase::CaptureFiniteNative(*Definition.Get(), NativeBudget.ToSharedRef(), 1, Source);
+		bExhausted = Exhausted.Code == EVoxelLandM5ErrorCode::BudgetExceeded
+			&& Exhausted.Message == TEXT("M4 snapshot validation permit unavailable") && Source == PriorSource;
+	}
+	TestTrue(TEXT("validation exhaustion preserves source before capture"), bExhausted);
+	ValidationProbes.Reset();
+	TSharedPtr<const FVoxelLandM5BoundBaseline, ESPMode::ThreadSafe> NativeBaseline;
+	const auto WrongNativeThread = FVoxelLandM5BoundBase::BuildFinite(Source.ToSharedRef(), NativeDefinition.ToSharedRef(), Factory, Never, NativeBaseline);
+	bNativeWrongThread = WrongNativeThread.Code == EVoxelLandM5ErrorCode::InvalidInput && !NativeBaseline;
+	Async(EAsyncExecution::ThreadPool, [&] {
+		const auto Cancelled = FVoxelLandM5BoundBase::BuildFinite(Source.ToSharedRef(), NativeDefinition.ToSharedRef(), Factory, [] { return true; }, NativeBaseline);
+		bNativeCancel = Cancelled.Code == EVoxelLandM5ErrorCode::Cancelled && !NativeBaseline;
+		const auto Built = FVoxelLandM5BoundBase::BuildFinite(Source.ToSharedRef(), NativeDefinition.ToSharedRef(), Factory, Never, NativeBaseline);
+		bNative = Built.Code == EVoxelLandM5ErrorCode::None && NativeBaseline
+			&& &NativeBaseline->GetDefinition() == NativeDefinition.Get() && NativeBaseline->UsesBudget(*NativeBudget)
+			&& NativeBaseline->GetGenerator().GetM4HeightGrid().Get() == &NativeBaseline->GetGrid();
+		const auto Prior = NativeBaseline;
+		const auto Again = FVoxelLandM5BoundBase::BuildFinite(Source.ToSharedRef(), NativeDefinition.ToSharedRef(), Factory, Never, NativeBaseline);
+		bNativeOneShot = Again.Code == EVoxelLandM5ErrorCode::InvalidInput && NativeBaseline == Prior;
+	}).Wait();
+	TestTrue(TEXT("wrong thread does not claim native source"), bNativeWrongThread);
+	TestTrue(TEXT("preclaim cancellation preserves native source"), bNativeCancel);
+	TestTrue(TEXT("native baseline binds admitted definition and actual grid"), bNative);
+	TestTrue(TEXT("native process admission is one-shot"), bNativeOneShot);
+	TWeakPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe> WeakSource = Source;
+	TWeakPtr<const FVoxelLandM5ValidatedDefinition, ESPMode::ThreadSafe> WeakDefinition = NativeDefinition;
+	Source.Reset();
+	TestTrue(TEXT("baseline retains source and definition"), WeakSource.IsValid() && WeakDefinition.IsValid() && NativeBaseline.IsValid());
+	NativeBaseline.Reset();
+	// Definition alone must retain the source's validation permit.
+	for (int32 ProbeIndex = 0; ProbeIndex < 3; ++ProbeIndex)
+	{
+		auto Permit = VoxelLandM4Preparation::ReserveValidation();
+		if (!TestTrue(TEXT("definition lifetime isolation permit available"), Permit.IsValid())) return false;
+		ValidationProbes.Add(MoveTemp(Permit));
+	}
+	const bool bHeld = !VoxelLandM4Preparation::ReserveValidation().IsValid() && WeakSource.IsValid();
+	NativeDefinition.Reset();
+	const bool bReleased = VoxelLandM4Preparation::ReserveValidation().IsValid() && !WeakSource.IsValid() && !WeakDefinition.IsValid();
+	ValidationProbes.Reset();
+	TestTrue(TEXT("definition alone retains source validation permit"), bHeld);
+	TestTrue(TEXT("final definition release returns validation permit"), bReleased);
+	return bBuilt && bBound && bForeignBudget && bForeignIdentity && bBoundCancel && bBoundOneShot && bWrongWorker
+		&& bNative && bNativeWrongThread && bNativeCancel && bNativeOneShot && bExhausted && bHeld && bReleased;
 }
 #endif

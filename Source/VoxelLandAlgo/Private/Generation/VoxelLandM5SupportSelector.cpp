@@ -19,29 +19,32 @@ public:
 		Result.Message = Message;
 		return Result;
 	}
-	// Exact XY winding after lossless common power-of-two reduction. Failure
-	// means the determinant cannot be represented within the bounded domain.
+	// Only the determinant's sign is needed. Coordinates were checked against
+	// the Q18 domain, so differences fit int64 but their products need 78 bits.
 	static bool Winding(const FVoxelLandM5FixedTriangleQ18& T, int64& Out)
 	{
-		using namespace VoxelLand::M5::CheckedMath;
-		const int64 Values[] = {T.B.X - T.A.X, T.B.Y - T.A.Y, T.C.X - T.A.X, T.C.Y - T.A.Y};
-		for (int32 Shift = 38; Shift >= 0; --Shift)
-		{
-			const int64 Scale = int64(1) << Shift;
-			bool bFits = true;
-			for (int64 Value : Values)
-			{
-				bFits &= Value % Scale == 0 && Value / Scale >= -1048576 && Value / Scale <= 1048576;
-			}
-			if (!bFits)
-			{
-				continue;
-			}
-			int64 Left = 0, Right = 0;
-			return TryMultiply(Values[0] / Scale, Values[3] / Scale, Left)
-				&& TryMultiply(Values[1] / Scale, Values[2] / Scale, Right) && TrySubtract(Left, Right, Out);
-		}
-		return false;
+		using FWide = TPair<uint64, uint64>;
+		const auto Multiply = [](uint64 A, uint64 B) -> FWide {
+			constexpr uint64 Mask = 0xffffffffULL;
+			const uint64 A0 = A & Mask, A1 = A >> 32, B0 = B & Mask, B1 = B >> 32;
+			const uint64 T0 = A0 * B0;
+			const uint64 T1 = A1 * B0 + (T0 >> 32);
+			const uint64 T2 = A0 * B1 + (T1 & Mask);
+			return FWide(A1 * B1 + (T1 >> 32) + (T2 >> 32), (T2 << 32) | (T0 & Mask));
+		};
+		const auto CompareProducts = [&Multiply](int64 A, int64 B, int64 C, int64 D) {
+			const bool LeftNegative = (A < 0) != (B < 0) && A != 0 && B != 0;
+			const bool RightNegative = (C < 0) != (D < 0) && C != 0 && D != 0;
+			if (LeftNegative != RightNegative) return LeftNegative ? -1 : 1;
+			const auto Magnitude = [](int64 V) { return uint64(V < 0 ? -V : V); };
+			const FWide Left = Multiply(Magnitude(A), Magnitude(B));
+			const FWide Right = Multiply(Magnitude(C), Magnitude(D));
+			const int32 Sign = Left.Key != Right.Key ? (Left.Key < Right.Key ? -1 : 1)
+				: (Left.Value == Right.Value ? 0 : (Left.Value < Right.Value ? -1 : 1));
+			return LeftNegative ? -Sign : Sign;
+		};
+		Out = CompareProducts(T.B.X - T.A.X, T.C.Y - T.A.Y, T.B.Y - T.A.Y, T.C.X - T.A.X);
+		return true;
 	}
 };
 

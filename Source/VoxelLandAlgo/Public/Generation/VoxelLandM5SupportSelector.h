@@ -28,6 +28,10 @@ public:
 		int32 MaxTotalFaces, TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TFunctionRef<bool()> IsCancelled, TSharedPtr<const FVoxelLandM5SupportSelector, ESPMode::ThreadSafe>& Out);
 	TConstArrayView<FVoxelLandM5MultiRouteSupportSelection> GetSelections() const { return Selections; }
+	bool MatchesSources(const FVoxelLandM5ScratchMesh& InMesh, const FVoxelLandM5CandidateResult& InRouted) const
+	{
+		return &Mesh.Get() == &InMesh && &Routed.Get() == &InRouted;
+	}
 private:
 	FVoxelLandM5SupportSelector(TSharedPtr<FVoxelLandM5BudgetLease, ESPMode::ThreadSafe>&& InLease,
 		TSharedRef<const FVoxelLandM5CandidateResult, ESPMode::ThreadSafe> InRouted,

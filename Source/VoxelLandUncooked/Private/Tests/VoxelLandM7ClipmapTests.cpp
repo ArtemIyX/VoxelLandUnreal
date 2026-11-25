@@ -389,7 +389,7 @@ bool FVoxelLandM7ClipmapFixture::CheckHorizontalFace(FAutomationTestBase& Test)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM7ClipmapTest, "VoxelLand.M7.Clipmap.Planner",
-	EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FVoxelLandM7ClipmapTest::RunTest(const FString& Parameters)
 {

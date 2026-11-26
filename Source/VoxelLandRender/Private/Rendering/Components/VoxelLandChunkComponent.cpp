@@ -68,17 +68,29 @@ public:
 			TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_RenderResourceSetup);
 			TArray<FDynamicMeshVertex> Vertices;
 			Vertices.Reserve(Mesh->Vertices.Num());
-			for (const FVoxelLandMeshVertex& Source : Mesh->Vertices)
+			const bool bHasMaterialBlend =
+				!Mesh->MaterialBlend.IsEmpty() && ensure(Mesh->MaterialBlend.Num() == Mesh->Vertices.Num());
+			for (int32 Index = 0; Index < Mesh->Vertices.Num(); ++Index)
 			{
+				const FVoxelLandMeshVertex& Source = Mesh->Vertices[Index];
 				FDynamicMeshVertex Vertex;
 				Vertex.Position = Source.Position;
 				Vertex.TextureCoordinate[0] = Source.UV;
 				Vertex.Color = Source.Color;
 				Vertex.SetTangents(
 					Source.Tangent, FVector3f::CrossProduct(Source.Normal, Source.Tangent), Source.Normal);
+				if (bHasMaterialBlend)
+				{
+					SetMaterialTexCoords(Vertex, Mesh->MaterialBlend[Index]);
+				}
 				Vertices.Add(Vertex);
 			}
-			Buffers.InitFromDynamicVertex(RHICmdList, &Factory, Vertices);
+			constexpr uint32 MaterialTexCoords = 5;
+			if (bHasMaterialBlend)
+			{
+				Buffers.StaticMeshVertexBuffer.SetUseFullPrecisionUVs(true);
+			}
+			Buffers.InitFromDynamicVertex(RHICmdList, &Factory, Vertices, bHasMaterialBlend ? MaterialTexCoords : 1);
 			IndexBuffer.Indices = Mesh->Indices;
 			IndexBuffer.InitResource(RHICmdList);
 #if WITH_EDITOR
@@ -88,6 +100,20 @@ public:
 				UploadObservation.Reset();
 			}
 #endif
+		}
+
+		static void SetMaterialTexCoords(FDynamicMeshVertex& Vertex, const FVoxelLandMaterialBlend& Blend)
+		{
+			constexpr int32 FirstSlotTexCoord = 1;
+			constexpr int32 FirstWeightTexCoord = 3;
+			constexpr float Normalize = 1.f / FVoxelLandMaterialBlend::WeightSum;
+			for (int32 Entry = 0; Entry < FVoxelLandMaterialBlend::LayerCount; Entry += 2)
+			{
+				Vertex.TextureCoordinate[FirstSlotTexCoord + Entry / 2] =
+					FVector2f(Blend.Slots[Entry], Blend.Slots[Entry + 1]);
+				Vertex.TextureCoordinate[FirstWeightTexCoord + Entry / 2] =
+					FVector2f(Blend.Weights[Entry], Blend.Weights[Entry + 1]) * Normalize;
+			}
 		}
 
 		virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily,

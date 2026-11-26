@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Meshing/VoxelLandMeshVertex.h"
+#include "Data/Meshing/VoxelLandMaterialBlend.h"
 #include "Data/Field/Chunks/VoxelLandChunkKey.h"
 #include <cmath>
 
@@ -11,6 +12,7 @@ struct FVoxelLandMeshData
 	TArray<uint32> Indices;
 	FBox3f Bounds = FBox3f(ForceInit);
 	uint32 NormalFallbacks = 0;
+	TArray<FVoxelLandMaterialBlend> MaterialBlend;
 };
 
 // Mesh-local floats share an exactly representable binary grid relative to a

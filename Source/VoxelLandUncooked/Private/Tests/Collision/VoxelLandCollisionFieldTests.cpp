@@ -2,7 +2,7 @@
 
 #include "Generation/Collision/VoxelLandCollisionField.h"
 
-#include "../TerrainOverlay/Stamps/VoxelLandTerrainSphereTestFixture.h"
+#include "../TerrainOverlay/Filters/VoxelLandTerrainRegionFilterTestFixture.h"
 
 #include "Data/Terrain/ChunkLocal/VoxelLandChunkLocalTerrainConfig.h"
 
@@ -83,6 +83,69 @@ public:
 			return Error.Message;
 		}
 		return VerifyHeightSeams(*Generator);
+	}
+
+	static FString VerifyCompletedOverlay()
+	{
+		FVoxelLandGeneratorSettings Settings;
+		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
+		FGeneratorPtr Baseline;
+		if (!FVoxelLandM6SphereTestFixture::CreateInputs(HeightCm, Settings, Grid)
+			|| FVoxelLandM6SphereTestFixture::CreateGenerator(Settings, Grid, false, Baseline))
+		{
+			return TEXT("Failed to create the untouched overlay fixture");
+		}
+
+		FVoxelLandM6Stamp Sphere;
+		Sphere.Id = FGuid(0x4d36, 3, 1, 11);
+		Sphere.OriginCm = FInt64Vector(0, 150, HeightCm);
+		Sphere.RadiusCm = 425;
+		Settings.M6Stamps.Stamps = MakeArrayView(&Sphere, 1);
+		const FVoxelLandM6FilterStage Smooth = FVoxelLandM6RegionFilterTestFixture::Stage(
+			11, EVoxelLandM6FilterKind::Smooth, FInt64Vector(-400, -100, -300), FInt64Vector(400, 400, 600), 18000);
+		Settings.M6Filters.Stages = MakeArrayView(&Smooth, 1);
+		Settings.M6Redistance.bEnabled = true;
+		Settings.M6Redistance.BandVoxels = 2;
+		FGeneratorPtr Completed;
+		if (const FVoxelLandError Error =
+				FVoxelLandM6SphereTestFixture::CreateGenerator(Settings, Grid, false, Completed))
+		{
+			return Error.Message;
+		}
+		const FVoxelLandChunkKey Left{FIntVector(-1, 0, 0), 0};
+		const FVoxelLandChunkKey Right{};
+		FChunkMap BaseChunks;
+		FChunkMap CompletedChunks;
+		if (const FString Failure = Generate(*Baseline, {Right}, BaseChunks); !Failure.IsEmpty())
+		{
+			return Failure;
+		}
+		if (const FString Failure = Generate(*Completed, {Left, Right}, CompletedChunks); !Failure.IsEmpty())
+		{
+			return Failure;
+		}
+		const FVoxelLandCollisionField Before(VoxelSizeCm, MoveTemp(BaseChunks));
+		const FVoxelLandCollisionField After(VoxelSizeCm, MoveTemp(CompletedChunks));
+		const FVector3d SeamPoint(0.0, 150.0, 225.0);
+		double BaseDensity = 0.0;
+		double CompletedDensity = 0.0;
+		if (Before.Sample(SeamPoint, BaseDensity) != EStatus::Available || BaseDensity <= 0.0
+			|| After.Sample(SeamPoint, CompletedDensity) != EStatus::Available || CompletedDensity >= 0.0)
+		{
+			return TEXT("Completed collision samples did not see solid terrain added by the processed overlay");
+		}
+		double LeftCell[2][2][2];
+		double RightCell[2][2][2];
+		if (After.ReadCell(FInt64Vector(-1, 1, 2), LeftCell) != EStatus::Available
+			|| After.ReadCell(FInt64Vector(0, 1, 2), RightCell) != EStatus::Available)
+		{
+			return TEXT("Completed overlay seam cells are missing");
+		}
+		const double LeftFace = FVoxelLandCollisionField::EvaluateCell(LeftCell, FVector3d(1.0, 0.5, 0.25));
+		const double RightFace = FVoxelLandCollisionField::EvaluateCell(RightCell, FVector3d(0.0, 0.5, 0.25));
+		return LeftFace == CompletedDensity && RightFace == CompletedDensity
+				 ? FString()
+				 : TEXT("Adjacent collision cells disagree with the processed canonical seam sample");
 	}
 
 	static FString VerifyClippedDensity()
@@ -279,6 +342,7 @@ bool FVoxelLandCollisionFieldCompletedTest::RunTest(const FString& Parameters)
 		Async(EAsyncExecution::ThreadPool, &FFieldFixture::VerifyFiniteHeight).Get(),
 		Async(EAsyncExecution::ThreadPool, &FFieldFixture::VerifyInfiniteHeight).Get(),
 		Async(EAsyncExecution::ThreadPool, &FFieldFixture::VerifyClippedDensity).Get(),
+		Async(EAsyncExecution::ThreadPool, &FFieldFixture::VerifyCompletedOverlay).Get(),
 	};
 	for (const FString& Failure : Failures)
 	{

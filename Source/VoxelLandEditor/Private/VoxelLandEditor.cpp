@@ -3,6 +3,7 @@
 #include "Worlds/Assets/VoxelLandAssetFactories.h"
 #include "Worlds/Assets/VoxelLandMaterialPaletteFactory.h"
 #include "Worlds/Assets/VoxelLandSurfaceMaterialFactory.h"
+#include "Worlds/Validation/VoxelLandWorldEditorValidation.h"
 #include "Materials/VoxelLandMaterialPaletteDetails.h"
 #include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Operators/VoxelLandOperator.h"

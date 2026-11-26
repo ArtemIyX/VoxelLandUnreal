@@ -7,6 +7,7 @@
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Generation/Collision/VoxelLandSdfCollision.h"
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "Misc/App.h"
 #include "Misc/AutomationTest.h"
@@ -15,6 +16,7 @@
 #include "Tests/AutomationEditorCommon.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
+#include "World/Collision/VoxelLandCollisionWorldView.h"
 #include "World/Demo/VoxelLandClipmapDemo.h"
 #include "World/VoxelLandWorld.h"
 
@@ -153,6 +155,37 @@ private:
 		return {};
 	}
 
+	bool CheckCollisionGround(AVoxelLandWorld& Terrain, const FVector& LocalSurface)
+	{
+		FVoxelLandCapsuleSweepRequest Sweep;
+		const FVector LocalStart = LocalSurface + FVector(0, 0, 500.0);
+		const FVector LocalEnd = LocalSurface + FVector(0, 0, 20.0);
+		const FVector Padding(Sweep.RadiusCm + Sweep.SkinCm, Sweep.RadiusCm + Sweep.SkinCm,
+			Sweep.HalfHeightCm + Sweep.SkinCm);
+		FVoxelLandCollisionWorldView Collision;
+		if (!Test.TestTrue(TEXT("Admit the capsule grounding footprint"),
+				Terrain.UpdateCollisionDemandForBounds(CollisionConsumer, FBox(LocalEnd - Padding, LocalStart + Padding)))
+			|| !Test.TestTrue(TEXT("Capture the collision field"), Terrain.CaptureCollisionView(CollisionConsumer, Collision)))
+		{
+			Finish();
+			return false;
+		}
+		const FVector Origin(Collision.OriginLocation);
+		Sweep.Start = LocalStart + Origin;
+		Sweep.End = LocalEnd + Origin;
+		const FVoxelLandCapsuleSweepResult Hit = FVoxelLandSdfCollision::SweepCapsule(*Collision.Field, Sweep);
+		if (Hit.Status == EVoxelLandCapsuleSweepStatus::Unavailable)
+		{
+			return false;
+		}
+		const FString Diagnostic = FString::Printf(TEXT("Capsule grounds in Play (status %d, normal %s, safe %.4f, regions %d)"),
+			int32(Hit.Status), *Hit.Normal.ToString(), Hit.LastSafeTime, Hit.RegionsVisited);
+		Test.TestTrue(*Diagnostic,
+			Hit.Status == EVoxelLandCapsuleSweepStatus::Contact && Hit.Normal.Z > 0.3 && Hit.LastSafeTime > 0.0);
+		Terrain.ReleaseCollisionDemand(CollisionConsumer);
+		return true;
+	}
+
 	bool CheckHeight(UWorld& World, AVoxelLandWorld& Terrain)
 	{
 		constexpr int32 Cells = FVoxelLandChunkData::Cells;
@@ -176,13 +209,17 @@ private:
 			{
 				return false;
 			}
+			const double Mid = 0.5 * Cells * Config->VoxelSizeCm;
+			if (!CheckCollisionGround(Terrain, FVector(Mid, Mid, Height.GetValue())))
+			{
+				return false;
+			}
 			if (IsHeadless())
 			{
 				Test.TestEqual(TEXT("Headless Height has no clipmap publication"),
 					Terrain.GetM7PublishedTicketForTests(), uint64(0));
 				return Finish();
 			}
-			const double Mid = 0.5 * Cells * Config->VoxelSizeCm;
 			Terrain.SetTestViewLocation(FVector(Mid, Mid, Height.GetValue()));
 			bViewSet = true;
 			return false;
@@ -227,6 +264,10 @@ private:
 		Test.TestTrue(TEXT("Projected density uses the 400 cm override instead of the 100 cm default"),
 			Island->Density[Center + Axis * Axis * 3] < 0);
 		Test.TestTrue(TEXT("Air above the island is positive"), Island->Density[Center + Axis * Axis * 6] > 0);
+		if (!CheckCollisionGround(Terrain, FVector((bMovedToRemote ? RemoteCm : 0.0) + 150.0, 150.0, 325.0)))
+		{
+			return false;
+		}
 		Test.TestFalse(TEXT("Island arrives through camera demand"), Terrain.IsExplicitChunkForTests(Key));
 		Test.TestEqual(
 			TEXT("Direct Density has no clipmap revision"), Terrain.GetM7PublishedTicketForTests(), uint64(0));
@@ -298,6 +339,7 @@ private:
 	bool bUseDemo = false;
 	double Start = FPlatformTime::Seconds();
 	int32 BaseChunkZ = 0;
+	const FGuid CollisionConsumer = FGuid::NewGuid();
 	bool bHeightProbesRequested = false;
 	bool bViewSet = false;
 	bool bMovedToRemote = false;

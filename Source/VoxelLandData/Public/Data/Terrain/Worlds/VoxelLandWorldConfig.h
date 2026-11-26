@@ -261,6 +261,10 @@ public:
 	int32 OverhangSalt = 0;
 	UPROPERTY(EditAnywhere, Category = "World")
 	TSoftObjectPtr<UVoxelLandMaterialSetup> MaterialSetup;
+
+	UPROPERTY(EditAnywhere, Category = "Appearance",
+		meta = (ToolTip = "Optional Material graph. Without a graph, the Material Setup rules assign surfaces."))
+	TSoftObjectPtr<UVoxelLandTerrainGraph> MaterialGraph;
 	UPROPERTY(EditAnywhere, Category = "Streaming", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 HorizontalRadius = 1;
 	UPROPERTY(EditAnywhere, Category = "Streaming", meta = (ClampMin = "1", ClampMax = "4"))

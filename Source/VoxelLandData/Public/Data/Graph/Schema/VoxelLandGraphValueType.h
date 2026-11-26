@@ -8,5 +8,6 @@ enum class EVoxelLandGraphValueType : uint8
 {
 	Float,
 	Int32,
-	Bool
+	Bool,
+	Surface
 };

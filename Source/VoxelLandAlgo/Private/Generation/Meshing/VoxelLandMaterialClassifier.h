@@ -13,7 +13,7 @@ public:
 	[[nodiscard]] static bool IsValid(const FVoxelLandMaterialAppearance& Appearance);
 	[[nodiscard]] static bool HasSlopeRules(const FVoxelLandMaterialAppearance& Appearance);
 	[[nodiscard]] static FVoxelLandMaterialCandidates Sample(const FVoxelLandMeshVertex& Vertex,
-		const FVoxelLandMaterialAppearance& Appearance, double OriginZ, bool bHasSlopeRules);
+		const FVoxelLandMaterialAppearance& Appearance, const FVector3d& Origin, bool bHasSlopeRules);
 
 private:
 	static double GetSlope(const FVector3f& Normal);

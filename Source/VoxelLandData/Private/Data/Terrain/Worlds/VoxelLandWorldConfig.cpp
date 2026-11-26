@@ -560,7 +560,8 @@ bool UVoxelLandWorldConfig::CaptureM5Snapshot(FVoxelLandM5WorldSnapshot& OutSnap
 bool UVoxelLandWorldConfig::CaptureBoundOutput(FVoxelLandGraphSnapshot& Snapshot, FString& OutError) const
 {
 	OutError.Reset();
-	if (!IsInGameThread() || !IsValid(Graph.Get()) || Graph->IsA<UVoxelLandGraphFunction>())
+	if (!IsInGameThread() || !IsValid(Graph.Get()) || Graph->IsA<UVoxelLandGraphFunction>()
+		|| Graph->GraphRole != EVoxelLandGraphRole::Terrain)
 	{
 		OutError = TEXT("Select a Terrain Graph in World Config.");
 		return false;

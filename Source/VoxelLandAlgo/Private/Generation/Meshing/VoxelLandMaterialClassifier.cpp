@@ -2,6 +2,8 @@
 #include "Data/Meshing/VoxelLandMaterialAppearance.h"
 #include "Data/Meshing/VoxelLandMaterialBlend.h"
 #include "Data/Meshing/VoxelLandMeshVertex.h"
+#include "Graph/Compilation/VoxelLandMaterialGraphPoint.h"
+#include "Graph/Compilation/VoxelLandMaterialGraphProgram.h"
 
 bool FVoxelLandMaterialClassifier::IsValid(const FVoxelLandMaterialAppearance& Appearance)
 {
@@ -25,6 +27,10 @@ bool FVoxelLandMaterialClassifier::IsValid(const FVoxelLandMaterialAppearance& A
 
 bool FVoxelLandMaterialClassifier::HasSlopeRules(const FVoxelLandMaterialAppearance& Appearance)
 {
+	if (Appearance.Program)
+	{
+		return Appearance.Program->UsesSlope();
+	}
 	for (const FVoxelLandResolvedMaterialRule& Rule : Appearance.Rules)
 	{
 		if (Rule.Input == EVoxelLandMaterialRuleInput::SlopeDegrees)
@@ -36,11 +42,21 @@ bool FVoxelLandMaterialClassifier::HasSlopeRules(const FVoxelLandMaterialAppeara
 }
 
 FVoxelLandMaterialCandidates FVoxelLandMaterialClassifier::Sample(const FVoxelLandMeshVertex& Vertex,
-	const FVoxelLandMaterialAppearance& Appearance, double OriginZ, bool bHasSlopeRules)
+	const FVoxelLandMaterialAppearance& Appearance, const FVector3d& Origin, bool bHasSlopeRules)
 {
 	double Weights[FVoxelLandMaterialAppearance::MaxSlots] = {};
-	const double Elevation = OriginZ + static_cast<double>(Vertex.Position.Z);
+	const FVector3d Position = Origin + FVector3d(Vertex.Position);
+	const double Elevation = Position.Z;
 	const double Slope = bHasSlopeRules ? GetSlope(Vertex.Normal) : 0.0;
+	if (Appearance.Program)
+	{
+		const FVoxelLandMaterialGraphPoint Point{Position, Slope, Appearance.Seed, Appearance.Signals.Get()};
+		if (!Appearance.Program->Evaluate(Point, MakeArrayView(Weights, Appearance.SlotCount)))
+		{
+			Weights[FVoxelLandMaterialAppearance::FallbackSlot] = 1.0;
+		}
+		return Select(Weights, Appearance.SlotCount);
+	}
 	double Remaining = 1.0;
 
 	// Later rules take their share first. The unclaimed weight belongs to the fallback.

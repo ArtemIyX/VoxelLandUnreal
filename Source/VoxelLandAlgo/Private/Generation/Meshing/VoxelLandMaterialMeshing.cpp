@@ -7,10 +7,10 @@ class FVoxelLandMaterialMeshingWork final
 {
 public:
 	FVoxelLandMaterialMeshingWork(
-		const FVoxelLandMeshData& InSource, const FVoxelLandMaterialAppearance& InAppearance, double InOriginZ)
+		const FVoxelLandMeshData& InSource, const FVoxelLandMaterialAppearance& InAppearance, const FVector3d& InOrigin)
 		: Source(InSource)
 		, Appearance(InAppearance)
-		, OriginZ(InOriginZ)
+		, Origin(InOrigin)
 	{
 	}
 
@@ -25,7 +25,7 @@ public:
 				return false;
 			}
 			Samples.Add(
-				FVoxelLandMaterialClassifier::Sample(Source.Vertices[Index], Appearance, OriginZ, bHasSlopeRules));
+				FVoxelLandMaterialClassifier::Sample(Source.Vertices[Index], Appearance, Origin, bHasSlopeRules));
 		}
 
 		Indices.Reserve(Source.Indices.Num());
@@ -248,7 +248,7 @@ private:
 
 	const FVoxelLandMeshData& Source;
 	const FVoxelLandMaterialAppearance& Appearance;
-	const double OriginZ;
+	const FVector3d Origin;
 	TArray<FVoxelLandMaterialCandidates> Samples;
 	TArray<FVoxelLandMeshVertex> AddedVertices;
 	TArray<FVoxelLandMaterialBlend> Blends;
@@ -274,7 +274,7 @@ bool FVoxelLandMaterialMeshing::Pack(FVoxelLandMeshData& Mesh, const FVoxelLandM
 		return true;
 	}
 
-	FVoxelLandMaterialMeshingWork Work(Mesh, Appearance, LogicalOrigin.Z);
+	FVoxelLandMaterialMeshingWork Work(Mesh, Appearance, LogicalOrigin);
 	if (!Work.Build(IsCancelled))
 	{
 		return false;

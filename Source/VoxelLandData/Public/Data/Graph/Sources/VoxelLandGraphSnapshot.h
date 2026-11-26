@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/Graph/Schema/VoxelLandGraphRole.h"
 #include "Data/Graph/Sources/VoxelLandGraphLinkRecord.h"
 #include "Data/Graph/Sources/VoxelLandGraphNodeRecord.h"
 #include "Data/Graph/Sources/VoxelLandGraphParameter.h"
@@ -14,6 +15,9 @@ struct VOXELLANDDATA_API FVoxelLandGraphSnapshot
 	GENERATED_BODY()
 	UPROPERTY()
 	int32 SourceVersion = 1;
+
+	UPROPERTY(VisibleAnywhere, Category = "VoxelLand")
+	EVoxelLandGraphRole GraphRole = EVoxelLandGraphRole::Terrain;
 	UPROPERTY()
 	TArray<FVoxelLandGraphParameter> Parameters;
 	UPROPERTY()

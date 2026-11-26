@@ -26,7 +26,9 @@ public:
 
 		bool Validate()
 		{
-			if (Graph.SourceVersion != 1 || Graph.Nodes.Num() > FVoxelLandTerrainGraphChanges::MaxNodes
+			if (Graph.SourceVersion != 1
+				|| (Graph.GraphRole != EVoxelLandGraphRole::Terrain && Graph.GraphRole != EVoxelLandGraphRole::Material)
+				|| Graph.Nodes.Num() > FVoxelLandTerrainGraphChanges::MaxNodes
 				|| Graph.Links.Num() > FVoxelLandTerrainGraphChanges::MaxLinks)
 			{
 				Diagnostic.Message = TEXT("Unsupported graph version or graph exceeds record limits.");
@@ -65,7 +67,8 @@ public:
 				{
 					if (!Pin.Id.IsValid() || Pins.Contains(Pin.Id)
 						|| (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
-							&& Pin.Type != EVoxelLandGraphValueType::Bool)
+							&& Pin.Type != EVoxelLandGraphValueType::Bool
+							&& !(Graph.GraphRole == EVoxelLandGraphRole::Material && Pin.Type == EVoxelLandGraphValueType::Surface))
 						|| Pin.bInvalidDefault || !FMath::IsFinite(Pin.FloatDefault))
 					{
 						Diagnostic.NodeId = Node.Id;
@@ -218,6 +221,7 @@ bool UVoxelLandTerrainGraph::CaptureSnapshot(
 		return false;
 	}
 	OutSnapshot.SourceVersion = SourceVersion;
+	OutSnapshot.GraphRole = GraphRole;
 	OutSnapshot.Parameters = Parameters;
 	OutSnapshot.Nodes = Nodes;
 	OutSnapshot.Links = Links;

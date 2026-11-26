@@ -33,6 +33,9 @@ struct VOXELLANDDATA_API FVoxelLandGraphNodeRecord
 	FSoftObjectPath FunctionPath;
 
 	UPROPERTY()
+	FSoftObjectPath SurfaceAsset;
+
+	UPROPERTY()
 	FGuid ParameterId;
 
 	// Input order is semantic, including for variadic operators.

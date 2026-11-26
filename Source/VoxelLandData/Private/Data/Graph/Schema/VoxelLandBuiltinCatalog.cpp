@@ -98,6 +98,30 @@ bool FVoxelLandBuiltinCatalog::Find(
 															: FVoxelLandBuiltinDescriptors::EType::Float);
 			bHasOutput = false;
 			break;
+		case EVoxelLandBuiltinNode::Surface:
+			OutputType = FVoxelLandBuiltinDescriptors::EType::Surface;
+			break;
+		case EVoxelLandBuiltinNode::BlendSurfaces:
+			FVoxelLandBuiltinDescriptors::AddBinary(Spec, FVoxelLandBuiltinDescriptors::EType::Surface);
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Alpha"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("0.5"));
+			OutputType = FVoxelLandBuiltinDescriptors::EType::Surface;
+			break;
+		case EVoxelLandBuiltinNode::SurfaceMaterialOutput:
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Surface"), FVoxelLandBuiltinDescriptors::EType::Surface);
+			bHasOutput = false;
+			break;
+		case EVoxelLandBuiltinNode::SurfaceSlope:
+		case EVoxelLandBuiltinNode::TerrainSignal:
+			break;
+		case EVoxelLandBuiltinNode::WorldSignal:
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Default"), FVoxelLandBuiltinDescriptors::EType::Float);
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Required"), FVoxelLandBuiltinDescriptors::EType::Bool);
+			break;
+		case EVoxelLandBuiltinNode::MaterialRemap:
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Value"), FVoxelLandBuiltinDescriptors::EType::Float);
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Lower"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("-0.5"));
+			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Upper"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("0.5"));
+			break;
 		case EVoxelLandBuiltinNode::DensityOutput:
 			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Density"), FVoxelLandBuiltinDescriptors::EType::Float);
 			bHasOutput = false;
@@ -302,7 +326,7 @@ bool FVoxelLandBuiltinCatalogLookup::ValidateBuiltinPins(const FVoxelLandBuiltin
 	{
 		if (Pin.Name.IsEmpty() || Names.Contains(FName(*Pin.Name))
 			|| (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
-				&& Pin.Type != EVoxelLandGraphValueType::Bool)
+				&& Pin.Type != EVoxelLandGraphValueType::Bool && Pin.Type != EVoxelLandGraphValueType::Surface)
 			|| (Pin.bOutput && (Pin.bUniform || !Pin.DefaultLiteral.IsEmpty())))
 		{
 			Error = TEXT("invalid or duplicate pin definition");
@@ -331,7 +355,7 @@ bool FVoxelLandBuiltinCatalogLookup::ValidateBuiltinPins(const FVoxelLandBuiltin
 	const int32 ExpectedOutputs =
 		(Spec.Kind == EVoxelLandBuiltinNode::DensityOutput || Spec.Kind == EVoxelLandBuiltinNode::M4HeightOutput
 			|| Spec.Kind == EVoxelLandBuiltinNode::FloatOutput || Spec.Kind == EVoxelLandBuiltinNode::IntOutput
-			|| Spec.Kind == EVoxelLandBuiltinNode::BoolOutput)
+			|| Spec.Kind == EVoxelLandBuiltinNode::BoolOutput || Spec.Kind == EVoxelLandBuiltinNode::SurfaceMaterialOutput)
 			? 0
 			: 1;
 	if (Outputs != ExpectedOutputs || (Outputs == 1 && !Spec.Pins.Last().bOutput))

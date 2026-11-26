@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/Graph/Schema/VoxelLandGraphRole.h"
 #include "Engine/DataAsset.h"
 #include "Data/Graph/Sources/VoxelLandGraphLinkRecord.h"
 #include "Data/Graph/Schema/VoxelLandGraphDiagnostic.h"
@@ -29,6 +30,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, Category = "VoxelLand")
 	int32 SourceVersion = 1;
+
+	UPROPERTY(VisibleAnywhere, Category = "VoxelLand")
+	EVoxelLandGraphRole GraphRole = EVoxelLandGraphRole::Terrain;
 
 	UPROPERTY(EditAnywhere, Category = "VoxelLand", meta = (TitleProperty = "Name"))
 	TArray<FVoxelLandGraphParameter> Parameters;

@@ -1271,6 +1271,11 @@ bool FVoxelLandGraphCompilePass::CompileSource(const FVoxelLandGraphSnapshot& Sn
 	TMap<FGuid, FVoxelLandGraphNodeOrigin>* NodeOrigins)
 {
 	OutDiagnostic = FVoxelLandGraphDiagnostic();
+	if (Snapshot.GraphRole != EVoxelLandGraphRole::Terrain)
+	{
+		OutDiagnostic.Message = TEXT("Material graphs cannot compile as terrain outputs.");
+		return false;
+	}
 	if (!FVoxelLandBuiltinCatalog::Validate(OutDiagnostic.Message))
 	{
 		return false;

@@ -59,7 +59,14 @@
 	X(FloatOutput, 53)                 \
 	X(IntOutput, 54)                   \
 	X(BoolOutput, 55)                  \
-	X(WorldNoise2D, 56)
+	X(WorldNoise2D, 56)                \
+	X(Surface, 57)                     \
+	X(BlendSurfaces, 58)               \
+	X(SurfaceMaterialOutput, 59)       \
+	X(SurfaceSlope, 60)                \
+	X(TerrainSignal, 61)               \
+	X(WorldSignal, 62)                 \
+	X(MaterialRemap, 63)
 
 enum class EVoxelLandBuiltinNode : uint32
 {

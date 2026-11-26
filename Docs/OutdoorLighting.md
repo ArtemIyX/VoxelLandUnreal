@@ -4,11 +4,17 @@
 
 Enable **Show Plugin Content** in the Content Browser and open **VoxelLand Content → Examples → OutdoorLighting → OutdoorLighting**. Press Play and fly from **Flight Start**. The map also includes entry, ridge and overlook cameras for repeatable framing.
 
-`WC_OutdoorLighting` uses the Mountain Grass Patches material graph with infinite Height Terrain and geometry AO strength 0.75. The map sets movable sun and sky, virtual shadow maps through the project settings, manual exposure and raster lighting. Its 48 m horizontal window uses the existing clipmap with maximum LOD 1. Set **Terrain Ambient Occlusion Strength** to zero in World Config to disable the geometry bake. Other World Config assets default to zero.
+`WC_OutdoorLighting` uses the Mountain Grass Patches material graph with infinite Height Terrain and geometry AO strength 0.75. The map sets movable sun and sky, virtual shadow maps through the project settings, manual exposure and raster lighting. The demo requests a 3 km horizontal radius with maximum LOD 5 and a 512-tile cap. Its authored, single-valued Height Terrain uses XY clipmap tiles. Coarse tiles stitch their boundary vertices to the finer neighbors. Set **Terrain Ambient Occlusion Strength** to zero in World Config to disable the geometry bake. Other World Config assets default to zero.
 
 The shared palette master exposes `TerrainDebugMode` 4 for geometry AO and 5 for texture and geometry AO combined. Plain materials keep their original vertex layout. Profile the intended streaming radius and terrain source before enabling AO on another world.
 
 The opt-in `VoxelLand.Lighting.CreateOutdoorDemo` editor automation, run with `-VoxelLandCreateOutdoorDemo`, creates the map and config when both output paths are free. It leaves existing editable assets intact.
+
+## Verify the six-level clipmap
+
+For a quick visual check, fly over the terrain in Play and use `viewmode wireframe`. Near terrain should show smaller triangles than the horizon.
+
+For a repeatable check in a Development build, run the map in standalone game mode with `-VoxelLandClipmapFlight -VoxelLandClipmapFlightLeaves=512 -trace=cpu,frame,gpu,bookmark,counters`. The flight goes 2.21 km out and back. Read the `ClipmapFlight` log for the published terrain count at each LOD, the near and outer triangle probes, and the LOD at fixed world locations. Open the capture in Unreal Insights to match flight checkpoints and revisions to worker, game-thread, and render-thread activity.
 
 ## Reference captures
 

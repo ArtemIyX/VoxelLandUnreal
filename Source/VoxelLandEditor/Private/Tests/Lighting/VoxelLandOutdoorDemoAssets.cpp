@@ -107,10 +107,10 @@ private:
 			return false;
 		}
 		TerrainConfig->SetObjectPropertyValue_InContainer(Terrain, &Config);
-		Terrain->M7MaxLOD = 1;
-		Terrain->M7HorizontalRadiusCm = 4800.0;
+		Terrain->M7MaxLOD = 5;
+		Terrain->M7HorizontalRadiusCm = 300000.0;
 		Terrain->M7VerticalRadiusCm = 3800.0;
-		Terrain->M7MaxLeaves = 256;
+		Terrain->M7MaxLeaves = 512;
 
 		const FVector StartPosition(-3100.0, -2100.0, 2600.0);
 		const FRotator StartRotation(-20.0, 35.0, 0.0);

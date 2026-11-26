@@ -19,6 +19,7 @@ enum class EPackageReloadPhase : uint8;
 #endif
 struct FVoxelLandM4SavedWorld;
 struct FVoxelLandWorldState;
+struct FVoxelLandCollisionWorldView;
 struct FVoxelLandTestBarrier;
 struct FVoxelLandReloadTestBarrier;
 namespace VoxelLandWorldPrivate
@@ -109,6 +110,15 @@ public:
 	// Data-only explicit demand is useful on dedicated servers. Keep it until ReleaseChunk.
 	bool RequestChunk(const FVoxelLandChunkKey& Key);
 	void ReleaseChunk(const FVoxelLandChunkKey& Key);
+
+	// Game-thread only. Each consumer owns its complete replacement set. Rejected updates keep the old lease.
+	[[nodiscard]] bool UpdateCollisionDemand(const FGuid& ConsumerId, TConstArrayView<FVoxelLandChunkKey> Keys);
+	// LocalBounds encloses the entire local sweep, including capsule dimensions and skin.
+	[[nodiscard]] bool UpdateCollisionDemandForBounds(const FGuid& ConsumerId, const FBox& LocalBounds);
+	void ReleaseCollisionDemand(const FGuid& ConsumerId);
+	// Pending keys are absent from the immutable view and resolve to Missing when sampled.
+	[[nodiscard]] bool CaptureCollisionView(const FGuid& ConsumerId, FVoxelLandCollisionWorldView& Out) const;
+	[[nodiscard]] bool IsCollisionViewCurrent(const FVoxelLandCollisionWorldView& View) const;
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Data")
 	bool RequestDataChunk(FIntVector Coordinate);
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Data")
@@ -210,6 +220,7 @@ private:
 	void AdvanceM7Publication();
 	void DiscardM7Staging();
 	void RetireChunk(const FVoxelLandChunkKey& Key);
+	bool CanRequestChunk(const FVoxelLandChunkKey& Key, bool bLogRejection = false) const;
 	void PumpCompletions();
 	void Dispatch();
 	void HandleWorldBeginTearDown(UWorld* World);

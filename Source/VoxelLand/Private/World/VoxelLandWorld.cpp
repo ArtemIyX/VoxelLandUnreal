@@ -47,7 +47,6 @@ class FWorker final : public FRunnable
 {
 public:
 	static constexpr int32 MaxWorkers = 4;
-	static constexpr int32 MaxRecords = 8192;
 
 	explicit FWorker(TSharedRef<FSharedWork, ESPMode::ThreadSafe> InWork)
 		: Work(InWork)
@@ -630,18 +629,11 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 {
 	check(IsInGameThread());
-	if (!State || Key.LOD != 0 || !State->Generator->IncludesChunk(Key)
-		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
-			Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited())
-		|| (State->Records.Num() >= FMath::Clamp(MaxResidentChunks, 1, FWorker::MaxRecords)
-			&& !State->Records.Contains(Key)))
+	if (!State
+		|| (State->Records.Num() >= FMath::Clamp(MaxResidentChunks, 1, FVoxelLandWorldState::MaxRecords)
+			&& !State->Records.Contains(Key))
+		|| !CanRequestChunk(Key, true))
 	{
-		return false;
-	}
-	if (const FVoxelLandError DemandError = State->Generator->ValidateM4ChunkDemand(Key))
-	{
-		UE_LOG(LogTemp, Warning, TEXT("VoxelLand rejected chunk (%d,%d,%d): %s"), Key.Coordinate.X, Key.Coordinate.Y,
-			Key.Coordinate.Z, *DemandError.Message);
 		return false;
 	}
 	FRecord& Record = State->Records.FindOrAdd(Key);
@@ -649,7 +641,7 @@ bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 	Record.bFailed = false;
 	Record.Error.Reset();
 	State->bDemandComplete = false;
-	if (!Record.Data && !Record.bRunning)
+	if ((!Record.Data || Record.bNeedsRender) && !Record.bRunning)
 	{
 		Record.bQueued = true;
 	}
@@ -734,7 +726,7 @@ void AVoxelLandWorld::SetRegionHidden(FIntVector Region, bool bRegionHidden)
 	}
 	if (bRegionHidden)
 	{
-		if (State->HiddenRegions.Num() >= FWorker::MaxRecords && !State->HiddenRegions.Contains(Region))
+		if (State->HiddenRegions.Num() >= FVoxelLandWorldState::MaxRecords && !State->HiddenRegions.Contains(Region))
 		{
 			return;
 		}
@@ -908,7 +900,7 @@ void AVoxelLandWorld::UpdateDemand()
 	const FIntVector NewChunk(
 		FMath::FloorToInt(Position.X), FMath::FloorToInt(Position.Y), FMath::FloorToInt(Position.Z));
 	const int32 H = FMath::Clamp(HorizontalRadius, 1, 8) + 1, V = FMath::Clamp(VerticalRadius, 1, 4) + 1;
-	const int32 Limit = FMath::Clamp(MaxResidentChunks, 1, FWorker::MaxRecords);
+	const int32 Limit = FMath::Clamp(MaxResidentChunks, 1, FVoxelLandWorldState::MaxRecords);
 	const FVector Direction = State->ViewVelocity.GetSafeNormal();
 	auto SectorAxis = [](double Value) {
 		return Value > 0.25 ? 1 : Value < -0.25 ? -1 : 0;
@@ -995,20 +987,24 @@ void AVoxelLandWorld::UpdateDemand()
 												: (A.Coordinate.Y != B.Coordinate.Y ? A.Coordinate.Y < B.Coordinate.Y
 																					: A.Coordinate.Z < B.Coordinate.Z);
 	});
-	int32 ExplicitCount = 0;
+	int32 PinnedCount = 0;
 	for (auto& Pair : State->Records)
 	{
 		Pair.Value.bDemand = false;
-		ExplicitCount += Pair.Value.bExplicit ? 1 : 0;
+		PinnedCount += Pair.Value.HasPinnedDemand() ? 1 : 0;
 	}
-	int32 Available = FMath::Max(0, Limit - ExplicitCount);
+	int32 Available = FMath::Max(0, Limit - PinnedCount);
 	TSet<FVoxelLandChunkKey> Selected;
 	for (const auto& Key : Candidates)
 	{
 		FRecord* Existing = State->Records.Find(Key);
-		if (Existing && Existing->bExplicit)
+		if (Existing && Existing->HasPinnedDemand())
 		{
 			Existing->bDemand = true;
+			if (Existing->bNeedsRender && !Existing->bRunning && !Existing->bFailed)
+			{
+				Existing->bQueued = true;
+			}
 			continue;
 		}
 		if (Available > 0)
@@ -1029,7 +1025,7 @@ void AVoxelLandWorld::UpdateDemand()
 	TArray<FVoxelLandChunkKey> Evictions;
 	for (const auto& Pair : State->Records)
 	{
-		if (!Pair.Value.bExplicit && !Selected.Contains(Pair.Key))
+		if (!Pair.Value.HasPinnedDemand() && !Selected.Contains(Pair.Key))
 		{
 			Evictions.Add(Pair.Key);
 		}
@@ -1070,7 +1066,7 @@ void AVoxelLandWorld::UpdateDemand()
 		}
 		FRecord& Record = State->Records.FindOrAdd(Key);
 		Record.bDemand = true;
-		if (!Record.Data && !Record.bRunning && !Record.bFailed)
+		if ((!Record.Data || Record.bNeedsRender) && !Record.bRunning && !Record.bFailed)
 		{
 			Record.bQueued = true;
 		}
@@ -1114,14 +1110,20 @@ void AVoxelLandWorld::PumpCompletions()
 			{
 				Record->Data = Done.Data;
 			}
-			Record->bQueued = Record->bDemand || Record->bExplicit;
+			Record->bQueued = Record->HasDemand();
 			++State->Stale;
 			continue;
 		}
-		if (Done.bCancelled || (!Record->bDemand && !Record->bExplicit))
+		if (Done.bCancelled || !Record->HasDemand())
 		{
 			++State->Cancelled;
 			continue;
+		}
+		if (Done.Data)
+		{
+			// A visual failure cannot invalidate the completed field.
+			Record->Data = Done.Data;
+			Record->bNeedsRender = !Done.Job.bRender && !State->bServer && !State->M7Visual;
 		}
 		if (Done.Error)
 		{
@@ -1130,11 +1132,22 @@ void AVoxelLandWorld::PumpCompletions()
 							  ? FString::Printf(TEXT("Chunk generation failed (error code %d)"), int32(Done.Error.Code))
 							  : Done.Error.Message.Left(1024);
 			++State->Failed;
+			if (!Record->Data)
+			{
+				Record->DeferCollisionRetry(FPlatformTime::Seconds());
+			}
+			else if (Done.Job.bRender)
+			{
+				Record->bNeedsRender = true;
+			}
 			UE_LOG(LogTemp, Error, TEXT("VoxelLand chunk (%d,%d,%d): %s"), Done.Job.Key.Coordinate.X,
 				Done.Job.Key.Coordinate.Y, Done.Job.Key.Coordinate.Z, *Done.Error.Message);
 			continue;
 		}
-		Record->Data = Done.Data;
+		if (Record->bNeedsRender && (Record->bDemand || Record->bExplicit))
+		{
+			Record->bQueued = true;
+		}
 		if (!Done.Mesh || State->bServer)
 		{
 			continue;
@@ -1150,8 +1163,8 @@ void AVoxelLandWorld::PumpCompletions()
 				GetWorld()->SpawnActor<AVoxelLandRegion>(AVoxelLandRegion::StaticClass(), FTransform::Identity, Params);
 			if (!Region)
 			{
-				Record->Data.Reset();
 				Record->bFailed = true;
+				Record->bNeedsRender = true;
 				Record->Error = TEXT("VoxelLand region spawn failed");
 				++State->Failed;
 				UE_LOG(LogTemp, Error, TEXT("VoxelLand region spawn failed"));
@@ -1165,8 +1178,8 @@ void AVoxelLandWorld::PumpCompletions()
 		if (!Region->Publish(C, VoxelLandMeshCoordinates::RenderOrigin(C, State->Generator->GetProfile().VoxelSizeCm),
 				Done.Mesh, TerrainMaterial))
 		{
-			Record->Data.Reset();
 			Record->bFailed = true;
+			Record->bNeedsRender = true;
 			Record->Error = TEXT("VoxelLand component rejected mesh");
 			++State->Failed;
 			UE_LOG(LogTemp, Error, TEXT("VoxelLand component rejected mesh for (%d,%d,%d)"), C.X, C.Y, C.Z);
@@ -1191,17 +1204,33 @@ void AVoxelLandWorld::Dispatch()
 	}
 	// At most one outstanding job per worker, including undrained completions. This bounds
 	// result memory by worker count times the maximum 34^3 vertices and 3*32^3 quads.
+	constexpr int32 MaxCollisionDispatchBurst = 4;
+	const double Now = FPlatformTime::Seconds();
 	while (State->Active < State->Threads.Num())
 	{
+		const bool bPreferCollision = State->CollisionDispatchBurst < MaxCollisionDispatchBurst;
+		if (!bPreferCollision)
+		{
+			// A moving collision footprint must yield to a pending visual revision.
+			const int32 ActiveBefore = State->Active;
+			DispatchM7Revision();
+			if (State->Active != ActiveBefore)
+			{
+				State->CollisionDispatchBurst = 0;
+				continue;
+			}
+		}
 		FRecord* Best = nullptr;
 		FVoxelLandChunkKey BestKey;
+		int32 BestPriority = -1;
 		int64 BestDistance = MAX_int64;
 		double BestAhead = -TNumericLimits<double>::Max();
 		const FVector Forward = State->ViewVelocity.GetSafeNormal();
 		for (auto& Pair : State->Records)
 		{
 			FRecord& R = Pair.Value;
-			if (!R.bQueued || R.bRunning || R.bFailed || (!R.bDemand && !R.bExplicit))
+			R.QueueDueCollisionRetry(Now);
+			if (!R.bQueued || R.bRunning || R.bFailed || !R.HasDemand())
 			{
 				continue;
 			}
@@ -1214,14 +1243,17 @@ void AVoxelLandWorld::Dispatch()
 								 + FMath::Min<int64>(FMath::Abs(DZ), 1000000);
 			const double Ahead = DX * Forward.X + DY * Forward.Y + DZ * Forward.Z;
 			const FIntVector B = BestKey.Coordinate;
-			if (!Best || Distance < BestDistance
-				|| (Distance == BestDistance
-					&& (Ahead > BestAhead
-						|| (Ahead == BestAhead
-							&& (C.X < B.X || (C.X == B.X && (C.Y < B.Y || (C.Y == B.Y && C.Z < B.Z))))))))
+			const int32 Priority = (R.CollisionOwners != 0) == bPreferCollision ? 1 : 0;
+			const bool bCloser = Distance < BestDistance
+							  || (Distance == BestDistance
+								  && (Ahead > BestAhead
+									  || (Ahead == BestAhead
+										  && (C.X < B.X || (C.X == B.X && (C.Y < B.Y || (C.Y == B.Y && C.Z < B.Z)))))));
+			if (!Best || Priority > BestPriority || (Priority == BestPriority && bCloser))
 			{
 				Best = &R;
 				BestKey = Pair.Key;
+				BestPriority = Priority;
 				BestDistance = Distance;
 				BestAhead = Ahead;
 			}
@@ -1229,14 +1261,18 @@ void AVoxelLandWorld::Dispatch()
 		if (!Best)
 		{
 			DispatchM7Revision();
+			State->CollisionDispatchBurst = 0;
 			break;
 		}
+		State->CollisionDispatchBurst = Best->CollisionOwners != 0
+			? FMath::Min(State->CollisionDispatchBurst + 1, MaxCollisionDispatchBurst)
+			: 0;
 		FJob Job;
 		Job.Key = BestKey;
 		Job.Generator = State->Generator;
 		Job.Epoch = State->Epoch;
 		Job.Ticket = ++State->NextTicket;
-		Job.bRender = !State->bServer && !State->M7Visual;
+		Job.bRender = !State->bServer && !State->M7Visual && (Best->bDemand || Best->bExplicit);
 		if (Job.bRender)
 		{
 			Job.Appearance = State->Appearance;
@@ -1324,7 +1360,7 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
 		{
 			++Visible;
 		}
-		if (R.bExplicit || R.bDemand)
+		if (R.HasDemand())
 		{
 			continue;
 		}

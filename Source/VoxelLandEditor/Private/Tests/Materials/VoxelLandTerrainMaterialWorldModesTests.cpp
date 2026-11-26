@@ -290,6 +290,7 @@ private:
 		bool bAllSharePalette = true;
 		bool bAllHaveLogicalOrigin = true;
 		bool bAllHaveExpectedVisibility = true;
+		bool bAllCastShadows = true;
 		for (TActorIterator<AVoxelLandRegion> It(&World); It; ++It)
 		{
 			if (It->IsHidden())
@@ -303,6 +304,7 @@ private:
 				if (Component->IsRegistered() && Component->IsVisible())
 				{
 					++Count;
+					bAllCastShadows &= Component->CastShadow;
 					bAllSharePalette = bAllSharePalette && Component->GetMaterial(0) == Actor.TerrainMaterial;
 					bAllHaveLogicalOrigin = bAllHaveLogicalOrigin && HasLogicalOrigin(*Component);
 					bAllHaveExpectedVisibility &=
@@ -321,6 +323,7 @@ private:
 			Test.TestTrue(
 				TEXT("Every published packed component receives its logical texture origin"), bAllHaveLogicalOrigin);
 			Test.TestTrue(TEXT("Geometry visibility is present only when requested"), bAllHaveExpectedVisibility);
+			Test.TestTrue(TEXT("Streamed terrain casts raster shadows"), bAllCastShadows);
 			if (Instance)
 			{
 				Test.TestEqual(TEXT("Terrain material receives the configured AO strength"),

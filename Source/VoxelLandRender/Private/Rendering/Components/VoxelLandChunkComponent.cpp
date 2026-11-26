@@ -189,6 +189,7 @@ UVoxelLandChunkComponent::UVoxelLandChunkComponent()
 	BodyInstance.SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 	SetGenerateOverlapEvents(false);
 	SetCanEverAffectNavigation(false);
+	SetCastShadow(true);
 }
 
 bool UVoxelLandChunkComponent::SetMesh(TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> InMesh)

@@ -1,6 +1,9 @@
 #include "VoxelLandEditor.h"
 #include "VoxelLandEditorBake.h"
 #include "Worlds/Assets/VoxelLandAssetFactories.h"
+#include "Worlds/Assets/VoxelLandMaterialPaletteFactory.h"
+#include "Worlds/Assets/VoxelLandSurfaceMaterialFactory.h"
+#include "Materials/VoxelLandMaterialPaletteDetails.h"
 #include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Operators/VoxelLandOperator.h"
 #include "AssetToolsModule.h"
@@ -324,9 +327,12 @@ void FVoxelLandEditorModule::StartupModule()
 		AddIcon(TEXT("VoxelLandMaterialSetup"), TEXT("MaterialSetup"));
 		FSlateStyleRegistry::RegisterSlateStyle(*Style);
 	}
-	FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"))
-		.RegisterCustomClassLayout(TEXT("VoxelLandWorldConfig"),
-			FOnGetDetailCustomizationInstance::CreateStatic(&FVoxelLandWorldSettingsDetails::MakeInstance));
+	FPropertyEditorModule& PropertyEditor =
+		FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
+	PropertyEditor.RegisterCustomClassLayout(TEXT("VoxelLandWorldConfig"),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FVoxelLandWorldSettingsDetails::MakeInstance));
+	PropertyEditor.RegisterCustomClassLayout(TEXT("VoxelLandMaterialPalette"),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FVoxelLandMaterialPaletteDetails::MakeInstance));
 	PinFactory = MakeShared<FVoxelLandGraphPinFactory>();
 	FEdGraphUtilities::RegisterVisualPinFactory(PinFactory);
 	FModuleManager::LoadModuleChecked<FVoxelLandAlgoModule>(TEXT("VoxelLandAlgo"));
@@ -372,7 +378,8 @@ void FVoxelLandEditorModule::StartupModule()
 	M4ControlGraphAssetActions = MakeShared<FVoxelLandEditorInternals::FVoxelLandM4ControlGraphAssetActions>();
 	AssetTools.RegisterAssetTypeActions(M4ControlGraphAssetActions.ToSharedRef());
 	const UFactory* DataFactories[] = {GetDefault<UVoxelLandWorldConfigFactory>(),
-		GetDefault<UVoxelLandMaterialSetupFactory>(), GetDefault<UVoxelLandCaveProtectionFactory>()};
+		GetDefault<UVoxelLandMaterialSetupFactory>(), GetDefault<UVoxelLandCaveProtectionFactory>(),
+		GetDefault<UVoxelLandSurfaceMaterialFactory>(), GetDefault<UVoxelLandMaterialPaletteFactory>()};
 	for (const UFactory* Factory : DataFactories)
 	{
 		const TSharedRef<IAssetTypeActions> Actions =
@@ -441,8 +448,10 @@ void FVoxelLandEditorModule::ShutdownModule()
 	GraphAssetActions.Reset();
 	if (FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
 	{
-		FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"))
-			.UnregisterCustomClassLayout(TEXT("VoxelLandWorldConfig"));
+		FPropertyEditorModule& PropertyEditor =
+			FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
+		PropertyEditor.UnregisterCustomClassLayout(TEXT("VoxelLandWorldConfig"));
+		PropertyEditor.UnregisterCustomClassLayout(TEXT("VoxelLandMaterialPalette"));
 	}
 	FEdGraphUtilities::UnregisterVisualPinFactory(PinFactory);
 	PinFactory.Reset();

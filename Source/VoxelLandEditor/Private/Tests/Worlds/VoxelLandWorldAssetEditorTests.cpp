@@ -1,6 +1,10 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "../../Worlds/Assets/VoxelLandAssetFactories.h"
+#include "../../Worlds/Assets/VoxelLandMaterialPaletteFactory.h"
+#include "../../Worlds/Assets/VoxelLandSurfaceMaterialFactory.h"
+#include "Data/Assets/Materials/VoxelLandMaterialPalette.h"
+#include "Data/Assets/Materials/VoxelLandSurfaceMaterial.h"
 #include "Data/Assets/Graphs/VoxelLandGraphFunction.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Data/Caves/Field/VoxelLandCaveProtectionAsset.h"
@@ -37,9 +41,11 @@ bool FVoxelLandWorldAssetEditorTest::RunTest(const FString& Parameters)
 		{NewObject<UVoxelLandGraphFunctionFactory>(), UVoxelLandGraphFunction::StaticClass()},
 		{Factory, UVoxelLandWorldConfig::StaticClass()},
 		{NewObject<UVoxelLandMaterialSetupFactory>(), UVoxelLandMaterialSetup::StaticClass()},
-		{NewObject<UVoxelLandCaveProtectionFactory>(), UVoxelLandM5ProtectionAsset::StaticClass()}};
+		{NewObject<UVoxelLandCaveProtectionFactory>(), UVoxelLandM5ProtectionAsset::StaticClass()},
+		{NewObject<UVoxelLandSurfaceMaterialFactory>(), UVoxelLandSurfaceMaterial::StaticClass()},
+		{NewObject<UVoxelLandMaterialPaletteFactory>(), UVoxelLandMaterialPalette::StaticClass()}};
 	const TCHAR* Labels[] = {TEXT("Terrain Graph"), TEXT("Graph Function"), TEXT("World Config"),
-		TEXT("Material Setup"), TEXT("Cave Protection")};
+		TEXT("Material Setup"), TEXT("Cave Protection"), TEXT("Surface Material"), TEXT("Material Palette")};
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Entries); ++Index)
 	{
 		UFactory* Entry = Entries[Index].Key;

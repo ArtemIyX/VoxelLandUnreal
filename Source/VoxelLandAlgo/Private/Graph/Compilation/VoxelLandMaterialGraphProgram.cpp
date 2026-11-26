@@ -8,7 +8,8 @@ class FVoxelLandMaterialGraphEvaluation final
 {
 public:
 	FVoxelLandMaterialGraphEvaluation(const FVoxelLandMaterialGraphPoint& InPoint, const double* InValues)
-		: Point(InPoint), Values(InValues)
+		: Point(InPoint)
+		, Values(InValues)
 	{
 	}
 
@@ -81,7 +82,8 @@ bool FVoxelLandMaterialGraphProgram::IsSupportedNode(EVoxelLandBuiltinNode Kind)
 	}
 }
 
-bool FVoxelLandMaterialGraphProgram::Evaluate(const FVoxelLandMaterialGraphPoint& Point, TArrayView<double> Weights) const
+bool FVoxelLandMaterialGraphProgram::Evaluate(
+	const FVoxelLandMaterialGraphPoint& Point, TArrayView<double> Weights) const
 {
 	if (Weights.Num() < SlotCount || Instructions.IsEmpty() || Point.Position.ContainsNaN())
 	{
@@ -131,21 +133,68 @@ bool FVoxelLandMaterialGraphProgram::Evaluate(const FVoxelLandMaterialGraphPoint
 	return true;
 }
 
+bool FVoxelLandMaterialGraphProgram::EvaluatePreview(
+	FGuid Node, const FVoxelLandMaterialGraphPoint& Point, double& Out) const
+{
+	double Values[MaxInstructions] = {};
+	const FVoxelLandMaterialGraphEvaluation Evaluation(Point, Values);
+	for (int32 Index = 0; Index < Instructions.Num(); ++Index)
+	{
+		const FVoxelLandMaterialGraphInstruction& Instruction = Instructions[Index];
+		if (Instruction.NodeId == Node && Instruction.Kind == EVoxelLandBuiltinNode::Surface)
+		{
+			double Weights[32] = {};
+			if (!Evaluate(Point, MakeArrayView(Weights)))
+			{
+				return false;
+			}
+			Out = Weights[Instruction.Slot];
+			return true;
+		}
+		if (!Evaluation.Scalar(Instruction, Values[Index]) || !FMath::IsFinite(Values[Index]))
+		{
+			return false;
+		}
+		if (Instruction.NodeId == Node && Instruction.Kind != EVoxelLandBuiltinNode::BlendSurfaces
+			&& Instruction.Kind != EVoxelLandBuiltinNode::SurfaceMaterialOutput)
+		{
+			Out = Values[Index];
+			return true;
+		}
+	}
+	return false;
+}
+
 bool FVoxelLandMaterialGraphEvaluation::Scalar(const FVoxelLandMaterialGraphInstruction& I, double& Out) const
 {
 	using ENode = EVoxelLandBuiltinNode;
 	switch (I.Kind)
 	{
-		case ENode::PositionX: Out = Point.Position.X; break;
-		case ENode::PositionY: Out = Point.Position.Y; break;
-		case ENode::PositionZ: Out = Point.Position.Z; break;
-		case ENode::SurfaceSlope: Out = Point.SlopeDegrees; break;
+		case ENode::PositionX:
+			Out = Point.Position.X;
+			break;
+		case ENode::PositionY:
+			Out = Point.Position.Y;
+			break;
+		case ENode::PositionZ:
+			Out = Point.Position.Z;
+			break;
+		case ENode::SurfaceSlope:
+			Out = Point.SlopeDegrees;
+			break;
 		case ENode::Surface:
-		case ENode::SurfaceMaterialOutput: Out = 0.0; break;
-		case ENode::BlendSurfaces: Out = FMath::Clamp(Input(I, 2), 0.0, 1.0); break;
-		case ENode::TerrainSignal: return Terrain(I, Out);
-		case ENode::WorldSignal: return World(I, Out);
-		case ENode::WorldNoise2D: return Noise(I, Out);
+		case ENode::SurfaceMaterialOutput:
+			Out = 0.0;
+			break;
+		case ENode::BlendSurfaces:
+			Out = FMath::Clamp(Input(I, 2), 0.0, 1.0);
+			break;
+		case ENode::TerrainSignal:
+			return Terrain(I, Out);
+		case ENode::WorldSignal:
+			return World(I, Out);
+		case ENode::WorldNoise2D:
+			return Noise(I, Out);
 		case ENode::FloatConstant:
 		case ENode::FloatParameter:
 		case ENode::IntConstant:
@@ -155,27 +204,65 @@ bool FVoxelLandMaterialGraphEvaluation::Scalar(const FVoxelLandMaterialGraphInst
 		case ENode::IntToFloat:
 		case ENode::RerouteFloat:
 		case ENode::RerouteInt:
-		case ENode::RerouteBool: Out = Input(I, 0); break;
-		case ENode::Add: Out = Reduce(I, false); break;
-		case ENode::Multiply: Out = Reduce(I, true); break;
-		case ENode::Subtract: Out = Input(I, 0) - Input(I, 1); break;
-		case ENode::Divide: Out = Input(I, 1) == 0.0 ? 0.0 : Input(I, 0) / Input(I, 1); break;
-		case ENode::Abs: Out = FMath::Abs(Input(I, 0)); break;
-		case ENode::Negate: Out = -Input(I, 0); break;
-		case ENode::Min: Out = FMath::Min(Input(I, 0), Input(I, 1)); break;
-		case ENode::Max: Out = FMath::Max(Input(I, 0), Input(I, 1)); break;
-		case ENode::Clamp: Out = FMath::Clamp(Input(I, 0), Input(I, 1), Input(I, 2)); break;
-		case ENode::Saturate: Out = FMath::Clamp(Input(I, 0), 0.0, 1.0); break;
-		case ENode::Lerp: Out = FMath::Lerp(Input(I, 0), Input(I, 1), Input(I, 2)); break;
-		case ENode::Less: Out = Input(I, 0) < Input(I, 1); break;
-		case ENode::LessEqual: Out = Input(I, 0) <= Input(I, 1); break;
-		case ENode::Equal: Out = Input(I, 0) == Input(I, 1); break;
-		case ENode::BoolAnd: Out = Input(I, 0) != 0.0 && Input(I, 1) != 0.0; break;
-		case ENode::BoolOr: Out = Input(I, 0) != 0.0 || Input(I, 1) != 0.0; break;
-		case ENode::BoolNot: Out = Input(I, 0) == 0.0; break;
+		case ENode::RerouteBool:
+			Out = Input(I, 0);
+			break;
+		case ENode::Add:
+			Out = Reduce(I, false);
+			break;
+		case ENode::Multiply:
+			Out = Reduce(I, true);
+			break;
+		case ENode::Subtract:
+			Out = Input(I, 0) - Input(I, 1);
+			break;
+		case ENode::Divide:
+			Out = Input(I, 1) == 0.0 ? 0.0 : Input(I, 0) / Input(I, 1);
+			break;
+		case ENode::Abs:
+			Out = FMath::Abs(Input(I, 0));
+			break;
+		case ENode::Negate:
+			Out = -Input(I, 0);
+			break;
+		case ENode::Min:
+			Out = FMath::Min(Input(I, 0), Input(I, 1));
+			break;
+		case ENode::Max:
+			Out = FMath::Max(Input(I, 0), Input(I, 1));
+			break;
+		case ENode::Clamp:
+			Out = FMath::Clamp(Input(I, 0), Input(I, 1), Input(I, 2));
+			break;
+		case ENode::Saturate:
+			Out = FMath::Clamp(Input(I, 0), 0.0, 1.0);
+			break;
+		case ENode::Lerp:
+			Out = FMath::Lerp(Input(I, 0), Input(I, 1), Input(I, 2));
+			break;
+		case ENode::Less:
+			Out = Input(I, 0) < Input(I, 1);
+			break;
+		case ENode::LessEqual:
+			Out = Input(I, 0) <= Input(I, 1);
+			break;
+		case ENode::Equal:
+			Out = Input(I, 0) == Input(I, 1);
+			break;
+		case ENode::BoolAnd:
+			Out = Input(I, 0) != 0.0 && Input(I, 1) != 0.0;
+			break;
+		case ENode::BoolOr:
+			Out = Input(I, 0) != 0.0 || Input(I, 1) != 0.0;
+			break;
+		case ENode::BoolNot:
+			Out = Input(I, 0) == 0.0;
+			break;
 		case ENode::SelectFloat:
 		case ENode::SelectInt:
-		case ENode::SelectBool: Out = Input(I, Input(I, 0) != 0.0 ? 1 : 2); break;
+		case ENode::SelectBool:
+			Out = Input(I, Input(I, 0) != 0.0 ? 1 : 2);
+			break;
 		case ENode::MaterialRemap:
 		{
 			const double Lower = Input(I, 1);
@@ -184,12 +271,14 @@ bool FVoxelLandMaterialGraphEvaluation::Scalar(const FVoxelLandMaterialGraphInst
 			Out = Lower == Upper ? double(Value >= Lower) : FMath::Clamp((Value - Lower) / (Upper - Lower), 0.0, 1.0);
 			break;
 		}
-		default: return false;
+		default:
+			return false;
 	}
 	return true;
 }
 
-double FVoxelLandMaterialGraphEvaluation::Reduce(const FVoxelLandMaterialGraphInstruction& Instruction, bool bMultiply) const
+double FVoxelLandMaterialGraphEvaluation::Reduce(
+	const FVoxelLandMaterialGraphInstruction& Instruction, bool bMultiply) const
 {
 	double Result = bMultiply ? 1.0 : 0.0;
 	for (int32 Index = 0; Index < Instruction.Inputs.Num(); ++Index)
@@ -216,7 +305,7 @@ bool FVoxelLandMaterialGraphEvaluation::Noise(const FVoxelLandMaterialGraphInstr
 		return false;
 	}
 	const uint64 NodeSeed = Point.Seed ^ (uint64(I.NodeId.A) << 32) ^ I.NodeId.B
-		^ ((uint64(I.NodeId.C) << 32 | I.NodeId.D) * 0x9e3779b97f4a7c15ull) ^ I.SeedSalt;
+						  ^ ((uint64(I.NodeId.C) << 32 | I.NodeId.D) * 0x9e3779b97f4a7c15ull) ^ I.SeedSalt;
 	double Sum = 0.0;
 	double Mass = 0.0;
 	double Amplitude = 1.0;
@@ -251,5 +340,5 @@ bool FVoxelLandMaterialGraphEvaluation::World(const FVoxelLandMaterialGraphInstr
 		return true;
 	}
 	Out = Input(I, 0);
-	return Input(I, 1) == 0.0;
+	return Point.Signals != nullptr || Input(I, 1) == 0.0;
 }

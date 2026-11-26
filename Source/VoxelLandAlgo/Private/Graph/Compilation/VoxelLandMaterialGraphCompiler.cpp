@@ -9,7 +9,10 @@ class FVoxelLandMaterialGraphCompile final
 public:
 	FVoxelLandMaterialGraphCompile(const FVoxelLandGraphSnapshot& InSource, TConstArrayView<FGuid> InPalette,
 		FVoxelLandMaterialGraphProgram& InProgram, FString& InError)
-		: Source(InSource), Palette(InPalette), Program(InProgram), Error(InError)
+		: Source(InSource)
+		, Palette(InPalette)
+		, Program(InProgram)
+		, Error(InError)
 	{
 	}
 
@@ -67,7 +70,8 @@ private:
 		}
 		for (const FVoxelLandGraphLinkRecord& Link : Source.Links)
 		{
-			if (!AllPins.Contains(Link.TargetPin) || !AllPins.Contains(Link.SourcePin) || Links.Contains(Link.TargetPin))
+			if (!AllPins.Contains(Link.TargetPin) || !AllPins.Contains(Link.SourcePin)
+				|| Links.Contains(Link.TargetPin))
 			{
 				Error = TEXT("Invalid or duplicate material graph link.");
 				return false;
@@ -126,7 +130,8 @@ private:
 		{
 			const FVoxelLandGraphPinRecord& Pin = Node.Pins[Index];
 			const FVoxelLandBuiltinPinSpec& PinSpec = Spec.Pins[Index];
-			const bool bIsTypedSignal = Pin.bOutput && Instruction.Kind == EVoxelLandBuiltinNode::TerrainSignal
+			const bool bIsTypedSignal =
+				Pin.bOutput && Instruction.Kind == EVoxelLandBuiltinNode::TerrainSignal
 				&& (Pin.Type == EVoxelLandGraphValueType::Int32 || Pin.Type == EVoxelLandGraphValueType::Bool);
 			if ((!bIsTypedSignal && Pin.Type != PinSpec.Type) || Pin.bOutput != PinSpec.bOutput || Pin.bInvalidDefault)
 			{
@@ -140,8 +145,8 @@ private:
 		return true;
 	}
 
-	bool ResolveInput(const FVoxelLandGraphNodeRecord& Node, const FVoxelLandGraphPinRecord& Pin,
-		FVoxelLandMaterialGraphInput& Input)
+	bool ResolveInput(
+		const FVoxelLandGraphNodeRecord& Node, const FVoxelLandGraphPinRecord& Pin, FVoxelLandMaterialGraphInput& Input)
 	{
 		const FVoxelLandGraphLinkRecord* const* Wire = Links.Find(Pin.Id);
 		if (!Wire)
@@ -204,6 +209,7 @@ private:
 				return true;
 			}
 			case EVoxelLandBuiltinNode::TerrainSignal:
+				Instruction.SignalType = Node.Pins.Last().Type;
 				return FVoxelLandMaterialGraphProgram::ReadGuid(Node.Configuration, Instruction.SignalId)
 					|| Fail(Node, TEXT("Select a named terrain output."));
 			case EVoxelLandBuiltinNode::WorldSignal:
@@ -220,12 +226,13 @@ private:
 	bool ReadWorldChannel(const FVoxelLandGraphNodeRecord& Node, FVoxelLandMaterialGraphInstruction& Instruction)
 	{
 		constexpr int32 MaxChannelBytes = 128;
-		if (Node.Configuration.IsEmpty() || Node.Configuration.Num() > MaxChannelBytes
-			|| Node.Configuration.Contains(0) || Instruction.Inputs[1].Instruction != INDEX_NONE)
+		if (Node.Configuration.IsEmpty() || Node.Configuration.Num() > MaxChannelBytes || Node.Configuration.Contains(0)
+			|| Instruction.Inputs[1].Instruction != INDEX_NONE)
 		{
 			return Fail(Node, TEXT("World Signal needs a channel name and a literal Required setting."));
 		}
-		const FUTF8ToTCHAR Channel(reinterpret_cast<const ANSICHAR*>(Node.Configuration.GetData()), Node.Configuration.Num());
+		const FUTF8ToTCHAR Channel(
+			reinterpret_cast<const ANSICHAR*>(Node.Configuration.GetData()), Node.Configuration.Num());
 		Instruction.Channel = FName(*FString(Channel.Length(), Channel.Get()));
 		return !Instruction.Channel.IsNone() || Fail(Node, TEXT("World Signal channel cannot be None."));
 	}

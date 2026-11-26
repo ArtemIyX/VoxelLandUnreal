@@ -198,7 +198,8 @@ void AVoxelLandWorld::AdvanceM7Publication()
 		return ConfigurationEpoch == Epoch && State && State->M7Visual.Get() == Visual && Visual->StagedTicket == Ticket
 			&& Visual->Ticket == Ticket && Visual->Staged == Revision;
 	};
-	if (Visual->Published && SameSourceFrontier(*Visual->Published, *Revision) && AllRegionsValid(Visual->Regions))
+	if (Visual->Published && Visual->Published->Appearance == Revision->Appearance
+		&& SameSourceFrontier(*Visual->Published, *Revision) && AllRegionsValid(Visual->Regions))
 	{
 		Visual->Published = Revision;
 		Visual->PublishedTicket = Ticket;

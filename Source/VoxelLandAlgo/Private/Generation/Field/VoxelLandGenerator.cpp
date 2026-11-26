@@ -1480,12 +1480,18 @@ FVoxelLandError FVoxelLandGenerator::EvaluateToWorkerBuffer(
 	return {};
 }
 
-#if WITH_EDITOR
-FVoxelLandError FVoxelLandGenerator::EvaluateIntegerPreview(
+FVoxelLandError FVoxelLandGenerator::EvaluateIntegerSamples(
 	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int32>& OutValues) const
 {
 	OutValues.Reset();
 	return EvaluateToWorkerBuffer(Positions, Worker, &OutValues);
+}
+
+#if WITH_EDITOR
+FVoxelLandError FVoxelLandGenerator::EvaluateIntegerPreview(
+	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int32>& OutValues) const
+{
+	return EvaluateIntegerSamples(Positions, Worker, OutValues);
 }
 #endif
 

@@ -8,6 +8,7 @@
 #endif
 class FVoxelLandGenerator;
 struct FVoxelLandMaterialAppearance;
+struct FVoxelLandChunkData;
 
 namespace VoxelLandWorldPrivate
 {
@@ -21,6 +22,7 @@ struct FJob
 	TSharedPtr<FCancel, ESPMode::ThreadSafe> Cancel;
 	TSharedPtr<const FM7RenderRequest, ESPMode::ThreadSafe> M7Visual;
 	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance;
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> ExistingData;
 	bool bRender = false;
 #if WITH_DEV_AUTOMATION_TESTS
 	TSharedPtr<FVoxelLandTestBarrier, ESPMode::ThreadSafe> Barrier;

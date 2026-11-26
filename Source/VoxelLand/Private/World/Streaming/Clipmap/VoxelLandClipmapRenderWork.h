@@ -34,6 +34,7 @@ struct FM7RenderRevision
 	FVoxelLandM7ClipmapLayout Layout;
 	FM7Sources Sources;
 	TArray<FM7Draw> Draws;
+	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance;
 	int32 RefinedLeaves = 0;
 };
 

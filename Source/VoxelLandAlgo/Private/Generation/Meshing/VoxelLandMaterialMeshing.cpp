@@ -20,12 +20,17 @@ public:
 		Samples.Reserve(Source.Vertices.Num());
 		for (int32 Index = 0; Index < Source.Vertices.Num(); ++Index)
 		{
-			if (Index % CancellationStride == 0 && IsCancelled())
+			if ((Appearance.Program || Index % CancellationStride == 0) && IsCancelled())
 			{
 				return false;
 			}
-			Samples.Add(
-				FVoxelLandMaterialClassifier::Sample(Source.Vertices[Index], Appearance, Origin, bHasSlopeRules));
+			const FVoxelLandMaterialCandidates Sample =
+				FVoxelLandMaterialClassifier::Sample(Source.Vertices[Index], Appearance, Origin, bHasSlopeRules);
+			if (Sample.Count == 0)
+			{
+				return false;
+			}
+			Samples.Add(Sample);
 		}
 
 		Indices.Reserve(Source.Indices.Num());

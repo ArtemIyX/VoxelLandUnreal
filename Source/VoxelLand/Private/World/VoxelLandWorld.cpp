@@ -107,7 +107,8 @@ public:
 					const EVoxelLandChunkClassification Proof = !Done.Error && Job.bRender
 																  ? Current->ClassifyChunkBeforeSampling(Job.Key)
 																  : EVoxelLandChunkClassification::NeedsSamples;
-					if (!Done.Error)
+					Done.Data = Job.ExistingData;
+					if (!Done.Error && !Done.Data)
 					{
 						TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_Generate);
 						Done.Error = Current->GenerateChunkCancellable(Job.Key, *Context, Done.Data,
@@ -542,6 +543,8 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 	M7PublishedLeafCount = 0;
 	M7FallbackRefinements = 0;
 	++ConfigurationEpoch;
+	MaterialWorldConfig.Reset();
+	ActiveMaterialLayout.Invalidate();
 	StopDemo();
 	StopPendingInitialization();
 	if (!State)
@@ -1092,6 +1095,16 @@ void AVoxelLandWorld::PumpCompletions()
 		}
 		Record->bRunning = false;
 		Record->Cancel.Reset();
+		if (Done.Job.bRender && Done.Job.Appearance != State->Appearance)
+		{
+			if (Done.Data && !Done.Error)
+			{
+				Record->Data = Done.Data;
+			}
+			Record->bQueued = Record->bDemand || Record->bExplicit;
+			++State->Stale;
+			continue;
+		}
 		if (Done.bCancelled || (!Record->bDemand && !Record->bExplicit))
 		{
 			++State->Cancelled;
@@ -1213,6 +1226,7 @@ void AVoxelLandWorld::Dispatch()
 		if (Job.bRender)
 		{
 			Job.Appearance = State->Appearance;
+			Job.ExistingData = Best->Data;
 		}
 		Job.Cancel = MakeShared<FCancel, ESPMode::ThreadSafe>();
 #if WITH_DEV_AUTOMATION_TESTS

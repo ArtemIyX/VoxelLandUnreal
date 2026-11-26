@@ -68,7 +68,8 @@ public:
 					if (!Pin.Id.IsValid() || Pins.Contains(Pin.Id)
 						|| (Pin.Type != EVoxelLandGraphValueType::Float && Pin.Type != EVoxelLandGraphValueType::Int32
 							&& Pin.Type != EVoxelLandGraphValueType::Bool
-							&& !(Graph.GraphRole == EVoxelLandGraphRole::Material && Pin.Type == EVoxelLandGraphValueType::Surface))
+							&& !(Graph.GraphRole == EVoxelLandGraphRole::Material
+								 && Pin.Type == EVoxelLandGraphValueType::Surface))
 						|| Pin.bInvalidDefault || !FMath::IsFinite(Pin.FloatDefault))
 					{
 						Diagnostic.NodeId = Node.Id;

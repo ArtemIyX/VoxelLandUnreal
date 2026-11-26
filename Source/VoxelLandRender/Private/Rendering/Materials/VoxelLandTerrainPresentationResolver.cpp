@@ -1,6 +1,11 @@
 #include "Rendering/Materials/VoxelLandTerrainPresentationResolver.h"
+#include "VoxelLandMaterialSignalBindings.h"
 
+#include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Assets/Materials/VoxelLandMaterialPalette.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
+#include "Graph/Compilation/VoxelLandMaterialGraphProgram.h"
+#include "Graph/Serialization/VoxelLandProgramCodec.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Data/Meshing/VoxelLandMaterialAppearance.h"
 #include "Data/Program/Serialization/VoxelLandCanonicalWriter.h"
@@ -44,8 +49,109 @@ TArray<uint8> FVoxelLandTerrainPresentationResolver::CaptureIdentity(
 	return MoveTemp(Writer.Bytes);
 }
 
+TArray<uint8> FVoxelLandTerrainPresentationResolver::CaptureIdentity(const UVoxelLandWorldConfig& Config)
+{
+	FCanonicalWriter Writer;
+	Writer.Bytes = CaptureIdentity(Config.MaterialSetup);
+	Writer.String(Config.MaterialGraph.ToSoftObjectPath().ToString());
+	if (!Config.MaterialGraph.IsNull())
+	{
+		Writer.String(LexToString(Config.Seed));
+		Writer.U8(static_cast<uint8>(Config.WorldExtent));
+		Writer.U32(Config.Overrides.Num());
+		for (const FVoxelLandParameterOverride& Override : Config.Overrides)
+		{
+			Writer.String(Override.ParameterId.ToString());
+			Writer.U8(static_cast<uint8>(Override.Type));
+			Writer.Float(Override.FloatValue);
+			Writer.U32(static_cast<uint32>(Override.IntValue));
+			Writer.U8(Override.BoolValue);
+		}
+		FVoxelLandGraphSnapshot Terrain;
+		FString Error;
+		if (Config.Graph && Config.Graph->CaptureSnapshot(Terrain, Error))
+		{
+			Writer.String(Config.Graph->GetPathName());
+			const uint64 Fingerprint = FVoxelLandProgramCodec::SourceFingerprint(Terrain);
+			Writer.U32(static_cast<uint32>(Fingerprint));
+			Writer.U32(static_cast<uint32>(Fingerprint >> 32));
+		}
+	}
+	if (const UVoxelLandTerrainGraph* Graph = Config.MaterialGraph.Get())
+	{
+		FVoxelLandGraphSnapshot Snapshot;
+		FString Error;
+		if (Graph->CaptureSnapshot(Snapshot, Error))
+		{
+			const uint64 Fingerprint = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
+			Writer.U32(static_cast<uint32>(Fingerprint));
+			Writer.U32(static_cast<uint32>(Fingerprint >> 32));
+			Writer.U8(static_cast<uint8>(Graph->GraphRole));
+		}
+	}
+	return MoveTemp(Writer.Bytes);
+}
+
+FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::Resolve(UObject* Outer,
+	const UVoxelLandWorldConfig& Config,
+	TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> WorldSignals)
+{
+	FVoxelLandTerrainPresentation Result = ResolveSetup(Outer, Config.MaterialSetup, Config.MaterialGraph.IsNull());
+	if (Config.MaterialGraph.IsNull())
+	{
+		Result.SourceIdentity = CaptureIdentity(Config);
+		return Result;
+	}
+
+	const TStrongObjectPtr<UVoxelLandTerrainGraph> Graph(Config.MaterialGraph.LoadSynchronous());
+	const UVoxelLandMaterialSetup* Setup = Config.MaterialSetup.Get();
+	const UVoxelLandMaterialPalette* Palette = Setup ? Setup->Palette.Get() : nullptr;
+	Result.SourceIdentity = CaptureIdentity(Config);
+	Result.bHasConfiguredPalette = true;
+	FString Error;
+	FVoxelLandGraphSnapshot Snapshot;
+	TSharedPtr<const FVoxelLandMaterialGraphProgram, ESPMode::ThreadSafe> Program;
+	TArray<FGuid, TInlineAllocator<FVoxelLandMaterialAppearance::MaxSlots>> Slots;
+	if (Palette)
+	{
+		for (const FVoxelLandMaterialPaletteSlot& Slot : Palette->BakedSlots)
+		{
+			Slots.Add(Slot.SurfaceId);
+		}
+	}
+	if (!Graph || Graph->GraphRole != EVoxelLandGraphRole::Material || !Palette || !Result.Appearance)
+	{
+		Error = TEXT("A Material Graph requires a material-role graph and a valid baked palette.");
+	}
+	else if (Graph->CaptureSnapshot(Snapshot, Error))
+	{
+		TSharedPtr<const IVoxelLandMaterialSignalSource, ESPMode::ThreadSafe> Bindings;
+		if (FVoxelLandMaterialGraphProgram::Compile(Snapshot, Slots, Program, Error)
+			&& FVoxelLandMaterialSignalBindings::Capture(Config, *Program, MoveTemp(WorldSignals), Bindings, Error))
+		{
+			TSharedRef<FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance =
+				MakeShared<FVoxelLandMaterialAppearance, ESPMode::ThreadSafe>(*Result.Appearance);
+			Appearance->Program = MoveTemp(Program);
+			Appearance->Signals = MoveTemp(Bindings);
+			Appearance->Seed = static_cast<uint64>(Config.Seed);
+			Result.Appearance = MoveTemp(Appearance);
+			return Result;
+		}
+	}
+	Result.Appearance.Reset();
+	Result.Diagnostic = FString::Printf(TEXT("Material graph %s: %s"), *Config.MaterialGraph.ToString(), *Error);
+	Result.Material.Reset(UMaterial::GetDefaultMaterial(MD_Surface));
+	return Result;
+}
+
 FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::Resolve(
 	UObject* Outer, const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath)
+{
+	return ResolveSetup(Outer, SetupPath, true);
+}
+
+FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::ResolveSetup(
+	UObject* Outer, const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bUseRules)
 {
 	check(IsInGameThread());
 	FVoxelLandTerrainPresentation Result;
@@ -55,7 +161,7 @@ FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::Resolve(
 		Result.bHasConfiguredPalette = true;
 		const TSoftObjectPtr<UVoxelLandMaterialPalette> PalettePath = Setup->Palette;
 		TStrongObjectPtr<UVoxelLandMaterialPalette> Palette(PalettePath.LoadSynchronous());
-		const TArray<FVoxelLandMaterialRule> Rules = Setup->Rules;
+		const TArray<FVoxelLandMaterialRule> Rules = bUseRules ? Setup->Rules : TArray<FVoxelLandMaterialRule>();
 		Result.SourceIdentity = CaptureIdentity(SetupPath);
 		FText Error;
 		if (Setup->Palette != PalettePath || !Palette || !Palette->ValidateBake(Error))

@@ -103,7 +103,8 @@ bool FVoxelLandBuiltinCatalog::Find(
 			break;
 		case EVoxelLandBuiltinNode::BlendSurfaces:
 			FVoxelLandBuiltinDescriptors::AddBinary(Spec, FVoxelLandBuiltinDescriptors::EType::Surface);
-			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Alpha"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("0.5"));
+			FVoxelLandBuiltinDescriptors::AddPin(
+				Spec, TEXT("Alpha"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("0.5"));
 			OutputType = FVoxelLandBuiltinDescriptors::EType::Surface;
 			break;
 		case EVoxelLandBuiltinNode::SurfaceMaterialOutput:
@@ -119,8 +120,10 @@ bool FVoxelLandBuiltinCatalog::Find(
 			break;
 		case EVoxelLandBuiltinNode::MaterialRemap:
 			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Value"), FVoxelLandBuiltinDescriptors::EType::Float);
-			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Lower"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("-0.5"));
-			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Upper"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("0.5"));
+			FVoxelLandBuiltinDescriptors::AddPin(
+				Spec, TEXT("Lower"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("-0.5"));
+			FVoxelLandBuiltinDescriptors::AddPin(
+				Spec, TEXT("Upper"), FVoxelLandBuiltinDescriptors::EType::Float, TEXT("0.5"));
 			break;
 		case EVoxelLandBuiltinNode::DensityOutput:
 			FVoxelLandBuiltinDescriptors::AddPin(Spec, TEXT("Density"), FVoxelLandBuiltinDescriptors::EType::Float);
@@ -355,7 +358,8 @@ bool FVoxelLandBuiltinCatalogLookup::ValidateBuiltinPins(const FVoxelLandBuiltin
 	const int32 ExpectedOutputs =
 		(Spec.Kind == EVoxelLandBuiltinNode::DensityOutput || Spec.Kind == EVoxelLandBuiltinNode::M4HeightOutput
 			|| Spec.Kind == EVoxelLandBuiltinNode::FloatOutput || Spec.Kind == EVoxelLandBuiltinNode::IntOutput
-			|| Spec.Kind == EVoxelLandBuiltinNode::BoolOutput || Spec.Kind == EVoxelLandBuiltinNode::SurfaceMaterialOutput)
+			|| Spec.Kind == EVoxelLandBuiltinNode::BoolOutput
+			|| Spec.Kind == EVoxelLandBuiltinNode::SurfaceMaterialOutput)
 			? 0
 			: 1;
 	if (Outputs != ExpectedOutputs || (Outputs == 1 && !Spec.Pins.Last().bOutput))

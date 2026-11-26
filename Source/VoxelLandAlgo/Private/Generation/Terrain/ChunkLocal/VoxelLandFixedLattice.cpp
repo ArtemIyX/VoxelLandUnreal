@@ -496,6 +496,18 @@ static FVoxelLandError EvaluateSignedPoint(
 	return {};
 }
 
+FVoxelLandError EvaluateValidatedSignedValue(
+	const FVoxelLandGenerator& Generator, int64 X, int64 Y, TArray<int64>& Registers, double& Out)
+{
+	int64 Raw = 0;
+	if (const FVoxelLandError Error = EvaluateSignedPoint(Generator, X, Y, Registers, Raw))
+	{
+		return Error;
+	}
+	Out = static_cast<double>(Raw) / FVoxelLandM4FixedLatticeInternals::Q;
+	return {};
+}
+
 FVoxelLandError EvaluateValidatedPoint(
 	const FVoxelLandGenerator& Generator, int64 WorldX, int64 WorldY, TArray<int64>& Registers, uint16& OutValue)
 {

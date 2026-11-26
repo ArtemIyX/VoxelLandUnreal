@@ -122,6 +122,7 @@ public:
 		virtual ~FInitializationRequest() = default;
 		virtual bool IsCurrent() const = 0;
 		virtual TOptional<TSoftObjectPtr<UVoxelLandMaterialSetup>> GetPresentationSetup() const { return {}; }
+		virtual UVoxelLandWorldConfig* GetMaterialWorldConfig() const { return nullptr; }
 		virtual void ApplyDemand(AVoxelLandWorld&) const = 0;
 		virtual TOptional<FVoxelLandChunkKey> GetStartup() const { return {}; }
 #if WITH_EDITOR
@@ -190,6 +191,8 @@ public:
 			}
 			return {};
 		}
+
+		UVoxelLandWorldConfig* GetMaterialWorldConfig() const override { return WeakSettings.Get(); }
 
 		bool IsCurrent() const override
 		{
@@ -625,6 +628,8 @@ public:
 			}
 			return {};
 		}
+
+		UVoxelLandWorldConfig* GetMaterialWorldConfig() const override { return WeakConfig.Get(); }
 
 #if WITH_EDITOR
 		bool References(const UObject* Object) const override
@@ -1811,15 +1816,20 @@ void AVoxelLandWorld::PollInitialization()
 		return;
 	}
 	const uint64 PresentationEpoch = ConfigurationEpoch;
+	const TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> CapturedSignals = MaterialWorldSignals;
 	TOptional<FVoxelLandTerrainPresentation> Presentation;
 #if !UE_SERVER
 	TOptional<TSoftObjectPtr<UVoxelLandMaterialSetup>> PresentationSetup;
+	TStrongObjectPtr<UVoxelLandWorldConfig> MaterialConfig;
 	if (!bDataOnly && GetNetMode() != NM_DedicatedServer && FApp::CanEverRender())
 	{
 		PresentationSetup = Job->Request->GetPresentationSetup();
 		if (PresentationSetup.IsSet())
 		{
-			Presentation.Emplace(FVoxelLandTerrainPresentationResolver::Resolve(this, PresentationSetup.GetValue()));
+			MaterialConfig.Reset(Job->Request->GetMaterialWorldConfig());
+			Presentation.Emplace(
+				MaterialConfig ? FVoxelLandTerrainPresentationResolver::Resolve(this, *MaterialConfig, CapturedSignals)
+							   : FVoxelLandTerrainPresentationResolver::Resolve(this, PresentationSetup.GetValue()));
 		}
 	}
 #endif
@@ -1843,14 +1853,16 @@ void AVoxelLandWorld::PollInitialization()
 	{
 		return;
 	}
-	bool bPresentationCurrent = true;
+	bool bPresentationCurrent = CapturedSignals == MaterialWorldSignals;
 #if !UE_SERVER
 	if (PresentationSetup.IsSet())
 	{
 		bPresentationCurrent =
-			PresentationSetup == Job->Request->GetPresentationSetup()
+			bPresentationCurrent && PresentationSetup == Job->Request->GetPresentationSetup()
 			&& Presentation->SourceIdentity
-				   == FVoxelLandTerrainPresentationResolver::CaptureIdentity(PresentationSetup.GetValue());
+				   == (MaterialConfig
+						   ? FVoxelLandTerrainPresentationResolver::CaptureIdentity(*MaterialConfig)
+						   : FVoxelLandTerrainPresentationResolver::CaptureIdentity(PresentationSetup.GetValue()));
 	}
 #endif
 	if (!bStillCurrent || !bPresentationCurrent)
@@ -1887,6 +1899,10 @@ void AVoxelLandWorld::PollInitialization()
 	if (Presentation.IsSet())
 	{
 		SetTerrainMaterial(Presentation->Material.Get());
+#if !UE_SERVER
+		MaterialWorldConfig = MaterialConfig.Get();
+		ActiveMaterialLayout = Presentation->LayoutIdentity;
+#endif
 		if (!Presentation->Diagnostic.IsEmpty())
 		{
 			UE_LOG(LogTemp, Warning, TEXT("VoxelLand: %s"), *Presentation->Diagnostic);

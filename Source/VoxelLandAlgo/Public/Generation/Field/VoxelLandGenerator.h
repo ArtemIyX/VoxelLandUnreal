@@ -152,6 +152,8 @@ public:
 	// Raw finite values from the same pure VM stage before density quantization and filters.
 	FVoxelLandError EvaluateSamplesRaw(
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
+	FVoxelLandError EvaluateIntegerSamples(
+		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int32>& OutValues) const;
 #if WITH_EDITOR
 	// Reads the integer input of a preview projection's terminal conversion.
 	FVoxelLandError EvaluateIntegerPreview(

@@ -53,7 +53,7 @@ FVoxelLandMaterialCandidates FVoxelLandMaterialClassifier::Sample(const FVoxelLa
 		const FVoxelLandMaterialGraphPoint Point{Position, Slope, Appearance.Seed, Appearance.Signals.Get()};
 		if (!Appearance.Program->Evaluate(Point, MakeArrayView(Weights, Appearance.SlotCount)))
 		{
-			Weights[FVoxelLandMaterialAppearance::FallbackSlot] = 1.0;
+			return {};
 		}
 		return Select(Weights, Appearance.SlotCount);
 	}

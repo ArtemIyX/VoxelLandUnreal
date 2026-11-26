@@ -122,6 +122,8 @@ public:
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> FindChunk(const FVoxelLandChunkKey& Key) const;
 	void SetRegionHidden(FIntVector Region, bool bRegionHidden);
 	void SetTerrainMaterial(UMaterialInterface* Material);
+	[[nodiscard]] bool SetMaterialWorldSignals(
+		TSharedPtr<const class FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> Signals, FString& Error);
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand")
 	void DumpStats() const;
 #if WITH_DEV_AUTOMATION_TESTS
@@ -232,6 +234,9 @@ private:
 	TFuture<void> InitializationTask;
 	TSharedPtr<FVoxelLandDemoJob, ESPMode::ThreadSafe> PendingDemo;
 	TFuture<void> DemoTask;
+	TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> MaterialWorldSignals;
+	TWeakObjectPtr<UVoxelLandWorldConfig> MaterialWorldConfig;
+	FGuid ActiveMaterialLayout;
 	uint64 ConfigurationEpoch = 0;
 	bool bLifecycleEnded = false;
 	FDelegateHandle WorldTearDownHandle;

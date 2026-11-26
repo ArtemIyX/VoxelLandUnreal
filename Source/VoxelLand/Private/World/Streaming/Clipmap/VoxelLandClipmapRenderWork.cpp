@@ -330,6 +330,7 @@ FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVo
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_BuildM7VisualRevision);
 	auto Revision = MakeShared<FM7RenderRevision, ESPMode::ThreadSafe>();
+	Revision->Appearance = Request.Appearance;
 	const FVoxelLandM7ClipmapLayout* Previous = Request.Previous ? &Request.Previous->Layout : nullptr;
 	if (IsCancelled())
 	{

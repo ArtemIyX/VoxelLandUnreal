@@ -18,6 +18,7 @@ public:
 	static void WriteGuid(FGuid Id, TArray<uint8>& Out);
 
 	[[nodiscard]] bool Evaluate(const FVoxelLandMaterialGraphPoint& Point, TArrayView<double> Weights) const;
+	[[nodiscard]] bool EvaluatePreview(FGuid Node, const FVoxelLandMaterialGraphPoint& Point, double& Out) const;
 	TConstArrayView<FVoxelLandMaterialGraphInstruction> GetInstructions() const { return Instructions; }
 	bool UsesSlope() const { return bHasSlope; }
 

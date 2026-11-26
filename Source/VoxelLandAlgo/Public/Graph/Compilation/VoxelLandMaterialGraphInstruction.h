@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
+#include "Data/Graph/Schema/VoxelLandGraphValueType.h"
 #include "VoxelLandMaterialGraphInput.h"
 
 struct FVoxelLandMaterialGraphInstruction
@@ -10,6 +11,7 @@ struct FVoxelLandMaterialGraphInstruction
 	TArray<FVoxelLandMaterialGraphInput, TInlineAllocator<6>> Inputs;
 	FGuid NodeId;
 	FGuid SignalId;
+	EVoxelLandGraphValueType SignalType = EVoxelLandGraphValueType::Float;
 	FName Channel;
 	uint32 SeedSalt = 0;
 	uint8 Slot = 0;

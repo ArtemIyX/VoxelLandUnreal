@@ -7,6 +7,7 @@
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Generation/Collision/VoxelLandCollisionField.h"
 #include "Generation/Collision/VoxelLandSdfCollision.h"
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "Misc/App.h"
@@ -157,24 +158,45 @@ private:
 
 	bool CheckCollisionGround(AVoxelLandWorld& Terrain, const FVector& LocalSurface)
 	{
+		if (!HeadlessTerrain.IsValid())
+		{
+			StartHeadlessTerrain(*Terrain.GetWorld());
+			return false;
+		}
+		AVoxelLandWorld& Headless = *HeadlessTerrain.Get();
+		if (!Headless.LastInitializationError.IsEmpty())
+		{
+			Test.AddError(Headless.LastInitializationError);
+			return Finish();
+		}
+		if (!Headless.HasWorldStateForTests())
+		{
+			return false;
+		}
+
 		FVoxelLandCapsuleSweepRequest Sweep;
 		const FVector LocalStart = LocalSurface + FVector(0, 0, 500.0);
 		const FVector LocalEnd = LocalSurface + FVector(0, 0, 20.0);
 		const FVector Padding(Sweep.RadiusCm + Sweep.SkinCm, Sweep.RadiusCm + Sweep.SkinCm,
 			Sweep.HalfHeightCm + Sweep.SkinCm);
+		const FBox Footprint(LocalEnd - Padding, LocalStart + Padding);
 		FVoxelLandCollisionWorldView Collision;
-		if (!Test.TestTrue(TEXT("Admit the capsule grounding footprint"),
-				Terrain.UpdateCollisionDemandForBounds(CollisionConsumer, FBox(LocalEnd - Padding, LocalStart + Padding)))
-			|| !Test.TestTrue(TEXT("Capture the collision field"), Terrain.CaptureCollisionView(CollisionConsumer, Collision)))
+		FVoxelLandCollisionWorldView HeadlessCollision;
+		if (!CaptureGroundingField(Terrain, Footprint, Collision)
+			|| !CaptureGroundingField(Headless, Footprint, HeadlessCollision))
 		{
-			Finish();
-			return false;
+			return Finish();
 		}
 		const FVector Origin(Collision.OriginLocation);
+		Test.TestEqual(TEXT("Rendered and data-only collision views use the same origin"),
+			HeadlessCollision.OriginLocation, Collision.OriginLocation);
 		Sweep.Start = LocalStart + Origin;
 		Sweep.End = LocalEnd + Origin;
 		const FVoxelLandCapsuleSweepResult Hit = FVoxelLandSdfCollision::SweepCapsule(*Collision.Field, Sweep);
-		if (Hit.Status == EVoxelLandCapsuleSweepStatus::Unavailable)
+		const FVoxelLandCapsuleSweepResult HeadlessHit =
+			FVoxelLandSdfCollision::SweepCapsule(*HeadlessCollision.Field, Sweep);
+		if (Hit.Status == EVoxelLandCapsuleSweepStatus::Unavailable
+			|| HeadlessHit.Status == EVoxelLandCapsuleSweepStatus::Unavailable)
 		{
 			return false;
 		}
@@ -182,8 +204,74 @@ private:
 			int32(Hit.Status), *Hit.Normal.ToString(), Hit.LastSafeTime, Hit.RegionsVisited);
 		Test.TestTrue(*Diagnostic,
 			Hit.Status == EVoxelLandCapsuleSweepStatus::Contact && Hit.Normal.Z > 0.3 && Hit.LastSafeTime > 0.0);
+		Test.TestEqual(TEXT("Data-only sweep has the same status"), HeadlessHit.Status, Hit.Status);
+		Test.TestTrue(TEXT("Data-only sweep has identical contact and safe fractions"),
+			HeadlessHit.Time == Hit.Time && HeadlessHit.LastSafeTime == Hit.LastSafeTime);
+		Test.TestTrue(TEXT("Data-only sweep has the same contact and normal"),
+			HeadlessHit.Point == Hit.Point && HeadlessHit.Normal == Hit.Normal);
+		Test.TestTrue(TEXT("Data-only sweep visits the same cells and regions"),
+			HeadlessHit.CellsVisited == Hit.CellsVisited && HeadlessHit.RegionsVisited == Hit.RegionsVisited);
+		if (Hit.Status == EVoxelLandCapsuleSweepStatus::Contact)
+		{
+			CheckHeadlessChunk(Terrain, Headless, Collision, Hit.Point);
+		}
 		Terrain.ReleaseCollisionDemand(CollisionConsumer);
+		Headless.ReleaseCollisionDemand(CollisionConsumer);
 		return true;
+	}
+
+	bool CaptureGroundingField(AVoxelLandWorld& Terrain, const FBox& Footprint, FVoxelLandCollisionWorldView& View)
+	{
+		return Test.TestTrue(TEXT("Admit the capsule grounding footprint"),
+				   Terrain.UpdateCollisionDemandForBounds(CollisionConsumer, Footprint))
+			&& Test.TestTrue(TEXT("Capture the collision field"), Terrain.CaptureCollisionView(CollisionConsumer, View)
+																	  && Terrain.IsCollisionViewCurrent(View)
+																	  && View.Field.IsValid());
+	}
+
+	void CheckHeadlessChunk(AVoxelLandWorld& Terrain, AVoxelLandWorld& Headless,
+		const FVoxelLandCollisionWorldView& View, const FVector& Contact)
+	{
+		FInt64Vector Cell;
+		TOptional<FVoxelLandChunkKey> Key;
+		if (Test.TestTrue(TEXT("Resolve the contact chunk"),
+				View.Field->TryGetCell(Contact, Cell) && View.Field->TryGetCellDependency(Cell, Key) && Key.IsSet()))
+		{
+			const auto ClientData = Terrain.FindChunk(Key.GetValue());
+			const auto HeadlessData = Headless.FindChunk(Key.GetValue());
+			if (Test.TestTrue(TEXT("Both terrain actors published the contact chunk"), ClientData && HeadlessData))
+			{
+				Test.TestTrue(TEXT("The contact chunk density bytes match after independent generation"),
+					ClientData.Get() != HeadlessData.Get() && ClientData->Density == HeadlessData->Density);
+				Test.TestEqual(TEXT("The contact chunk hashes match"), HeadlessData->Hash, ClientData->Hash);
+			}
+		}
+		const UWorld* World = Headless.GetWorld();
+		for (TActorIterator<AVoxelLandRegion> Region(World); Region; ++Region)
+		{
+			Test.TestTrue(TEXT("Data-only terrain owns no region"), Region->GetOwner() != &Headless);
+		}
+		Test.TestEqual(
+			TEXT("Data-only terrain publishes no visual revision"), Headless.GetM7PublishedTicketForTests(), uint64(0));
+	}
+
+	void StartHeadlessTerrain(UWorld& World)
+	{
+		HeadlessTerrain = World.SpawnActor<AVoxelLandWorld>();
+		if (!Test.TestNotNull(TEXT("Data-only terrain spawned"), HeadlessTerrain.Get()))
+		{
+			Finish();
+			return;
+		}
+
+		HeadlessTerrain->bDataOnly = true;
+		const FIntVector Startup = Config->IsDirectDensity() ? FIntVector(1, 0, 0) : FIntVector::ZeroValue;
+		if (!Test.TestTrue(TEXT("Data-only terrain initializes with the same world settings"),
+				HeadlessTerrain->InitializeFromConfig(Config.Get(), Startup)))
+		{
+			Test.AddError(HeadlessTerrain->LastInitializationError);
+			Finish();
+		}
 	}
 
 	bool CheckHeight(UWorld& World, AVoxelLandWorld& Terrain)
@@ -328,6 +416,10 @@ private:
 		{
 			Actor->Shutdown();
 		}
+		if (HeadlessTerrain.IsValid())
+		{
+			HeadlessTerrain->Shutdown();
+		}
 		bEnding = true;
 		GEditor->RequestEndPlayMap();
 		return false;
@@ -335,6 +427,7 @@ private:
 
 	FAutomationTestBase& Test;
 	TWeakObjectPtr<AVoxelLandWorld> Actor;
+	TWeakObjectPtr<AVoxelLandWorld> HeadlessTerrain;
 	TStrongObjectPtr<UVoxelLandWorldConfig> Config;
 	bool bUseDemo = false;
 	double Start = FPlatformTime::Seconds();

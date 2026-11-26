@@ -1424,7 +1424,7 @@ FVoxelLandError FVoxelLandWorkerContextImpl::QuantizeOutput(int32 N, float Voxel
 }
 
 FVoxelLandError FVoxelLandGenerator::EvaluateToWorkerBuffer(
-	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const
+	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int32>* IntegerPreview) const
 {
 	if (M4HeightGrid || M4Unlimited)
 	{
@@ -1453,15 +1453,41 @@ FVoxelLandError FVoxelLandGenerator::EvaluateToWorkerBuffer(
 		return Error;
 	}
 	const FVoxelLandProgramDraft& D = Program->GetData();
-	for (const FVoxelLandInstruction& I : D.Instructions)
+	TConstArrayView<FVoxelLandInstruction> Instructions = D.Instructions;
+	if (IntegerPreview)
+	{
+		if (Instructions.Num() < 2 || Instructions.Last().Op != EVoxelLandOpcode::StoreDensity
+			|| Instructions.Last(1).Op != EVoxelLandOpcode::IntToFloat
+			|| Instructions.Last(1).Dst != Instructions.Last().A)
+		{
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidContext, TEXT("Integer preview requires a terminal integer conversion"));
+		}
+		Instructions = Instructions.Left(Instructions.Num() - 2);
+	}
+	for (const FVoxelLandInstruction& I : Instructions)
 	{
 		if (FVoxelLandError Error = W.ExecuteInstruction(I, D, FloatParameters, IntParameters, Seeds, Positions.Num()))
 		{
 			return Error;
 		}
 	}
+	if (IntegerPreview)
+	{
+		const int32 Offset = int32(D.Instructions.Last(1).A) * FVoxelLandGeneratorValidation::BatchSize;
+		IntegerPreview->Append(W.IntRegisters.GetData() + Offset, Positions.Num());
+	}
 	return {};
 }
+
+#if WITH_EDITOR
+FVoxelLandError FVoxelLandGenerator::EvaluateIntegerPreview(
+	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int32>& OutValues) const
+{
+	OutValues.Reset();
+	return EvaluateToWorkerBuffer(Positions, Worker, &OutValues);
+}
+#endif
 
 FVoxelLandError FVoxelLandGenerator::EvaluateSamples(
 	TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int16>& OutDensity) const

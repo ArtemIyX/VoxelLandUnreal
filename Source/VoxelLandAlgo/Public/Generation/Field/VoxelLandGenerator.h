@@ -152,6 +152,11 @@ public:
 	// Raw finite values from the same pure VM stage before density quantization and filters.
 	FVoxelLandError EvaluateSamplesRaw(
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
+#if WITH_EDITOR
+	// Reads the integer input of a preview projection's terminal conversion.
+	FVoxelLandError EvaluateIntegerPreview(
+		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<int32>& OutValues) const;
+#endif
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
 	bool IncludesChunk(const FVoxelLandChunkKey& Key) const;
 	const TOptional<FVoxelLandDensityBounds>& GetDirectDensityBounds() const { return DirectDensityBounds; }
@@ -210,7 +215,8 @@ private:
 	bool SampleM4BaseHeight(
 		int64 X, int64 Y, int32& Height, TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const;
 	FVoxelLandError ValidateM4Footprint(const FVoxelLandChunkKey& Key, int32 Axis, int32 Offset) const;
-	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker) const;
+	FVoxelLandError EvaluateToWorkerBuffer(TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker,
+		TArray<int32>* IntegerPreview = nullptr) const;
 	FVoxelLandError GenerateExpandedDensity(
 		const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key,

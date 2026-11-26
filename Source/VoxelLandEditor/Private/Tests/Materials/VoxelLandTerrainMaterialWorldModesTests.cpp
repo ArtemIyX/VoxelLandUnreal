@@ -1,6 +1,11 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Assets/Materials/VoxelLandMaterialPalette.h"
+#include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
+#include "Data/Meshing/VoxelLandWorldSignalSnapshot.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Rendering/Components/VoxelLandChunkComponent.h"
@@ -38,6 +43,20 @@ public:
 			return false;
 		}
 		Config.Reset(DuplicateObject<UVoxelLandWorldConfig>(Source, GetTransientPackage()));
+		bUseProceduralMaterials = FParse::Param(FCommandLine::Get(), TEXT("VoxelLandProceduralMaterialWorldModes"));
+		if (bUseProceduralMaterials)
+		{
+			const UVoxelLandWorldConfig* Grass = LoadObject<UVoxelLandWorldConfig>(
+				nullptr, TEXT("/VoxelLand/Examples/TerrainMaterials/WC_GrassPatches.WC_GrassPatches"));
+			if (!Test.TestNotNull(TEXT("Grass Patches configuration"), Grass))
+			{
+				return false;
+			}
+			if (!ConfigureProceduralAppearance(*Grass))
+			{
+				return false;
+			}
+		}
 		Config->WorldExtent = Mode == FiniteHeightMode || Mode == FiniteDensityMode ? EVoxelLandWorldExtent::Finite
 																					: EVoxelLandWorldExtent::Infinite;
 		Config->HorizontalRadius = 1;
@@ -55,6 +74,7 @@ public:
 		}
 		bHasRequestedView = false;
 		bCheckingSupersession = false;
+		bRefreshedSignals = false;
 		PreviousTicket = 0;
 		Deadline = FPlatformTime::Seconds() + ModeTimeoutSeconds;
 		return Test.TestTrue(FString::Printf(TEXT("%s configuration initializes"), ModeLabel()),
@@ -118,7 +138,28 @@ public:
 			Test.TestTrue(
 				TEXT("Moving the view publishes a new material-bound clipmap revision"), Ticket > PreviousTicket);
 		}
-		if (Mode == FiniteHeightMode || Mode == FiniteDensityMode)
+		if (bUseProceduralMaterials && !bRefreshedSignals)
+		{
+			const TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Data =
+				Actor.FindChunk(FVoxelLandChunkKey{});
+			{
+				const TGuardValue<int64> ChangedSeed(Config->Seed, Config->Seed + 1);
+				FString Error;
+				Test.TestFalse(TEXT("Reject signal refresh after accepted terrain inputs change"),
+					Actor.SetMaterialWorldSignals(nullptr, Error));
+				Test.TestTrue(TEXT("Report changed terrain inputs"), Error.Contains(TEXT("settings changed")));
+			}
+			if (!SetGrassSignal(1.0, 2))
+			{
+				return Finish();
+			}
+			Test.TestTrue(TEXT("Replacing a material world map preserves resident density"),
+				Actor.FindChunk(FVoxelLandChunkKey{}) == Data);
+			bRefreshedSignals = true;
+			PreviousTicket = Ticket;
+			return false;
+		}
+		if (!bUseProceduralMaterials && (Mode == FiniteHeightMode || Mode == FiniteDensityMode))
 		{
 			return BeginRuleSupersession();
 		}
@@ -137,6 +178,56 @@ public:
 	}
 
 private:
+	bool ConfigureProceduralAppearance(const UVoxelLandWorldConfig& Grass)
+	{
+		UVoxelLandTerrainGraph* Graph = Grass.MaterialGraph.LoadSynchronous();
+		if (!Test.TestNotNull(TEXT("Editable Grass Patches material graph"), Graph))
+		{
+			return false;
+		}
+		MaterialGraph.Reset(DuplicateObject(Graph, GetTransientPackage()));
+		FVoxelLandGraphNodeRecord* Noise =
+			MaterialGraph->Nodes.FindByPredicate([](const FVoxelLandGraphNodeRecord& Node) {
+				return Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::WorldNoise2D);
+			});
+		if (!Test.TestNotNull(TEXT("Graph noise source to replace with a World Signal"), Noise))
+		{
+			return false;
+		}
+		const FVoxelLandGraphPinRecord Result = Noise->Pins.Last();
+		FVoxelLandGraphPinRecord Default;
+		Default.Id = FGuid::NewGuid();
+		Default.Type = EVoxelLandGraphValueType::Float;
+		Default.FloatDefault = 0.0f;
+		FVoxelLandGraphPinRecord Required;
+		Required.Id = FGuid::NewGuid();
+		Required.Type = EVoxelLandGraphValueType::Bool;
+		Required.BoolDefault = true;
+		Noise->Pins = {Default, Required, Result};
+		Noise->OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::WorldSignal);
+		const FTCHARToUTF8 Channel(TEXT("GrassMoisture"));
+		Noise->Configuration.Reset();
+		Noise->Configuration.Append(reinterpret_cast<const uint8*>(Channel.Get()), Channel.Length());
+		Config->MaterialSetup = Grass.MaterialSetup;
+		Config->MaterialGraph = MaterialGraph.Get();
+		return SetGrassSignal(-1.0, 1);
+	}
+
+	bool SetGrassSignal(double Value, uint64 Revision)
+	{
+		FVoxelLandWorldSignalGrid Grid;
+		Grid.Name = TEXT("GrassMoisture");
+		Grid.Size = FIntPoint(2, 2);
+		Grid.OriginCm = FVector2d(-100000.0, -100000.0);
+		Grid.SpacingCm = 200000.0;
+		Grid.Samples.Init(Value, 4);
+		FVoxelLandWorldSignalSnapshot::FPtr Signals;
+		FString Error;
+		const bool bApplied = FVoxelLandWorldSignalSnapshot::Create({MoveTemp(Grid)}, Revision, Signals, Error)
+						   && Actor.SetMaterialWorldSignals(Signals, Error);
+		return Test.TestTrue(Error.IsEmpty() ? TEXT("Supply the immutable grass map") : *Error, bApplied);
+	}
+
 	bool BeginRuleSupersession()
 	{
 		const UVoxelLandMaterialSetup* Original = Config->MaterialSetup.Get();
@@ -260,6 +351,7 @@ private:
 	AVoxelLandWorld& Actor;
 	TStrongObjectPtr<UVoxelLandWorldConfig> Config;
 	TStrongObjectPtr<UVoxelLandMaterialSetup> MutableSetup;
+	TStrongObjectPtr<UVoxelLandTerrainGraph> MaterialGraph;
 	TStrongObjectPtr<UMaterialInterface> PriorMaterial;
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> PriorData;
 	uint64 PriorClipmapTicket = 0;
@@ -269,6 +361,8 @@ private:
 	bool bHasRequestedView = false;
 	bool bCheckingSupersession = false;
 	bool bRuleChangedInHook = false;
+	bool bUseProceduralMaterials = false;
+	bool bRefreshedSignals = false;
 };
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandTerrainMaterialWorldModesTest, "VoxelLand.Materials.WorldModes",

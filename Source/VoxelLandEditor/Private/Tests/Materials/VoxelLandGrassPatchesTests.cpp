@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
+#include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Data/Assets/Materials/VoxelLandMaterialPalette.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Data/Assets/Materials/VoxelLandSurfaceMaterial.h"
@@ -22,15 +23,18 @@
 class FVoxelLandGrassPatchesGraphBuilder final
 {
 public:
-	static FVoxelLandGraphSnapshot Make(TConstArrayView<FGuid> SurfaceIds, bool bNoise,
-		TConstArrayView<FSoftObjectPath> SurfaceAssets = {})
+	static FVoxelLandGraphSnapshot Make(
+		TConstArrayView<FGuid> SurfaceIds, bool bNoise, TConstArrayView<FSoftObjectPath> SurfaceAssets = {})
 	{
 		check(SurfaceIds.Num() == SurfaceCount);
 		FVoxelLandGrassPatchesGraphBuilder Builder;
 		Builder.Graph.GraphRole = EVoxelLandGraphRole::Material;
-		Builder.AddSurface(SurfaceIds[MeadowSlot], SurfaceAssets.IsValidIndex(MeadowSlot) ? SurfaceAssets[MeadowSlot] : FSoftObjectPath());
-		Builder.AddSurface(SurfaceIds[DryGrassSlot], SurfaceAssets.IsValidIndex(DryGrassSlot) ? SurfaceAssets[DryGrassSlot] : FSoftObjectPath());
-		Builder.AddSurface(SurfaceIds[SlateSlot], SurfaceAssets.IsValidIndex(SlateSlot) ? SurfaceAssets[SlateSlot] : FSoftObjectPath());
+		Builder.AddSurface(SurfaceIds[MeadowSlot],
+			SurfaceAssets.IsValidIndex(MeadowSlot) ? SurfaceAssets[MeadowSlot] : FSoftObjectPath());
+		Builder.AddSurface(SurfaceIds[DryGrassSlot],
+			SurfaceAssets.IsValidIndex(DryGrassSlot) ? SurfaceAssets[DryGrassSlot] : FSoftObjectPath());
+		Builder.AddSurface(SurfaceIds[SlateSlot],
+			SurfaceAssets.IsValidIndex(SlateSlot) ? SurfaceAssets[SlateSlot] : FSoftObjectPath());
 		const int32 Grass = Builder.Add(EVoxelLandBuiltinNode::BlendSurfaces);
 		Builder.Connect(MeadowSlot, Grass, TEXT("A"));
 		Builder.Connect(DryGrassSlot, Grass, TEXT("B"));
@@ -71,10 +75,7 @@ private:
 	static constexpr float PatchSizeCm = 1600.f;
 	static constexpr float GrassTransition = 0.18f;
 
-	FGuid MakeId()
-	{
-		return FGuid(0x47524153, 0x53504154, 0x43484553, ++NextId);
-	}
+	FGuid MakeId() { return FGuid(0x47524153, 0x53504154, 0x43484553, ++NextId); }
 
 	int32 Add(EVoxelLandBuiltinNode Kind)
 	{
@@ -149,7 +150,8 @@ public:
 			const FString PackageName = MakePackageName(Name);
 			if (FPackageName::DoesPackageExist(PackageName) || FindPackage(nullptr, *PackageName))
 			{
-				Test.AddError(FString::Printf(TEXT("Grass Patches package '%s' exists. Existing examples were left intact."), *PackageName));
+				Test.AddError(FString::Printf(
+					TEXT("Grass Patches package '%s' exists. Existing examples were left intact."), *PackageName));
 				return false;
 			}
 		}
@@ -158,8 +160,8 @@ public:
 			nullptr, TEXT("/VoxelLand/Examples/TerrainMaterials/DA_Surface_Meadow.DA_Surface_Meadow"));
 		UVoxelLandSurfaceMaterial* Slate = LoadObject<UVoxelLandSurfaceMaterial>(
 			nullptr, TEXT("/VoxelLand/Examples/TerrainMaterials/DA_Surface_Slate.DA_Surface_Slate"));
-		UVoxelLandWorldConfig* Rolling = LoadObject<UVoxelLandWorldConfig>(
-			nullptr, TEXT("/VoxelLand/Examples/WC_RollingHills.WC_RollingHills"));
+		UVoxelLandWorldConfig* Rolling =
+			LoadObject<UVoxelLandWorldConfig>(nullptr, TEXT("/VoxelLand/Examples/WC_RollingHills.WC_RollingHills"));
 		if (!Meadow || !Slate || !Rolling || !Rolling->Graph)
 		{
 			Test.AddError(TEXT("Grass Patches requires the shipped Meadow, Slate and Rolling Hills examples."));
@@ -174,7 +176,8 @@ public:
 			Test.AddError(TEXT("Duplicating Meadow did not produce a distinct surface ID."));
 			return false;
 		}
-		const FSoftObjectPath SurfaceAssets[] = {FSoftObjectPath(Meadow), FSoftObjectPath(DryGrass.Get()), FSoftObjectPath(Slate)};
+		const FSoftObjectPath SurfaceAssets[] = {
+			FSoftObjectPath(Meadow), FSoftObjectPath(DryGrass.Get()), FSoftObjectPath(Slate)};
 		FVoxelLandGraphSnapshot Source = FVoxelLandGrassPatchesGraphBuilder::Make(SurfaceIds, true, SurfaceAssets);
 		TStrongObjectPtr<UVoxelLandTerrainGraph> Graph(NewAsset<UVoxelLandTerrainGraph>(GraphName));
 		Graph->GraphRole = Source.GraphRole;
@@ -209,6 +212,66 @@ public:
 			Save(*DryGrass) && Save(*Palette) && Save(*Setup) && Save(*Graph) && Save(*Config));
 	}
 
+	static bool GenerateTerrainSignalExample(FAutomationTestBase& Test)
+	{
+		const TCHAR* SignalGraphName = TEXT("MG_MountainGrassPatches");
+		const TCHAR* SignalConfigName = TEXT("WC_MountainGrassPatches");
+		if (FPackageName::DoesPackageExist(MakePackageName(SignalGraphName))
+			|| FPackageName::DoesPackageExist(MakePackageName(SignalConfigName)))
+		{
+			Test.AddError(TEXT("Mountain Grass Patches already exists. Existing assets were left intact."));
+			return false;
+		}
+		UVoxelLandWorldConfig* Grass = LoadObject<UVoxelLandWorldConfig>(
+			nullptr, TEXT("/VoxelLand/Examples/TerrainMaterials/WC_GrassPatches.WC_GrassPatches"));
+		UVoxelLandWorldConfig* Mountain =
+			LoadObject<UVoxelLandWorldConfig>(nullptr, TEXT("/VoxelLand/Examples/WC_MountainBiome.WC_MountainBiome"));
+		if (!Grass || !Mountain || !Mountain->Graph || Grass->MaterialGraph.IsNull())
+		{
+			Test.AddError(TEXT("Create the Grass Patches and Mountain Biome examples first."));
+			return false;
+		}
+		const FVoxelLandGraphNodeRecord* Mask =
+			Mountain->Graph->Nodes.FindByPredicate([](const FVoxelLandGraphNodeRecord& Node) {
+				return FVoxelLandGraphOutputs::IsNamedOutput(Node.OperatorId)
+					&& FVoxelLandGraphOutputs::GetName(Node) == TEXT("Mountain Mask");
+			});
+		UVoxelLandTerrainGraph* Source = Grass->MaterialGraph.LoadSynchronous();
+		if (!Mask || !Source)
+		{
+			Test.AddError(TEXT("Missing Mountain Mask output or Grass Patches graph."));
+			return false;
+		}
+		TStrongObjectPtr<UVoxelLandTerrainGraph> Graph(DuplicateAsset(*Source, SignalGraphName));
+		FVoxelLandGraphNodeRecord* Noise = Graph->Nodes.FindByPredicate([](const FVoxelLandGraphNodeRecord& Node) {
+			return Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::WorldNoise2D);
+		});
+		if (!Noise)
+		{
+			return false;
+		}
+		const FVoxelLandGraphPinRecord Signal = Noise->Pins.Last();
+		Noise->OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::TerrainSignal);
+		Noise->Pins = {Signal};
+		FVoxelLandMaterialGraphProgram::WriteGuid(Mask->Id, Noise->Configuration);
+		for (FVoxelLandGraphNodeRecord& Node : Graph->Nodes)
+		{
+			if (Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::MaterialRemap))
+			{
+				Node.Pins[1].FloatDefault = 0.f;
+				Node.Pins[2].FloatDefault = 1.f;
+				break;
+			}
+		}
+		TStrongObjectPtr<UVoxelLandWorldConfig> Config(DuplicateAsset(*Mountain, SignalConfigName));
+		Config->MaterialSetup = Grass->MaterialSetup;
+		Config->MaterialGraph = Graph.Get();
+		const FVoxelLandTerrainPresentation Presentation =
+			FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), *Config);
+		return Test.TestTrue(*Presentation.Diagnostic, Presentation.Appearance.IsValid())
+			&& Test.TestTrue(TEXT("Save the imported Mountain Mask example"), Save(*Graph) && Save(*Config));
+	}
+
 private:
 	static constexpr const TCHAR* ExampleRoot = TEXT("/VoxelLand/Examples/TerrainMaterials/");
 	static constexpr const TCHAR* DryGrassName = TEXT("DA_Surface_DryGrass");
@@ -218,31 +281,28 @@ private:
 	static constexpr const TCHAR* ConfigName = TEXT("WC_GrassPatches");
 	static constexpr EObjectFlags EditableAssetFlags = RF_Public | RF_Standalone | RF_Transactional;
 
-	static FString MakePackageName(const TCHAR* Name)
-	{
-		return FString(ExampleRoot) + Name;
-	}
+	static FString MakePackageName(const TCHAR* Name) { return FString(ExampleRoot) + Name; }
 
-	template <typename AssetType>
-	static AssetType* NewAsset(const TCHAR* Name)
+	template <typename AssetType> static AssetType* NewAsset(const TCHAR* Name)
 	{
 		return NewObject<AssetType>(CreatePackage(*MakePackageName(Name)), FName(Name), EditableAssetFlags);
 	}
 
-	template <typename AssetType>
-	static AssetType* DuplicateAsset(AssetType& Source, const TCHAR* Name)
+	template <typename AssetType> static AssetType* DuplicateAsset(AssetType& Source, const TCHAR* Name)
 	{
 		AssetType* Copy = DuplicateObject<AssetType>(&Source, CreatePackage(*MakePackageName(Name)), FName(Name));
 		Copy->SetFlags(EditableAssetFlags);
 		return Copy;
 	}
 
-	static bool CompileGraph(FAutomationTestBase& Test, const UVoxelLandTerrainGraph& Graph, TConstArrayView<FGuid> Palette)
+	static bool CompileGraph(
+		FAutomationTestBase& Test, const UVoxelLandTerrainGraph& Graph, TConstArrayView<FGuid> Palette)
 	{
 		FVoxelLandGraphSnapshot Source;
 		FString Error;
 		TSharedPtr<const FVoxelLandMaterialGraphProgram, ESPMode::ThreadSafe> Program;
-		if (!Graph.CaptureSnapshot(Source, Error) || !FVoxelLandMaterialGraphProgram::Compile(Source, Palette, Program, Error))
+		if (!Graph.CaptureSnapshot(Source, Error)
+			|| !FVoxelLandMaterialGraphProgram::Compile(Source, Palette, Program, Error))
 		{
 			Test.AddError(Error);
 			return false;
@@ -298,7 +358,8 @@ bool FVoxelLandMaterialGraphProgramTests::RunTest(const FString&)
 	double Weights[FBuilder::SurfaceCount] = {};
 	TestTrue(TEXT("Sample flat terrain"), Program->Evaluate(Point, Weights));
 	TestEqual(TEXT("Meadow receives its complement"), Weights[FBuilder::MeadowSlot], 1.0 - FBuilder::ReferenceAlpha);
-	TestEqual(TEXT("Dry grass receives the authored alpha"), Weights[FBuilder::DryGrassSlot], double(FBuilder::ReferenceAlpha));
+	TestEqual(TEXT("Dry grass receives the authored alpha"), Weights[FBuilder::DryGrassSlot],
+		double(FBuilder::ReferenceAlpha));
 	TestEqual(TEXT("Slate stays absent from flat terrain"), Weights[FBuilder::SlateSlot], 0.0);
 	Point.SlopeDegrees = 0.5 * (FBuilder::RockStartsDegrees + FBuilder::AllRockDegrees);
 	TestTrue(TEXT("Sample the middle of the slope transition"), Program->Evaluate(Point, Weights));
@@ -349,4 +410,15 @@ bool FVoxelLandMaterialGraphProgramTests::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandMountainGrassPatchesTest, "VoxelLand.Materials.CreateMountainGrassPatches",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FVoxelLandMountainGrassPatchesTest::RunTest(const FString& Parameters)
+{
+	if (!FParse::Param(FCommandLine::Get(), TEXT("VoxelLandCreateMountainGrassPatches")))
+	{
+		return true;
+	}
+	return FVoxelLandGrassPatchesAssets::GenerateTerrainSignalExample(*this);
+}
 #endif

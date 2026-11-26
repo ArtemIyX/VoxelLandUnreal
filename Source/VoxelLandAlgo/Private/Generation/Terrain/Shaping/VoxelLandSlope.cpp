@@ -51,32 +51,47 @@ bool FVoxelLandM4SlopeInternals::ValidHeight(int64 Value)
 	return Value >= -HeightLimitQ8 && Value <= HeightLimitQ8;
 }
 
-bool DensityQ8(int64 ZQ8, int32 CenterQ8, int32 PlusXQ8, int32 MinusXQ8, int32 PlusYQ8, int32 MinusYQ8,
-	int32 VoxelSizeCm, int64& OutDensityQ8)
+bool TryGetNormalizationQ12(const FIntVector4& NeighborsQ8, int32 VoxelSizeCm, int64& OutNormalization)
 {
-	if (!FVoxelLandM4SlopeInternals::ValidHeight(ZQ8) || !FVoxelLandM4SlopeInternals::ValidHeight(CenterQ8)
-		|| !FVoxelLandM4SlopeInternals::ValidHeight(PlusXQ8) || !FVoxelLandM4SlopeInternals::ValidHeight(MinusXQ8)
-		|| !FVoxelLandM4SlopeInternals::ValidHeight(PlusYQ8) || !FVoxelLandM4SlopeInternals::ValidHeight(MinusYQ8)
-		|| VoxelSizeCm <= 0 || VoxelSizeCm > 2000000)
+	if (!FVoxelLandM4SlopeInternals::ValidHeight(NeighborsQ8.X)
+		|| !FVoxelLandM4SlopeInternals::ValidHeight(NeighborsQ8.Y)
+		|| !FVoxelLandM4SlopeInternals::ValidHeight(NeighborsQ8.Z)
+		|| !FVoxelLandM4SlopeInternals::ValidHeight(NeighborsQ8.W) || VoxelSizeCm <= 0 || VoxelSizeCm > 2000000)
 	{
 		return false;
 	}
 	const int64 StencilDenominator = int64(VoxelSizeCm) * 512;
 	const int64 SlopeX = FVoxelLandM4SlopeInternals::RoundAway(
-		(int64(PlusXQ8) - MinusXQ8) * FVoxelLandM4SlopeInternals::SlopeScale, StencilDenominator);
+		(int64(NeighborsQ8.X) - NeighborsQ8.Y) * FVoxelLandM4SlopeInternals::SlopeScale, StencilDenominator);
 	const int64 SlopeY = FVoxelLandM4SlopeInternals::RoundAway(
-		(int64(PlusYQ8) - MinusYQ8) * FVoxelLandM4SlopeInternals::SlopeScale, StencilDenominator);
+		(int64(NeighborsQ8.Z) - NeighborsQ8.W) * FVoxelLandM4SlopeInternals::SlopeScale, StencilDenominator);
 	if (SlopeX < -FVoxelLandM4SlopeInternals::SlopeLimitQ12 || SlopeX > FVoxelLandM4SlopeInternals::SlopeLimitQ12
 		|| SlopeY < -FVoxelLandM4SlopeInternals::SlopeLimitQ12 || SlopeY > FVoxelLandM4SlopeInternals::SlopeLimitQ12)
 	{
 		return false;
 	}
-	const int64 NormQ12 = FVoxelLandM4SlopeInternals::NearestRoot(
+	OutNormalization = FVoxelLandM4SlopeInternals::NearestRoot(
 		FVoxelLandM4SlopeInternals::SlopeScale * FVoxelLandM4SlopeInternals::SlopeScale + SlopeX * SlopeX
 		+ SlopeY * SlopeY);
-	const int64 Density =
-		FVoxelLandM4SlopeInternals::RoundAway((ZQ8 - CenterQ8) * FVoxelLandM4SlopeInternals::SlopeScale, NormQ12);
-	OutDensityQ8 = Density;
+	return true;
+}
+
+int64 NormalizeDensityQ8(int64 UnnormalizedQ8, int64 NormalizationQ12)
+{
+	return FVoxelLandM4SlopeInternals::RoundAway(
+		UnnormalizedQ8 * FVoxelLandM4SlopeInternals::SlopeScale, NormalizationQ12);
+}
+
+bool DensityQ8(int64 ZQ8, int32 CenterQ8, int32 PlusXQ8, int32 MinusXQ8, int32 PlusYQ8, int32 MinusYQ8,
+	int32 VoxelSizeCm, int64& OutDensityQ8)
+{
+	int64 NormalizationQ12 = 0;
+	if (!FVoxelLandM4SlopeInternals::ValidHeight(ZQ8) || !FVoxelLandM4SlopeInternals::ValidHeight(CenterQ8)
+		|| !TryGetNormalizationQ12(FIntVector4(PlusXQ8, MinusXQ8, PlusYQ8, MinusYQ8), VoxelSizeCm, NormalizationQ12))
+	{
+		return false;
+	}
+	OutDensityQ8 = NormalizeDensityQ8(ZQ8 - CenterQ8, NormalizationQ12);
 	return true;
 }
 }

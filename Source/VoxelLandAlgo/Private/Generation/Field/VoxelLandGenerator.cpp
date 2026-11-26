@@ -1,5 +1,7 @@
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "VoxelLandTerrainHeightColumns.h"
+#include "VoxelLandQuantizedDensity.h"
+#include "../Terrain/ChunkLocal/VoxelLandFixedLatticeSampling.h"
 #include "Generation/Terrain/Controls/VoxelLandTerrainControlMath.h"
 #include "Generation/Terrain/Heightfield/VoxelLandHeightGrid.h"
 #include "Generation/Terrain/ChunkLocal/VoxelLandFixedLattice.h"
@@ -1814,6 +1816,29 @@ bool FVoxelLandGenerator::SupportsHeightClipmap() const
 		&& !(M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0);
 }
 
+FVoxelLandError FVoxelLandGenerator::SampleHeightClipmapPoint(
+	int64 X, int64 Y, TArray<int64>& Registers, int32& OutHeightQ8) const
+{
+	int32 HeightQ8 = 0;
+	if (const FVoxelLandError Error =
+			VoxelLandM4FixedLattice::EvaluateValidatedHeightPoint(*M4Unlimited->AuthoredHeightGenerator, X, Y,
+				M4Unlimited->BaseQ8, M4Unlimited->HeightScaleCm, Registers, HeightQ8))
+	{
+		return Error;
+	}
+	int32 NoiseQ = 0;
+	if (M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0
+		&& (!VoxelLandM4FixedLattice::SampleShaping2D(
+				X, Y, M4HeightDetail.FrequencyPerCm, uint64(uint32(M4HeightDetailSeed)), NoiseQ)
+			|| !FVoxelLandGeneratorValidation::ApplyHeightDetail(
+				HeightQ8, NoiseQ, M4HeightDetail.AmplitudeQ8, HeightQ8)))
+	{
+		return {EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid height clipmap detail sample")};
+	}
+	OutHeightQ8 = HeightQ8;
+	return {};
+}
+
 FVoxelLandError FVoxelLandGenerator::SampleHeightClipmap(
 	TConstArrayView<FInt64Vector> Locations, TArray<int32>& OutHeightQ8, TFunctionRef<bool()> IsCancelled) const
 {
@@ -1826,8 +1851,6 @@ FVoxelLandError FVoxelLandGenerator::SampleHeightClipmap(
 		return {EVoxelLandErrorCode::UnsupportedLod, TEXT("Height clipmap requires an authored single-valued field")};
 	}
 
-	const FVoxelLandGenerator& HeightSource = *M4Unlimited->AuthoredHeightGenerator;
-	const bool bApplyDetail = M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0;
 	TArray<int64> Registers;
 	TArray<int32> Heights;
 	Heights.Reserve(Locations.Num());
@@ -1840,19 +1863,9 @@ FVoxelLandError FVoxelLandGenerator::SampleHeightClipmap(
 		}
 		const FInt64Vector& Point = Locations[Index];
 		int32 HeightQ8 = 0;
-		if (const FVoxelLandError Error = VoxelLandM4FixedLattice::EvaluateValidatedHeightPoint(
-				HeightSource, Point.X, Point.Y, M4Unlimited->BaseQ8, M4Unlimited->HeightScaleCm, Registers, HeightQ8))
+		if (const FVoxelLandError Error = SampleHeightClipmapPoint(Point.X, Point.Y, Registers, HeightQ8))
 		{
 			return Error;
-		}
-		int32 NoiseQ = 0;
-		if (bApplyDetail
-			&& (!VoxelLandM4FixedLattice::SampleShaping2D(
-					Point.X, Point.Y, M4HeightDetail.FrequencyPerCm, uint64(uint32(M4HeightDetailSeed)), NoiseQ)
-				|| !FVoxelLandGeneratorValidation::ApplyHeightDetail(
-					HeightQ8, NoiseQ, M4HeightDetail.AmplitudeQ8, HeightQ8)))
-		{
-			return {EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid height clipmap detail sample")};
 		}
 		Heights.Add(HeightQ8);
 	}
@@ -2105,20 +2118,7 @@ FVoxelLandError FVoxelLandGenerator::WriteTerrainDensityGrid(const FVoxelLandM7S
 					}
 					DensityQ8 += DeltaQ8;
 				}
-				// Q8 cm -> 1/1024 voxel. Integer division rounds nearest, ties away.
-				const int64 Numerator = DensityQ8 * 4;
-				const int64 Magnitude = Numerator < 0 ? -Numerator : Numerator;
-				int64 Quantized = Magnitude / VoxelSize;
-				const int64 Remainder = Magnitude % VoxelSize;
-				if (Remainder != 0 && Remainder >= VoxelSize - Remainder)
-				{
-					++Quantized;
-				}
-				if (Numerator < 0)
-				{
-					Quantized = -Quantized;
-				}
-				Density.Add(int16(FMath::Clamp<int64>(Quantized, -32768, 32767)));
+				Density.Add(FVoxelLandQuantizedDensity::FromHeightQ8(DensityQ8, VoxelSize));
 			}
 		}
 	}

@@ -1,9 +1,11 @@
 #include "VoxelLandAmbientOcclusionField.h"
 
 #include "../../Clipmap/Sampling/VoxelLandCompletedBox.h"
+#include "../../Field/VoxelLandQuantizedDensity.h"
 #include "Data/Meshing/VoxelLandMeshData.h"
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "Generation/Meshing/Lighting/VoxelLandTerrainAmbientOcclusion.h"
+#include "Generation/Terrain/Shaping/VoxelLandSlope.h"
 
 FVoxelLandAmbientOcclusionField::FVoxelLandAmbientOcclusionField(const FVoxelLandGenerator& InGenerator,
 	FVoxelLandWorkerContext& InWorker, TFunctionRef<bool()> InIsCancelled, const FVoxelLandChunkData* InLOD0Data)
@@ -12,6 +14,8 @@ FVoxelLandAmbientOcclusionField::FVoxelLandAmbientOcclusionField(const FVoxelLan
 	, IsCancelled(InIsCancelled)
 	, LOD0Data(InLOD0Data)
 	, bHasHeight(InGenerator.SupportsM7CompletedField())
+	, bHasHeightSurface(InGenerator.SupportsHeightClipmap())
+	, SizeCm(bHasHeightSurface ? int32(InGenerator.GetProfile().VoxelSizeCm) : 0)
 	, LocalHeightSource(InGenerator.M4Unlimited.Get())
 {
 }
@@ -46,7 +50,89 @@ FVoxelLandError FVoxelLandAmbientOcclusionField::operator()(const FInt64Vector& 
 	{
 		return {};
 	}
-	return ReadHeight(Position, OutDensity);
+	return bHasHeightSurface ? ReadHeightSurface(Position, OutDensity) : ReadHeight(Position, OutDensity);
+}
+
+FVoxelLandError FVoxelLandAmbientOcclusionField::ReadSurfaceElevation(const FInt64Vector& XY, int32& OutHeightQ8)
+{
+	if (const int32* Cached = SurfaceElevations.Find(XY))
+	{
+		OutHeightQ8 = *Cached;
+		return {};
+	}
+	constexpr int32 MaxHeightSamples = 256 * 1024;
+	if (SurfaceElevations.Num() >= MaxHeightSamples)
+	{
+		return {EVoxelLandErrorCode::InvalidParameter,
+			TEXT("Terrain ambient visibility exceeds its surface sample budget")};
+	}
+	if (const FVoxelLandError Error =
+			Generator.SampleHeightClipmapPoint(XY.X * SizeCm, XY.Y * SizeCm, HeightRegisters, OutHeightQ8))
+	{
+		return Error;
+	}
+	SurfaceElevations.Add(XY, OutHeightQ8);
+	return {};
+}
+
+FVoxelLandError FVoxelLandAmbientOcclusionField::ReadSurfaceNormalization(
+	const FInt64Vector& XY, int64& OutNormalizationQ12)
+{
+	if (const int64* Cached = SurfaceNormalizations.Find(XY))
+	{
+		OutNormalizationQ12 = *Cached;
+		return {};
+	}
+	const FInt64Vector Neighbors[] = {
+		XY + FInt64Vector(1, 0, 0), XY - FInt64Vector(1, 0, 0), XY + FInt64Vector(0, 1, 0), XY - FInt64Vector(0, 1, 0)};
+	FIntVector4 Heights;
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Neighbors); ++Index)
+	{
+		if (const FVoxelLandError Error = ReadSurfaceElevation(Neighbors[Index], Heights[Index]))
+		{
+			return Error;
+		}
+	}
+	if (!VoxelLandM4Slope::TryGetNormalizationQ12(Heights, SizeCm, OutNormalizationQ12))
+	{
+		return {EVoxelLandErrorCode::InvalidMathDomain, TEXT("M4 slope stencil is outside its supported range")};
+	}
+	SurfaceNormalizations.Add(XY, OutNormalizationQ12);
+	return {};
+}
+
+FVoxelLandError FVoxelLandAmbientOcclusionField::ReadHeightSurface(const FInt64Vector& Position, int16& OutDensity)
+{
+	if (const FVoxelLandError Error = Generator.ValidateM7RawFootprint(Position, Position))
+	{
+		if (Error.Code != EVoxelLandErrorCode::NonFiniteCoordinate
+			&& Error.Code != EVoxelLandErrorCode::InvalidParameter)
+		{
+			return Error;
+		}
+		OutDensity = MAX_int16;
+		return {};
+	}
+
+	// Every Z sample in the plain authored surface comes from the same height and optional XY slope stencil.
+	const FInt64Vector XY(Position.X, Position.Y, 0);
+	int32 HeightQ8 = 0;
+	if (const FVoxelLandError Error = ReadSurfaceElevation(XY, HeightQ8))
+	{
+		return Error;
+	}
+	int64 DensityQ8 = Position.Z * SizeCm * 256 - HeightQ8;
+	if (Generator.bM4NormalizeSlope)
+	{
+		int64 NormalizationQ12 = 0;
+		if (const FVoxelLandError Error = ReadSurfaceNormalization(XY, NormalizationQ12))
+		{
+			return Error;
+		}
+		DensityQ8 = VoxelLandM4Slope::NormalizeDensityQ8(DensityQ8, NormalizationQ12);
+	}
+	OutDensity = FVoxelLandQuantizedDensity::FromHeightQ8(DensityQ8, SizeCm);
+	return {};
 }
 
 FVoxelLandError FVoxelLandAmbientOcclusionField::ReadHeightBox(const FVoxelLandM7CompletedBox& Box, TArray<int16>& Out)

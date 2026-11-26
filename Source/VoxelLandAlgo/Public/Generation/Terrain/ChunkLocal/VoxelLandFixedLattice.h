@@ -19,8 +19,6 @@ VOXELLANDALGO_API bool IsShapingFrequencySupported(float Frequency);
 VOXELLANDALGO_API bool SampleShaping2D(int64 X, int64 Y, float Frequency, uint64 Seed, int32& OutNoiseQ15);
 VOXELLANDALGO_API bool SampleShaping3D(int64 X, int64 Y, int64 Z, float Frequency, uint64 Seed, int32& OutNoiseQ15);
 VOXELLANDALGO_API FVoxelLandError Validate(const FVoxelLandGenerator& Generator);
-FVoxelLandError EvaluateValidatedHeightPoint(const FVoxelLandGenerator& Generator, int64 X, int64 Y, int32 BaseQ8,
-	int32 ScaleCm, TArray<int64>& Registers, int32& OutHeight);
 VOXELLANDALGO_API FVoxelLandError EvaluateValidatedSignedValue(
 	const FVoxelLandGenerator& Generator, int64 X, int64 Y, TArray<int64>& Registers, double& Out);
 VOXELLANDALGO_API FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, int64 OriginX, int64 OriginY,

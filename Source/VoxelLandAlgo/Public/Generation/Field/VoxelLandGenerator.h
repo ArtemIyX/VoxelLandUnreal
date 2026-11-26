@@ -189,6 +189,7 @@ public:
 
 private:
 	friend class FVoxelLandAmbientOcclusionField;
+	FVoxelLandError SampleHeightClipmapPoint(int64 X, int64 Y, TArray<int64>& Registers, int32& OutHeightQ8) const;
 	static FVoxelLandM5Diagnostic CreateMeteredInternal(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		const FVoxelLandM4OverhangConfig* Overhang, const FVoxelLandM4SmoothSettings* Smooth,

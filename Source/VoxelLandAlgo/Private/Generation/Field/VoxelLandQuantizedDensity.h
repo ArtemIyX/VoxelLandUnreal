@@ -5,6 +5,7 @@
 class FVoxelLandQuantizedDensity final
 {
 public:
+	static int16 FromHeightQ8(int64 DensityQ8, int64 VoxelSizeCm);
 	static int32 RoundRatioAwayFromZero(int64 Numerator, int32 Denominator);
 	static int16 Blend(int16 Original, int32 Target, int32 Strength);
 	static int16 SmoothSample(

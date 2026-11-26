@@ -29,6 +29,14 @@ FVoxelLandError FVoxelLandSmoothDensityInternals::SmoothError(EVoxelLandErrorCod
 	return Error;
 }
 
+int16 FVoxelLandQuantizedDensity::FromHeightQ8(int64 DensityQ8, int64 VoxelSizeCm)
+{
+	// Q8 cm to 1/1024 voxel, rounding nearest with ties away from zero.
+	const int64 Magnitude = FMath::Abs(DensityQ8) * 4;
+	const int64 Rounded = (Magnitude + VoxelSizeCm / 2) / VoxelSizeCm;
+	return int16(FMath::Clamp<int64>(DensityQ8 < 0 ? -Rounded : Rounded, MIN_int16, MAX_int16));
+}
+
 int32 FVoxelLandQuantizedDensity::RoundRatioAwayFromZero(int64 Numerator, int32 Denominator)
 {
 	const int64 Magnitude = Numerator < 0 ? -Numerator : Numerator;

@@ -25,6 +25,9 @@
  */
 namespace VoxelLandM4Slope
 {
+// Separate the XY stencil from Z so callers can retain the normalization per column.
+bool TryGetNormalizationQ12(const FIntVector4& NeighborsQ8, int32 VoxelSizeCm, int64& OutNormalization);
+int64 NormalizeDensityQ8(int64 UnnormalizedQ8, int64 NormalizationQ12);
 VOXELLANDALGO_API bool DensityQ8(int64 ZQ8, int32 CenterQ8, int32 PlusXQ8, int32 MinusXQ8, int32 PlusYQ8,
 	int32 MinusYQ8, int32 VoxelSizeCm, int64& OutDensityQ8);
 }

@@ -5,6 +5,7 @@
 #include "Data/Terrain/ChunkLocal/VoxelLandChunkLocalTerrainConfig.h"
 #include "Generation/Clipmap/Meshing/VoxelLandHeightClipmapMesher.h"
 #include "Generation/Field/VoxelLandGenerator.h"
+#include "Generation/Meshing/Lighting/VoxelLandTerrainAmbientOcclusion.h"
 #include "Misc/AutomationTest.h"
 
 class FVoxelLandHeightClipmapSeamFixture final
@@ -20,6 +21,7 @@ private:
 	static bool NeverCancel() { return false; }
 	static bool CancelImmediately() { return true; }
 	static FString VerifyLevel(const FVoxelLandGenerator& Generator, uint8 Level);
+	static FString VerifyAmbientVisibility(const FVoxelLandGenerator& Generator);
 	static FString VerifyEdge(const FVoxelLandGenerator& Generator, const FVoxelLandChunkKey& Parent,
 		const FVoxelLandMeshData& Coarse, int32 Edge);
 	static bool RecordEdge(const FVoxelLandMeshData& Mesh, FVector3f Origin, int32 Axis, float Plane, int32 Spacing,
@@ -139,6 +141,44 @@ FString FVoxelLandHeightClipmapSeamFixture::VerifyLevel(const FVoxelLandGenerato
 	return {};
 }
 
+FString FVoxelLandHeightClipmapSeamFixture::VerifyAmbientVisibility(const FVoxelLandGenerator& Generator)
+{
+	TUniquePtr<FVoxelLandWorkerContext> Worker;
+	const FVoxelLandChunkKey Key{FIntVector(-1, -1, 0), 0};
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Completed;
+	FVoxelLandMeshData Mesh;
+	if (Generator.CreateWorker(Worker) || Generator.GenerateChunk(Key, *Worker, Completed)
+		|| FVoxelLandHeightClipmapMesher::Build(Key, 0, Generator, NeverCancel, Mesh))
+	{
+		return TEXT("Unable to prepare the completed density and stitched AO fixture");
+	}
+
+	// Keep all AO reads in the reference chunk's completed samples.
+	FVoxelLandMeshData FromCompleted;
+	for (int32 Y = 8; Y <= 24; Y += 4)
+	{
+		for (int32 X = 8; X <= 24; X += 4)
+		{
+			FromCompleted.Vertices.Add(Mesh.Vertices[X + (Cells + 1) * Y]);
+		}
+	}
+	FVoxelLandMeshData FromCache = FromCompleted;
+	const FVector Origin = VoxelLandMeshCoordinates::RenderOrigin(Key.Coordinate, BaseSpacing);
+	if (const FVoxelLandError Error = FVoxelLandTerrainAmbientOcclusion::Bake(
+			FromCompleted, Generator, *Worker, Key, Origin, NeverCancel, Completed.Get()))
+	{
+		return Error.Message;
+	}
+	if (const FVoxelLandError Error =
+			FVoxelLandTerrainAmbientOcclusion::Bake(FromCache, Generator, *Worker, Key, Origin, NeverCancel))
+	{
+		return Error.Message;
+	}
+	return FromCache.AmbientVisibility == FromCompleted.AmbientVisibility
+			 ? FString{}
+			 : TEXT("The planar AO cache changed completed-field visibility bytes");
+}
+
 FString FVoxelLandHeightClipmapSeamFixture::Verify()
 {
 	FVoxelLandProgramDraft Draft;
@@ -171,6 +211,22 @@ FString FVoxelLandHeightClipmapSeamFixture::Verify()
 	for (uint8 Level = 1; Level <= 5; ++Level)
 	{
 		if (const FString Error = VerifyLevel(*Generator, Level); !Error.IsEmpty())
+		{
+			return Error;
+		}
+	}
+
+	Config.BaseQ8 = 1350 * 256;
+	Config.HeightDetail.AmplitudeQ8 = 700 * 256;
+	Config.HeightDetail.FrequencyPerCm = 0.003f;
+	for (const bool bNormalizeSlope : {false, true})
+	{
+		Config.bNormalizeSlope = bNormalizeSlope;
+		if (const FVoxelLandError Error = FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Generator))
+		{
+			return Error.Message;
+		}
+		if (const FString Error = VerifyAmbientVisibility(*Generator); !Error.IsEmpty())
 		{
 			return Error;
 		}

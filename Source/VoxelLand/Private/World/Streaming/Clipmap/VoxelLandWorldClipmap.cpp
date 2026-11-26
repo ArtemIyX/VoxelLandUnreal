@@ -5,6 +5,7 @@
 #include "Data/World/Streaming/VoxelLandPublication.h"
 #include "Data/World/Streaming/VoxelLandWorldState.h"
 #include "Engine/World.h"
+#include "Generation/Clipmap/Planning/VoxelLandHeightClipmap.h"
 #include "HAL/Event.h"
 #include "Misc/ScopeLock.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -21,6 +22,48 @@ FVector QuantizeView(const FVector& View, double BaseSpacing)
 	const double Step = 8.0 * BaseSpacing;
 	return {FMath::RoundToDouble(View.X / Step) * Step, FMath::RoundToDouble(View.Y / Step) * Step,
 		FMath::RoundToDouble(View.Z / Step) * Step};
+}
+
+TOptional<FVector2D> SampleHeightDetailView(
+	const FVector& LogicalView, const FVector& Quantized, FM7VisualState& Visual)
+{
+	const FVector2D Current(LogicalView.X, LogicalView.Y);
+	const double Now = FPlatformTime::Seconds();
+	const double DeltaSeconds = Now - Visual.LastHeightCameraTime;
+	const FVector2D Motion = Current - Visual.LastHeightCamera.Get(Current);
+	constexpr double MaxContinuousStepCm = 12000.0;
+	if (DeltaSeconds > 0.0 && DeltaSeconds < 0.5 && Motion.SizeSquared() < FMath::Square(MaxContinuousStepCm))
+	{
+		constexpr double VelocityResponseSeconds = 0.15;
+		const double Blend = FMath::Min(DeltaSeconds / VelocityResponseSeconds, 1.0);
+		Visual.HeightCameraVelocity = FMath::Lerp(Visual.HeightCameraVelocity, Motion / DeltaSeconds, Blend);
+	}
+	else
+	{
+		Visual.HeightCameraVelocity = FVector2D::ZeroVector;
+	}
+	Visual.LastHeightCamera = Current;
+	Visual.LastHeightCameraTime = Now;
+
+	constexpr double PredictAboveCmPerSecond = 3000.0;
+	if (Visual.HeightCameraVelocity.SizeSquared() < FMath::Square(PredictAboveCmPerSecond))
+	{
+		return {};
+	}
+
+	// Keep terrain ahead of a fast camera detailed during the worker and upload latency.
+	constexpr double LeadSeconds = 1.8;
+	const double Step = 8.0 * Visual.Settings.BaseVoxelSizeCm;
+	const double LeadCap = FVoxelLandHeightClipmap::MaxDetailLookAheadCm(Visual.Settings.HorizontalRadiusCm);
+	const FVector2D Offset = Visual.HeightCameraVelocity * LeadSeconds;
+	const FVector2D Center(Quantized.X, Quantized.Y);
+	const FVector2D Snapped(FMath::GridSnap(Offset.X, Step), FMath::GridSnap(Offset.Y, Step));
+	const double Distance = Snapped.Size();
+	if (Distance <= 0.0)
+	{
+		return {};
+	}
+	return Center + Snapped * FMath::Min(1.0, LeadCap / Distance);
 }
 
 bool OutsideReplacementWindow(
@@ -140,6 +183,10 @@ void AVoxelLandWorld::UpdateM7Demand(const FVector& LogicalView)
 	{
 		return;
 	}
+	if (Visual.bHeightSurface)
+	{
+		Visual.DesiredHeightDetailView = SampleHeightDetailView(LogicalView, Quantized, Visual);
+	}
 	if (Visual.LastSubmittedView
 		&& OutsideReplacementWindow(Visual.LastSubmittedView.GetValue(), Quantized, Visual.Settings))
 	{
@@ -158,6 +205,7 @@ void AVoxelLandWorld::UpdateM7Demand(const FVector& LogicalView)
 		}
 	}
 	if (!Visual.LastSubmittedView || Quantized != Visual.LastSubmittedView.GetValue()
+		|| Visual.DesiredHeightDetailView != Visual.LastSubmittedHeightDetailView
 		|| (Visual.Cancel && Visual.Cancel->bCancelled.Load()))
 	{
 		Visual.DesiredView = Quantized;
@@ -182,6 +230,7 @@ void AVoxelLandWorld::DispatchM7Revision()
 	auto Request = MakeShared<FM7RenderRequest, ESPMode::ThreadSafe>();
 	Request->Settings = Visual.Settings;
 	Request->Settings.ViewCm = Visual.DesiredView.GetValue();
+	Request->Settings.HeightDetailViewCm = Visual.DesiredHeightDetailView;
 	Request->Previous = Visual.Published;
 	Request->Appearance = State->Appearance;
 
@@ -197,6 +246,7 @@ void AVoxelLandWorld::DispatchM7Revision()
 	Visual.Ticket = Job.Ticket;
 	Visual.Cancel = Job.Cancel;
 	Visual.LastSubmittedView = Request->Settings.ViewCm;
+	Visual.LastSubmittedHeightDetailView = Request->Settings.HeightDetailViewCm;
 	Visual.DesiredView.Reset();
 	{
 		FScopeLock Lock(&State->Work->Mutex);
@@ -473,6 +523,9 @@ void AVoxelLandWorld::AdvanceM7Publication()
 			Visual->RetiredRegions.Add(Pair.Value);
 		}
 	}
+#if !UE_SERVER
+	UVoxelLandChunkComponent::CommitClipmapVisibility(MoveTemp(Show), MoveTemp(Hide));
+#endif
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -495,8 +548,5 @@ void AVoxelLandWorld::CopyM7PublishedKeysForTests(TArray<FVoxelLandChunkKey>& Ou
 	{
 		Out = Visual->Published->Layout.Leaves;
 	}
-#if !UE_SERVER
-	UVoxelLandChunkComponent::CommitClipmapVisibility(MoveTemp(Show), MoveTemp(Hide));
-#endif
 }
 #endif

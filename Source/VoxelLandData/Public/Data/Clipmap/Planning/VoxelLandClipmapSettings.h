@@ -14,4 +14,6 @@ struct FVoxelLandM7ClipmapSettings
 	int32 MaxLeaves = 512;
 	// Keep slots for source/geometry fallback, after admitting the mandatory roots.
 	int32 FallbackReserveLeaves = 64;
+	// Optional XY detail look-ahead for the height surface. Coverage remains centered on ViewCm.
+	TOptional<FVector2D> HeightDetailViewCm;
 };

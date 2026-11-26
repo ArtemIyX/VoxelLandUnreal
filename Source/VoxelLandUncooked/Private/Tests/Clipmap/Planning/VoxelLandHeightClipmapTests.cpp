@@ -138,6 +138,22 @@ bool FVoxelLandHeightClipmapTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	FVoxelLandM7ClipmapLayout Ahead;
+	Settings.ViewCm.Z = 2600.0;
+	Settings.HeightDetailViewCm = FVector2D(Settings.ViewCm.X + 34000.0, Settings.ViewCm.Y);
+	FHeightClipmapFixture::FCells AheadCells;
+	if (!TestTrue(TEXT("Build a view with bounded look-ahead"),
+			FVoxelLandHeightClipmap::Build(Settings, &Initial, Ahead, EdgeMasks))
+		|| !FHeightClipmapFixture::CheckCoverage(*this, Ahead, EdgeMasks, AheadCells))
+	{
+		return false;
+	}
+	TestTrue(TEXT("The look-ahead does not shift coverage"), Initial.Roots == Ahead.Roots);
+	TestEqual(TEXT("The camera stays at LOD 0 with a lead"), AheadCells.FindChecked(TrackedCell).LOD, uint8(0));
+	TestEqual(TEXT("The projected midpoint has LOD 0"), AheadCells.FindChecked(FIntPoint(4, -1)).LOD, uint8(0));
+	TestEqual(TEXT("The projected camera position has LOD 0"), AheadCells.FindChecked(FIntPoint(9, -1)).LOD, uint8(0));
+
+	Settings.HeightDetailViewCm.Reset();
 	FVoxelLandM7ClipmapLayout Previous = MoveTemp(Initial);
 	const FVector Route[] = {
 		FVector(23000.0, -2100.0, 2600.0), FVector(-118000.0, -175000.0, 2600.0), FVector(-3100.0, -2100.0, 2600.0)};

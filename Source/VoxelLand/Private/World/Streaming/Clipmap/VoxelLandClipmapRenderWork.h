@@ -54,6 +54,11 @@ struct FM7VisualState
 	FVoxelLandM7ClipmapSettings Settings;
 	TOptional<FVector> DesiredView;
 	TOptional<FVector> LastSubmittedView;
+	TOptional<FVector2D> DesiredHeightDetailView;
+	TOptional<FVector2D> LastSubmittedHeightDetailView;
+	TOptional<FVector2D> LastHeightCamera;
+	FVector2D HeightCameraVelocity = FVector2D::ZeroVector;
+	double LastHeightCameraTime = 0.0;
 	TSharedPtr<FCancel, ESPMode::ThreadSafe> Cancel;
 	uint64 Ticket = 0;
 	uint64 PublishedTicket = 0;

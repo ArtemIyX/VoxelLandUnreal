@@ -53,15 +53,34 @@ FVoxelLandHeightClipmap::FKey FVoxelLandHeightClipmap::ProbeCoarserNeighbor(cons
 	return {FIntVector(ParentX, ParentY, 0), uint8(Key.LOD + 1)};
 }
 
+double FVoxelLandHeightClipmap::MaxDetailLookAheadCm(double HorizontalRadiusCm)
+{
+	return FMath::Clamp(HorizontalRadiusCm / 8.0, 0.0, 35000.0);
+}
+
+double FVoxelLandHeightClipmap::SquaredDistanceToTile(const FVector2D& Minimum, double Width, const FVector2D& Point)
+{
+	const double DX = FMath::Max3(Minimum.X - Point.X, Point.X - (Minimum.X + Width), 0.0);
+	const double DY = FMath::Max3(Minimum.Y - Point.Y, Point.Y - (Minimum.Y + Width), 0.0);
+	return FMath::Square(DX) + FMath::Square(DY);
+}
+
 FVoxelLandHeightClipmap::FPriority FVoxelLandHeightClipmap::MakePriority(
 	const FKey& Key, const FVoxelLandM7ClipmapSettings& Settings)
 {
 	const double Width = double(Settings.BaseVoxelSizeCm) * FVoxelLandChunkData::Cells * (int64(1) << Key.LOD);
-	const double X = double(Key.Coordinate.X) * Width;
-	const double Y = double(Key.Coordinate.Y) * Width;
-	const double DX = FMath::Max3(X - Settings.ViewCm.X, Settings.ViewCm.X - (X + Width), 0.0);
-	const double DY = FMath::Max3(Y - Settings.ViewCm.Y, Settings.ViewCm.Y - (Y + Width), 0.0);
-	return {FMath::Square(DX) + FMath::Square(DY), Key};
+	const FVector2D Minimum(double(Key.Coordinate.X) * Width, double(Key.Coordinate.Y) * Width);
+	const FVector2D Current(Settings.ViewCm.X, Settings.ViewCm.Y);
+	const double Distance = SquaredDistanceToTile(Minimum, Width, Current);
+	if (!Settings.HeightDetailViewCm.IsSet())
+	{
+		return {Distance, Key};
+	}
+	const FVector2D Lead = Settings.HeightDetailViewCm.GetValue();
+	const FVector2D Midpoint = (Current + Lead) * 0.5;
+	return {FMath::Min3(
+				Distance, SquaredDistanceToTile(Minimum, Width, Midpoint), SquaredDistanceToTile(Minimum, Width, Lead)),
+		Key};
 }
 
 void FVoxelLandHeightClipmap::Split(
@@ -123,9 +142,11 @@ void FVoxelLandHeightClipmap::WriteFrontier(
 	TArray<FPriority> Ordered;
 	Ordered.Reserve(Leaves.Num());
 	constexpr uint8 OppositeEdge[] = {PositiveX, NegativeX, PositiveY, NegativeY};
+	FVoxelLandM7ClipmapSettings CameraOnly = Layout.Settings;
+	CameraOnly.HeightDetailViewCm.Reset();
 	for (const FKey& Key : Leaves)
 	{
-		Ordered.Add(MakePriority(Key, Layout.Settings));
+		Ordered.Add(MakePriority(Key, CameraOnly));
 		if (Key.LOD == Layout.Settings.MaxLod)
 		{
 			continue;
@@ -163,6 +184,22 @@ bool FVoxelLandHeightClipmap::Build(const FVoxelLandM7ClipmapSettings& Settings,
 		return false;
 	}
 
+	if (Result.Settings.HeightDetailViewCm.IsSet())
+	{
+		const FVector2D View(Settings.ViewCm.X, Settings.ViewCm.Y);
+		const FVector2D Delta = Result.Settings.HeightDetailViewCm.GetValue() - View;
+		const double Limit = MaxDetailLookAheadCm(Settings.HorizontalRadiusCm);
+		if (!FMath::IsFinite(Delta.X) || !FMath::IsFinite(Delta.Y))
+		{
+			Result.Settings.HeightDetailViewCm.Reset();
+		}
+		else if (Delta.SizeSquared() > FMath::Square(Limit))
+		{
+			const FVector2D Scaled = Delta / FMath::Max(FMath::Abs(Delta.X), FMath::Abs(Delta.Y));
+			Result.Settings.HeightDetailViewCm = View + Scaled * (Limit / Scaled.Size());
+		}
+	}
+
 	const bool bCanRetain = Previous && I::AreSettingsCompatible(Settings, Previous->Settings);
 	TSet<FKey> Leaves;
 	TArray<FPriority> Pending;
@@ -174,7 +211,7 @@ bool FVoxelLandHeightClipmap::Build(const FVoxelLandM7ClipmapSettings& Settings,
 		Leaves.Add(Root);
 		if (Root.LOD > 0)
 		{
-			Pending.Add(MakePriority(Root, Settings));
+			Pending.Add(MakePriority(Root, Result.Settings));
 		}
 	}
 	Pending.Heapify(I::IsHigherPriority);

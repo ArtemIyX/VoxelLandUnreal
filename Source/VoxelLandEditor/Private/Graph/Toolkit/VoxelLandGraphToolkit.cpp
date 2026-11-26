@@ -28,6 +28,8 @@
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "World/Terrain/Worlds/VoxelLandTerrainPreparation.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
+#include "Data/Assets/Materials/VoxelLandMaterialPalette.h"
+#include "Data/Meshing/VoxelLandMaterialAppearance.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Graph/Schema/VoxelLandGraphFunctionCapture.h"
 #include "Data/Graph/Schema/VoxelLandGraphFunctionId.h"
@@ -37,8 +39,11 @@
 #include "Graph/Compilation/VoxelLandGraphCompiler.h"
 #include "Graph/Serialization/VoxelLandProgramCodec.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
+#include "Generation/Meshing/VoxelLandMaterialMeshing.h"
 #include "Rendering/Components/VoxelLandChunkComponent.h"
 #include "Rendering/Diagnostics/VoxelLandPreviewUploadObservation.h"
+#include "Rendering/Materials/VoxelLandTerrainMaterial.h"
+#include "Rendering/Materials/VoxelLandTerrainPresentationResolver.h"
 #include "HAL/IConsoleManager.h"
 #include "AdvancedPreviewScene.h"
 #include "AssetRegistry/AssetData.h"
@@ -407,6 +412,31 @@ public:
 		return true;
 	}
 
+	static UVoxelLandMaterialPalette* GetPreviewPalette(const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath)
+	{
+		const UVoxelLandMaterialSetup* Setup = SetupPath.Get();
+		return Setup ? Setup->Palette.Get() : nullptr;
+	}
+
+	static bool IsSameMaterialAppearance(
+		const FVoxelLandMaterialAppearance& Left, const FVoxelLandMaterialAppearance& Right)
+	{
+		if (Left.SlotCount != Right.SlotCount || Left.Rules.Num() != Right.Rules.Num())
+		{
+			return false;
+		}
+		for (int32 Index = 0; Index < Left.Rules.Num(); ++Index)
+		{
+			const FVoxelLandResolvedMaterialRule& A = Left.Rules[Index];
+			const FVoxelLandResolvedMaterialRule& B = Right.Rules[Index];
+			if (A.Slot != B.Slot || A.Input != B.Input || A.Threshold != B.Threshold || A.BlendWidth != B.BlendWidth)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	class FVoxelLandPreviewJob
 	{
 	public:
@@ -414,7 +444,7 @@ public:
 
 		static bool Run(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandSerializedProgram& Payload, int64 Seed,
 			const FVoxelLandZoneProfile& Profile, int32 HorizontalRadius, int32 VerticalRadius,
-			const TOptional<FVoxelLandDensityBounds>& Bounds,
+			const TOptional<FVoxelLandDensityBounds>& Bounds, const FVoxelLandMaterialAppearance* Appearance,
 			const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error
 #if WITH_DEV_AUTOMATION_TESTS
 			,
@@ -477,7 +507,7 @@ public:
 					for (int32 X = Min.X; X < Max.X; ++X)
 					{
 						if (!Generate(*Generator, *Worker, Scratch, FIntVector(X, Y, Z), Profile.VoxelSizeCm, Cancel,
-								Meshes, Error))
+								Meshes, Error, Appearance))
 						{
 							return false;
 						}
@@ -490,7 +520,8 @@ public:
 		static bool RunPreparedRange(const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& Generator,
 			int32 HorizontalRadius, int32 MinZ, int32 MaxZ,
 			const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error,
-			uint64 MaxRetainedMeshBytes = MAX_uint64, FIntPoint CenterXY = FIntPoint::ZeroValue)
+			uint64 MaxRetainedMeshBytes = MAX_uint64, FIntPoint CenterXY = FIntPoint::ZeroValue,
+			const FVoxelLandMaterialAppearance* Appearance = nullptr)
 		{
 			if (!Generator || Cancel->Load())
 			{
@@ -512,15 +543,16 @@ public:
 					{
 						const int32 PreviousCount = Meshes.Num();
 						if (!Generate(*Generator, *Worker, Scratch, FIntVector(CenterXY.X + X, CenterXY.Y + Y, Z),
-								Generator->GetProfile().VoxelSizeCm, Cancel, Meshes, Error))
+								Generator->GetProfile().VoxelSizeCm, Cancel, Meshes, Error, Appearance))
 						{
 							return false;
 						}
 						if (Meshes.Num() > PreviousCount)
 						{
 							const FVoxelLandMeshData& Mesh = *Meshes.Last().Value;
-							RetainedMeshBytes +=
-								uint64(Mesh.Vertices.GetAllocatedSize()) + uint64(Mesh.Indices.GetAllocatedSize());
+							RetainedMeshBytes += uint64(Mesh.Vertices.GetAllocatedSize())
+											   + uint64(Mesh.Indices.GetAllocatedSize())
+											   + uint64(Mesh.MaterialBlend.GetAllocatedSize());
 							if (RetainedMeshBytes + uint64(Meshes.GetAllocatedSize()) > MaxRetainedMeshBytes)
 							{
 								Error = TEXT("Inspection mesh buffers exceed the 64 MiB retention limit.");
@@ -536,7 +568,8 @@ public:
 	private:
 		static bool Generate(const FVoxelLandGenerator& Generator, FVoxelLandWorkerContext& Worker,
 			FVoxelLandMeshingScratch& Scratch, FIntVector Position, float VoxelSize,
-			const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error)
+			const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error,
+			const FVoxelLandMaterialAppearance* Appearance)
 		{
 			if (Cancel->Load())
 			{
@@ -562,6 +595,18 @@ public:
 			}
 			if (!Mesh->Indices.IsEmpty())
 			{
+				if (Appearance
+					&& !FVoxelLandMaterialMeshing::Pack(*Mesh, *Appearance,
+						VoxelLandMeshCoordinates::RenderOrigin(Position, VoxelSize),
+						[&Cancel] { return Cancel->Load(); }))
+				{
+					Error = TEXT("Preview material packing failed or was cancelled.");
+					return false;
+				}
+				if (Cancel->Load())
+				{
+					return false;
+				}
 				Meshes.Emplace(Position, Mesh);
 			}
 			return true;
@@ -769,6 +814,7 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 	int64 SeedForTests = 0;
 #endif
+	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance;
 	FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::FResult Meshes;
 };
 
@@ -862,6 +908,7 @@ void FVoxelLandGraphToolkit::AddReferencedObjects(FReferenceCollector& Collector
 	Collector.AddReferencedObject(Graph);
 	Collector.AddReferencedObjects(PreviewComponents);
 	Collector.AddReferencedObject(PreviewMaterial);
+	Collector.AddReferencedObject(PendingTerrainMaterial);
 	Collector.AddReferencedObject(NoiseTexture);
 	Collector.AddReferencedObject(M4StageTexture);
 	Collector.AddReferencedObject(M4ControlsTexture);
@@ -917,7 +964,7 @@ void FVoxelLandGraphToolkit::Open(
 	PreviewSettings = FVoxelLandGraphToolkitOperations::MakePreviewSettings(
 		Asset, FVoxelLandGraphToolkitOperations::LoadExampleConfig(*Asset));
 	SynchronizePreviewSettings(false);
-	ApplyMaterialSetup();
+	ApplyMaterialSetup(false);
 	CreateMirror();
 	FVoxelLandGraphSnapshot InitialSource;
 	InitialSource.SourceVersion = Asset->SourceVersion;
@@ -1233,7 +1280,8 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArg
 
 FText FVoxelLandGraphToolkit::StatusText() const
 {
-	return FText::FromString(MaterialDiagnostic.IsEmpty() ? Status : Status + TEXT("\n") + MaterialDiagnostic);
+	return FText::FromString(
+		bNoisePreview || MaterialDiagnostic.IsEmpty() ? Status : Status + TEXT("\n") + MaterialDiagnostic);
 }
 
 FText FVoxelLandGraphToolkit::PreviewStatusText() const
@@ -2131,8 +2179,7 @@ void FVoxelLandGraphToolkit::PostUndo(bool bSuccess)
 					[this](const TWeakObjectPtr<UObject>& Item) { return Item.Get() == Asset; });
 			if (bM4UndoMaterialChange)
 			{
-				const UVoxelLandMaterialSetup* Setup = M4PreviewConfig->MaterialSetup.LoadSynchronous();
-				ApplyPreviewMaterial(Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr);
+				RefreshTerrainMaterial(M4PreviewConfig->MaterialSetup, !bM4UndoSemanticChange);
 			}
 			if (bM4UndoSemanticChange || (bEditedAssetIsControl && PreviousRevision != Revision))
 			{
@@ -2696,6 +2743,9 @@ void FVoxelLandGraphToolkit::CancelPreview()
 	PreviewFence.Reset();
 	++PreviewRevision;
 	bPreviewRequested = false;
+	PendingTerrainMaterial = nullptr;
+	PendingMaterialLayout.Invalidate();
+	PendingMaterialDiagnostic.Reset();
 	if (PreviewCancel)
 	{
 		PreviewCancel->Store(true);
@@ -2754,6 +2804,8 @@ void FVoxelLandGraphToolkit::ClearPreview()
 		}
 	}
 	PreviewComponents.Reset();
+	PublishedAppearance.Reset();
+	PublishedMaterialLayout.Invalidate();
 }
 
 void FVoxelLandGraphToolkit::SeedCommitted(const FText& Text, ETextCommit::Type)
@@ -2864,7 +2916,12 @@ void FVoxelLandGraphToolkit::PackageReloaded(EPackageReloadPhase Phase, FPackage
 	{
 		const UPackage* Package = Event->GetOldPackage();
 		const bool bGraphAffected = Asset && Asset->GetOutermost() == Package;
-		const UObject* Setup = PreviewSettings ? PreviewSettings->MaterialSetup.Get() : nullptr;
+		const UVoxelLandWorldConfig* Config =
+			bM4Preview && M4PreviewConfig ? M4PreviewConfig.Get() : PreviewSettings.Get();
+		const UObject* Setup = Config ? Config->MaterialSetup.Get() : nullptr;
+		const UObject* Palette =
+			Config ? FVoxelLandGraphToolkitOperations::GetPreviewPalette(Config->MaterialSetup) : nullptr;
+		const bool bPaletteAffected = Palette && Palette->GetOutermost() == Package;
 		const UObject* Selected = SelectedPreviewSettings.Get();
 		const bool bM4FunctionAffected =
 			M4FunctionDependencies.ContainsByPredicate([Package](const TWeakObjectPtr<UObject>& Dependency) {
@@ -2880,12 +2937,13 @@ void FVoxelLandGraphToolkit::PackageReloaded(EPackageReloadPhase Phase, FPackage
 					   || (M4PreviewConfig->Mountain.Graph
 						   && M4PreviewConfig->Mountain.Graph->GetOutermost() == Package)
 					   || (M4PreviewConfig->Peaks.Graph && M4PreviewConfig->Peaks.Graph->GetOutermost() == Package));
-		if (bGraphAffected || (Setup && Setup->GetOutermost() == Package)
+		if (bGraphAffected || bPaletteAffected || (Setup && Setup->GetOutermost() == Package)
 			|| (Selected && Selected->GetOutermost() == Package)
 			|| (PreviewMaterial && PreviewMaterial->GetOutermost() == Package) || bM4Affected)
 		{
 			bPackageReloadInProgress = true;
 			PauseForReload(bGraphAffected);
+			bResumePreviewAfterReload |= bPaletteAffected;
 		}
 	}
 	else if (Phase == EPackageReloadPhase::PrePackageFixup && Event && Asset
@@ -2944,11 +3002,16 @@ void FVoxelLandGraphToolkit::ObjectsReplaced(const TMap<UObject*, UObject*>& Rep
 		}
 		return;
 	}
-	const UObject* Setup = PreviewSettings ? PreviewSettings->MaterialSetup.Get() : nullptr;
-	if ((Setup && Replacements.Contains(const_cast<UObject*>(Setup))) || Replacements.Contains(PreviewMaterial)
+	const UVoxelLandWorldConfig* Config = bM4Preview && M4PreviewConfig ? M4PreviewConfig.Get() : PreviewSettings.Get();
+	UVoxelLandMaterialSetup* Setup = Config ? Config->MaterialSetup.Get() : nullptr;
+	UVoxelLandMaterialPalette* Palette =
+		Config ? FVoxelLandGraphToolkitOperations::GetPreviewPalette(Config->MaterialSetup) : nullptr;
+	const bool bPaletteAffected = Palette && Replacements.Contains(Palette);
+	if (bPaletteAffected || (Setup && Replacements.Contains(Setup)) || Replacements.Contains(PreviewMaterial)
 		|| (SelectedPreviewSettings.IsValid() && Replacements.Contains(SelectedPreviewSettings.Get())))
 	{
 		PauseForReload(false);
+		bResumePreviewAfterReload |= bPaletteAffected;
 	}
 }
 
@@ -2987,7 +3050,8 @@ void FVoxelLandGraphToolkit::M4ObjectTransacted(UObject* Object, const FTransact
 		}
 		return;
 	}
-	if (Object == M4PreviewConfig->MaterialSetup.Get())
+	if (Object == M4PreviewConfig->MaterialSetup.Get()
+		|| Object == FVoxelLandGraphToolkitOperations::GetPreviewPalette(M4PreviewConfig->MaterialSetup))
 	{
 		bM4UndoMaterialChange = true;
 		return;
@@ -3042,10 +3106,11 @@ void FVoxelLandGraphToolkit::MaterialSetupPropertyChanged(UObject* Object, FProp
 	{
 		if ((Object == M4PreviewConfig
 				&& Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UVoxelLandWorldConfig, MaterialSetup))
-			|| (Object && Object == M4PreviewConfig->MaterialSetup.Get()))
+			|| (Object
+				&& (Object == M4PreviewConfig->MaterialSetup.Get()
+					|| Object == FVoxelLandGraphToolkitOperations::GetPreviewPalette(M4PreviewConfig->MaterialSetup))))
 		{
-			const UVoxelLandMaterialSetup* Setup = M4PreviewConfig->MaterialSetup.LoadSynchronous();
-			ApplyPreviewMaterial(Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr);
+			RefreshTerrainMaterial(M4PreviewConfig->MaterialSetup, true);
 			return;
 		}
 		const bool bM4FunctionAffected =
@@ -3059,7 +3124,9 @@ void FVoxelLandGraphToolkit::MaterialSetupPropertyChanged(UObject* Object, FProp
 			return;
 		}
 	}
-	if (!bStopped && !GIsTransacting && PreviewSettings && PreviewSettings->MaterialSetup.Get() == Object)
+	if (!bStopped && !GIsTransacting && PreviewSettings && Object
+		&& (Object == PreviewSettings->MaterialSetup.Get()
+			|| Object == FVoxelLandGraphToolkitOperations::GetPreviewPalette(PreviewSettings->MaterialSetup)))
 	{
 		SynchronizePreviewSettings(true);
 	}
@@ -3083,6 +3150,11 @@ void FVoxelLandGraphToolkit::ApplyPreviewMaterial(UMaterialInterface* Material)
 		PreviewMaterial = Material;
 		MaterialDiagnostic.Reset();
 	}
+	if (PreviewWork && !PreviewWork->Appearance && !PreviewWork->bNoise2D)
+	{
+		PendingTerrainMaterial = PreviewMaterial;
+		PendingMaterialDiagnostic = MaterialDiagnostic;
+	}
 	for (UVoxelLandChunkComponent* Component : PreviewComponents)
 	{
 		if (Component)
@@ -3092,14 +3164,106 @@ void FVoxelLandGraphToolkit::ApplyPreviewMaterial(UMaterialInterface* Material)
 	}
 }
 
-void FVoxelLandGraphToolkit::ApplyMaterialSetup()
+void FVoxelLandGraphToolkit::ApplyMaterialSetup(bool bRestartPreview)
 {
-	const UVoxelLandMaterialSetup* Setup = PreviewSettings ? PreviewSettings->MaterialSetup.LoadSynchronous() : nullptr;
-	ApplyPreviewMaterial(Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr);
+	bHasExplicitPreviewMaterial = false;
+	RefreshTerrainMaterial(
+		PreviewSettings ? PreviewSettings->MaterialSetup : TSoftObjectPtr<UVoxelLandMaterialSetup>(), bRestartPreview);
+}
+
+void FVoxelLandGraphToolkit::RefreshTerrainMaterial(
+	const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bRestartPreview)
+{
+	const TSoftObjectPtr<UVoxelLandMaterialSetup> Path = SetupPath;
+	const uint64 PreviewTicket = PreviewRevision;
+	const uint64 GraphRevision = Revision;
+	const TStrongObjectPtr<UVoxelLandMaterialSetup> Setup(Path.LoadSynchronous());
+	const bool bHasPalette = Setup && !Setup->Palette.IsNull();
+	if (!bHasPalette && !PublishedAppearance && !(PreviewWork && PreviewWork->Appearance))
+	{
+		const TSoftObjectPtr<UMaterialInterface> LegacyPath =
+			Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
+		UMaterialInterface* Legacy = LegacyPath.LoadSynchronous();
+		if (!bStopped && !bReloadPaused && PreviewRevision == PreviewTicket && Revision == GraphRevision)
+		{
+			ApplyPreviewMaterial(Legacy);
+		}
+		return;
+	}
+	if (!bRestartPreview || bNoisePreview || bStopped || bPIE || bReloadPaused || PreviewRevision != PreviewTicket
+		|| Revision != GraphRevision)
+	{
+		return;
+	}
+	const FVoxelLandTerrainPresentation Presentation =
+		FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), Path);
+	if (bStopped || bPIE || bReloadPaused || PreviewRevision != PreviewTicket || Revision != GraphRevision)
+	{
+		return;
+	}
+	if (Presentation.bHasConfiguredPalette && !Presentation.Appearance)
+	{
+		CancelPreview();
+		MaterialDiagnostic = Presentation.Diagnostic;
+		Status = TEXT("Terrain palette unavailable. The previous preview is retained.");
+		return;
+	}
+	if (Presentation.Appearance && PublishedAppearance && Presentation.LayoutIdentity == PublishedMaterialLayout
+		&& FVoxelLandGraphToolkitOperations::IsSameMaterialAppearance(*Presentation.Appearance, *PublishedAppearance)
+		&& (!PreviewWork
+			|| (PreviewWork->Appearance && Presentation.LayoutIdentity == PendingMaterialLayout
+				&& FVoxelLandGraphToolkitOperations::IsSameMaterialAppearance(
+					*Presentation.Appearance, *PreviewWork->Appearance))))
+	{
+		ApplyPreviewMaterial(Presentation.Material.Get());
+		SelectedPreviewMaterial.Reset();
+		MaterialDiagnostic = Presentation.Diagnostic;
+		if (PreviewWork)
+		{
+			PendingTerrainMaterial = Presentation.Material.Get();
+			PendingMaterialDiagnostic = Presentation.Diagnostic;
+		}
+		return;
+	}
+	StartPreview();
+}
+
+bool FVoxelLandGraphToolkit::CaptureTerrainMaterial(
+	const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, FVoxelLandPreviewWork& Work)
+{
+	if (!Work.bM4 && bHasExplicitPreviewMaterial)
+	{
+		PendingTerrainMaterial = PreviewMaterial;
+		PendingMaterialDiagnostic = MaterialDiagnostic;
+		return true;
+	}
+	const TSoftObjectPtr<UVoxelLandMaterialSetup> Path = SetupPath;
+	const FVoxelLandTerrainPresentation Presentation =
+		FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), Path);
+	if (bStopped || bPIE || bReloadPaused || Work.PreviewRevision != PreviewRevision || Work.SourceRevision != Revision)
+	{
+		return false;
+	}
+	if (Presentation.bHasConfiguredPalette && !Presentation.Appearance && !PreviewComponents.IsEmpty())
+	{
+		MaterialDiagnostic = Presentation.Diagnostic;
+		Status = TEXT("Terrain palette unavailable. The previous preview is retained.");
+		return false;
+	}
+	Work.Appearance = Presentation.Appearance;
+	PendingTerrainMaterial = Presentation.Material.Get();
+	PendingMaterialLayout = Presentation.LayoutIdentity;
+	PendingMaterialDiagnostic = Presentation.Diagnostic;
+	return true;
 }
 
 void FVoxelLandGraphToolkit::MaterialChanged(const FAssetData& Material)
 {
+	bHasExplicitPreviewMaterial = true;
+	if (PreviewWork && PreviewWork->Appearance)
+	{
+		CancelPreview();
+	}
 	ApplyPreviewMaterial(Cast<UMaterialInterface>(Material.GetAsset()));
 }
 
@@ -3157,7 +3321,7 @@ void FVoxelLandGraphToolkit::SettingsChanged(const FAssetData& Settings)
 	SynchronizePreviewSettings(true);
 	// Picking settings is an explicit material selection even if its setup path
 	// matches the prior one (the user may have selected a direct material).
-	ApplyMaterialSetup();
+	ApplyMaterialSetup(false);
 }
 
 void FVoxelLandGraphToolkit::PreviewPropertiesChanged(const FPropertyChangedEvent&)
@@ -3224,6 +3388,18 @@ void FVoxelLandGraphToolkit::SynchronizePreviewSettings(bool bApplyChanges)
 	{
 		MaterialWriter.U32(uint32(Setup->FormatVersion));
 		MaterialWriter.String(Setup->Material.ToSoftObjectPath().ToString());
+		MaterialWriter.String(Setup->Palette.ToSoftObjectPath().ToString());
+		for (const FVoxelLandMaterialRule& Rule : Setup->Rules)
+		{
+			MaterialWriter.String(Rule.SurfaceId.ToString());
+			MaterialWriter.U8(uint8(Rule.Input));
+			MaterialWriter.String(FString::Printf(TEXT("%.17g/%.17g"), Rule.Threshold, Rule.BlendWidth));
+		}
+		if (const UVoxelLandMaterialPalette* Palette = Setup->Palette.Get())
+		{
+			MaterialWriter.String(Palette->LayoutIdentity.ToString());
+			MaterialWriter.String(Palette->ShadingIdentity.ToString());
+		}
 	}
 	const bool bDensityChanged = bHasPreviewSettingsSnapshot && PreviewDensitySnapshot != Writer.Bytes;
 	const bool bMaterialChanged = bHasPreviewSettingsSnapshot && PreviewMaterialSnapshot != MaterialWriter.Bytes;
@@ -3502,6 +3678,10 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 	Work->M4Peaks = M4PreviewConfig->Peaks.Graph;
 	Work->PreviewRevision = PreviewRevision;
 	Work->SourceRevision = Revision;
+	if (!CaptureTerrainMaterial(M4PreviewConfig->MaterialSetup, *Work))
+	{
+		return;
+	}
 	Work->VoxelSize = float(ExecutionSnapshot->VoxelSizeCm);
 	Work->ChunkCount = (2 * Horizontal + 1) * (2 * Horizontal + 1) * 2 * Vertical;
 #if WITH_DEV_AUTOMATION_TESTS
@@ -3557,7 +3737,7 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 					Work->ChunkCount = 9 * (Work->M4MaxChunkZ - Work->M4MinChunkZ + 1);
 					Work->bSuccess = FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::RunPreparedRange(Generator,
 						1, Work->M4MinChunkZ, Work->M4MaxChunkZ, Cancel, Work->Meshes, Work->Error,
-						VoxelLandM4Inspection::MaxMeshBytes);
+						VoxelLandM4Inspection::MaxMeshBytes, FIntPoint::ZeroValue, Work->Appearance.Get());
 					if (Work->bSuccess && Work->Meshes.IsEmpty())
 					{
 						Work->bSuccess = false;
@@ -3582,7 +3762,7 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 				}
 				Work->bSuccess = FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::RunPreparedRange(Generator,
 					Horizontal, CenterZ - Vertical, CenterZ + Vertical - 1, Cancel, Work->Meshes, Work->Error,
-					MAX_uint64, CenterXY);
+					MAX_uint64, CenterXY, Work->Appearance.Get());
 			}
 		}
 		Work->GenerationMs = (FPlatformTime::Seconds() - Started) * 1000.0;
@@ -3682,6 +3862,10 @@ void FVoxelLandGraphToolkit::StartPreview()
 	Work->SourceRevision = Revision;
 	Work->bNoise2D = bMakeNoise2D;
 	Work->SliceType = SliceType;
+	if (!bMakeNoise2D && !CaptureTerrainMaterial(PreviewSettings->MaterialSetup, *Work))
+	{
+		return;
+	}
 #if WITH_DEV_AUTOMATION_TESTS
 	Work->SeedForTests = Seed;
 #endif
@@ -3710,8 +3894,9 @@ void FVoxelLandGraphToolkit::StartPreview()
 			}
 			else
 			{
-				Work->bSuccess = FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::Run(Snapshot, Payload, Seed,
-					Profile, HorizontalRadius, VerticalRadius, Bounds, Cancel, Work->Meshes, Work->Error
+				Work->bSuccess = FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::Run(
+					Snapshot, Payload, Seed, Profile, HorizontalRadius, VerticalRadius, Bounds, Work->Appearance.Get(),
+					Cancel, Work->Meshes, Work->Error
 #if WITH_DEV_AUTOMATION_TESTS
 					,
 					Barrier
@@ -4010,7 +4195,12 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 	{
 		UVoxelLandChunkComponent* Component =
 			NewObject<UVoxelLandChunkComponent>(GetTransientPackage(), NAME_None, RF_Transient);
-		Component->SetMaterial(0, PreviewMaterial);
+		Component->SetMaterial(0, PendingTerrainMaterial);
+		if (Finished.Appearance)
+		{
+			FVoxelLandTerrainMaterial::SetLogicalOrigin(
+				*Component, VoxelLandMeshCoordinates::RenderOrigin(Entry.Key, Finished.VoxelSize));
+		}
 		if (!Component->SetMesh(Entry.Value))
 		{
 			Status = TEXT("Error; previous preview is stale: a preview mesh was rejected.");
@@ -4021,6 +4211,14 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 	const bool bFrameFirstTerrain = Finished.M4Snapshot && Finished.M4Snapshot->AuthoredHeightOutputId.IsValid()
 								 && PreviewComponents.IsEmpty() && !Staged.IsEmpty();
 	ClearPreview();
+	PreviewMaterial = PendingTerrainMaterial;
+	PublishedAppearance = Finished.Appearance;
+	PublishedMaterialLayout = PendingMaterialLayout;
+	MaterialDiagnostic = PendingMaterialDiagnostic;
+	if (PublishedAppearance)
+	{
+		SelectedPreviewMaterial.Reset();
+	}
 	bShowingScalarPreview = false;
 	const bool bGPURequested =
 		FVoxelLandGraphToolkitOperations::CVarVoxelLandPreviewGPUUploadTiming.GetValueOnGameThread() != 0;
@@ -4222,42 +4420,37 @@ void FVoxelLandGraphToolkit::ProcessCompileWork()
 	}
 }
 
+bool FVoxelLandGraphToolkit::IsPreviewWorkCurrent(const FVoxelLandPreviewWork& Work) const
+{
+	return !bStopped && !bPIE && !bReloadPaused && !bPreviewRequested && Work.PreviewRevision == PreviewRevision
+		&& Work.SourceRevision == Revision;
+}
+
 void FVoxelLandGraphToolkit::ProcessPreviewWork()
 {
 	if (!PreviewWork || !PreviewWork->Done.Load())
 	{
 		return;
 	}
-	const TSharedPtr<FVoxelLandPreviewWork, ESPMode::ThreadSafe> Finished = MoveTemp(PreviewWork);
-	if (!bPIE && Finished->PreviewRevision == PreviewRevision && Finished->SourceRevision == Revision
-		&& !bPreviewRequested)
+	const TSharedPtr<FVoxelLandPreviewWork, ESPMode::ThreadSafe> Finished = PreviewWork;
+	const bool bWasCurrent = IsPreviewWorkCurrent(*Finished);
+	const bool bHeightSourceIsCurrent =
+		!bWasCurrent || !Finished->bSuccess || !Finished->bM4 || IsM4PreviewCurrent(*Finished);
+	if (PreviewWork != Finished)
+	{
+		return;
+	}
+	PreviewWork.Reset();
+	if (bWasCurrent && IsPreviewWorkCurrent(*Finished))
 	{
 		PreviewCancel.Reset();
 		if (!Finished->bSuccess)
 		{
 			Status = FString::Printf(TEXT("Error; previous preview is stale: %s"), *Finished->Error);
 		}
-		else if (Finished->bM4 && !IsM4PreviewCurrent(*Finished))
+		else if (!bHeightSourceIsCurrent)
 		{
 			Status = TEXT("Stale M4 preview: configuration or control graph changed during generation.");
-		}
-		else if (Finished->bM4)
-		{
-			// Material is presentation only. Resolve the current value after generation,
-			// then recheck identity because synchronous loading can re-enter editor code.
-			const UVoxelLandMaterialSetup* Setup = M4PreviewConfig->MaterialSetup.LoadSynchronous();
-			UMaterialInterface* Material =
-				Setup && Setup->FormatVersion == 1 ? Setup->Material.LoadSynchronous() : nullptr;
-			if (bStopped || bPIE || bReloadPaused || Finished->PreviewRevision != PreviewRevision
-				|| Finished->SourceRevision != Revision || !IsM4PreviewCurrent(*Finished))
-			{
-				Status = TEXT("Stale M4 preview: source changed while loading the material.");
-			}
-			else
-			{
-				ApplyPreviewMaterial(Material);
-				PublishPreview(*Finished);
-			}
 		}
 		else if (Finished->bNoise2D)
 		{
@@ -4267,6 +4460,9 @@ void FVoxelLandGraphToolkit::ProcessPreviewWork()
 		{
 			PublishPreview(*Finished);
 		}
+		PendingTerrainMaterial = nullptr;
+		PendingMaterialDiagnostic.Reset();
+		PendingMaterialLayout.Invalidate();
 	}
 	if (bPreviewRequested && !bPIE)
 	{

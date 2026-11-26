@@ -22,7 +22,9 @@ class SVoxelLandPreviewViewport;
 class SGraphActionMenu;
 class UVoxelLandChunkComponent;
 class UMaterialInterface;
+class UVoxelLandMaterialSetup;
 class UTexture2D;
+struct FVoxelLandMaterialAppearance;
 struct FVoxelLandM4StageStats;
 struct FVoxelLandM4WorldSnapshot;
 class UVoxelLandWorldConfig;
@@ -85,6 +87,7 @@ public:
 	void SetSettingsPickerForTests(UVoxelLandWorldConfig* Settings);
 	FString GetMaterialPickerPathForTests() const { return MaterialPickerPath(); }
 	UMaterialInterface* GetEffectiveMaterialForTests() const { return PreviewMaterial; }
+	bool HasPublishedAppearanceForTests() const { return PublishedAppearance.IsValid(); }
 	FString GetSettingsPickerPathForTests() const { return SettingsPickerPath(); }
 	void SetDiagnosticForTests(const FVoxelLandGraphDiagnostic& InDiagnostic) { ErrorDiagnostic = InDiagnostic; }
 	const FVoxelLandGraphDiagnostic& GetDiagnosticForTests() const { return ErrorDiagnostic; }
@@ -223,7 +226,9 @@ private:
 	FString MaterialPickerPath() const;
 	FString SettingsPickerPath() const;
 	void ApplyPreviewMaterial(UMaterialInterface* Material);
-	void ApplyMaterialSetup();
+	void ApplyMaterialSetup(bool bRestartPreview = true);
+	void RefreshTerrainMaterial(const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bRestartPreview);
+	bool CaptureTerrainMaterial(const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, FVoxelLandPreviewWork& Work);
 	void SettingsChanged(const FAssetData& Settings);
 	void PreviewPropertiesChanged(const FPropertyChangedEvent& Event);
 	void SynchronizePreviewSettings(bool bApplyChanges);
@@ -239,6 +244,7 @@ private:
 	void PollFunctionPalette();
 	void ProcessCompileWork();
 	void ProcessPreviewWork();
+	bool IsPreviewWorkCurrent(const FVoxelLandPreviewWork& Work) const;
 	void PollPreviewFence();
 	bool PublishPreview(const FVoxelLandPreviewWork& Finished);
 	void UpdateTerrainPreviewDetails(const FVoxelLandPreviewWork& Finished);
@@ -257,6 +263,12 @@ private:
 	TSharedPtr<SVoxelLandPreviewViewport> PreviewViewport;
 	TArray<TObjectPtr<UVoxelLandChunkComponent>> PreviewComponents;
 	TObjectPtr<UMaterialInterface> PreviewMaterial = nullptr;
+	TObjectPtr<UMaterialInterface> PendingTerrainMaterial = nullptr;
+	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> PublishedAppearance;
+	FGuid PendingMaterialLayout;
+	FGuid PublishedMaterialLayout;
+	FString PendingMaterialDiagnostic;
+	bool bHasExplicitPreviewMaterial = false;
 	TObjectPtr<UTexture2D> NoiseTexture = nullptr;
 	FSlateBrush NoiseBrush;
 	bool bShowingScalarPreview = false;

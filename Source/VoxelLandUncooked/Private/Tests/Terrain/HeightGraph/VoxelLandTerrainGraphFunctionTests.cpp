@@ -2,7 +2,7 @@
 
 #include "Async/Async.h"
 #include "Data/Assets/Graphs/VoxelLandGraphFunction.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinCatalog.h"
 #include "Data/Graph/Schema/VoxelLandGraphFunctionId.h"
@@ -51,7 +51,7 @@ FVoxelLandGraphNodeRecord M4FunctionCall(UVoxelLandGraphFunction& Function)
 	return Node;
 }
 
-bool M4FunctionBuildFixture(UVoxelLandM4WorldConfig& Config, UVoxelLandGraphFunction*& Inner,
+bool M4FunctionBuildFixture(UVoxelLandWorldConfig& Config, UVoxelLandGraphFunction*& Inner,
 	UVoxelLandGraphFunction*& Outer, UVoxelLandTerrainGraph*& Root)
 {
 	Inner = NewObject<UVoxelLandGraphFunction>(&Config);
@@ -116,7 +116,7 @@ bool M4FunctionCompile2D(const FVoxelLandGraphSnapshot& Source, FString& Error)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4FunctionCaptureTest, "VoxelLand.M4.Function.Capture", M4FunctionFlags)
 bool FVoxelLandM4FunctionCaptureTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandGraphFunction* Inner = nullptr;
 	UVoxelLandGraphFunction* Outer = nullptr;

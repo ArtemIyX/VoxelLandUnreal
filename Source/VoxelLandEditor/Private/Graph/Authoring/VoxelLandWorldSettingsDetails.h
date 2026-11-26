@@ -1,7 +1,7 @@
 #pragma once
 #include "IDetailCustomization.h"
 
-class UVoxelLandWorldSettings;
+class UVoxelLandWorldConfig;
 class IPropertyHandle;
 
 class FVoxelLandWorldSettingsDetails : public IDetailCustomization
@@ -14,16 +14,16 @@ public:
 
 #if WITH_DEV_AUTOMATION_TESTS
 	static void SetEnabledForTests(
-		UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool bEnabled);
+		UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool bEnabled);
 	static void SetFloatForTests(
-		UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, float Value);
+		UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, float Value);
 	static void SetIntForTests(
-		UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, int32 Value);
+		UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, int32 Value);
 	static void SetBoolForTests(
-		UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool Value);
+		UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool Value);
 	static int32 GetRefreshNotificationsForTests();
-	static bool NeedsRawOverridesForTests(UVoxelLandWorldSettings* Settings);
-	static FText DiagnosticForTests(UVoxelLandWorldSettings* Settings, FGuid Id);
+	static bool NeedsRawOverridesForTests(UVoxelLandWorldConfig* Settings);
+	static FText DiagnosticForTests(UVoxelLandWorldConfig* Settings, FGuid Id);
 #endif
 
 private:

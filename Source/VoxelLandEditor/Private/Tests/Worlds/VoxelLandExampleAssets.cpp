@@ -4,7 +4,7 @@
 #include "Async/Async.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
-#include "Data/Assets/Worlds/VoxelLandWorldSettings.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "EdGraph/EdGraph.h"
 #include "Generation/Field/VoxelLandGenerator.h"
@@ -25,7 +25,7 @@
 namespace
 {
 constexpr TCHAR GraphPath[] = TEXT("/VoxelLand/Examples/DA_M3_Hills");
-constexpr TCHAR SettingsPath[] = TEXT("/VoxelLand/Examples/DA_M3_WorldSettings");
+constexpr TCHAR SettingsPath[] = TEXT("/VoxelLand/Examples/DA_DirectDensityWorld");
 constexpr TCHAR MaterialPath[] = TEXT("/VoxelLand/Examples/DA_M3_MaterialSetup");
 const FGuid AmplitudeId(0x4d334558, 1, 0, 1);
 const FGuid OctavesId(0x4d334558, 1, 0, 2);
@@ -325,18 +325,21 @@ bool FVoxelLandCreateExampleAssets::RunTest(const FString& Parameters)
 	UPackage* MaterialPackage = CreatePackage(MaterialPath);
 	const EObjectFlags Flags = RF_Public | RF_Standalone | RF_Transactional;
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(GraphPackage, TEXT("DA_M3_Hills"), Flags);
-	UVoxelLandWorldSettings* Settings =
-		NewObject<UVoxelLandWorldSettings>(SettingsPackage, TEXT("DA_M3_WorldSettings"), Flags);
+	UVoxelLandWorldConfig* Settings =
+		NewObject<UVoxelLandWorldConfig>(SettingsPackage, TEXT("DA_DirectDensityWorld"), Flags);
 	UVoxelLandMaterialSetup* Material =
 		NewObject<UVoxelLandMaterialSetup>(MaterialPackage, TEXT("DA_M3_MaterialSetup"), Flags);
 	FExampleBuilder(*Graph).Build();
+	Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 	Settings->Graph = Graph;
 	Settings->Seed = 1234;
-	Settings->VoxelSizeCm = 100.0f;
+	Settings->DirectVoxelSizeCm = 100.0f;
+	Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
+	Settings->WorldExtent = EVoxelLandWorldExtent::Infinite;
 	Settings->MaterialSetup = Material;
 	Material->Material = TSoftObjectPtr<UMaterialInterface>(
 		FSoftObjectPath(TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial")));
-	if (!Settings->ValidateSettings(Error) || !CompileExample(*Graph, Error))
+	if (!Settings->ValidateDirectDensitySettings(Error) || !CompileExample(*Graph, Error))
 	{
 		AddError(Error);
 		return false;
@@ -369,8 +372,8 @@ bool FVoxelLandVerifyExampleAssets::RunTest(const FString& Parameters)
 	}
 	UVoxelLandTerrainGraph* Graph =
 		LoadObject<UVoxelLandTerrainGraph>(nullptr, TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"));
-	UVoxelLandWorldSettings* Settings = LoadObject<UVoxelLandWorldSettings>(
-		nullptr, TEXT("/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings"));
+	UVoxelLandWorldConfig* Settings = LoadObject<UVoxelLandWorldConfig>(
+		nullptr, TEXT("/VoxelLand/Examples/DA_DirectDensityWorld.DA_DirectDensityWorld"));
 	UVoxelLandMaterialSetup* Material = LoadObject<UVoxelLandMaterialSetup>(
 		nullptr, TEXT("/VoxelLand/Examples/DA_M3_MaterialSetup.DA_M3_MaterialSetup"));
 	if (!Graph || !Settings || !Material)
@@ -380,7 +383,7 @@ bool FVoxelLandVerifyExampleAssets::RunTest(const FString& Parameters)
 	}
 	FString Error;
 	if (Settings->Graph != Graph || Settings->MaterialSetup.LoadSynchronous() != Material
-		|| !Settings->ValidateSettings(Error))
+		|| !Settings->ValidateDirectDensitySettings(Error))
 	{
 		AddError(FString::Printf(TEXT("Example settings references or values are invalid: %s"), *Error));
 		return false;

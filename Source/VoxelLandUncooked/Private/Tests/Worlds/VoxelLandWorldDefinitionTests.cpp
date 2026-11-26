@@ -14,7 +14,7 @@
 
 namespace
 {
-void WorldDefinitionTestControls(UVoxelLandWorldDefinition& World)
+void WorldDefinitionTestControls(UVoxelLandWorldSource& World)
 {
 	FVoxelLandM4ControlConfig* Controls[] = {&World.Common.Continental, &World.Common.Mountain, &World.Common.Peaks};
 	for (FVoxelLandM4ControlConfig* Control : Controls)
@@ -32,8 +32,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandWorldDefinitionCaptureTest, "VoxelLan
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandWorldDefinitionCaptureTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandFiniteWorld* Finite = NewObject<UVoxelLandFiniteWorld>();
-	UVoxelLandInfiniteWorld* Infinite = NewObject<UVoxelLandInfiniteWorld>();
+	UVoxelLandFiniteWorldSource* Finite = NewObject<UVoxelLandFiniteWorldSource>();
+	UVoxelLandInfiniteWorldSource* Infinite = NewObject<UVoxelLandInfiniteWorldSource>();
 	WorldDefinitionTestControls(*Finite);
 	WorldDefinitionTestControls(*Infinite);
 	Infinite->Common.Continental.Graph = Finite->Common.Continental.Graph;

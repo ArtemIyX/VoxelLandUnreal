@@ -384,7 +384,7 @@ bool AVoxelLandWorld::ConfigureClipmap(FVoxelLandWorldState& Candidate)
 
 bool AVoxelLandWorld::QueueStartupChunk(FVoxelLandWorldState& Candidate, const FVoxelLandChunkKey& Startup)
 {
-	if (Startup.LOD != 0
+	if (Startup.LOD != 0 || !Candidate.Generator->IncludesChunk(Startup)
 		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
 			Startup.Coordinate, Candidate.Generator->GetProfile().VoxelSizeCm, Candidate.Generator->IsM4Unlimited()))
 	{
@@ -585,7 +585,7 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 bool AVoxelLandWorld::RequestChunk(const FVoxelLandChunkKey& Key)
 {
 	check(IsInGameThread());
-	if (!State || Key.LOD != 0
+	if (!State || Key.LOD != 0 || !State->Generator->IncludesChunk(Key)
 		|| !VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
 			Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited())
 		|| (State->Records.Num() >= FMath::Clamp(MaxResidentChunks, 1, FWorker::MaxRecords)
@@ -891,6 +891,10 @@ void AVoxelLandWorld::UpdateDemand()
 			{
 				FVoxelLandChunkKey Key;
 				Key.Coordinate = NewChunk + FIntVector(X, Y, Z);
+				if (!State->Generator->IncludesChunk(Key))
+				{
+					continue;
+				}
 				if (VoxelLandMeshCoordinates::IsKeyInPrecisionRange(
 						Key.Coordinate, State->Generator->GetProfile().VoxelSizeCm, State->Generator->IsM4Unlimited()))
 				{

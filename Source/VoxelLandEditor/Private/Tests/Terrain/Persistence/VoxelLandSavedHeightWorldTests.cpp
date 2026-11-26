@@ -2,7 +2,7 @@
 #include "../../../VoxelLandEditorBake.h"
 #include "Async/Async.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Terrain/Persistence/VoxelLandSavedTerrainWorldRecord.h"
 #include "Generation/Field/VoxelLandGenerator.h"
@@ -72,7 +72,7 @@ bool FVoxelLandM4HeightSavedTest::RunTest(const FString& Parameters)
 	}
 	Graph->HeightOutputId = Height.Id;
 	Graph->Nodes.Add(Height);
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
 	FVoxelLandM4CurveAuthoringKey First, Last;
 	Last.InputQ16 = 65535;
@@ -92,10 +92,11 @@ bool FVoxelLandM4HeightSavedTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	bool bSaved = false, bRestored = false, bKeyEqual = false, bTamper = false, bAtomic = false;
-	bool bUnknownVersion = false;
+	bool bUnknownVersion = false, bRejectedLegacy = false;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4SavedWorld Saved;
-		bSaved = VoxelLandM4SavedWorld::Capture(Snapshot, Saved, Error) && Saved.Identity.FormatVersion == 1;
+		bSaved = VoxelLandM4WorldIdentity::CaptureVersion(Snapshot, 1, Saved.Identity, Error);
+		Saved.Snapshot = Snapshot;
 		if (!bSaved)
 		{
 			return;
@@ -109,8 +110,10 @@ bool FVoxelLandM4HeightSavedTest::RunTest(const FString& Parameters)
 		FVoxelLandM4SavedWorld Loaded;
 		FVoxelLandM4SavedWorld::StaticStruct()->SerializeItem(Reader, &Loaded, nullptr);
 		FVoxelLandM4WorldSnapshot Restored;
-		bRestored = !Writer.IsError() && !Reader.IsError() && VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error)
-				 && Restored.HeightStage.Version == 1
+		bRejectedLegacy =
+			!VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error) && Error.Contains(TEXT("regenerating"));
+		Restored = Loaded.Snapshot;
+		bRestored = !Writer.IsError() && !Reader.IsError() && Restored.HeightStage.Version == 1
 				 && Restored.HeightStage.OutputNodeId == Snapshot.HeightStage.OutputNodeId
 				 && Restored.HeightStage.MountainInputId == Snapshot.HeightStage.MountainInputId;
 		if (!bRestored)
@@ -122,13 +125,14 @@ bool FVoxelLandM4HeightSavedTest::RunTest(const FString& Parameters)
 				 && OriginalKey == RestoredKey;
 		Loaded.Snapshot.HeightStage.MountainInputId = Loaded.Snapshot.HeightStage.ContinentalInputId;
 		Restored.Seed = 4321;
-		bTamper = !VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error);
+		bTamper = !VoxelLandM4WorldIdentity::Matches(Loaded.Identity, Loaded.Snapshot, Error);
 		bAtomic = Restored.Seed == 4321;
 		FVoxelLandM4IdentityRecord Unsupported;
 		bUnknownVersion = !VoxelLandM4WorldIdentity::CaptureVersion(Snapshot, 2, Unsupported, Error);
 	}).Get();
-	TestTrue(FString::Printf(TEXT("graph-height identity saves in current format: %s"), *Error), bSaved);
-	TestTrue(TEXT("graph-height manifest survives serialized restore"), bRestored);
+	TestTrue(FString::Printf(TEXT("legacy graph-height identity remains inspectable: %s"), *Error), bSaved);
+	TestTrue(TEXT("legacy graph-height manifest survives property serialization"), bRestored);
+	TestTrue(TEXT("legacy graph-height manifest requires reauthoring before regeneration"), bRejectedLegacy);
 	TestTrue(TEXT("restored height graph retains prepass key"), bKeyEqual);
 	TestTrue(TEXT("corrupt graph-height manifest rejected"), bTamper);
 	TestTrue(TEXT("failed manifest restore leaves output intact"), bAtomic);

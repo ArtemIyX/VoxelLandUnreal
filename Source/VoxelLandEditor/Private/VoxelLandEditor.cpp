@@ -1,18 +1,17 @@
 #include "VoxelLandEditor.h"
 #include "VoxelLandEditorBake.h"
-#include "Worlds/Assets/VoxelLandFiniteWorldAssetActions.h"
-#include "Worlds/Assets/VoxelLandInfiniteWorldAssetActions.h"
-#include "Worlds/Validation/VoxelLandWorldEditorValidation.h"
+#include "Worlds/Assets/VoxelLandAssetFactories.h"
+#include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Operators/VoxelLandOperator.h"
 #include "AssetToolsModule.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "AssetTypeActions_Base.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Assets/Graphs/VoxelLandGraphFunction.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
+#include "Data/Caves/Field/VoxelLandCaveProtectionAsset.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
-#include "Data/Assets/Worlds/VoxelLandWorldDefinition.h"
-#include "Data/World/Configuration/VoxelLandWorldSourceSnapshot.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Graph/Toolkit/VoxelLandGraphToolkit.h"
 #include "Graph/Schema/VoxelLandGraphPinFactory.h"
@@ -25,6 +24,7 @@
 #include "Generation/Terrain/Controls/VoxelLandControlGrid.h"
 #include "Generation/Terrain/ChunkLocal/VoxelLandFixedLattice.h"
 #include "World/Terrain/Controls/VoxelLandOverrideValidation.h"
+#include "World/Terrain/Worlds/VoxelLandTerrainPreparation.h"
 #include "Generation/Terrain/Curves/VoxelLandCurveBake.h"
 #include "Generation/Caves/Infrastructure/VoxelLandCaveBudget.h"
 #include "Async/Async.h"
@@ -115,12 +115,23 @@ bool CompileNamedGraph(UVoxelLandM4ControlGraph& Graph, FString& Error)
 	return true;
 }
 
-bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
+bool BakeWorldConfig(UVoxelLandWorldConfig& Config, FString& Error)
 {
 	if (!IsInGameThread())
 	{
 		Error = TEXT("M4 configuration baking requires the game thread");
 		return false;
+	}
+	if (Config.TerrainOutputId.IsValid())
+	{
+		FVoxelLandM4WorldSnapshot Snapshot;
+		if (!Config.CaptureSnapshot(Snapshot, Error))
+		{
+			return false;
+		}
+		return Async(EAsyncExecution::ThreadPool, [&Snapshot, &Error] {
+			return VoxelLandM4Preparation::ValidateAuthoredHeight(Snapshot, Error);
+		}).Get();
 	}
 	TSet<UVoxelLandM4ControlGraph*> NamedGraphs;
 	const FVoxelLandM4ControlConfig* Controls[] = {&Config.Continental, &Config.Mountain, &Config.Peaks};
@@ -222,13 +233,32 @@ bool BakeWorldConfig(UVoxelLandM4WorldConfig& Config, FString& Error)
 class FVoxelLandEditorInternals final
 {
 public:
+	class FVoxelLandDataAssetActions final : public FAssetTypeActions_Base
+	{
+	public:
+		explicit FVoxelLandDataAssetActions(const UFactory& Factory)
+			: DisplayName(Factory.GetDisplayName())
+			, AssetClass(Factory.GetSupportedClass())
+		{
+		}
+
+		FText GetName() const override { return DisplayName; }
+		FColor GetTypeColor() const override { return FColor(67, 158, 92); }
+		UClass* GetSupportedClass() const override { return AssetClass; }
+		uint32 GetCategories() override { return GetVoxelLandAssetMenuCategory(); }
+
+	private:
+		const FText DisplayName;
+		UClass* const AssetClass;
+	};
+
 	class FVoxelLandGraphAssetActions : public FAssetTypeActions_Base
 	{
 	public:
-		virtual FText GetName() const override { return LOCTEXT("GraphAsset", "VoxelLand Terrain Graph"); }
+		virtual FText GetName() const override { return LOCTEXT("GraphAsset", "Terrain Graph"); }
 		virtual FColor GetTypeColor() const override { return FColor(67, 158, 92); }
 		virtual UClass* GetSupportedClass() const override { return UVoxelLandTerrainGraph::StaticClass(); }
-		virtual uint32 GetCategories() override { return EAssetTypeCategories::Misc; }
+		virtual uint32 GetCategories() override { return GetVoxelLandAssetMenuCategory(); }
 
 		virtual void OpenAssetEditor(const TArray<UObject*>& Objects, TSharedPtr<IToolkitHost> Host) override
 		{
@@ -262,14 +292,14 @@ public:
 	class FVoxelLandM4ControlGraphAssetActions : public FVoxelLandGraphAssetActions
 	{
 	public:
-		virtual FText GetName() const override { return LOCTEXT("M4ControlGraphAsset", "VoxelLand M4 Control Graph"); }
+		virtual FText GetName() const override { return LOCTEXT("M4ControlGraphAsset", "Terrain Graph (Legacy)"); }
 		virtual UClass* GetSupportedClass() const override { return UVoxelLandM4ControlGraph::StaticClass(); }
 	};
 
 	class FVoxelLandFunctionAssetActions : public FVoxelLandGraphAssetActions
 	{
 	public:
-		virtual FText GetName() const override { return LOCTEXT("FunctionAsset", "VoxelLand Graph Function"); }
+		virtual FText GetName() const override { return LOCTEXT("FunctionAsset", "Graph Function"); }
 		virtual UClass* GetSupportedClass() const override { return UVoxelLandGraphFunction::StaticClass(); }
 		virtual FColor GetTypeColor() const override { return FColor(130, 85, 173); }
 	};
@@ -290,15 +320,12 @@ void FVoxelLandEditorModule::StartupModule()
 				new FSlateVectorImageBrush(Path, FVector2D(64.0f, 64.0f)));
 		};
 		AddIcon(TEXT("VoxelLandTerrainGraph"), TEXT("TerrainGraph"));
-		AddIcon(TEXT("VoxelLandWorldSettings"), TEXT("WorldSettings"));
-		AddIcon(TEXT("VoxelLandM4WorldConfig"), TEXT("WorldSettings"));
-		AddIcon(TEXT("VoxelLandFiniteWorld"), TEXT("WorldSettings"));
-		AddIcon(TEXT("VoxelLandInfiniteWorld"), TEXT("WorldSettings"));
+		AddIcon(TEXT("VoxelLandWorldConfig"), TEXT("WorldSettings"));
 		AddIcon(TEXT("VoxelLandMaterialSetup"), TEXT("MaterialSetup"));
 		FSlateStyleRegistry::RegisterSlateStyle(*Style);
 	}
 	FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"))
-		.RegisterCustomClassLayout(TEXT("VoxelLandWorldSettings"),
+		.RegisterCustomClassLayout(TEXT("VoxelLandWorldConfig"),
 			FOnGetDetailCustomizationInstance::CreateStatic(&FVoxelLandWorldSettingsDetails::MakeInstance));
 	PinFactory = MakeShared<FVoxelLandGraphPinFactory>();
 	FEdGraphUtilities::RegisterVisualPinFactory(PinFactory);
@@ -337,16 +364,22 @@ void FVoxelLandEditorModule::StartupModule()
 		UE_LOG(LogTemp, Warning, TEXT("VoxelLand filter presentation unavailable: %s"), *Error);
 	}
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+	AssetTools.RegisterAdvancedAssetCategory(TEXT("VoxelLand"), LOCTEXT("AssetCategory", "VoxelLand"));
 	GraphAssetActions = MakeShared<FVoxelLandEditorInternals::FVoxelLandGraphAssetActions>();
 	AssetTools.RegisterAssetTypeActions(GraphAssetActions.ToSharedRef());
 	FunctionAssetActions = MakeShared<FVoxelLandEditorInternals::FVoxelLandFunctionAssetActions>();
 	AssetTools.RegisterAssetTypeActions(FunctionAssetActions.ToSharedRef());
 	M4ControlGraphAssetActions = MakeShared<FVoxelLandEditorInternals::FVoxelLandM4ControlGraphAssetActions>();
 	AssetTools.RegisterAssetTypeActions(M4ControlGraphAssetActions.ToSharedRef());
-	FiniteWorldAssetActions = MakeShared<FVoxelLandFiniteWorldAssetActions>();
-	AssetTools.RegisterAssetTypeActions(FiniteWorldAssetActions.ToSharedRef());
-	InfiniteWorldAssetActions = MakeShared<FVoxelLandInfiniteWorldAssetActions>();
-	AssetTools.RegisterAssetTypeActions(InfiniteWorldAssetActions.ToSharedRef());
+	const UFactory* DataFactories[] = {GetDefault<UVoxelLandWorldConfigFactory>(),
+		GetDefault<UVoxelLandMaterialSetupFactory>(), GetDefault<UVoxelLandCaveProtectionFactory>()};
+	for (const UFactory* Factory : DataFactories)
+	{
+		const TSharedRef<IAssetTypeActions> Actions =
+			MakeShared<FVoxelLandEditorInternals::FVoxelLandDataAssetActions>(*Factory);
+		AssetTools.RegisterAssetTypeActions(Actions);
+		DataAssetActions.Add(Actions);
+	}
 	PreSaveHandle = FCoreUObjectDelegates::OnObjectPreSave.AddRaw(this, &FVoxelLandEditorModule::OnObjectPreSave);
 	FunctionPropertyHandle =
 		FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FVoxelLandEditorModule::OnFunctionPropertyChanged);
@@ -362,20 +395,6 @@ void FVoxelLandEditorModule::ShutdownModule()
 	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(FunctionPropertyHandle);
 	FCoreUObjectDelegates::OnObjectTransacted.Remove(FunctionTransactionHandle);
 	FCoreUObjectDelegates::OnObjectsReplaced.Remove(FunctionReplacedHandle);
-	if (FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
-	{
-		IAssetTools& AssetTools = FModuleManager::GetModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
-		if (FiniteWorldAssetActions.IsValid())
-		{
-			AssetTools.UnregisterAssetTypeActions(FiniteWorldAssetActions.ToSharedRef());
-		}
-		if (InfiniteWorldAssetActions.IsValid())
-		{
-			AssetTools.UnregisterAssetTypeActions(InfiniteWorldAssetActions.ToSharedRef());
-		}
-	}
-	FiniteWorldAssetActions.Reset();
-	InfiniteWorldAssetActions.Reset();
 	if (GraphAssetActions.IsValid())
 	{
 		StaticCastSharedPtr<FVoxelLandEditorInternals::FVoxelLandGraphAssetActions>(GraphAssetActions)
@@ -409,13 +428,21 @@ void FVoxelLandEditorModule::ShutdownModule()
 			.Get()
 			.UnregisterAssetTypeActions(M4ControlGraphAssetActions.ToSharedRef());
 	}
+	if (FAssetToolsModule* AssetToolsModule = FModuleManager::GetModulePtr<FAssetToolsModule>(TEXT("AssetTools")))
+	{
+		for (const TSharedRef<IAssetTypeActions>& Actions : DataAssetActions)
+		{
+			AssetToolsModule->Get().UnregisterAssetTypeActions(Actions);
+		}
+	}
+	DataAssetActions.Reset();
 	M4ControlGraphAssetActions.Reset();
 	FunctionAssetActions.Reset();
 	GraphAssetActions.Reset();
 	if (FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
 	{
 		FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"))
-			.UnregisterCustomClassLayout(TEXT("VoxelLandWorldSettings"));
+			.UnregisterCustomClassLayout(TEXT("VoxelLandWorldConfig"));
 	}
 	FEdGraphUtilities::UnregisterVisualPinFactory(PinFactory);
 	PinFactory.Reset();
@@ -469,52 +496,9 @@ void FVoxelLandEditorModule::OnFunctionObjectsReplaced(const TMap<UObject*, UObj
 
 void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveContext Context)
 {
-	if (UVoxelLandWorldDefinition* World = Cast<UVoxelLandWorldDefinition>(Object))
+	if (UVoxelLandWorldConfig* Config = Cast<UVoxelLandWorldConfig>(Object))
 	{
-		TStrongObjectPtr<UVoxelLandWorldDefinition> WorldGuard(World);
-		if (!Context.IsFirstConcurrentSave())
-		{
-			return;
-		}
-		FString Error;
-		const auto Source = World->CaptureSource(Error);
-		bool bValid = false;
-		if (Source && VoxelLandWorldEditorValidation::CanValidateSynchronously(Source->GetCommon(), Error))
-		{
-			bValid = Async(EAsyncExecution::ThreadPool, [Source, &Error]() {
-				TSharedPtr<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget;
-				if (!FVoxelLandM5Budget::TryCreate(64 * 1024 * 1024, 1000000000, Budget))
-				{
-					Error = TEXT("Unable to allocate the world-validation budget.");
-					return false;
-				}
-				// The save path waits on this worker, so it must not run any provider
-				// callbacks that could wait on the game thread. The preflight accepts
-				// only built-ins, and an empty frozen registry prevents accidental
-				// provider dispatch even if a builtin ID was registered externally.
-				const FVoxelLandOperatorRegistrySnapshot Providers;
-				return VoxelLandWorldEditorValidation::ValidateSnapshot(
-					Source->GetCommon(), Source->GetWorldKind(), Providers, Budget.ToSharedRef(), [] { return false; },
-					Error);
-			}).Get();
-		}
-		if (!bValid)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("VoxelLand world %s validation incomplete or invalid: %s"),
-				*World->GetPathName(), *Error);
-		}
-		if (Context.IsCooking())
-		{
-			// Serialize rejects the actual cooker write even if the graph check
-			// succeeds: cooked world reconstruction is not implemented yet.
-			UE_LOG(LogTemp, Error, TEXT("VoxelLand world %s cannot cook. %s"), *World->GetPathName(),
-				World->GetPreparationBlocker());
-		}
-		return;
-	}
-	if (UVoxelLandM4WorldConfig* Config = Cast<UVoxelLandM4WorldConfig>(Object))
-	{
-		if (!Context.IsFirstConcurrentSave())
+		if (Config->IsDirectDensity() || !Context.IsFirstConcurrentSave())
 		{
 			return;
 		}
@@ -523,7 +507,13 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 			Config->SetCookPreparationResult(false);
 		}
 		FString Error;
-		const bool bBaked = VoxelLandM4Editor::BakeWorldConfig(*Config, Error);
+		const bool bLegacyHeight = Context.IsCooking() && !Config->TerrainOutputId.IsValid();
+		if (bLegacyHeight)
+		{
+			Error = TEXT(
+				"Bind a named Float Height output before cooking. Legacy three-channel terrain must be reauthored.");
+		}
+		const bool bBaked = !bLegacyHeight && VoxelLandM4Editor::BakeWorldConfig(*Config, Error);
 		if (Context.IsCooking())
 		{
 			Config->SetCookPreparationResult(bBaked);
@@ -532,13 +522,13 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 		{
 			if (Context.IsCooking())
 			{
-				UE_LOG(LogTemp, Error, TEXT("VoxelLand M4 configuration %s cannot cook: %s"), *Config->GetPathName(),
-					*Error);
+				UE_LOG(
+					LogTemp, Error, TEXT("VoxelLand World Config %s cannot cook: %s"), *Config->GetPathName(), *Error);
 			}
 			else
 			{
-				UE_LOG(LogTemp, Warning, TEXT("VoxelLand M4 configuration %s is not baked: %s"), *Config->GetPathName(),
-					*Error);
+				UE_LOG(LogTemp, Warning, TEXT("VoxelLand World Config %s failed validation: %s"),
+					*Config->GetPathName(), *Error);
 			}
 		}
 		return;
@@ -575,7 +565,8 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 		return;
 	}
 	UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Object);
-	if (!Graph || Graph->IsA<UVoxelLandGraphFunction>() || !Context.IsFirstConcurrentSave())
+	if (!Graph || Graph->IsA<UVoxelLandGraphFunction>() || FVoxelLandGraphOutputs::HasNamedOutputs(Graph->Nodes)
+		|| !Context.IsFirstConcurrentSave())
 	{
 		return;
 	}

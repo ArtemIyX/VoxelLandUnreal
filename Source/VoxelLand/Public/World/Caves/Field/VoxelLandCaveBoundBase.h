@@ -7,8 +7,8 @@
 #include "HAL/CriticalSection.h"
 #include "Templates/Function.h"
 
-class UVoxelLandM4WorldConfig;
-class UVoxelLandFiniteWorld;
+class UVoxelLandWorldConfig;
+class UVoxelLandFiniteWorldSource;
 class FVoxelLandGenerator;
 class FVoxelLandM4GridLease;
 class FVoxelLandM5Budget;
@@ -55,12 +55,12 @@ public:
 	// provider/allocator overhead. The M5 reservation covers a logical
 	// metadata allowance, not the M4 prepass, worker scratch or M4 work.
 	// Failure leaves OutCapture unchanged. The returned capture contains no UObject.
-	static FVoxelLandM5Diagnostic Capture(UVoxelLandM4WorldConfig& Config,
+	static FVoxelLandM5Diagnostic Capture(UVoxelLandWorldConfig& Config,
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture);
 	// Typed finite equivalent. The captured bounds are authored upstream bounds,
 	// not proof of a usable footprint; the caller checks freshness and lifecycle.
-	static FVoxelLandM5Diagnostic Capture(UVoxelLandFiniteWorld& Definition,
+	static FVoxelLandM5Diagnostic Capture(UVoxelLandFiniteWorldSource& Definition,
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget,
 		TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture);
 	const FVoxelLandM5WorldSnapshot& GetSnapshot() const { return Snapshot; }
@@ -75,7 +75,7 @@ public:
 	// Charges this capture's shared work budget before scanning. A changed dependency returns
 	// success with false; invalid input or exhausted budget leaves output alone.
 	FVoxelLandM5Diagnostic CheckFiniteProtectionCurrent(
-		const UVoxelLandFiniteWorld& Definition, bool& bOutCurrent) const;
+		const UVoxelLandFiniteWorldSource& Definition, bool& bOutCurrent) const;
 
 private:
 	friend class FVoxelLandM5BoundBase;
@@ -122,7 +122,7 @@ public:
 
 	// Game-thread typed capture, with actual process and validation admission
 	// acquired before snapshot capture. Geometry is explicitly identity-bound.
-	static FVoxelLandM5Diagnostic CaptureFiniteNative(UVoxelLandFiniteWorld& Asset,
+	static FVoxelLandM5Diagnostic CaptureFiniteNative(UVoxelLandFiniteWorldSource& Asset,
 		TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, uint32 GeometryVersion,
 		TSharedPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe>& OutSource);
 

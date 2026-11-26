@@ -3,8 +3,7 @@
 #include "../Stamps/VoxelLandTerrainSphereTestFixture.h"
 
 #include "Async/Async.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
-#include "Data/TerrainOverlay/Configuration/VoxelLandTerrainOverlayConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Terrain/Persistence/VoxelLandTerrainIdentityRecord.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
@@ -20,7 +19,7 @@ class FVoxelLandM6RuntimeCommand final : public IAutomationLatentCommand
 {
 public:
 	FVoxelLandM6RuntimeCommand(FAutomationTestBase& InTest, UWorld& InWorld, AVoxelLandWorld& InActor,
-		UVoxelLandM6WorldConfig& InConfig, TArray<uint8>&& InExpectedBaseline)
+		UVoxelLandWorldConfig& InConfig, TArray<uint8>&& InExpectedBaseline)
 		: Test(InTest)
 		, World(InWorld)
 		, Actor(InActor)
@@ -32,7 +31,7 @@ public:
 
 	bool Update() override;
 	void Cleanup();
-	static bool PrepareBaselineIdentity(const UVoxelLandM4WorldConfig& Config, TArray<uint8>& Bytes, FString& Error);
+	static bool PrepareBaselineIdentity(const UVoxelLandWorldConfig& Config, TArray<uint8>& Bytes, FString& Error);
 
 private:
 	using FCheck = bool (FVoxelLandM6RuntimeCommand::*)();
@@ -51,7 +50,7 @@ private:
 	FAutomationTestBase& Test;
 	UWorld& World;
 	AVoxelLandWorld& Actor;
-	UVoxelLandM6WorldConfig& Config;
+	UVoxelLandWorldConfig& Config;
 	TArray<uint8> ExpectedBaseline;
 	TArray<uint8> PublishedIdentity;
 	TArray<uint8> FiniteIdentity;
@@ -61,7 +60,7 @@ private:
 };
 
 bool FVoxelLandM6RuntimeCommand::PrepareBaselineIdentity(
-	const UVoxelLandM4WorldConfig& Config, TArray<uint8>& Bytes, FString& Error)
+	const UVoxelLandWorldConfig& Config, TArray<uint8>& Bytes, FString& Error)
 {
 	FVoxelLandM4WorldSnapshot Snapshot;
 	FVoxelLandM4IdentityRecord Baseline;
@@ -94,7 +93,7 @@ bool FVoxelLandM6RuntimeCommand::HasVLW6Sections(
 	constexpr uint32 Tags[] = {0x5453364d, 0x4c46364d, 0x4452364d}; // M6ST, M6FL, M6RD.
 	int32 Cursor = 0;
 	uint32 Tag = 0, Version = 0, Length = 0;
-	if (!ReadU32(Bytes, Cursor, Tag) || Tag != 0x36574c56 || !ReadU32(Bytes, Cursor, Version) || Version != 1
+	if (!ReadU32(Bytes, Cursor, Tag) || Tag != 0x36574c56 || !ReadU32(Bytes, Cursor, Version) || Version != 2
 		|| !ReadU32(Bytes, Cursor, Length) || Length != uint32(Baseline.Num()) || Length > uint32(Bytes.Num() - Cursor)
 		|| FMemory::Memcmp(Bytes.GetData() + Cursor, Baseline.GetData(), Length) != 0)
 	{
@@ -188,7 +187,7 @@ bool FVoxelLandM6RuntimeCommand::CheckStampedChunks()
 		FiniteIdentity = PublishedIdentity;
 		Check = &FVoxelLandM6RuntimeCommand::CheckRepeatedInitialization;
 	}
-	if (!Actor.InitializeM6FromSettings(&Config, FIntVector::ZeroValue))
+	if (!Actor.InitializeFromConfig(&Config, FIntVector::ZeroValue))
 	{
 		return Fail(Actor.LastInitializationError);
 	}
@@ -199,7 +198,7 @@ bool FVoxelLandM6RuntimeCommand::CheckRepeatedInitialization()
 {
 	TArray<uint8> Identity;
 	if (!Actor.LastInitializationError.IsEmpty() || !Actor.GetM6WorldIdentity(Identity) || Identity != FiniteIdentity
-		|| !Actor.InitializeM6FromSettings(&Config, FIntVector::ZeroValue))
+		|| !Actor.InitializeFromConfig(&Config, FIntVector::ZeroValue))
 	{
 		return Fail(TEXT("Identical authored inputs changed identity or a refresh failed"));
 	}
@@ -218,7 +217,7 @@ bool FVoxelLandM6RuntimeCommand::CheckStaleInitialization()
 	}
 	FVoxelLandM6Stamp& Clear = Config.Overlay.Stamps[0];
 	Clear.HalfExtentCm.X = 0;
-	if (Actor.InitializeM6FromSettings(&Config, FIntVector::ZeroValue)
+	if (Actor.InitializeFromConfig(&Config, FIntVector::ZeroValue)
 		|| !Actor.LastInitializationError.Contains(TEXT("half extent")) || !Actor.GetM6WorldIdentity(Identity)
 		|| Identity != FiniteIdentity)
 	{
@@ -226,10 +225,10 @@ bool FVoxelLandM6RuntimeCommand::CheckStaleInitialization()
 	}
 
 	Clear.HalfExtentCm.X = 500;
-	Config.Baseline->bUnlimited = true;
+	Config.WorldExtent = EVoxelLandWorldExtent::Infinite;
 	FString Error;
-	if (!PrepareBaselineIdentity(*Config.Baseline, ExpectedBaseline, Error)
-		|| !Actor.InitializeM6FromSettings(&Config, FIntVector::ZeroValue))
+	if (!PrepareBaselineIdentity(Config, ExpectedBaseline, Error)
+		|| !Actor.InitializeFromConfig(&Config, FIntVector::ZeroValue))
 	{
 		return Fail(Error.IsEmpty() ? Actor.LastInitializationError : Error);
 	}
@@ -250,7 +249,7 @@ bool FVoxelLandM6RuntimeCommand::CheckRedistanceIdentity()
 	Config.Overlay.bFiltersEnabled = false;
 	Config.Overlay.Redistance.bEnabled = false;
 	Check = &FVoxelLandM6RuntimeCommand::CheckEmptyOverlay;
-	if (!Actor.InitializeM6FromSettings(&Config, FIntVector::ZeroValue))
+	if (!Actor.InitializeFromConfig(&Config, FIntVector::ZeroValue))
 	{
 		return Fail(Actor.LastInitializationError);
 	}
@@ -288,7 +287,7 @@ bool FVoxelLandM6RuntimeCommand::CheckEmptyOverlay()
 		return Check == nullptr;
 	}
 	Check = &FVoxelLandM6RuntimeCommand::CheckLegacyInitialization;
-	if (!Actor.InitializeM4FromSettings(Config.Baseline.Get(), FIntVector::ZeroValue))
+	if (!Actor.InitializeFromConfig(&Config, FIntVector::ZeroValue))
 	{
 		return Fail(Actor.LastInitializationError);
 	}
@@ -330,10 +329,9 @@ bool FVoxelLandM6DataOnlyRuntimeTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	UVoxelLandM6WorldConfig* M6 = NewObject<UVoxelLandM6WorldConfig>();
+	UVoxelLandWorldConfig* M6 = NewObject<UVoxelLandWorldConfig>();
 	M6->AddToRoot();
-	UVoxelLandM4WorldConfig* Baseline = NewObject<UVoxelLandM4WorldConfig>(M6);
-	M6->Baseline = Baseline;
+	UVoxelLandWorldConfig* Baseline = M6;
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Baseline);
 	FString Error;
 	if (!FVoxelLandM4RuntimeTestInputs::MakeProgram(*Graph, Error))
@@ -343,21 +341,15 @@ bool FVoxelLandM6DataOnlyRuntimeTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	Baseline->Continental.Graph = Baseline->Mountain.Graph = Baseline->Peaks.Graph = Graph;
-	FVoxelLandM4RuntimeTestInputs::SetCurve(Baseline->Continental);
-	FVoxelLandM4RuntimeTestInputs::SetCurve(Baseline->Mountain);
-	FVoxelLandM4RuntimeTestInputs::SetCurve(Baseline->Peaks);
-	TArray<int32> Samples;
-	Samples.Init(0, 4097);
-	Baseline->BaseHeightQ8 = 300 * 256;
+	FVoxelLandM4RuntimeTestInputs::BindAuthoredHeight(*Baseline, *Graph);
+	Baseline->BaseElevationCm = 300.f;
 	Baseline->CellsX = Baseline->CellsY = 8;
 	Baseline->OriginXCm = Baseline->OriginYCm = -25600;
 	Baseline->GridSpacingCm = 6400;
 	Baseline->HorizontalRadius = Baseline->VerticalRadius = 1;
 	Baseline->bGlobalErosion = false;
 	TArray<uint8> ExpectedBaseline;
-	if (!Baseline->SetBakedCurves(Samples, Samples, Samples, 1, Error)
-		|| !FVoxelLandM6RuntimeCommand::PrepareBaselineIdentity(*Baseline, ExpectedBaseline, Error))
+	if (!FVoxelLandM6RuntimeCommand::PrepareBaselineIdentity(*Baseline, ExpectedBaseline, Error))
 	{
 		M6->RemoveFromRoot();
 		AddError(Error);
@@ -404,7 +396,7 @@ bool FVoxelLandM6DataOnlyRuntimeTest::RunTest(const FString& Parameters)
 	Actor->DispatchBeginPlay();
 	const TSharedPtr<FVoxelLandM6RuntimeCommand> Command =
 		MakeShared<FVoxelLandM6RuntimeCommand>(*this, *World, *Actor, *M6, MoveTemp(ExpectedBaseline));
-	if (!Actor->InitializeM6FromSettings(M6, FIntVector::ZeroValue))
+	if (!Actor->InitializeFromConfig(M6, FIntVector::ZeroValue))
 	{
 		AddError(Actor->LastInitializationError);
 		Command->Cleanup();

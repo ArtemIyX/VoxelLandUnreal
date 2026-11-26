@@ -108,7 +108,7 @@ bool FVoxelLandM4GeneratorIntegrationTest::RunTest(const FString& Parameters)
 			Key.Coordinate = FIntVector(-1, -1, -1);
 			bDemandAccepted = !Generator->ValidateM4ChunkDemand(Key);
 			FVoxelLandChunkKey WrongLOD = Key;
-			WrongLOD.LOD = 1;
+			WrongLOD.LOD = 6; // M7 admits levels 0–5, subject to the full field footprint.
 			bDemandLOD = Generator->ValidateM4ChunkDemand(WrongLOD).Code == EVoxelLandErrorCode::UnsupportedLod;
 			bUnknownBounds = Generator->ClassifyChunkBeforeSampling(Key) == EVoxelLandChunkClassification::NeedsSamples;
 			TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Base;

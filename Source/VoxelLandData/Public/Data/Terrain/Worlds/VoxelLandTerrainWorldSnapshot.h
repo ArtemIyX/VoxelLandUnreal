@@ -7,6 +7,7 @@
 #include "Data/Terrain/Shaping/VoxelLandTerrainSmoothingSettings.h"
 #include "Data/Terrain/Shaping/VoxelLandHeightDetailConfig.h"
 #include "Data/Terrain/HeightGraph/VoxelLandHeightStageManifest.h"
+#include "Data/Graph/Sources/VoxelLandGraphSnapshot.h"
 #include "VoxelLandTerrainWorldSnapshot.generated.h"
 
 // Plain immutable-by-convention worker input. Source graph identities are checked
@@ -19,6 +20,13 @@ struct VOXELLANDDATA_API FVoxelLandM4WorldSnapshot
 	int32 FormatVersion = 1;
 	UPROPERTY()
 	FVoxelLandM4HeightStageManifest HeightStage;
+
+	UPROPERTY()
+	FGuid AuthoredHeightOutputId;
+	UPROPERTY()
+	FVoxelLandGraphSnapshot AuthoredHeightSource;
+	UPROPERTY()
+	int32 HeightScaleCm = 1000;
 	UPROPERTY()
 	FVoxelLandM4ControlSnapshot Continental;
 	UPROPERTY()

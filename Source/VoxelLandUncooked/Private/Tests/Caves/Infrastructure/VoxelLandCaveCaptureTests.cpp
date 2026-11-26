@@ -1,5 +1,5 @@
 #if WITH_DEV_AUTOMATION_TESTS
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Caves/Planning/VoxelLandCaveWorldSnapshot.h"
 #include "Misc/AutomationTest.h"
@@ -8,7 +8,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5CaptureTest, "VoxelLand.M5.Authorin
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandM5CaptureTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	FVoxelLandM4ControlConfig* Controls[] = {&Config->Continental, &Config->Mountain, &Config->Peaks};
 	for (FVoxelLandM4ControlConfig* Control : Controls)
 	{

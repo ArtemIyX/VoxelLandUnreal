@@ -13,7 +13,7 @@
 class UEdGraph;
 
 // Source and last compiled payload are stored separately; callers must reject stale payloads.
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, HideDropdown)
 class VOXELLANDDATA_API UVoxelLandTerrainGraph : public UDataAsset
 {
 	GENERATED_BODY()
@@ -30,7 +30,7 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "VoxelLand")
 	int32 SourceVersion = 1;
 
-	UPROPERTY(EditAnywhere, Category = "VoxelLand")
+	UPROPERTY(EditAnywhere, Category = "VoxelLand", meta = (TitleProperty = "Name"))
 	TArray<FVoxelLandGraphParameter> Parameters;
 
 	UPROPERTY()

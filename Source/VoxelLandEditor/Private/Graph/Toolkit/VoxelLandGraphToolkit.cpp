@@ -1,4 +1,5 @@
 #include "VoxelLandGraphToolkit.h"
+#include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
 #include "../../VoxelLandEditorBake.h"
 #include "Operators/VoxelLandOperator.h"
@@ -23,8 +24,7 @@
 #include "../Preview/VoxelLandPreviewScene.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Assets/Graphs/VoxelLandGraphFunction.h"
-#include "Data/Assets/Worlds/VoxelLandWorldSettings.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "World/Terrain/Worlds/VoxelLandTerrainPreparation.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
@@ -83,6 +83,106 @@
 class FVoxelLandGraphToolkitOperations final
 {
 public:
+	static const UVoxelLandWorldConfig* LoadExampleConfig(const UVoxelLandTerrainGraph& Graph)
+	{
+		const FString Package = Graph.GetOutermost()->GetName();
+		const FString ExamplePrefix = TEXT("/VoxelLand/Examples/TG_");
+		if (!Package.StartsWith(ExamplePrefix))
+		{
+			return nullptr;
+		}
+		const FString Example = Package.RightChop(ExamplePrefix.Len());
+		if (Example != TEXT("RollingHills") && Example != TEXT("MountainBiome"))
+		{
+			return nullptr;
+		}
+		const FString ObjectPath = FString::Printf(TEXT("/VoxelLand/Examples/WC_%s.WC_%s"), *Example, *Example);
+		const UVoxelLandWorldConfig* Config = LoadObject<UVoxelLandWorldConfig>(nullptr, *ObjectPath);
+		return Config && Config->Graph == &Graph && !Config->IsDirectDensity() ? Config : nullptr;
+	}
+
+	static UVoxelLandWorldConfig* MakePreviewSettings(
+		UVoxelLandTerrainGraph* Graph, const UVoxelLandWorldConfig* Source = nullptr)
+	{
+		if (Source)
+		{
+			UVoxelLandWorldConfig* Settings = DuplicateObject<UVoxelLandWorldConfig>(Source, GetTransientPackage());
+			Settings->SetFlags(RF_Transient | RF_Transactional);
+			return Settings;
+		}
+		UVoxelLandWorldConfig* Settings =
+			NewObject<UVoxelLandWorldConfig>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+		Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
+		Settings->Graph = Graph;
+		return Settings;
+	}
+
+	static bool IsPreviewOutput(const FGuid& Operator)
+	{
+		return FVoxelLandGraphOutputs::IsNamedOutput(Operator)
+			|| Operator == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+	}
+
+	static bool IsDefaultHeightOutput(const FVoxelLandGraphNodeRecord& Node)
+	{
+		return Node.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::FloatOutput)
+			&& FVoxelLandGraphOutputs::GetName(Node).Equals(TEXT("Height"));
+	}
+
+	static void LayoutRecoveredGraph(UEdGraph& Graph, TConstArrayView<FVoxelLandGraphLinkRecord> Links)
+	{
+		constexpr int32 ColumnWidth = 300;
+		constexpr int32 RowHeight = 230;
+		TMap<FGuid, int32> Indices;
+		TArray<int32> Incoming;
+		TArray<int32> Columns;
+		TArray<TArray<int32>> Successors;
+		Incoming.SetNumZeroed(Graph.Nodes.Num());
+		Columns.SetNumZeroed(Graph.Nodes.Num());
+		Successors.SetNum(Graph.Nodes.Num());
+		for (int32 Index = 0; Index < Graph.Nodes.Num(); ++Index)
+		{
+			Indices.Add(Graph.Nodes[Index]->NodeGuid, Index);
+		}
+		for (const FVoxelLandGraphLinkRecord& Link : Links)
+		{
+			const int32* Source = Indices.Find(Link.SourceNode);
+			const int32* Target = Indices.Find(Link.TargetNode);
+			if (Source && Target)
+			{
+				Successors[*Source].Add(*Target);
+				++Incoming[*Target];
+			}
+		}
+		TArray<int32> Ready;
+		for (int32 Index = 0; Index < Incoming.Num(); ++Index)
+		{
+			if (Incoming[Index] == 0)
+			{
+				Ready.Add(Index);
+			}
+		}
+		for (int32 Cursor = 0; Cursor < Ready.Num(); ++Cursor)
+		{
+			const int32 Source = Ready[Cursor];
+			for (const int32 Target : Successors[Source])
+			{
+				Columns[Target] = FMath::Max(Columns[Target], Columns[Source] + 1);
+				if (--Incoming[Target] == 0)
+				{
+					Ready.Add(Target);
+				}
+			}
+		}
+		TMap<int32, int32> Rows;
+		for (int32 Index = 0; Index < Graph.Nodes.Num(); ++Index)
+		{
+			UEdGraphNode* Node = Graph.Nodes[Index];
+			Node->NodePosX = Columns[Index] * ColumnWidth;
+			Node->NodePosY = Rows.FindOrAdd(Columns[Index])++ * RowHeight;
+		}
+	}
+
 	DECLARE_MULTICAST_DELEGATE_OneParam(FM4ControlGraphChanged, UVoxelLandTerrainGraph*);
 	inline static FM4ControlGraphChanged M4ControlGraphChanged;
 	static void M4ClearNamedPrograms(UVoxelLandM4ControlGraph* Graph)
@@ -248,6 +348,10 @@ public:
 		Record.ParameterId = Node.ParameterId;
 		Record.SeedSalt = Node.SeedSalt;
 		Record.Configuration = Node.Configuration;
+		if (FVoxelLandGraphOutputs::IsNamedOutput(Record.OperatorId))
+		{
+			FVoxelLandGraphOutputs::SetName(Record, Node.OutputName.TrimStartAndEnd());
+		}
 		Record.FunctionPath = Node.FunctionPath;
 		for (const UEdGraphPin* Pin : Node.Pins)
 		{
@@ -310,6 +414,7 @@ public:
 
 		static bool Run(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandSerializedProgram& Payload, int64 Seed,
 			const FVoxelLandZoneProfile& Profile, int32 HorizontalRadius, int32 VerticalRadius,
+			const TOptional<FVoxelLandDensityBounds>& Bounds,
 			const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error
 #if WITH_DEV_AUTOMATION_TESTS
 			,
@@ -326,6 +431,7 @@ public:
 			Settings.Program = Program;
 			Settings.WorldSeed = uint64(Seed);
 			Settings.Profile = Profile;
+			Settings.DirectDensityBounds = Bounds;
 			TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 			if (FVoxelLandError Failure = FVoxelLandGenerator::Create(Settings, Generator))
 			{
@@ -349,11 +455,26 @@ public:
 			}
 #endif
 			FVoxelLandMeshingScratch Scratch;
-			for (int32 Z = -VerticalRadius; Z < VerticalRadius; ++Z)
+			FIntVector Min(-HorizontalRadius, -HorizontalRadius, -VerticalRadius);
+			FIntVector Max(HorizontalRadius + 1, HorizontalRadius + 1, VerticalRadius);
+			if (Bounds.IsSet())
 			{
-				for (int32 Y = -HorizontalRadius; Y <= HorizontalRadius; ++Y)
+				// Keep a bounded preview near the origin, or the closest in-bounds chunk.
+				const FIntVector End = Bounds->MaxChunkExclusive - FIntVector(1);
+				const FIntVector Anchor(FMath::Clamp(0, Bounds->MinChunk.X, End.X),
+					FMath::Clamp(0, Bounds->MinChunk.Y, End.Y), FMath::Clamp(0, Bounds->MinChunk.Z, End.Z));
+				Min.X = int32(FMath::Max(int64(Bounds->MinChunk.X), int64(Anchor.X) + Min.X));
+				Min.Y = int32(FMath::Max(int64(Bounds->MinChunk.Y), int64(Anchor.Y) + Min.Y));
+				Min.Z = int32(FMath::Max(int64(Bounds->MinChunk.Z), int64(Anchor.Z) + Min.Z));
+				Max.X = int32(FMath::Min(int64(Bounds->MaxChunkExclusive.X), int64(Anchor.X) + Max.X));
+				Max.Y = int32(FMath::Min(int64(Bounds->MaxChunkExclusive.Y), int64(Anchor.Y) + Max.Y));
+				Max.Z = int32(FMath::Min(int64(Bounds->MaxChunkExclusive.Z), int64(Anchor.Z) + Max.Z));
+			}
+			for (int32 Z = Min.Z; Z < Max.Z; ++Z)
+			{
+				for (int32 Y = Min.Y; Y < Max.Y; ++Y)
 				{
-					for (int32 X = -HorizontalRadius; X <= HorizontalRadius; ++X)
+					for (int32 X = Min.X; X < Max.X; ++X)
 					{
 						if (!Generate(*Generator, *Worker, Scratch, FIntVector(X, Y, Z), Profile.VoxelSizeCm, Cancel,
 								Meshes, Error))
@@ -366,18 +487,10 @@ public:
 			return !Cancel->Load();
 		}
 
-		static bool RunPrepared(const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& Generator,
-			int32 HorizontalRadius, int32 VerticalRadius, const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel,
-			FResult& Meshes, FString& Error)
-		{
-			return RunPreparedRange(
-				Generator, HorizontalRadius, -VerticalRadius, VerticalRadius - 1, Cancel, Meshes, Error);
-		}
-
 		static bool RunPreparedRange(const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe>& Generator,
 			int32 HorizontalRadius, int32 MinZ, int32 MaxZ,
 			const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, FResult& Meshes, FString& Error,
-			uint64 MaxRetainedMeshBytes = MAX_uint64)
+			uint64 MaxRetainedMeshBytes = MAX_uint64, FIntPoint CenterXY = FIntPoint::ZeroValue)
 		{
 			if (!Generator || Cancel->Load())
 			{
@@ -398,7 +511,7 @@ public:
 					for (int32 X = -HorizontalRadius; X <= HorizontalRadius; ++X)
 					{
 						const int32 PreviousCount = Meshes.Num();
-						if (!Generate(*Generator, *Worker, Scratch, FIntVector(X, Y, Z),
+						if (!Generate(*Generator, *Worker, Scratch, FIntVector(CenterXY.X + X, CenterXY.Y + Y, Z),
 								Generator->GetProfile().VoxelSizeCm, Cancel, Meshes, Error))
 						{
 							return false;
@@ -461,10 +574,29 @@ class FVoxelLandNoisePreviewJob
 public:
 	static constexpr int32 Resolution = 128;
 
+	static EVoxelLandGraphValueType GetValueType(const FVoxelLandGraphSnapshot& Snapshot, FGuid NodeId, FGuid PinId)
+	{
+		for (const FVoxelLandGraphNodeRecord& Node : Snapshot.Nodes)
+		{
+			if (Node.Id != NodeId)
+			{
+				continue;
+			}
+			for (const FVoxelLandGraphPinRecord& Pin : Node.Pins)
+			{
+				if (!PinId.IsValid() || Pin.Id == PinId)
+				{
+					return Pin.Type;
+				}
+			}
+		}
+		return EVoxelLandGraphValueType::Float;
+	}
+
 	static bool Run(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandSerializedProgram& Payload, int64 Seed,
-		const FVoxelLandZoneProfile& Profile, float SpacingCm, float SliceZCm,
-		const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, TArray<uint8>& Pixels, float& Minimum,
-		float& Maximum, int32& Clipped, FString& Error)
+		const FVoxelLandZoneProfile& Profile, float SpacingCm, float SliceZCm, EVoxelLandGraphValueType ValueType,
+		const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& Cancel, TArray<uint8>& Pixels, double& Minimum,
+		double& Maximum, FString& Error)
 	{
 		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
 		if (Cancel->Load() || !FVoxelLandProgramCodec::Load(Snapshot, Payload, Program, Error) || Cancel->Load())
@@ -491,9 +623,16 @@ public:
 		Result.SetNumUninitialized(Resolution * Resolution * 4);
 		FVector3f Positions[Resolution];
 		TArray<float> Values;
-		Minimum = TNumericLimits<float>::Max();
-		Maximum = TNumericLimits<float>::Lowest();
-		Clipped = 0;
+		TArray<int32> Integers;
+		TArray<float> FloatPixels;
+		const bool bInteger = ValueType == EVoxelLandGraphValueType::Int32;
+		const bool bFloat = ValueType == EVoxelLandGraphValueType::Float;
+		if (bFloat)
+		{
+			FloatPixels.SetNumUninitialized(Resolution * Resolution);
+		}
+		Minimum = TNumericLimits<double>::Max();
+		Maximum = TNumericLimits<double>::Lowest();
 		for (int32 Y = 0; Y < Resolution; ++Y)
 		{
 			if (Cancel->Load())
@@ -504,35 +643,68 @@ public:
 			{
 				Positions[X] = FVector3f((float(X) - 63.5f) * SpacingCm, (63.5f - float(Y)) * SpacingCm, SliceZCm);
 			}
-			if (FVoxelLandError Failure =
-					Generator->EvaluateSamplesRaw(MakeArrayView(Positions, Resolution), *Worker, Values))
+			const TConstArrayView<FVector3f> Samples = MakeArrayView(Positions, Resolution);
+			if (const FVoxelLandError Failure = bInteger ? Generator->EvaluateIntegerPreview(Samples, *Worker, Integers)
+														 : Generator->EvaluateSamplesRaw(Samples, *Worker, Values))
 			{
 				Error = Failure.Message;
 				return false;
 			}
 			for (int32 X = 0; X < Resolution; ++X)
 			{
-				const float Value = Values[X];
+				const double Value = bInteger ? double(Integers[X]) : double(Values[X]);
 				Minimum = FMath::Min(Minimum, Value);
 				Maximum = FMath::Max(Maximum, Value);
-				if (Value < -1.0f || Value > 1.0f)
+				const int32 Pixel = Y * Resolution + X;
+				if (bFloat)
 				{
-					++Clipped;
+					FloatPixels[Pixel] = Values[X];
 				}
-				const uint8 Grey = uint8(FMath::RoundToInt((FMath::Clamp(Value, -1.0f, 1.0f) + 1.0f) * 127.5f));
-				const int32 Offset = (Y * Resolution + X) * 4;
-				Result[Offset] = Grey;
-				Result[Offset + 1] = Grey;
-				Result[Offset + 2] = Grey;
-				Result[Offset + 3] = 255;
+				else
+				{
+					WritePixel(Result, Pixel, GetCategoryColor(ValueType, Value));
+				}
 			}
 		}
 		if (Cancel->Load())
 		{
 			return false;
 		}
+		if (bFloat)
+		{
+			const double Range = Maximum - Minimum;
+			for (int32 Pixel = 0; Pixel < FloatPixels.Num(); ++Pixel)
+			{
+				const uint8 Grey = Range > 0.0
+									 ? uint8(FMath::RoundToInt((double(FloatPixels[Pixel]) - Minimum) * 255.0 / Range))
+									 : 128;
+				WritePixel(Result, Pixel, FColor(Grey, Grey, Grey));
+			}
+		}
 		Pixels = MoveTemp(Result);
 		return true;
+	}
+
+private:
+	static void WritePixel(TArray<uint8>& Pixels, int32 Index, FColor Color)
+	{
+		const int32 Offset = Index * 4;
+		Pixels[Offset] = Color.B;
+		Pixels[Offset + 1] = Color.G;
+		Pixels[Offset + 2] = Color.R;
+		Pixels[Offset + 3] = Color.A;
+	}
+
+	static FColor GetCategoryColor(EVoxelLandGraphValueType Type, double Value)
+	{
+		if (Type == EVoxelLandGraphValueType::Bool)
+		{
+			return Value != 0.0 ? FColor(255, 203, 92) : FColor(30, 45, 63);
+		}
+		const uint32 Category = uint32(int32(Value)) * 0x9e3779b9u;
+		constexpr double HueRange = 360.0 / 4294967296.0;
+		const FLinearColor Color = FLinearColor(float(double(Category) * HueRange), 0.7f, 0.82f).HSVToLinearRGB();
+		return Color.ToFColorSRGB();
 	}
 };
 
@@ -583,15 +755,15 @@ public:
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> M4ValidationLease;
 	TSharedPtr<FVoxelLandM4WorldSnapshot, ESPMode::ThreadSafe> M4Snapshot;
 	TSharedPtr<FVoxelLandM4WorldSnapshot, ESPMode::ThreadSafe> M4ExecutionSnapshot;
-	TWeakObjectPtr<UVoxelLandM4WorldConfig> M4Config;
+	TWeakObjectPtr<UVoxelLandWorldConfig> M4Config;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Continental;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Mountain;
 	TWeakObjectPtr<UVoxelLandTerrainGraph> M4Peaks;
 	TArray<uint8> M4StagePixels;
 	TArray<uint8> NoisePixels;
-	float NoiseMin = 0.0f;
-	float NoiseMax = 0.0f;
-	int32 NoiseClipped = 0;
+	EVoxelLandGraphValueType SliceType = EVoxelLandGraphValueType::Float;
+	double NoiseMin = 0.0;
+	double NoiseMax = 0.0;
 	FString Error;
 	double GenerationMs = 0;
 #if WITH_DEV_AUTOMATION_TESTS
@@ -699,7 +871,11 @@ void FVoxelLandGraphToolkit::AddReferencedObjects(FReferenceCollector& Collector
 
 FText FVoxelLandGraphToolkit::GetBaseToolkitName() const
 {
-	return LOCTEXT("Title", "VoxelLand Terrain Graph");
+	if (Asset && Asset->IsA<UVoxelLandGraphFunction>())
+	{
+		return LOCTEXT("FunctionTitle", "Graph Function");
+	}
+	return LOCTEXT("Title", "Terrain Graph");
 }
 
 bool FVoxelLandGraphToolkit::StoreCompiledProgram(UVoxelLandTerrainGraph& Graph, FVoxelLandSerializedProgram&& Payload)
@@ -738,11 +914,10 @@ void FVoxelLandGraphToolkit::Open(
 	}
 	PreviewScene = MakeShared<FVoxelLandPreviewScene>();
 	PreviewViewport = SNew(SVoxelLandPreviewViewport).Scene(PreviewScene);
-	PreviewSettings =
-		NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
-	PreviewSettings->Graph = Asset;
+	PreviewSettings = FVoxelLandGraphToolkitOperations::MakePreviewSettings(
+		Asset, FVoxelLandGraphToolkitOperations::LoadExampleConfig(*Asset));
 	SynchronizePreviewSettings(false);
-	ApplyPreviewMaterial(nullptr);
+	ApplyMaterialSetup();
 	CreateMirror();
 	FVoxelLandGraphSnapshot InitialSource;
 	InitialSource.SourceVersion = Asset->SourceVersion;
@@ -773,23 +948,38 @@ void FVoxelLandGraphToolkit::Open(
 	BeginPIEHandle = FEditorDelegates::PreBeginPIE.AddRaw(this, &FVoxelLandGraphToolkit::BeginPIE);
 	EndPIEHandle = FEditorDelegates::EndPIE.AddRaw(this, &FVoxelLandGraphToolkit::EndPIE);
 	const TSharedRef<FTabManager::FLayout> Layout =
-		FTabManager::NewLayout(TEXT("VoxelLandGraphEditor_v1"))
+		FTabManager::NewLayout(TEXT("VoxelLandGraphEditor_v3"))
 			->AddArea(FTabManager::NewPrimaryArea()
 					->SetOrientation(Orient_Vertical)
 					->Split(FTabManager::NewSplitter()
 							->SetOrientation(Orient_Horizontal)
-							->Split(FTabManager::NewStack()->SetSizeCoefficient(0.50f)->AddTab(
+							->Split(FTabManager::NewStack()->SetSizeCoefficient(0.44f)->AddTab(
 								FVoxelLandGraphToolkitOperations::GraphTab, ETabState::OpenedTab))
-							->Split(FTabManager::NewStack()->SetSizeCoefficient(0.30f)->AddTab(
+							->Split(FTabManager::NewStack()->SetSizeCoefficient(0.39f)->AddTab(
 								FVoxelLandGraphToolkitOperations::PreviewTab, ETabState::OpenedTab))
-							->Split(FTabManager::NewStack()
+							->Split(FTabManager::NewSplitter()
 									->SetSizeCoefficient(0.20f)
-									->AddTab(FVoxelLandGraphToolkitOperations::DetailsTab, ETabState::OpenedTab)
-									->AddTab(FVoxelLandGraphToolkitOperations::PaletteTab, ETabState::OpenedTab)))
+									->SetOrientation(Orient_Vertical)
+									->Split(FTabManager::NewStack()->SetSizeCoefficient(0.30f)->AddTab(
+										TEXT("VoxelLandOutputs"), ETabState::OpenedTab))
+									->Split(FTabManager::NewStack()
+											->SetSizeCoefficient(0.70f)
+											->AddTab(FVoxelLandGraphToolkitOperations::DetailsTab, ETabState::OpenedTab)
+											->AddTab(
+												FVoxelLandGraphToolkitOperations::PaletteTab, ETabState::ClosedTab))))
 					->Split(FTabManager::NewStack()->SetSizeCoefficient(0.2f)->AddTab(
-						FVoxelLandGraphToolkitOperations::DiagnosticsTab, ETabState::OpenedTab)));
+						FVoxelLandGraphToolkitOperations::DiagnosticsTab, ETabState::ClosedTab)));
 	InitAssetEditor(Mode, Host, TEXT("VoxelLandGraphEditor"), Layout, true, true, Asset);
 	bHasEditorWindow = true;
+	GraphWidget->ZoomToFit(false);
+	if (Graph->Nodes.Num() == 2)
+	{
+		if (UVoxelLandEditorNode* Noise = Cast<UVoxelLandEditorNode>(Graph->Nodes[0]);
+			Noise && Noise->Kind == int32(EVoxelLandBuiltinNode::WorldNoise2D))
+		{
+			GraphWidget->SetNodeSelection(Noise, true);
+		}
+	}
 	ExtendGraphToolbar();
 	RegenerateMenusAndToolbars();
 	RequestCompile();
@@ -800,7 +990,7 @@ void FVoxelLandGraphToolkit::SetMaterialPickerForTests(UMaterialInterface* Mater
 	MaterialChanged(Material ? FAssetData(Material) : FAssetData());
 }
 
-void FVoxelLandGraphToolkit::SetSettingsPickerForTests(UVoxelLandWorldSettings* Settings)
+void FVoxelLandGraphToolkit::SetSettingsPickerForTests(UVoxelLandWorldConfig* Settings)
 {
 	SettingsChanged(Settings ? FAssetData(Settings) : FAssetData());
 }
@@ -876,7 +1066,8 @@ void FVoxelLandGraphToolkit::InitializeForTests(UVoxelLandTerrainGraph* InAsset)
 	ObjectsReinstancedHandle =
 		FCoreUObjectDelegates::OnObjectsReinstanced.AddRaw(this, &FVoxelLandGraphToolkit::ObjectsReinstanced);
 	PreviewSettings =
-		NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+		NewObject<UVoxelLandWorldConfig>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+	PreviewSettings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 	PreviewSettings->Graph = Asset;
 	SynchronizePreviewSettings(false);
 	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->NotifyAssetOpened(Asset, this);
@@ -891,6 +1082,10 @@ void FVoxelLandGraphToolkit::InitializeForTests(UVoxelLandTerrainGraph* InAsset)
 #endif
 void FVoxelLandGraphToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& Manager)
 {
+	Manager
+		->RegisterTabSpawner(
+			TEXT("VoxelLandOutputs"), FOnSpawnTab::CreateSP(this, &FVoxelLandGraphToolkit::SpawnOutputs))
+		.SetDisplayName(LOCTEXT("Outputs", "Outputs"));
 	FAssetEditorToolkit::RegisterTabSpawners(Manager);
 	Manager
 		->RegisterTabSpawner(FVoxelLandGraphToolkitOperations::GraphTab,
@@ -899,11 +1094,11 @@ void FVoxelLandGraphToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& 
 	Manager
 		->RegisterTabSpawner(FVoxelLandGraphToolkitOperations::DetailsTab,
 			FOnSpawnTab::CreateSP(this, &FVoxelLandGraphToolkit::SpawnDetails))
-		.SetDisplayName(LOCTEXT("Details", "Details / Parameters"));
+		.SetDisplayName(LOCTEXT("Details", "Inspector"));
 	Manager
 		->RegisterTabSpawner(FVoxelLandGraphToolkitOperations::DiagnosticsTab,
 			FOnSpawnTab::CreateSP(this, &FVoxelLandGraphToolkit::SpawnDiagnostics))
-		.SetDisplayName(LOCTEXT("Diagnostics", "Compiler Results"));
+		.SetDisplayName(LOCTEXT("Diagnostics", "Diagnostics"));
 	Manager
 		->RegisterTabSpawner(FVoxelLandGraphToolkitOperations::PreviewTab,
 			FOnSpawnTab::CreateSP(this, &FVoxelLandGraphToolkit::SpawnPreview))
@@ -916,6 +1111,7 @@ void FVoxelLandGraphToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& 
 
 void FVoxelLandGraphToolkit::UnregisterTabSpawners(const TSharedRef<FTabManager>& Manager)
 {
+	Manager->UnregisterTabSpawner(TEXT("VoxelLandOutputs"));
 	Manager->UnregisterTabSpawner(FVoxelLandGraphToolkitOperations::GraphTab);
 	Manager->UnregisterTabSpawner(FVoxelLandGraphToolkitOperations::DetailsTab);
 	Manager->UnregisterTabSpawner(FVoxelLandGraphToolkitOperations::DiagnosticsTab);
@@ -928,11 +1124,6 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnGraph(const FSpawnTabArgs&)
 {
 	return SNew(SDockTab)
 		[SNew(SVerticalBox)
-			+ SVerticalBox::Slot()
-				.AutoHeight()[SNew(SButton).Text(LOCTEXT("FrameSelection", "Frame selection")).OnClicked_Lambda([this] {
-					FrameSelection();
-					return FReply::Handled();
-				})]
 			+ SVerticalBox::Slot().AutoHeight()[SNew(SComboButton)
 					.Visibility_Lambda([this] {
 						return Asset && Asset->IsA<UVoxelLandGraphFunction>() ? EVisibility::Visible
@@ -975,8 +1166,7 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDetails(const FSpawnTabArgs&)
 	return SNew(
 		SDockTab)[SNew(SVerticalBox)
 				  + SVerticalBox::Slot().AutoHeight()[SNew(STextBlock)
-						  .Text(LOCTEXT("ParameterHint",
-							  "Select the background for graph parameters, or a parameter node to choose its ID."))
+						  .Text(LOCTEXT("ParameterHint", "Select the graph background to edit graph parameters."))
 						  .AutoWrapText(true)]
 				  + SVerticalBox::Slot()
 					  .AutoHeight()[SNew(SHorizontalBox)
@@ -1043,15 +1233,16 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDiagnostics(const FSpawnTabArg
 
 FText FVoxelLandGraphToolkit::StatusText() const
 {
-	const FString Mode =
-		bM4Preview ? FString(bM4Inspection ? TEXT("M4 2 km inspection. ") : TEXT("M4 terrain preview. "))
-		: bNoisePreview
-			? FString::Printf(TEXT("2D noise %s - %s. "),
-				  bNoiseStandalone ? TEXT("standalone coordinates") : TEXT("graph-wired slice"), *PreviewTargetLabel)
-		: PreviewNodeId.IsValid() ? FString::Printf(TEXT("Node preview - %s. "), *PreviewTargetLabel)
-								  : TEXT("Root preview. ");
-	return FText::FromString(
-		Mode + Status + (MaterialDiagnostic.IsEmpty() ? FString() : TEXT(" ") + MaterialDiagnostic));
+	return FText::FromString(MaterialDiagnostic.IsEmpty() ? Status : Status + TEXT("\n") + MaterialDiagnostic);
+}
+
+FText FVoxelLandGraphToolkit::PreviewStatusText() const
+{
+	if (Status.StartsWith(TEXT("Ready: render commands complete")))
+	{
+		return LOCTEXT("TerrainReady", "Terrain ready");
+	}
+	return FText::FromString(Status);
 }
 
 FText FVoxelLandGraphToolkit::M4StageInspectorText() const
@@ -1110,150 +1301,138 @@ FReply FVoxelLandGraphToolkit::FocusError()
 	return FReply::Handled();
 }
 
+TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnOutputs(const FSpawnTabArgs&)
+{
+	const TSharedRef<SDockTab> Tab =
+		SNew(SDockTab)[SNew(SScrollBox) + SScrollBox::Slot()[SAssignNew(OutputRows, SVerticalBox)]];
+	RebuildOutputList();
+	return Tab;
+}
+
+void FVoxelLandGraphToolkit::RebuildOutputList()
+{
+	if (!OutputRows || !Graph)
+	{
+		return;
+	}
+	OutputRows->ClearChildren();
+	for (UEdGraphNode* Object : Graph->Nodes)
+	{
+		UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(Object);
+		if (!Node
+			|| !FVoxelLandGraphToolkitOperations::IsPreviewOutput(
+				VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode(Node->Kind))))
+		{
+			continue;
+		}
+		if (Node->NodeGuid == PreviewNamedOutputId)
+		{
+			PreviewTargetLabel = Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
+		}
+		const TWeakObjectPtr<UVoxelLandEditorNode> WeakNode(Node);
+		OutputRows->AddSlot().AutoHeight()
+			[SNew(SButton).Text(Node->GetNodeTitle(ENodeTitleType::ListView)).OnClicked_Lambda([this, WeakNode] {
+				if (UVoxelLandEditorNode* Selected = WeakNode.Get())
+				{
+					GraphWidget->ClearSelectionSet();
+					GraphWidget->SetNodeSelection(Selected, true);
+					SelectNamedOutput(Selected->NodeGuid, Selected->GetNodeTitle(ENodeTitleType::ListView).ToString());
+				}
+				return FReply::Handled();
+			})];
+	}
+	if (OutputRows->NumSlots() == 0)
+	{
+		OutputRows->AddSlot().AutoHeight()[SNew(STextBlock)
+				.Text(LOCTEXT("AddOutputHint", "Add a Float, Integer, or Boolean Output in the graph."))];
+	}
+}
+
+void FVoxelLandGraphToolkit::SelectTerrainPreview()
+{
+	const FReply Reply = ReturnToRootPreview();
+	(void)Reply;
+}
+
+void FVoxelLandGraphToolkit::SelectNamedOutput(FGuid OutputId, FString Name)
+{
+	PreviewNamedOutputId = OutputId;
+	PreviewNodeId.Invalidate();
+	PreviewPinId.Invalidate();
+	bM4Preview = false;
+	bNoisePreview = true;
+	bNoiseStandalone = false;
+	PreviewTargetLabel = MoveTemp(Name);
+	++PreviewTargetRevision;
+	RequestCompile();
+}
+
 TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnPreview(const FSpawnTabArgs&)
 {
 	return SNew(SDockTab)
 		[SNew(SVerticalBox)
 			+ SVerticalBox::Slot()
-				.AutoHeight()[SNew(STextBlock).Text_Raw(this, &FVoxelLandGraphToolkit::StatusText).AutoWrapText(true)]
-			+ SVerticalBox::Slot().AutoHeight()
-				[SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1)[SNew(SObjectPropertyEntryBox)
-							.AllowedClass(UVoxelLandM4WorldConfig::StaticClass())
-							.ObjectPath_Raw(this, &FVoxelLandGraphToolkit::M4PreviewConfigPath)
-							.OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::M4PreviewConfigChanged)]
-					+ SHorizontalBox::Slot().AutoWidth()
-						[SNew(SButton).Text(LOCTEXT("M4PreviewGenerate", "Preview M4 world")).OnClicked_Lambda([this] {
-							bM4Preview = true;
-							bM4Inspection = false;
-							bNoisePreview = false;
-							StartM4Preview();
-							return FReply::Handled();
-						})]
-					+ SHorizontalBox::Slot().AutoWidth()
-						[SNew(SButton).Text(LOCTEXT("M4Inspect2km", "Inspect from 2 km")).OnClicked_Lambda([this] {
-							bM4Preview = true;
-							bM4Inspection = true;
-							bNoisePreview = false;
-							StartM4Preview();
-							return FReply::Handled();
-						})]
-					+ SHorizontalBox::Slot().AutoWidth()
-						[SNew(SButton).Text(LOCTEXT("M4CopyInspection", "Copy inspection details")).OnClicked_Lambda([this] {
-							if (!M4InspectionDetails.IsEmpty())
-							{
-								FString Details = M4InspectionDetails;
-								FVector Location;
-								FRotator Rotation;
-								float Fov = 0.f;
-								FIntPoint Resolution;
-								if (PreviewViewport
-									&& PreviewViewport->GetCameraDetails(Location, Rotation, Fov, Resolution))
-								{
-									Details += FString::Printf(
-										TEXT(
-											"\nView at time of copy: %s; rotation %s; horizontal FOV %.2f degrees; viewport %d x %d."),
-										*Location.ToString(), *Rotation.ToString(), Fov, Resolution.X, Resolution.Y);
-								}
-								FPlatformApplicationMisc::ClipboardCopy(*Details);
-							}
-							return FReply::Handled();
-						})]]
-			+ SVerticalBox::Slot().AutoHeight()
-				[SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth()[SNew(SComboButton)
-							.ButtonContent()[SNew(STextBlock).Text(LOCTEXT("PreviewOutput", "Preview selected output"))]
-							.OnGetMenuContent_Raw(this, &FVoxelLandGraphToolkit::BuildPreviewTargetMenu)]
-					+ SHorizontalBox::Slot().AutoWidth()[SNew(SButton)
-							.Text(LOCTEXT("PreviewRoot", "Preview graph output"))
-							.OnClicked_Raw(this, &FVoxelLandGraphToolkit::ReturnToRootPreview)]]
-			+ SVerticalBox::Slot().AutoHeight()
-				[SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth()[SNew(SButton)
-							.Text(LOCTEXT("NoiseWired", "2D noise: graph-wired"))
-							.ToolTipText(LOCTEXT(
-								"NoiseWiredTip", "Sample the selected noise node with its existing graph connections."))
-							.OnClicked_Lambda([this] { return SelectNoisePreview(false); })]
-					+ SHorizontalBox::Slot().AutoWidth()[SNew(SButton)
-							.Text(LOCTEXT("NoiseStandalone", "2D noise: standalone"))
-							.ToolTipText(LOCTEXT("NoiseStandaloneTip",
-								"Temporarily substitute XY and Z positions for the selected noise node's coordinate inputs."))
-							.OnClicked_Lambda([this] { return SelectNoisePreview(true); })]]
-			+ SVerticalBox::Slot()
-				.AutoHeight()[SNew(SHorizontalBox).Visibility_Lambda([this] {
-					return bNoisePreview ? EVisibility::Visible : EVisibility::Collapsed;
-				})
-							  + SHorizontalBox::Slot().AutoWidth().VAlign(
-								  VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("NoiseSpacing", "Spacing (cm/pixel)"))]
-							  + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<float>)
-									  .MinValue(0.01f)
-									  .MaxValue(100000.0f)
-									  .Value_Lambda([this] { return NoiseSpacingCm; })
-									  .OnValueCommitted_Raw(this, &FVoxelLandGraphToolkit::SetNoiseSpacing)]
-							  + SHorizontalBox::Slot().AutoWidth().VAlign(
-								  VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("NoiseSlice", "World Z (cm)"))]
-							  + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<float>)
-									  .MinValue(-10000000.0f)
-									  .MaxValue(10000000.0f)
-									  .Value_Lambda([this] { return NoiseSliceZCm; })
-									  .OnValueCommitted_Raw(this, &FVoxelLandGraphToolkit::SetNoiseSlice)]]
-			+ SVerticalBox::Slot().AutoHeight()[SNew(STextBlock)
-					.Visibility_Lambda([this] { return bNoisePreview ? EVisibility::Visible : EVisibility::Collapsed; })
-					.Text(LOCTEXT("NoiseLegend",
-						"128 x 128; X right, Y up. Black = -1, grey = 0, white = +1; values outside [-1, 1] clip. Graph-wired mode samples the graph at world Z; Z only affects connected inputs."))
-					.AutoWrapText(true)]
-			+ SVerticalBox::Slot().AutoHeight()
-				[SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(
-						VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Seed", "Seed"))]
-					+ SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox)
-							.Text_Lambda([this] { return FText::AsCultureInvariant(LexToString(PreviewSeed)); })
-							.OnTextCommitted_Raw(this, &FVoxelLandGraphToolkit::SeedCommitted)]
-					+ SHorizontalBox::Slot().AutoWidth()[SNew(SButton)
-							.Text(LOCTEXT("FrameTerrain", "Frame terrain (F)"))
-							.OnClicked_Raw(this, &FVoxelLandGraphToolkit::FramePreviewTerrain)]
-					+ SHorizontalBox::Slot().AutoWidth()[SNew(SButton)
-							.Text(LOCTEXT("ResetCamera", "Reset camera"))
-							.OnClicked_Raw(this, &FVoxelLandGraphToolkit::ResetPreviewCamera)]]
-			+ SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox)
-					.AllowedClass(UMaterialInterface::StaticClass())
-					.ObjectPath_Raw(this, &FVoxelLandGraphToolkit::MaterialPickerPath)
-					.OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::MaterialChanged)]
-			+ SVerticalBox::Slot().AutoHeight()[SNew(SObjectPropertyEntryBox)
-					.AllowedClass(UVoxelLandWorldSettings::StaticClass())
-					.ObjectPath_Raw(this, &FVoxelLandGraphToolkit::SettingsPickerPath)
-					.OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::SettingsChanged)]
-			+ SVerticalBox::Slot()
 				.AutoHeight()[SNew(SHorizontalBox)
-							  + SHorizontalBox::Slot().AutoWidth().VAlign(
-								  VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("Radius", "Preview radius (XY / Z)"))]
-							  + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>)
-									  .MinValue(1)
-									  .MaxValue(2)
-									  .Value_Lambda([this] { return PreviewHorizontalRadius; })
-									  .OnValueCommitted_Lambda(
-										  [this](int32 Value, ETextCommit::Type) { CommitPreviewRadius(Value, true); })]
-							  + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>)
-									  .MinValue(1)
-									  .MaxValue(2)
-									  .Value_Lambda([this] { return PreviewVerticalRadius; })
-									  .OnValueCommitted_Lambda([this](int32 Value, ETextCommit::Type) {
-										  CommitPreviewRadius(Value, false);
-									  })]]
-			+ SVerticalBox::Slot().AutoHeight()[SNew(SExpandableArea)
-					.InitiallyCollapsed(true)
-					.HeaderContent()[SNew(STextBlock)
-							.Text(LOCTEXT("PreviewSettings", "Transient preview settings and overrides"))]
-					.BodyContent()[SNew(SBox).MaxDesiredHeight(250)[PreviewDetails.ToSharedRef()]]]
+							  + SHorizontalBox::Slot().AutoWidth()[SNew(SComboButton)
+									  .ButtonContent()[SNew(STextBlock).Text_Lambda([this] {
+										  return PreviewTargetLabel.IsEmpty() ? LOCTEXT("TerrainTarget", "Terrain")
+																			  : FText::FromString(PreviewTargetLabel);
+									  })]
+									  .OnGetMenuContent_Raw(this, &FVoxelLandGraphToolkit::BuildPreviewTargetMenu)]
+							  + SHorizontalBox::Slot().FillWidth(1)[SNew(SObjectPropertyEntryBox)
+									  .AllowedClass(UVoxelLandWorldConfig::StaticClass())
+									  .ObjectPath_Raw(this, &FVoxelLandGraphToolkit::M4PreviewConfigPath)
+									  .OnObjectChanged_Raw(this, &FVoxelLandGraphToolkit::M4PreviewConfigChanged)]
+							  + SHorizontalBox::Slot().AutoWidth()[SNew(SButton)
+									  .Text(LOCTEXT("FrameTerrain", "Frame"))
+									  .OnClicked_Raw(this, &FVoxelLandGraphToolkit::FramePreviewTerrain)]]
 			+ SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Visibility_Lambda([this] {
-				  return bNoisePreview ? EVisibility::Collapsed : EVisibility::Visible;
+				  return bShowingScalarPreview ? EVisibility::Collapsed : EVisibility::Visible;
 			  })[PreviewViewport.ToSharedRef()]]
 			+ SVerticalBox::Slot().FillHeight(1)[SNew(SBox)
 					.HAlign(HAlign_Center)
 					.VAlign(VAlign_Center)
-					.Visibility_Lambda([this] { return bNoisePreview ? EVisibility::Visible : EVisibility::Collapsed; })
-						[SNew(SBox).WidthOverride(384.0f).HeightOverride(
-							384.0f)[SNew(SImage).Image_Raw(this, &FVoxelLandGraphToolkit::GetNoiseBrush)]]]];
+					.Visibility_Lambda([this] {
+						return bShowingScalarPreview ? EVisibility::Visible : EVisibility::Collapsed;
+					})[SNew(SBox).WidthOverride(384.0f).HeightOverride(384.0f)[SNew(SImage).Image_Raw(this,
+						&FVoxelLandGraphToolkit::GetNoiseBrush)]]]
+			+ SVerticalBox::Slot().AutoHeight()
+				[SNew(STextBlock).Text_Raw(this, &FVoxelLandGraphToolkit::PreviewStatusText).AutoWrapText(true)]
+			+ SVerticalBox::Slot().AutoHeight()[SNew(SExpandableArea)
+					.InitiallyCollapsed(true)
+					.HeaderContent()[SNew(STextBlock).Text(LOCTEXT("PreviewSettings", "Preview Settings"))]
+					.BodyContent()
+						[SNew(SVerticalBox)
+							+ SVerticalBox::Slot().AutoHeight()
+								[SNew(SHorizontalBox)
+									+ SHorizontalBox::Slot().AutoWidth()[SNew(STextBlock).Text(LOCTEXT("Seed", "Seed"))]
+									+ SHorizontalBox::Slot().FillWidth(1)[SNew(SEditableTextBox)
+											.Text_Lambda(
+												[this] { return FText::AsCultureInvariant(LexToString(PreviewSeed)); })
+											.OnTextCommitted_Raw(this, &FVoxelLandGraphToolkit::SeedCommitted)]
+									+ SHorizontalBox::Slot()
+										.AutoWidth()[SNew(STextBlock).Text(LOCTEXT("Slice", "Slice Z (cm)"))]
+									+ SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<float>)
+											.Value_Lambda([this] { return NoiseSliceZCm; })
+											.OnValueCommitted_Raw(this, &FVoxelLandGraphToolkit::SetNoiseSlice)]]
+							+ SVerticalBox::Slot()
+								.AutoHeight()[SNew(SHorizontalBox)
+											  + SHorizontalBox::Slot().AutoWidth()[SNew(STextBlock)
+													  .Text(LOCTEXT("Radius", "Radius (XY / Z)"))]
+											  + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>)
+													  .MinValue(1)
+													  .MaxValue(2)
+													  .Value_Lambda([this] { return PreviewHorizontalRadius; })
+													  .OnValueCommitted_Lambda([this](int32 V, ETextCommit::Type) {
+														  CommitPreviewRadius(V, true);
+													  })]
+											  + SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>)
+													  .MinValue(1)
+													  .MaxValue(2)
+													  .Value_Lambda([this] { return PreviewVerticalRadius; })
+													  .OnValueCommitted_Lambda([this](int32 V, ETextCommit::Type) {
+														  CommitPreviewRadius(V, false);
+													  })]]]]];
 }
 
 TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildFunctionOutputMenu()
@@ -1343,6 +1522,24 @@ void FVoxelLandGraphToolkit::SetFunctionOutput(FGuid NodeId, FGuid PinId, EVoxel
 TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildPreviewTargetMenu()
 {
 	FMenuBuilder Menu(true, nullptr);
+	Menu.AddMenuEntry(LOCTEXT("PreviewTerrain", "Terrain"),
+		LOCTEXT("PreviewTerrainTip", "Preview the finished terrain."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::SelectTerrainPreview)));
+	if (Asset)
+	{
+		for (const FVoxelLandGraphNodeRecord& Output : Asset->Nodes)
+		{
+			if (FVoxelLandGraphToolkitOperations::IsPreviewOutput(Output.OperatorId))
+			{
+				const FString Name = FVoxelLandGraphOutputs::GetName(Output);
+				Menu.AddMenuEntry(FText::FromString(Name),
+					LOCTEXT("PreviewOutputSlice", "Preview this signal from above."), FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateSP(this, &FVoxelLandGraphToolkit::SelectNamedOutput, Output.Id, Name)));
+			}
+		}
+	}
+
 	bool bHasOutput = false;
 	if (GraphWidget && !bStopped && !bPIE && !bReloadPaused)
 	{
@@ -1364,9 +1561,9 @@ TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildPreviewTargetMenu()
 					FString::Printf(TEXT("%s - %s (%s)"), *Node->GetNodeTitle(ENodeTitleType::ListView).ToString(),
 						*Node->GetPinDisplayName(Pin).ToString(), *Pin->PinType.PinCategory.ToString());
 				Menu.AddMenuEntry(FText::FromString(Label),
-					LOCTEXT("PreviewOutputTip", "Preview this output as a signed density field."), FSlateIcon(),
+					LOCTEXT("PreviewOutputTip", "Preview this signal from above."), FSlateIcon(),
 					FUIAction(FExecuteAction::CreateSP(
-						this, &FVoxelLandGraphToolkit::SelectPreviewTarget, Node->NodeGuid, Pin->PinId, Label)));
+						this, &FVoxelLandGraphToolkit::SelectPinSlice, Node->NodeGuid, Pin->PinId, Label)));
 			}
 		}
 	}
@@ -1378,6 +1575,12 @@ TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildPreviewTargetMenu()
 	return Menu.MakeWidget();
 }
 
+void FVoxelLandGraphToolkit::SelectPinSlice(FGuid NodeId, FGuid PinId, FString Label)
+{
+	bSelectedPinSlice = true;
+	SelectPreviewTarget(NodeId, PinId, MoveTemp(Label));
+}
+
 void FVoxelLandGraphToolkit::SelectPreviewTarget(FGuid NodeId, FGuid PinId, FString Label)
 {
 	if (bStopped || bPIE || bReloadPaused)
@@ -1386,7 +1589,9 @@ void FVoxelLandGraphToolkit::SelectPreviewTarget(FGuid NodeId, FGuid PinId, FStr
 	}
 	bM4Preview = false;
 	ClearM4StageMap();
-	bNoisePreview = false;
+	bNoisePreview = bSelectedPinSlice;
+	bNoiseStandalone = false;
+	PreviewNamedOutputId.Invalidate();
 	PreviewNodeId = NodeId;
 	PreviewPinId = PinId;
 	PreviewTargetLabel = MoveTemp(Label);
@@ -1500,11 +1705,14 @@ const FSlateBrush* FVoxelLandGraphToolkit::GetNoiseBrush() const
 
 FReply FVoxelLandGraphToolkit::ReturnToRootPreview()
 {
-	if (!bStopped && !bPIE && !bReloadPaused && (PreviewNodeId.IsValid() || bM4Preview))
+	if (!bStopped && !bPIE && !bReloadPaused
+		&& (PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid() || bM4Preview))
 	{
 		bM4Preview = false;
 		ClearM4StageMap();
 		bNoisePreview = false;
+		bSelectedPinSlice = false;
+		PreviewNamedOutputId.Invalidate();
 		PreviewNodeId.Invalidate();
 		PreviewPinId.Invalidate();
 		PreviewTargetLabel.Reset();
@@ -1519,6 +1727,18 @@ FReply FVoxelLandGraphToolkit::ReturnToRootPreview()
 
 bool FVoxelLandGraphToolkit::BuildNodePreviewSnapshot(FVoxelLandGraphSnapshot& Snapshot, FString& Error) const
 {
+	if (PreviewNamedOutputId.IsValid())
+	{
+		return FVoxelLandGraphOutputs::Project(Snapshot, PreviewNamedOutputId, true, Error);
+	}
+	if (GetTerrainPreviewOutput().IsValid())
+	{
+		return PreviewSettings->CaptureBoundOutput(Snapshot, Error);
+	}
+	if (bSelectedPinSlice)
+	{
+		return FVoxelLandGraphOutputs::ProjectPin(Snapshot, PreviewNodeId, PreviewPinId, Error);
+	}
 	const FVoxelLandGraphNodeRecord* Node = Snapshot.Nodes.FindByPredicate(
 		[this](const FVoxelLandGraphNodeRecord& Candidate) { return Candidate.Id == PreviewNodeId; });
 	if (!Node)
@@ -1672,6 +1892,13 @@ void FVoxelLandGraphToolkit::CreateMirror()
 	if (Asset->EditorGraph)
 	{
 		Graph = Asset->EditorGraph;
+		for (UEdGraphNode* GraphNode : Graph->Nodes)
+		{
+			if (UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(GraphNode))
+			{
+				Node->ConfigureNoiseAuthoringPins();
+			}
+		}
 		bLoading = false;
 		return;
 	}
@@ -1708,6 +1935,15 @@ void FVoxelLandGraphToolkit::CreateMirror()
 		Node->ParameterId = Record.ParameterId;
 		Node->SeedSalt = Record.SeedSalt;
 		Node->Configuration = Record.Configuration;
+		if (FVoxelLandGraphOutputs::IsNamedOutput(Record.OperatorId))
+		{
+			Node->OutputName = FVoxelLandGraphOutputs::GetName(Record);
+		}
+		if (Record.OperatorId == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::WorldNoise2D) && Record.Pins.Num() > 2
+			&& Record.Pins[2].FloatDefault > 0.f)
+		{
+			Node->HillSizeCm = 1.f / Record.Pins[2].FloatDefault;
+		}
 		Node->FunctionPath = Record.FunctionPath;
 		if (Node->Kind == int32(VoxelLandGraphFunctionCallId().D))
 		{
@@ -1734,11 +1970,20 @@ void FVoxelLandGraphToolkit::CreateMirror()
 			(*Source)->MakeLinkTo(*Target);
 		}
 	}
+	for (UEdGraphNode* GraphNode : Graph->Nodes)
+	{
+		if (UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(GraphNode))
+		{
+			Node->ConfigureNoiseAuthoringPins();
+		}
+	}
+	FVoxelLandGraphToolkitOperations::LayoutRecoveredGraph(*Graph, Asset->Links);
 	if (Asset->Nodes.IsEmpty() && !Asset->IsA<UVoxelLandGraphFunction>())
 	{
 		UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset);
 		UVoxelLandEditorNode* Output = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
-		Output->Kind = int32(Named ? EVoxelLandBuiltinNode::M4HeightOutput : EVoxelLandBuiltinNode::DensityOutput);
+		Output->Kind = int32(Named ? EVoxelLandBuiltinNode::M4HeightOutput : EVoxelLandBuiltinNode::FloatOutput);
+		Output->OutputName = Named ? FString() : TEXT("Height");
 		Output->CreateNewGuid();
 		Graph->AddNode(Output, false, false);
 		Output->AllocateDefaultPins();
@@ -1941,6 +2186,7 @@ void FVoxelLandGraphToolkit::GraphChanged(const FEdGraphEditAction&)
 
 void FVoxelLandGraphToolkit::SynchronizeGraph()
 {
+	RebuildOutputList();
 	const uint64 Previous = Revision;
 	FString Error;
 	FVoxelLandGraphDiagnostic Diagnostic;
@@ -1987,6 +2233,78 @@ void FVoxelLandGraphToolkit::SelectionChanged(const TSet<UObject*>& Selection)
 	}
 }
 
+FGuid FVoxelLandGraphToolkit::GetTerrainPreviewOutput() const
+{
+	if (!PreviewNodeId.IsValid() && !PreviewNamedOutputId.IsValid() && !SelectedPreviewSettings.IsNull()
+		&& PreviewSettings && PreviewSettings->Graph == Asset && PreviewSettings->IsDirectDensity())
+	{
+		return PreviewSettings->TerrainOutputId;
+	}
+	return FGuid();
+}
+
+bool FVoxelLandGraphToolkit::StartAuthoredHeightPreview()
+{
+	if (!Asset || PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid())
+	{
+		return false;
+	}
+	UVoxelLandWorldConfig* Selected = SelectedPreviewSettings.IsNull() ? nullptr : PreviewSettings.Get();
+	if (!FVoxelLandGraphOutputs::HasNamedOutputs(Asset->Nodes)
+		&& (!Selected || Selected->IsDirectDensity() || Asset->IsA<UVoxelLandM4ControlGraph>()))
+	{
+		return false;
+	}
+	if (Selected && Selected->Graph != Asset)
+	{
+		Status = TEXT("Select a World Config that uses this Terrain Graph.");
+		return true;
+	}
+	if (Selected && Selected->IsDirectDensity())
+	{
+		if (!Selected->TerrainOutputId.IsValid())
+		{
+			Status = TEXT("Select a Float output in World Config.");
+			return true;
+		}
+		bNoisePreview = false;
+		bM4Preview = false;
+		return false;
+	}
+	const UVoxelLandWorldConfig* Source =
+		PreviewSettings && !PreviewSettings->IsDirectDensity() ? PreviewSettings.Get() : nullptr;
+	UVoxelLandWorldConfig* Preview =
+		Source ? DuplicateObject<UVoxelLandWorldConfig>(Source, GetTransientPackage())
+			   : NewObject<UVoxelLandWorldConfig>(GetTransientPackage(), NAME_None, RF_Transient);
+	if (!Source)
+	{
+		const FVoxelLandGraphNodeRecord* Output =
+			Asset->Nodes.FindByPredicate(&FVoxelLandGraphToolkitOperations::IsDefaultHeightOutput);
+		if (!Output)
+		{
+			Status = TEXT("Add a Float output named Height, or select a World Config that binds another output.");
+			return true;
+		}
+		Preview->Graph = Asset;
+		Preview->TerrainOutputId = Output->Id;
+		Preview->TerrainOutputLabel = FVoxelLandGraphOutputs::GetName(*Output);
+		Preview->bGlobalErosion = false;
+		Preview->CellsX = 8;
+		Preview->CellsY = 8;
+		Preview->GridSpacingCm = 3200;
+		Preview->OriginXCm = -12800;
+		Preview->OriginYCm = -12800;
+	}
+	Preview->HorizontalRadius = PreviewHorizontalRadius;
+	Preview->VerticalRadius = PreviewVerticalRadius;
+	Preview->Seed = PreviewSeed;
+	M4PreviewConfig = Preview;
+	bM4Preview = true;
+	bM4Inspection = false;
+	StartM4Preview();
+	return true;
+}
+
 void FVoxelLandGraphToolkit::RequestCompile()
 {
 	if (bStopped || bPIE || bReloadPaused)
@@ -2020,7 +2338,11 @@ void FVoxelLandGraphToolkit::RequestCompile()
 		Status = FString::Printf(TEXT("Error; preview stale: %s"), *Error);
 		return;
 	}
-	if (!PreviewNodeId.IsValid())
+	if (StartAuthoredHeightPreview())
+	{
+		return;
+	}
+	if (!PreviewNodeId.IsValid() && !PreviewNamedOutputId.IsValid())
 	{
 		if (UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset))
 		{
@@ -2103,7 +2425,8 @@ void FVoxelLandGraphToolkit::RequestCompile()
 		return;
 	}
 	const uint64 SourceHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
-	const bool bNodePreview = PreviewNodeId.IsValid();
+	const bool bNodePreview =
+		PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid() || GetTerrainPreviewOutput().IsValid();
 	if (bNodePreview && !BuildNodePreviewSnapshot(Snapshot, Error))
 	{
 		NodePreviewSnapshot.Reset();
@@ -2653,7 +2976,7 @@ void FVoxelLandGraphToolkit::M4ObjectTransacted(UObject* Object, const FTransact
 		}
 		for (const FName Property : Event.GetChangedProperties())
 		{
-			if (Property == GET_MEMBER_NAME_CHECKED(UVoxelLandM4WorldConfig, MaterialSetup))
+			if (Property == GET_MEMBER_NAME_CHECKED(UVoxelLandWorldConfig, MaterialSetup))
 			{
 				bM4UndoMaterialChange = true;
 			}
@@ -2707,10 +3030,18 @@ void FVoxelLandGraphToolkit::MaterialSetupPropertyChanged(UObject* Object, FProp
 	{
 		return;
 	}
+	if (!bStopped && !GIsTransacting && Object && Object == SelectedPreviewSettings.Get())
+	{
+		CancelPreview();
+		++PreviewTargetRevision;
+		SettingsChanged(FAssetData(Object));
+		CompileDue = FPlatformTime::Seconds() + 0.2;
+		return;
+	}
 	if (!bStopped && !GIsTransacting && bM4Preview && M4PreviewConfig)
 	{
 		if ((Object == M4PreviewConfig
-				&& Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UVoxelLandM4WorldConfig, MaterialSetup))
+				&& Event.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UVoxelLandWorldConfig, MaterialSetup))
 			|| (Object && Object == M4PreviewConfig->MaterialSetup.Get()))
 		{
 			const UVoxelLandMaterialSetup* Setup = M4PreviewConfig->MaterialSetup.LoadSynchronous();
@@ -2784,42 +3115,41 @@ FString FVoxelLandGraphToolkit::SettingsPickerPath() const
 
 FString FVoxelLandGraphToolkit::M4PreviewConfigPath() const
 {
-	return M4PreviewConfig ? M4PreviewConfig->GetPathName() : FString();
+	return SelectedPreviewSettings.IsValid() ? SelectedPreviewSettings->GetPathName() : FString();
 }
 
 void FVoxelLandGraphToolkit::M4PreviewConfigChanged(const FAssetData& Settings)
 {
-	UVoxelLandM4WorldConfig* Source = Cast<UVoxelLandM4WorldConfig>(Settings.GetAsset());
+	UVoxelLandWorldConfig* Source = Cast<UVoxelLandWorldConfig>(Settings.GetAsset());
 	if (Settings.IsValid() && !Source)
 	{
 		return;
 	}
-	M4PreviewConfig = Source;
-	if (bM4Preview)
-	{
-		StartM4Preview();
-	}
+	bNoisePreview = false;
+	bSelectedPinSlice = false;
+	bM4Preview = false;
+	M4PreviewConfig = nullptr;
+	PreviewNamedOutputId.Invalidate();
+	PreviewNodeId.Invalidate();
+	PreviewPinId.Invalidate();
+	PreviewTargetLabel.Reset();
+	++PreviewTargetRevision;
+	CancelPreview();
+	SettingsChanged(Settings);
+	RequestCompile();
 }
 
 void FVoxelLandGraphToolkit::SettingsChanged(const FAssetData& Settings)
 {
-	UVoxelLandWorldSettings* Source = Cast<UVoxelLandWorldSettings>(Settings.GetAsset());
+	UVoxelLandWorldConfig* Source = Cast<UVoxelLandWorldConfig>(Settings.GetAsset());
 	if (Settings.IsValid() && !Source)
 	{
 		return;
 	}
 	SelectedPreviewSettings = Source;
-	if (Source)
-	{
-		PreviewSettings = DuplicateObject<UVoxelLandWorldSettings>(Source, GetTransientPackage());
-		PreviewSettings->SetFlags(RF_Transient | RF_Transactional);
-	}
-	else
-	{
-		PreviewSettings =
-			NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
-		PreviewSettings->Graph = Asset;
-	}
+	const UVoxelLandWorldConfig* Defaults =
+		Source || !Asset ? Source : FVoxelLandGraphToolkitOperations::LoadExampleConfig(*Asset);
+	PreviewSettings = FVoxelLandGraphToolkitOperations::MakePreviewSettings(Asset, Defaults);
 	if (PreviewDetails)
 	{
 		PreviewDetails->SetObject(PreviewSettings, true);
@@ -2846,7 +3176,7 @@ void FVoxelLandGraphToolkit::SynchronizePreviewSettings(bool bApplyChanges)
 	Writer.U32(uint32(PreviewSettings->FormatVersion));
 	Writer.U32(uint32(uint64(PreviewSettings->Seed)));
 	Writer.U32(uint32(uint64(PreviewSettings->Seed) >> 32));
-	Writer.Float(PreviewSettings->VoxelSizeCm);
+	Writer.Float(PreviewSettings->DirectVoxelSizeCm);
 	Writer.U32(uint32(PreviewSettings->HorizontalRadius));
 	Writer.U32(uint32(PreviewSettings->VerticalRadius));
 	TArray<FVoxelLandParameterOverride> Sorted = PreviewSettings->Overrides;
@@ -2935,12 +3265,12 @@ FReply FVoxelLandGraphToolkit::FramePreviewTerrain()
 bool FVoxelLandGraphToolkit::BuildPreviewProfile(
 	const FVoxelLandSerializedProgram& Payload, FVoxelLandZoneProfile& Profile, FString& Error) const
 {
-	if (!PreviewSettings || PreviewSettings->Graph != Asset || !PreviewSettings->ValidateSettings(Error))
+	if (!PreviewSettings || PreviewSettings->Graph != Asset || !PreviewSettings->ValidateDirectDensitySettings(Error))
 	{
 		Error = FString::Printf(TEXT("Settings must reference this graph and be valid. %s"), *Error);
 		return false;
 	}
-	Profile.VoxelSizeCm = PreviewSettings->VoxelSizeCm;
+	Profile.VoxelSizeCm = PreviewSettings->DirectVoxelSizeCm;
 	for (const FVoxelLandParameterOverride& Override : PreviewSettings->Overrides)
 	{
 		const FVoxelLandSerializedParameter* Parameter =
@@ -3046,7 +3376,7 @@ public:
 
 bool FVoxelLandGraphToolkit::IsM4PreviewCurrent(const FVoxelLandPreviewWork& Work) const
 {
-	UVoxelLandM4WorldConfig* Config = Work.M4Config.Get();
+	UVoxelLandWorldConfig* Config = Work.M4Config.Get();
 	if (!Config || Config != M4PreviewConfig || !Work.M4Snapshot || !Config->MatchesPreviewSnapshot(*Work.M4Snapshot)
 		|| Config->Continental.Graph != Work.M4Continental.Get() || Config->Mountain.Graph != Work.M4Mountain.Get()
 		|| Config->Peaks.Graph != Work.M4Peaks.Get())
@@ -3087,34 +3417,34 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 	if (PreviewWork)
 	{
 		bPreviewRequested = true;
-		Status = TEXT("Generating M4 terrain; previous preview is stale.");
+		Status = TEXT("Generating terrain; previous preview is stale.");
 		return;
 	}
 	if (!M4PreviewConfig)
 	{
-		Status = TEXT("Stale preview: select an M4 world configuration.");
+		Status = TEXT("Stale preview: select a World Config.");
 		return;
 	}
 	TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
-	if (M4PreviewConfig->bUnlimited)
+	if (M4PreviewConfig->IsInfinite())
 	{
 		Lease = VoxelLandM4Preparation::Reserve();
 	}
 	else if (!VoxelLandM4Preparation::EnsureCoordinatorReady())
 	{
-		Status = TEXT("Stale preview: M4 shared prepass coordinator is unavailable.");
+		Status = TEXT("The shared height prepass coordinator is unavailable.");
 		return;
 	}
-	if (M4PreviewConfig->bUnlimited && !Lease)
+	if (M4PreviewConfig->IsInfinite() && !Lease)
 	{
-		Status = TEXT("Stale preview: M4 prepass admission budget is exhausted.");
+		Status = TEXT("The height prepass budget is exhausted.");
 		return;
 	}
 	const TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease =
 		VoxelLandM4Preparation::ReserveValidation();
 	if (!ValidationLease)
 	{
-		Status = TEXT("Stale preview: M4 snapshot validation capacity is exhausted.");
+		Status = TEXT("The preview’s snapshot validation capacity is exhausted.");
 		return;
 	}
 	FString Error;
@@ -3126,9 +3456,11 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 	}
 	TArray<TWeakObjectPtr<UObject>> Dependencies;
 	const FVoxelLandM4ControlSnapshot* Controls[] = {&Snapshot->Continental, &Snapshot->Mountain, &Snapshot->Peaks};
-	for (const FVoxelLandM4ControlSnapshot* Control : Controls)
+	const FVoxelLandGraphSnapshot* Sources[] = {
+		&Snapshot->AuthoredHeightSource, &Controls[0]->Source, &Controls[1]->Source, &Controls[2]->Source};
+	for (const FVoxelLandGraphSnapshot* Source : Sources)
 	{
-		for (const FVoxelLandGraphFunctionSnapshot& Function : Control->Source.Functions)
+		for (const FVoxelLandGraphFunctionSnapshot& Function : Source->Functions)
 		{
 			UObject* Dependency = FSoftObjectPath(Function.AssetPath).ResolveObject();
 			if (!Dependency)
@@ -3178,14 +3510,15 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 #endif
 	PreviewWork = Work;
 	SemanticChangeTime = FPlatformTime::Seconds();
-	Status = TEXT("Generating M4 terrain; previous preview is stale.");
+	Status = TEXT("Generating terrain. The previous preview is stale.");
 	WorkerTasks.Add(Async(EAsyncExecution::ThreadPool, [Work, Lease, Cancel, Horizontal, Vertical]() {
 		const double Started = FPlatformTime::Seconds();
 		TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 		auto IsCancelled = [&Cancel] {
 			return Cancel->Load();
 		};
-		if (VoxelLandM4PreviewCurves::Bake(*Work->M4ExecutionSnapshot, IsCancelled, Work->Error)
+		const bool bAuthored = Work->M4ExecutionSnapshot->AuthoredHeightOutputId.IsValid();
+		if ((bAuthored || VoxelLandM4PreviewCurves::Bake(*Work->M4ExecutionSnapshot, IsCancelled, Work->Error))
 			&& VoxelLandM4Preparation::Prepare(
 				*Work->M4ExecutionSnapshot, Lease, Work->M4ValidationLease, IsCancelled, Generator, Work->Error))
 		{
@@ -3235,8 +3568,21 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 			}
 			else
 			{
-				Work->bSuccess = FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::RunPrepared(
-					Generator, Horizontal, Vertical, Cancel, Work->Meshes, Work->Error);
+				const double ChunkSizeCm = double(Work->VoxelSize) * FVoxelLandChunkData::Cells;
+				const double HeightCm = Grid ? (double(Work->M4MinHeightQ8) + Work->M4MaxHeightQ8) / 512.0
+											 : double(Work->M4ExecutionSnapshot->BaseHeightQ8) / 256.0;
+				const int32 CenterZ = bAuthored ? FMath::FloorToInt32(HeightCm / ChunkSizeCm) : 0;
+				FIntPoint CenterXY = FIntPoint::ZeroValue;
+				if (bAuthored && Grid)
+				{
+					CenterXY.X =
+						FMath::FloorToInt32(double(FMath::Clamp(int64(0), Work->M4MinX, Work->M4MaxX)) / ChunkSizeCm);
+					CenterXY.Y =
+						FMath::FloorToInt32(double(FMath::Clamp(int64(0), Work->M4MinY, Work->M4MaxY)) / ChunkSizeCm);
+				}
+				Work->bSuccess = FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::RunPreparedRange(Generator,
+					Horizontal, CenterZ - Vertical, CenterZ + Vertical - 1, Cancel, Work->Meshes, Work->Error,
+					MAX_uint64, CenterXY);
 			}
 		}
 		Work->GenerationMs = (FPlatformTime::Seconds() - Started) * 1000.0;
@@ -3248,7 +3594,10 @@ void FVoxelLandGraphToolkit::StartPreview()
 {
 	if (bM4Preview)
 	{
-		StartM4Preview();
+		if (!StartAuthoredHeightPreview())
+		{
+			StartM4Preview();
+		}
 		return;
 	}
 	if (bStopped || bPIE || bReloadPaused)
@@ -3282,9 +3631,11 @@ void FVoxelLandGraphToolkit::StartPreview()
 		Status = FString::Printf(TEXT("Stale preview: source unavailable or invalid. %s"), *Error);
 		return;
 	}
+	const EVoxelLandGraphValueType SliceType = FVoxelLandNoisePreviewJob::GetValueType(
+		Snapshot, PreviewNamedOutputId.IsValid() ? PreviewNamedOutputId : PreviewNodeId, PreviewPinId);
 	const uint64 SourceHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
 	FVoxelLandSerializedProgram Payload;
-	if (PreviewNodeId.IsValid())
+	if (PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid() || GetTerrainPreviewOutput().IsValid())
 	{
 		if (!NodePreviewPayload || !NodePreviewSnapshot || NodePreviewSourceHash != SourceHash)
 		{
@@ -3316,15 +3667,21 @@ void FVoxelLandGraphToolkit::StartPreview()
 	const int32 HorizontalRadius = PreviewHorizontalRadius;
 	const int32 VerticalRadius = PreviewVerticalRadius;
 	const bool bMakeNoise2D = bNoisePreview;
+	TOptional<FVoxelLandDensityBounds> Bounds;
+	if (!SelectedPreviewSettings.IsNull() && PreviewSettings->IsDirectDensity() && !PreviewSettings->IsInfinite())
+	{
+		Bounds = PreviewSettings->DensityBounds;
+	}
 	const float SpacingCm = NoiseSpacingCm;
 	const float SliceZCm = NoiseSliceZCm;
-	Status = bMakeNoise2D ? TEXT("Generating 2D noise; previous preview is stale.")
+	Status = bMakeNoise2D ? TEXT("Generating top-down preview…")
 						  : TEXT("Generating bounded chunks; previous preview is stale.");
 	const TSharedRef<FVoxelLandPreviewWork, ESPMode::ThreadSafe> Work =
 		MakeShared<FVoxelLandPreviewWork, ESPMode::ThreadSafe>();
 	Work->PreviewRevision = PreviewRevision;
 	Work->SourceRevision = Revision;
 	Work->bNoise2D = bMakeNoise2D;
+	Work->SliceType = SliceType;
 #if WITH_DEV_AUTOMATION_TESTS
 	Work->SeedForTests = Seed;
 #endif
@@ -3338,23 +3695,23 @@ void FVoxelLandGraphToolkit::StartPreview()
 	const TSharedPtr<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe> Barrier = MoveTemp(PreviewReloadBarrierForTests);
 	WorkerTasks.Add(Async(EAsyncExecution::ThreadPool,
 		[Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius,
-			SpacingCm, SliceZCm, bMakeNoise2D, Cancel, Work, Barrier]() mutable
+			SpacingCm, SliceZCm, bMakeNoise2D, Bounds, Cancel, Work, Barrier]() mutable
 #else
 	WorkerTasks.Add(Async(EAsyncExecution::ThreadPool,
 		[Snapshot = MoveTemp(Snapshot), Payload, Profile = MoveTemp(Profile), Seed, HorizontalRadius, VerticalRadius,
-			SpacingCm, SliceZCm, bMakeNoise2D, Cancel, Work]() mutable
+			SpacingCm, SliceZCm, bMakeNoise2D, Bounds, Cancel, Work]() mutable
 #endif
 		{
 			const double StartTime = FPlatformTime::Seconds();
 			if (bMakeNoise2D)
 			{
 				Work->bSuccess = FVoxelLandNoisePreviewJob::Run(Snapshot, Payload, Seed, Profile, SpacingCm, SliceZCm,
-					Cancel, Work->NoisePixels, Work->NoiseMin, Work->NoiseMax, Work->NoiseClipped, Work->Error);
+					Work->SliceType, Cancel, Work->NoisePixels, Work->NoiseMin, Work->NoiseMax, Work->Error);
 			}
 			else
 			{
 				Work->bSuccess = FVoxelLandGraphToolkitOperations::FVoxelLandPreviewJob::Run(Snapshot, Payload, Seed,
-					Profile, HorizontalRadius, VerticalRadius, Cancel, Work->Meshes, Work->Error
+					Profile, HorizontalRadius, VerticalRadius, Bounds, Cancel, Work->Meshes, Work->Error
 #if WITH_DEV_AUTOMATION_TESTS
 					,
 					Barrier
@@ -3398,11 +3755,21 @@ bool FVoxelLandGraphToolkit::PublishNoisePreview(const FVoxelLandPreviewWork& Fi
 	Texture->Filter = TF_Nearest;
 	Texture->UpdateResource();
 	NoiseTexture = Texture;
+	bShowingScalarPreview = true;
 	NoiseBrush.SetResourceObject(Texture);
 	NoiseBrush.SetImageSize(FVector2D(Resolution, Resolution));
-	Status = FString::Printf(
-		TEXT("Ready: observed range %.6g to %.6g; %d of %d samples clipped outside [-1, 1]; CPU %.1f ms."),
-		Finished.NoiseMin, Finished.NoiseMax, Finished.NoiseClipped, Resolution * Resolution, Finished.GenerationMs);
+	switch (Finished.SliceType)
+	{
+		case EVoxelLandGraphValueType::Bool:
+			Status = TEXT("Dark = false · Gold = true");
+			break;
+		case EVoxelLandGraphValueType::Int32:
+			Status = FString::Printf(TEXT("Categories in range %.0f to %.0f."), Finished.NoiseMin, Finished.NoiseMax);
+			break;
+		default:
+			Status = FString::Printf(TEXT("Range %.4g to %.4g."), Finished.NoiseMin, Finished.NoiseMax);
+			break;
+	}
 	SemanticChangeTime = 0.0;
 	return true;
 }
@@ -3651,7 +4018,10 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 		}
 		Staged.Emplace(Entry.Key, Component);
 	}
+	const bool bFrameFirstTerrain = Finished.M4Snapshot && Finished.M4Snapshot->AuthoredHeightOutputId.IsValid()
+								 && PreviewComponents.IsEmpty() && !Staged.IsEmpty();
 	ClearPreview();
+	bShowingScalarPreview = false;
 	const bool bGPURequested =
 		FVoxelLandGraphToolkitOperations::CVarVoxelLandPreviewGPUUploadTiming.GetValueOnGameThread() != 0;
 	TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> UploadObservation;
@@ -3671,6 +4041,10 @@ bool FVoxelLandGraphToolkit::PublishPreview(const FVoxelLandPreviewWork& Finishe
 	if (PreviewViewport)
 	{
 		PreviewViewport->SetTerrainBounds(TerrainBounds);
+		if (bFrameFirstTerrain)
+		{
+			PreviewViewport->FrameTerrain();
+		}
 	}
 	UpdateTerrainPreviewDetails(Finished);
 #if WITH_DEV_AUTOMATION_TESTS

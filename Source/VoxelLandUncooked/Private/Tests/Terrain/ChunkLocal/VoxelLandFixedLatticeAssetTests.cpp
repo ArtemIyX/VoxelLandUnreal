@@ -1,7 +1,9 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
+#include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
+#include "Generation/Terrain/Domains/VoxelLandTerrainDomain.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -14,7 +16,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4FixedLatticeAssetTest, "VoxelLand.M4.FixedLattice.AssetValidation", M4FixedAssetFlags)
 bool FVoxelLandM4FixedLatticeAssetTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	for (FVoxelLandM4ControlConfig* Control : {&Config->Continental, &Config->Mountain, &Config->Peaks})
 	{
 		Control->Graph = NewObject<UVoxelLandTerrainGraph>(Config);
@@ -24,7 +26,7 @@ bool FVoxelLandM4FixedLatticeAssetTest::RunTest(const FString& Parameters)
 		Last.InputQ16 = 65535;
 		Control->CurveKeys = {First, Last};
 	}
-	Config->bUnlimited = true;
+	Config->WorldExtent = EVoxelLandWorldExtent::Infinite;
 	Config->bGlobalErosion = false;
 	Config->bOverhangEnabled = true;
 	Config->OverhangAmplitudeQ8 = 256;
@@ -48,7 +50,14 @@ bool FVoxelLandM4FixedLatticeAssetTest::RunTest(const FString& Parameters)
 	Config->HeightDetail.bEnabled = false;
 	TestTrue(TEXT("disabled detail does not require Q24 frequency"), Config->ValidateSettings(Error));
 	Config->bGlobalErosion = true;
-	TestFalse(TEXT("fixed-lattice unlimited still rejects global erosion"), Config->ValidateSettings(Error));
+	FVoxelLandM4WorldSnapshot Snapshot;
+	TestTrue(TEXT("infinite config captures with its finite erosion preference enabled"),
+		Config->CaptureSnapshot(Snapshot, Error));
+	TestFalse(TEXT("captured infinite domain excludes erosion"), Snapshot.Domain.bGlobalErosion);
+	TestTrue(TEXT("captured fixed-lattice domain remains admissible"), !VoxelLandM4Domain::Validate(Snapshot.Domain));
+	Snapshot.Domain.bGlobalErosion = true;
+	TestTrue(TEXT("fixed-lattice backend rejects an unlimited domain that requests erosion"),
+		bool(VoxelLandM4Domain::Validate(Snapshot.Domain)));
 	return true;
 }
 

@@ -26,13 +26,13 @@ public:
 	static constexpr int32 MaxVerticalRadius = 4;
 	static constexpr int32 MinIdentityBytes = 8;
 	static constexpr int32 MaxIdentityBytes = 8 * 1024 * 1024;
-	static constexpr int32 SavedFormatVersion = 1;
 
 	static bool M4SavedParametersBounded(const TArray<FVoxelLandGraphParameter>& Parameters, int32 Limit);
 	static bool M4SavedGraphBounded(const TArray<FVoxelLandGraphParameter>& Parameters,
 		const TArray<FVoxelLandGraphNodeRecord>& Nodes, const TArray<FVoxelLandGraphLinkRecord>& Links,
 		int32 ParameterLimit, FVoxelLandM4SavedGraphTotals& Totals);
 	static bool M4SavedChannelBounded(const FVoxelLandM4ControlSnapshot& Channel);
+	static bool M4SavedSourceBounded(const FVoxelLandGraphSnapshot& Source);
 };
 
 bool FVoxelLandM4SavedWorldPreflightInternals::M4SavedParametersBounded(
@@ -95,8 +95,25 @@ bool FVoxelLandM4SavedWorldPreflightInternals::M4SavedChannelBounded(const FVoxe
 	{
 		return false;
 	}
+	if (!M4SavedSourceBounded(Source))
+	{
+		return false;
+	}
+	for (const auto& Parameter : Program.Parameters)
+	{
+		if (Parameter.Name.Len() > MaxNameLength)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool FVoxelLandM4SavedWorldPreflightInternals::M4SavedSourceBounded(const FVoxelLandGraphSnapshot& Source)
+{
 	FVoxelLandM4SavedGraphTotals Totals;
-	if (!M4SavedGraphBounded(Source.Parameters, Source.Nodes, Source.Links, MaxParameters, Totals))
+	if (Source.Functions.Num() > MaxFunctions
+		|| !M4SavedGraphBounded(Source.Parameters, Source.Nodes, Source.Links, MaxParameters, Totals))
 	{
 		return false;
 	}
@@ -104,13 +121,6 @@ bool FVoxelLandM4SavedWorldPreflightInternals::M4SavedChannelBounded(const FVoxe
 	{
 		if (Function.AssetPath.Len() > MaxPathLength
 			|| !M4SavedGraphBounded(Function.Inputs, Function.Nodes, Function.Links, MaxFunctionInputs, Totals))
-		{
-			return false;
-		}
-	}
-	for (const auto& Parameter : Program.Parameters)
-	{
-		if (Parameter.Name.Len() > MaxNameLength)
 		{
 			return false;
 		}
@@ -125,9 +135,17 @@ bool VoxelLandM4SavedWorldPreflight::ValidateSnapshot(const FVoxelLandM4WorldSna
 		|| S.MaterialSetupPath.ToString().Len() > FVoxelLandM4SavedWorldPreflightInternals::MaxPathLength
 		|| !FVoxelLandM4SavedWorldPreflightInternals::M4SavedChannelBounded(S.Continental)
 		|| !FVoxelLandM4SavedWorldPreflightInternals::M4SavedChannelBounded(S.Mountain)
-		|| !FVoxelLandM4SavedWorldPreflightInternals::M4SavedChannelBounded(S.Peaks))
+		|| !FVoxelLandM4SavedWorldPreflightInternals::M4SavedChannelBounded(S.Peaks)
+		|| !FVoxelLandM4SavedWorldPreflightInternals::M4SavedSourceBounded(S.AuthoredHeightSource))
 	{
 		Error = TEXT("M4 saved world snapshot exceeds admission limits");
+		return false;
+	}
+	if (S.AuthoredHeightOutputId.IsValid()
+		&& (S.HeightScaleCm < 1 || S.HeightScaleCm > 2000000 || FMath::Abs(int64(S.BaseHeightQ8)) > 512000000
+			|| S.AuthoredHeightSource.Nodes.IsEmpty() || S.HeightStage.Version != 0))
+	{
+		Error = TEXT("Saved authored Height has an invalid graph source or elevation settings.");
 		return false;
 	}
 	return VoxelLandM4HeightStageValidation::Validate(S, Error);
@@ -135,7 +153,13 @@ bool VoxelLandM4SavedWorldPreflight::ValidateSnapshot(const FVoxelLandM4WorldSna
 
 bool VoxelLandM4SavedWorldPreflight::Validate(const FVoxelLandM4SavedWorld& Saved, FString& Error)
 {
-	if (Saved.FormatVersion != FVoxelLandM4SavedWorldPreflightInternals::SavedFormatVersion
+	if (Saved.FormatVersion == 1 || !Saved.Snapshot.AuthoredHeightOutputId.IsValid())
+	{
+		Error = TEXT(
+			"Legacy three-channel Height saves require reauthoring a named Float output and regenerating the world.");
+		return false;
+	}
+	if (Saved.FormatVersion != FVoxelLandM4SavedWorld::AuthoredFormatVersion
 		|| Saved.Identity.CanonicalBytes.Num() < FVoxelLandM4SavedWorldPreflightInternals::MinIdentityBytes
 		|| Saved.Identity.CanonicalBytes.Num() > FVoxelLandM4SavedWorldPreflightInternals::MaxIdentityBytes)
 	{

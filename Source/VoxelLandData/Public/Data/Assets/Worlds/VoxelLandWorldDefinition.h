@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/DataAsset.h"
+#include "UObject/Object.h"
 #include "Data/World/Configuration/VoxelLandWorldKind.h"
 #include "Data/World/Configuration/VoxelLandWorldCommonSettings.h"
 #include "Templates/Function.h"
@@ -17,8 +17,8 @@ VOXELLANDDATA_API void VoxelLandWorldDefinitionSetBeforeLoadHook(TFunction<void(
 
 // Abstract common authoring data. A concrete asset type determines its world
 // mode; there is no separately editable flag that can contradict the type.
-UCLASS(Abstract, BlueprintType)
-class VOXELLANDDATA_API UVoxelLandWorldDefinition : public UDataAsset
+UCLASS(Abstract, Transient)
+class VOXELLANDDATA_API UVoxelLandWorldSource : public UObject
 {
 	GENERATED_BODY()
 
@@ -34,7 +34,7 @@ public:
 	void EnforceCookPreparation(FArchive& Ar) const;
 #endif
 	virtual EVoxelLandWorldKind GetWorldKind() const
-		PURE_VIRTUAL(UVoxelLandWorldDefinition::GetWorldKind, return EVoxelLandWorldKind::Finite;);
+		PURE_VIRTUAL(UVoxelLandWorldSource::GetWorldKind, return EVoxelLandWorldKind::Finite;);
 
 	UPROPERTY(EditAnywhere, Category = "VoxelLand",
 		meta = (ToolTip = "Terrain inputs shared by finite and infinite-style worlds."))

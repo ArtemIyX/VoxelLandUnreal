@@ -1,7 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Async/Async.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
@@ -122,7 +122,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4ExampleReproducibility, "VoxelLand.M4.Example.Reproducibility", M4ExampleFlags)
 bool FVoxelLandM4ExampleReproducibility::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graphs[3] = {NewObject<UVoxelLandTerrainGraph>(Config),
 		NewObject<UVoxelLandTerrainGraph>(Config), NewObject<UVoxelLandTerrainGraph>(Config)};

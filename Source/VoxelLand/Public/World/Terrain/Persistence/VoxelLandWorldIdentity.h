@@ -16,7 +16,9 @@ namespace VoxelLandM4WorldIdentity
 // Cross-version/platform compatibility is not claimed until backend versions are
 // explicitly pinned. Outputs are unchanged on failure.
 VOXELLAND_API bool Capture(const FVoxelLandM4WorldSnapshot& Snapshot, FVoxelLandM4IdentityRecord& Out, FString& Error);
-// Only the current encoding, version 1, is accepted.
+// Version 1 identifies legacy control snapshots for internal regressions and
+// existing metered callers. Version 2 identifies named authored Height.
+inline constexpr int32 AuthoredHeightVersion = 2;
 VOXELLAND_API bool CaptureVersion(
 	const FVoxelLandM4WorldSnapshot& Snapshot, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error);
 // Recompute from fresh inputs and compare all bytes (never just the hash).

@@ -1,7 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
-#include "Data/Assets/Worlds/VoxelLandWorldSettings.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
@@ -19,7 +19,7 @@ class FVoxelLandCookedRuntimeCommand final : public IAutomationLatentCommand
 {
 public:
 	FVoxelLandCookedRuntimeCommand(FAutomationTestBase* InTest, UWorld* InWorld, AVoxelLandWorld* InActor,
-		UVoxelLandWorldSettings* InSettings, FString InMountDirectory)
+		UVoxelLandWorldConfig* InSettings, FString InMountDirectory)
 		: Test(InTest)
 		, World(InWorld)
 		, Actor(InActor)
@@ -54,7 +54,7 @@ public:
 			Test->TestTrue(TEXT("Changed settings report superseded result"),
 				Actor->LastInitializationError.Contains(TEXT("superseded")));
 			Settings->Seed = 1234;
-			if (!Actor->InitializeFromSettings(Settings))
+			if (!Actor->InitializeFromConfig(Settings, FIntVector::ZeroValue))
 			{
 				Test->AddError(FString::Printf(
 					TEXT("Cooked settings initialization rejected: %s"), *Actor->LastInitializationError));
@@ -123,7 +123,7 @@ private:
 	FAutomationTestBase* Test;
 	UWorld* World;
 	AVoxelLandWorld* Actor;
-	UVoxelLandWorldSettings* Settings;
+	UVoxelLandWorldConfig* Settings;
 	FString MountDirectory;
 	double StartTime;
 	int32 Stage = 0;
@@ -143,7 +143,7 @@ bool FVoxelLandCookedExampleProbe::RunTest(const FString& Parameters)
 	}
 	FPaths::NormalizeDirectoryName(Directory);
 	if (!FPaths::FileExists(Directory / TEXT("DA_M3_Hills.uasset"))
-		|| !FPaths::FileExists(Directory / TEXT("DA_M3_WorldSettings.uasset")))
+		|| !FPaths::FileExists(Directory / TEXT("DA_DirectDensityWorld.uasset")))
 	{
 		AddError(TEXT("Cooked example graph or settings not found in supplied directory."));
 		return false;
@@ -151,8 +151,8 @@ bool FVoxelLandCookedExampleProbe::RunTest(const FString& Parameters)
 	const FString MountDirectory = FPaths::GetPath(Directory) + TEXT("/");
 	FPackageName::RegisterMountPoint(TEXT("/VoxelLand/"), MountDirectory);
 	TGuardValue<int32> AllowCooked(GAllowCookedDataInEditorBuilds, 1);
-	UVoxelLandWorldSettings* LoadedSettings = LoadObject<UVoxelLandWorldSettings>(
-		nullptr, TEXT("/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings"));
+	UVoxelLandWorldConfig* LoadedSettings = LoadObject<UVoxelLandWorldConfig>(
+		nullptr, TEXT("/VoxelLand/Examples/DA_DirectDensityWorld.DA_DirectDensityWorld"));
 	UVoxelLandTerrainGraph* Graph = LoadedSettings ? LoadedSettings->Graph.Get() : nullptr;
 	if (!LoadedSettings || !Graph || !LoadedSettings->GetOutermost()->HasAnyPackageFlags(PKG_FilterEditorOnly)
 		|| !Graph->GetOutermost()->HasAnyPackageFlags(PKG_FilterEditorOnly))
@@ -163,13 +163,13 @@ bool FVoxelLandCookedExampleProbe::RunTest(const FString& Parameters)
 	}
 	TestNull(TEXT("Cook strips editor graph"), Graph->EditorGraph.Get());
 	FString Error;
-	if (!LoadedSettings->ValidateSettings(Error) || !GEngine)
+	if (!LoadedSettings->ValidateDirectDensitySettings(Error) || !GEngine)
 	{
 		FPackageName::UnRegisterMountPoint(TEXT("/VoxelLand/"), MountDirectory);
 		AddError(FString::Printf(TEXT("Cooked settings invalid: %s"), *Error));
 		return false;
 	}
-	UVoxelLandWorldSettings* Settings = DuplicateObject<UVoxelLandWorldSettings>(LoadedSettings, GetTransientPackage());
+	UVoxelLandWorldConfig* Settings = DuplicateObject<UVoxelLandWorldConfig>(LoadedSettings, GetTransientPackage());
 	Settings->AddToRoot();
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 	if (!World)
@@ -198,7 +198,7 @@ bool FVoxelLandCookedExampleProbe::RunTest(const FString& Parameters)
 	Actor->DispatchBeginPlay();
 	TestFalse(TEXT("BeginPlay does not start terrain"), Actor->HasWorldStateForTests());
 	TestFalse(TEXT("BeginPlay leaves terrain tick disabled"), Actor->IsActorTickEnabled());
-	if (!Actor->InitializeFromSettings(Settings))
+	if (!Actor->InitializeFromConfig(Settings, FIntVector::ZeroValue))
 	{
 		AddError(FString::Printf(TEXT("Could not start cancellation probe: %s"), *Actor->LastInitializationError));
 		Actor->Shutdown();
@@ -213,7 +213,7 @@ bool FVoxelLandCookedExampleProbe::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Cancellation leaves no terrain state"), Actor->HasWorldStateForTests());
 	TestFalse(TEXT("Cancellation ends initialization"), Actor->bInitializing);
 	TestTrue(TEXT("Cancellation reports its reason"), Actor->LastInitializationError.Contains(TEXT("cancelled")));
-	if (!Actor->InitializeFromSettings(Settings))
+	if (!Actor->InitializeFromConfig(Settings, FIntVector::ZeroValue))
 	{
 		AddError(TEXT("Could not start stale-result probe"));
 		Actor->Shutdown();

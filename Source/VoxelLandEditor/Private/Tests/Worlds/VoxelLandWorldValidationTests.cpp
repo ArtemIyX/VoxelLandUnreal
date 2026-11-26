@@ -254,9 +254,8 @@ bool FVoxelLandWorldCookGuardTest::RunTest(const FString& Parameters)
 	FArchiveCookContext CookContext(
 		nullptr, UE::Cook::ECookType::Unknown, UE::Cook::ECookingDLC::Unknown, nullptr, nullptr);
 	FArchiveSavePackageData CookData(SerializeContext, nullptr, &CookContext);
-	for (UVoxelLandWorldDefinition* World :
-		{static_cast<UVoxelLandWorldDefinition*>(NewObject<UVoxelLandFiniteWorld>()),
-			static_cast<UVoxelLandWorldDefinition*>(NewObject<UVoxelLandInfiniteWorld>())})
+	for (UVoxelLandWorldSource* World : {static_cast<UVoxelLandWorldSource*>(NewObject<UVoxelLandFiniteWorldSource>()),
+			 static_cast<UVoxelLandWorldSource*>(NewObject<UVoxelLandInfiniteWorldSource>())})
 	{
 		TArray<uint8> Bytes;
 		FMemoryWriter Writer(Bytes);

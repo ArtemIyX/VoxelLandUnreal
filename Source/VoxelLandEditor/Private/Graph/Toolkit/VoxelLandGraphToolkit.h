@@ -25,8 +25,8 @@ class UMaterialInterface;
 class UTexture2D;
 struct FVoxelLandM4StageStats;
 struct FVoxelLandM4WorldSnapshot;
-class UVoxelLandWorldSettings;
-class UVoxelLandM4WorldConfig;
+class UVoxelLandWorldConfig;
+class UVoxelLandWorldConfig;
 struct FAssetData;
 class FVoxelLandCompileWork;
 class FVoxelLandPreviewWork;
@@ -64,7 +64,7 @@ public:
 	int32 GetPanelRefreshCountForTests() const { return PanelRefreshCountForTests; }
 	void CreatePanelForTests();
 	void CopyPasteNodesForTests(const TArray<UEdGraphNode*>& Nodes);
-	UVoxelLandWorldSettings* GetPreviewSettingsForTests() const { return PreviewSettings; }
+	UVoxelLandWorldConfig* GetPreviewSettingsForTests() const { return PreviewSettings; }
 	uint64 GetPreviewRevisionForTests() const { return PreviewRevision; }
 	int32 GetMaterialApplyCountForTests() const { return MaterialApplyCountForTests; }
 	int32 GetPreviewStartCountForTests() const { return PreviewStartCountForTests; }
@@ -82,7 +82,7 @@ public:
 
 	int32 GetPreviewHorizontalRadiusForTests() const { return PreviewHorizontalRadius; }
 	void SetMaterialPickerForTests(UMaterialInterface* Material);
-	void SetSettingsPickerForTests(UVoxelLandWorldSettings* Settings);
+	void SetSettingsPickerForTests(UVoxelLandWorldConfig* Settings);
 	FString GetMaterialPickerPathForTests() const { return MaterialPickerPath(); }
 	UMaterialInterface* GetEffectiveMaterialForTests() const { return PreviewMaterial; }
 	FString GetSettingsPickerPathForTests() const { return SettingsPickerPath(); }
@@ -121,7 +121,7 @@ public:
 	const FString& GetM4InspectionDetailsForTests() const { return M4InspectionDetails; }
 	bool HasPreviewFenceForTests() const { return PreviewFence.IsValid(); }
 	void StartPreviewForTests() { StartPreview(); }
-	void StartM4PreviewForTests(UVoxelLandM4WorldConfig* Config)
+	void StartM4PreviewForTests(UVoxelLandWorldConfig* Config)
 	{
 		M4PreviewConfig = Config;
 		bM4Preview = true;
@@ -129,6 +129,7 @@ public:
 	}
 	bool HasM4PreviewWorkForTests() const { return PreviewWork.IsValid(); }
 	void RequestCompileForTests() { RequestCompile(); }
+	void SelectNamedOutputForTests(FGuid Id, const FString& Name) { SelectNamedOutput(Id, Name); }
 	bool HasCompileWorkForTests() const { return CompileWork.IsValid(); }
 	bool HasScheduledCompileForTests() const { return CompileDue > 0.0; }
 	void AddWorkerForTests(TFuture<void>&& Task) { WorkerTasks.Add(MoveTemp(Task)); }
@@ -150,6 +151,13 @@ private:
 	TSharedRef<SDockTab> SpawnDetails(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnDiagnostics(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnPreview(const FSpawnTabArgs& Args);
+	TSharedRef<SDockTab> SpawnOutputs(const FSpawnTabArgs& Args);
+	void RebuildOutputList();
+	void SelectNamedOutput(FGuid OutputId, FString Name);
+	void SelectPinSlice(FGuid NodeId, FGuid PinId, FString Name);
+	void SelectTerrainPreview();
+	bool StartAuthoredHeightPreview();
+	FGuid GetTerrainPreviewOutput() const;
 	TSharedRef<SDockTab> SpawnPalette(const FSpawnTabArgs& Args);
 	void CollectPalette(FGraphActionListBuilderBase& OutActions);
 	void ActivatePalette(const TArray<TSharedPtr<FEdGraphSchemaAction>>& Actions);
@@ -174,6 +182,7 @@ private:
 	void PasteNodes();
 	void DuplicateSelected();
 	FText StatusText() const;
+	FText PreviewStatusText() const;
 	FText M4StageInspectorText() const;
 	void StartPreview();
 	void StartM4Preview();
@@ -250,14 +259,15 @@ private:
 	TObjectPtr<UMaterialInterface> PreviewMaterial = nullptr;
 	TObjectPtr<UTexture2D> NoiseTexture = nullptr;
 	FSlateBrush NoiseBrush;
+	bool bShowingScalarPreview = false;
 	TObjectPtr<UTexture2D> M4StageTexture = nullptr;
 	FSlateBrush M4StageBrush;
 	TObjectPtr<UTexture2D> M4ControlsTexture = nullptr;
 	FSlateBrush M4ControlsBrush;
 	TSoftObjectPtr<UMaterialInterface> SelectedPreviewMaterial;
-	TSoftObjectPtr<UVoxelLandWorldSettings> SelectedPreviewSettings;
-	TObjectPtr<UVoxelLandWorldSettings> PreviewSettings = nullptr;
-	TObjectPtr<UVoxelLandM4WorldConfig> M4PreviewConfig = nullptr;
+	TSoftObjectPtr<UVoxelLandWorldConfig> SelectedPreviewSettings;
+	TObjectPtr<UVoxelLandWorldConfig> PreviewSettings = nullptr;
+	TObjectPtr<UVoxelLandWorldConfig> M4PreviewConfig = nullptr;
 	TArray<TWeakObjectPtr<UObject>> M4FunctionDependencies;
 	uint64 M4FunctionPresentationRevision = 0;
 	bool bM4Preview = false;
@@ -279,6 +289,9 @@ private:
 	uint64 PreviewRevision = 0;
 	uint64 PreviewTargetRevision = 0;
 	uint64 NodePreviewSourceHash = 0;
+	TSharedPtr<class SVerticalBox> OutputRows;
+	FGuid PreviewNamedOutputId;
+	bool bSelectedPinSlice = false;
 	FGuid PreviewNodeId;
 	FGuid PreviewPinId;
 	FString PreviewTargetLabel;

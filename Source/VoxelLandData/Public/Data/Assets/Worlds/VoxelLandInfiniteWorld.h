@@ -7,8 +7,8 @@
 
 struct FVoxelLandInfiniteWorldSnapshot;
 
-UCLASS(BlueprintType)
-class VOXELLANDDATA_API UVoxelLandInfiniteWorld : public UVoxelLandWorldDefinition
+UCLASS(Transient)
+class VOXELLANDDATA_API UVoxelLandInfiniteWorldSource : public UVoxelLandWorldSource
 {
 	GENERATED_BODY()
 

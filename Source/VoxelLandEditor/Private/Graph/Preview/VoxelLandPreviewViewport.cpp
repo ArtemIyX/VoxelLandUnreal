@@ -50,6 +50,8 @@ TSharedRef<FEditorViewportClient> SVoxelLandPreviewViewport::MakeEditorViewportC
 	ViewportClient->SetViewLocation(FVector(-7000.0, -7000.0, 5000.0));
 	ViewportClient->SetViewRotation(FRotator(-25.0, 45.0, 0.0));
 	ViewportClient->SetViewMode(VMI_Lit);
+	ViewportClient->ExposureSettings.bFixed = true;
+	ViewportClient->ExposureSettings.FixedEV100 = 2.f;
 	ViewportClient->SetRealtime(true);
 	return ViewportClient;
 }

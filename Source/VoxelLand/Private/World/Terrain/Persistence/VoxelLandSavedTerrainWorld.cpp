@@ -7,12 +7,19 @@
 bool VoxelLandM4SavedWorld::Capture(
 	const FVoxelLandM4WorldSnapshot& Snapshot, FVoxelLandM4SavedWorld& Out, FString& Error)
 {
+	if (!Snapshot.AuthoredHeightOutputId.IsValid())
+	{
+		Error =
+			TEXT("Cannot save legacy three-channel Height. Reauthor a named Float output and regenerate the world.");
+		return false;
+	}
 	// Validate metadata before the identity encoder or the saved copy allocate.
 	if (!VoxelLandM4SavedWorldPreflight::ValidateSnapshot(Snapshot, Error))
 	{
 		return false;
 	}
 	FVoxelLandM4SavedWorld Saved;
+	Saved.FormatVersion = FVoxelLandM4SavedWorld::AuthoredFormatVersion;
 	if (!VoxelLandM4WorldIdentity::Capture(Snapshot, Saved.Identity, Error))
 	{
 		return false;

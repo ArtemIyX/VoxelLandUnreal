@@ -4,67 +4,73 @@
 #include "Factories/Factory.h"
 #include "VoxelLandAssetFactories.generated.h"
 
+uint32 GetVoxelLandAssetMenuCategory();
+
+UCLASS(Abstract)
+class UVoxelLandAssetFactory : public UFactory
+{
+	GENERATED_BODY()
+
+public:
+	virtual uint32 GetMenuCategories() const override;
+};
+
 UCLASS()
-class UVoxelLandTerrainGraphFactory : public UFactory
+class UVoxelLandTerrainGraphFactory : public UVoxelLandAssetFactory
 {
 	GENERATED_BODY()
 
 public:
 	UVoxelLandTerrainGraphFactory();
+	virtual FText GetDisplayName() const override;
 	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
 		UObject* Context, FFeedbackContext* Warn) override;
 };
 
 UCLASS()
-class UVoxelLandM4ControlGraphFactory : public UFactory
-{
-	GENERATED_BODY()
-public:
-	UVoxelLandM4ControlGraphFactory();
-	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
-		UObject* Context, FFeedbackContext* Warn) override;
-};
-
-UCLASS()
-class UVoxelLandGraphFunctionFactory : public UFactory
+class UVoxelLandGraphFunctionFactory : public UVoxelLandAssetFactory
 {
 	GENERATED_BODY()
 
 public:
 	UVoxelLandGraphFunctionFactory();
+	virtual FText GetDisplayName() const override;
 	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
 		UObject* Context, FFeedbackContext* Warn) override;
 };
 
 UCLASS()
-class UVoxelLandWorldSettingsFactory : public UFactory
+class UVoxelLandWorldConfigFactory : public UVoxelLandAssetFactory
 {
 	GENERATED_BODY()
 
 public:
-	UVoxelLandWorldSettingsFactory();
+	UVoxelLandWorldConfigFactory();
+	virtual FText GetDisplayName() const override;
 	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
 		UObject* Context, FFeedbackContext* Warn) override;
 };
 
 UCLASS()
-class UVoxelLandM4WorldConfigFactory : public UFactory
-{
-	GENERATED_BODY()
-
-public:
-	UVoxelLandM4WorldConfigFactory();
-	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
-		UObject* Context, FFeedbackContext* Warn) override;
-};
-
-UCLASS()
-class UVoxelLandMaterialSetupFactory : public UFactory
+class UVoxelLandMaterialSetupFactory : public UVoxelLandAssetFactory
 {
 	GENERATED_BODY()
 
 public:
 	UVoxelLandMaterialSetupFactory();
+	virtual FText GetDisplayName() const override;
+	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
+		UObject* Context, FFeedbackContext* Warn) override;
+};
+
+UCLASS()
+class UVoxelLandCaveProtectionFactory : public UVoxelLandAssetFactory
+{
+	GENERATED_BODY()
+
+public:
+	UVoxelLandCaveProtectionFactory();
+	virtual FText GetDisplayName() const override;
 	virtual UObject* FactoryCreateNew(UClass* InClass, UObject* Parent, FName Name, EObjectFlags Flags,
 		UObject* Context, FFeedbackContext* Warn) override;
 };

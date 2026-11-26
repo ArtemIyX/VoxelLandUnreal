@@ -4,7 +4,7 @@
 #include "../../../VoxelLandEditorBake.h"
 #include "Async/Async.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Generation/Field/VoxelLandGenerator.h"
@@ -55,10 +55,9 @@ void M4NamedAppendChannel(UVoxelLandM4ControlGraph& Graph, int32 Index, float Va
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4NamedGraphTest, "VoxelLand.M4.Editor.NamedControlGraph", M4NamedGraphFlags)
 bool FVoxelLandM4NamedGraphTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4ControlGraphFactory* Factory = NewObject<UVoxelLandM4ControlGraphFactory>();
-	UVoxelLandM4ControlGraph* Graph = Cast<UVoxelLandM4ControlGraph>(Factory->FactoryCreateNew(
-		UVoxelLandM4ControlGraph::StaticClass(), GetTransientPackage(), NAME_None, RF_Transient, nullptr, nullptr));
-	if (!TestNotNull(TEXT("named graph factory creates asset"), Graph))
+	UVoxelLandM4ControlGraph* Graph =
+		NewObject<UVoxelLandM4ControlGraph>(GetTransientPackage(), NAME_None, RF_Transactional);
+	if (!TestNotNull(TEXT("legacy named graph remains constructible for inspection"), Graph))
 	{
 		return false;
 	}
@@ -72,7 +71,7 @@ bool FVoxelLandM4NamedGraphTest::RunTest(const FString& Parameters)
 		AddError(Error);
 		return false;
 	}
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
 	FVoxelLandM4CurveAuthoringKey First, Last;
 	Last.InputQ16 = 65535;
@@ -209,7 +208,7 @@ bool FVoxelLandM4HeightOutputTest::RunTest(const FString& Parameters)
 		AddError(Error);
 		return false;
 	}
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
 	FVoxelLandM4CurveAuthoringKey First, Last;
 	Last.InputQ16 = 65535;
@@ -272,7 +271,7 @@ bool FVoxelLandM4HeightOutputTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("unsupported identity version is rejected"), bUnknownVersionRejected);
 	TestEqual(TEXT("height stage uses current world identity"), Identity.FormatVersion, 1);
 	Lease.Reset();
-	Config->bUnlimited = true;
+	Config->WorldExtent = EVoxelLandWorldExtent::Infinite;
 	if (!TestTrue(TEXT("height output captures unlimited mode"), Config->CaptureSnapshot(Snapshot, Error)))
 	{
 		return false;

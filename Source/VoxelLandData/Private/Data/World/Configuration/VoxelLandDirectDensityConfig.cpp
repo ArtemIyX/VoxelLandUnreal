@@ -1,4 +1,4 @@
-#include "Data/Assets/Worlds/VoxelLandWorldSettings.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Assets/Graphs/VoxelLandGraphFunction.h"
@@ -99,7 +99,7 @@ bool FVoxelLandWorldSettingsInternals::ValidateOverride(
 	return true;
 }
 
-bool UVoxelLandWorldSettings::ValidateSettings(FString& OutError) const
+bool UVoxelLandWorldConfig::ValidateDirectDensitySettings(FString& OutError) const
 {
 	OutError.Reset();
 	if (FormatVersion != 1 || !Graph || Graph->IsA<UVoxelLandGraphFunction>() || Graph->SourceVersion != 1)
@@ -107,10 +107,15 @@ bool UVoxelLandWorldSettings::ValidateSettings(FString& OutError) const
 		OutError = TEXT("Missing graph or unsupported settings/graph version.");
 		return false;
 	}
-	if (!FMath::IsFinite(VoxelSizeCm) || VoxelSizeCm <= 0.0f || HorizontalRadius < 1 || HorizontalRadius > 8
+	if (!FMath::IsFinite(DirectVoxelSizeCm) || DirectVoxelSizeCm <= 0.0f || HorizontalRadius < 1 || HorizontalRadius > 8
 		|| VerticalRadius < 1 || VerticalRadius > 4)
 	{
 		OutError = TEXT("Invalid voxel size or chunk bounds.");
+		return false;
+	}
+	if (!IsInfinite() && !DensityBounds.IsValid())
+	{
+		OutError = TEXT("Finite direct density requires a nonempty XYZ chunk box.");
 		return false;
 	}
 	TMap<FGuid, const FVoxelLandGraphParameter*> ParametersById;

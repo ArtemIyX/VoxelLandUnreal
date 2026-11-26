@@ -1,19 +1,22 @@
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
+#include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 
 #include "Data/Assets/Graphs/VoxelLandGraphFunction.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Graph/Schema/VoxelLandGraphFunctionId.h"
+#include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Data/Caves/Planning/VoxelLandCaveWorldSnapshot.h"
 #include "Data/Program/Serialization/VoxelLandCanonicalWriter.h"
 #include "Hash/xxhash.h"
+#include "UObject/StrongObjectPtr.h"
 #include <limits>
 #if WITH_EDITOR
 #include "UObject/ObjectSaveContext.h"
 #endif
 
-void UVoxelLandM4WorldConfig::Serialize(FArchive& Ar)
+void UVoxelLandWorldConfig::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
 #if WITH_EDITOR
@@ -22,20 +25,20 @@ void UVoxelLandM4WorldConfig::Serialize(FArchive& Ar)
 }
 
 #if WITH_EDITOR
-void UVoxelLandM4WorldConfig::EnforceCookPreparation(FArchive& Ar) const
+void UVoxelLandWorldConfig::EnforceCookPreparation(FArchive& Ar) const
 {
 	// Only reject the actual export write. Harvest and other archive traversals
 	// may serialize the object but are not the package writer's error channel.
 	const FObjectSavePackageSerializeContext* Context = Ar.GetArchiveState().GetSavePackageSerializeContext();
-	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
-		&& Context->GetPhase() == EObjectSaveContextPhase::Write
+	if (!IsDirectDensity() && !HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving()
+		&& Ar.IsCooking() && Context && Context->GetPhase() == EObjectSaveContextPhase::Write
 		&& (!bCookPreparationSucceeded || Caves.bEnabled || Caves.Pockets.bEnabled))
 	{
 		Ar.SetError();
 	}
 }
 
-void UVoxelLandM4WorldConfig::PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext)
+void UVoxelLandWorldConfig::PostSaveRoot(FObjectPostSaveRootContext ObjectSaveContext)
 {
 	Super::PostSaveRoot(ObjectSaveContext);
 	if (ObjectSaveContext.IsLastConcurrentSave())
@@ -448,7 +451,7 @@ public:
 	}
 };
 
-bool UVoxelLandM4WorldConfig::ValidateBakedCurves(FString& OutError) const
+bool UVoxelLandWorldConfig::ValidateBakedCurves(FString& OutError) const
 {
 	OutError.Reset();
 	if (!IsInGameThread() || !FVoxelLandM4WorldConfigInternals::M4AssetCookedValid(Continental)
@@ -461,7 +464,7 @@ bool UVoxelLandM4WorldConfig::ValidateBakedCurves(FString& OutError) const
 	return true;
 }
 
-bool UVoxelLandM4WorldConfig::SetBakedCurves(
+bool UVoxelLandWorldConfig::SetBakedCurves(
 	TConstArrayView<int32> C, TConstArrayView<int32> M, TConstArrayView<int32> P, int32 BakeVersion, FString& OutError)
 {
 	OutError.Reset();
@@ -501,7 +504,7 @@ bool UVoxelLandM4WorldConfig::SetBakedCurves(
 	return true;
 }
 
-void UVoxelLandM4WorldConfig::ClearBakedCurves()
+void UVoxelLandWorldConfig::ClearBakedCurves()
 {
 	check(IsInGameThread());
 	Continental.CookedCurve = {};
@@ -509,18 +512,18 @@ void UVoxelLandM4WorldConfig::ClearBakedCurves()
 	Peaks.CookedCurve = {};
 }
 
-bool UVoxelLandM4WorldConfig::ValidateSettings(FString& OutError) const
+bool UVoxelLandWorldConfig::ValidateSettings(FString& OutError) const
 {
 	FVoxelLandM4WorldSnapshot Snapshot;
 	return CaptureSnapshot(Snapshot, OutError);
 }
 
-bool UVoxelLandM4WorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnapshot, FString& OutError) const
+bool UVoxelLandWorldConfig::CaptureSnapshot(FVoxelLandM4WorldSnapshot& OutSnapshot, FString& OutError) const
 {
 	return CaptureSnapshotInternal(OutSnapshot, OutError, false);
 }
 
-bool UVoxelLandM4WorldConfig::CaptureM5Snapshot(FVoxelLandM5WorldSnapshot& OutSnapshot, FString& OutError) const
+bool UVoxelLandWorldConfig::CaptureM5Snapshot(FVoxelLandM5WorldSnapshot& OutSnapshot, FString& OutError) const
 {
 	OutError.Reset();
 	if (!IsInGameThread())
@@ -554,7 +557,47 @@ bool UVoxelLandM4WorldConfig::CaptureM5Snapshot(FVoxelLandM5WorldSnapshot& OutSn
 	return true;
 }
 
-bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
+bool UVoxelLandWorldConfig::CaptureBoundOutput(FVoxelLandGraphSnapshot& Snapshot, FString& OutError) const
+{
+	OutError.Reset();
+	if (!IsInGameThread() || !IsValid(Graph.Get()) || Graph->IsA<UVoxelLandGraphFunction>())
+	{
+		OutError = TEXT("Select a Terrain Graph in World Config.");
+		return false;
+	}
+	const TStrongObjectPtr<UVoxelLandTerrainGraph> CapturedGraph(Graph.Get());
+	const FGuid OutputId = TerrainOutputId;
+	const FString Label = TerrainOutputLabel;
+	FVoxelLandGraphSnapshot Candidate;
+	const FVoxelLandGraphNodeRecord* BoundNode = CapturedGraph->Nodes.FindByPredicate(
+		[&OutputId](const FVoxelLandGraphNodeRecord& Node) { return Node.Id == OutputId; });
+	if (!IsDirectDensity()
+		&& (!BoundNode || BoundNode->OperatorId != VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::FloatOutput)))
+	{
+		OutError = FString::Printf(
+			TEXT(
+				"%s, output %s: Height Terrain requires a named Float output. Select an existing output or reauthor legacy terrain."),
+			*CapturedGraph->GetName(), Label.IsEmpty() ? *OutputId.ToString() : *Label);
+		return false;
+	}
+	if (!OutputId.IsValid() || !CapturedGraph->CaptureSnapshot(Candidate, OutError)
+		|| !FVoxelLandGraphOutputs::Project(Candidate, OutputId, false, OutError))
+	{
+		OutError = FString::Printf(TEXT("%s, output %s: %s"), *CapturedGraph->GetName(),
+			Label.IsEmpty() ? *OutputId.ToString() : *Label,
+			OutError.IsEmpty() ? TEXT("Select a named Float output.") : *OutError);
+		return false;
+	}
+	if (Graph != CapturedGraph.Get() || TerrainOutputId != OutputId)
+	{
+		OutError = TEXT("The Terrain Graph binding changed during capture. Retry with the current World Config.");
+		return false;
+	}
+	Snapshot = MoveTemp(Candidate);
+	return true;
+}
+
+bool UVoxelLandWorldConfig::CaptureSnapshotInternal(
 	FVoxelLandM4WorldSnapshot& OutSnapshot, FString& OutError, bool bAllowM5) const
 {
 	OutError.Reset();
@@ -580,15 +623,15 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
 		OutError = TEXT("M4 height detail configuration is invalid.");
 		return false;
 	}
-	if (FormatVersion != 1 || VoxelSizeCm < 1 || VoxelSizeCm > 2000000 || (bUnlimited && VoxelSizeCm > 134217)
-		|| int64(BaseHeightQ8) < -FVoxelLandM4WorldConfigInternals::M4AssetHeightLimit
-		|| int64(BaseHeightQ8) > FVoxelLandM4WorldConfigInternals::M4AssetHeightLimit || HorizontalRadius < 1
-		|| HorizontalRadius > 8 || VerticalRadius < 1 || VerticalRadius > 4)
+	if (FormatVersion != 1 || VoxelSizeCm < 1 || VoxelSizeCm > 2000000 || (IsInfinite() && VoxelSizeCm > 134217)
+		|| (!TerrainOutputId.IsValid()
+			&& FMath::Abs(int64(BaseHeightQ8)) > FVoxelLandM4WorldConfigInternals::M4AssetHeightLimit)
+		|| HorizontalRadius < 1 || HorizontalRadius > 8 || VerticalRadius < 1 || VerticalRadius > 4)
 	{
 		OutError = TEXT("M4 voxel size, base height or demand radii are invalid.");
 		return false;
 	}
-	if (!bUnlimited
+	if (!IsInfinite()
 		&& (CellsX < 1 || CellsX > 1024 || CellsY < 1 || CellsY > 1024 || GridSpacingCm < 1 || GridSpacingCm > 134217
 			|| OriginXCm < -FVoxelLandM4WorldConfigInternals::M4AssetExactFloatLimit
 			|| OriginYCm < -FVoxelLandM4WorldConfigInternals::M4AssetExactFloatLimit
@@ -611,18 +654,13 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
 		OutError = TEXT("M4 erosion configuration is invalid.");
 		return false;
 	}
-	if (bUnlimited
+	if (IsInfinite()
 		&& ((bOverhangEnabled && OverhangAmplitudeQ8 != 0 && double(OverhangFrequencyPerCm) * 16777216.0 < 0.5)
 			|| (HeightDetail.bEnabled && HeightDetail.AmplitudeQ8 != 0
 				&& double(HeightDetail.FrequencyPerCm) * 16777216.0 < 0.5)))
 	{
 		OutError = TEXT(
 			"M4 fixed lattice requires unlimited mode, no global erosion and representable Q24 shaping frequencies.");
-		return false;
-	}
-	if (bUnlimited && bGlobalErosion)
-	{
-		OutError = TEXT("Unlimited M4 worlds require global erosion to be disabled.");
 		return false;
 	}
 	if (OverhangAmplitudeQ8 < 0 || OverhangAmplitudeQ8 > 128000 || OverhangBandQ8 < 1 || OverhangBandQ8 > 1280000
@@ -636,57 +674,73 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
 	// Check all three graphs before capturing any: a later oversized channel must
 	// not cause earlier snapshot copies or function loads as a side effect.
 	FVoxelLandM4WorldSnapshot S;
-	const UVoxelLandM4ControlGraph* HeightGraph = Cast<UVoxelLandM4ControlGraph>(Continental.Graph);
-	const UVoxelLandM4ControlGraph* MountainGraph = Cast<UVoxelLandM4ControlGraph>(Mountain.Graph);
-	const UVoxelLandM4ControlGraph* PeaksGraph = Cast<UVoxelLandM4ControlGraph>(Peaks.Graph);
-	const bool bAnyHeightOutput = (HeightGraph && HeightGraph->HeightOutputId.IsValid())
-							   || (MountainGraph && MountainGraph->HeightOutputId.IsValid())
-							   || (PeaksGraph && PeaksGraph->HeightOutputId.IsValid());
-	if (bAnyHeightOutput)
+	if (Graph || TerrainOutputId.IsValid())
 	{
-		if (!HeightGraph || HeightGraph != MountainGraph || HeightGraph != PeaksGraph
-			|| !HeightGraph->HeightOutputId.IsValid())
+		if (!TerrainOutputId.IsValid() || HeightScaleCm < 1 || HeightScaleCm > 2000000
+			|| !FMath::IsFinite(BaseElevationCm) || FMath::Abs(BaseElevationCm) > 2000000.f)
 		{
-			OutError = TEXT("A graph height output requires the same M4 graph for all three controls.");
+			OutError = TEXT("Height Terrain requires a selected Float output and a valid Height Scale.");
 			return false;
 		}
-		const FVoxelLandGraphNodeRecord* HeightNode = HeightGraph->Nodes.FindByPredicate(
-			[HeightGraph](const FVoxelLandGraphNodeRecord& Node) { return Node.Id == HeightGraph->HeightOutputId; });
-		if (!HeightNode || HeightNode->Pins.Num() != 3)
+		S.AuthoredHeightOutputId = TerrainOutputId;
+		S.HeightScaleCm = HeightScaleCm;
+	}
+	else
+	{
+		const UVoxelLandM4ControlGraph* HeightGraph = Cast<UVoxelLandM4ControlGraph>(Continental.Graph);
+		const UVoxelLandM4ControlGraph* MountainGraph = Cast<UVoxelLandM4ControlGraph>(Mountain.Graph);
+		const UVoxelLandM4ControlGraph* PeaksGraph = Cast<UVoxelLandM4ControlGraph>(Peaks.Graph);
+		const bool bAnyHeightOutput = (HeightGraph && HeightGraph->HeightOutputId.IsValid())
+								   || (MountainGraph && MountainGraph->HeightOutputId.IsValid())
+								   || (PeaksGraph && PeaksGraph->HeightOutputId.IsValid());
+		if (bAnyHeightOutput)
 		{
-			OutError = TEXT("M4 height output is missing its three inputs.");
+			if (!HeightGraph || HeightGraph != MountainGraph || HeightGraph != PeaksGraph
+				|| !HeightGraph->HeightOutputId.IsValid())
+			{
+				OutError = TEXT("A graph height output requires the same M4 graph for all three controls.");
+				return false;
+			}
+			const FVoxelLandGraphNodeRecord* HeightNode =
+				HeightGraph->Nodes.FindByPredicate([HeightGraph](const FVoxelLandGraphNodeRecord& Node) {
+					return Node.Id == HeightGraph->HeightOutputId;
+				});
+			if (!HeightNode || HeightNode->Pins.Num() != 3)
+			{
+				OutError = TEXT("M4 height output is missing its three inputs.");
+				return false;
+			}
+			S.HeightStage.Version = 1;
+			S.HeightStage.OutputNodeId = HeightGraph->HeightOutputId;
+			S.HeightStage.ContinentalInputId = HeightNode->Pins[0].Id;
+			S.HeightStage.MountainInputId = HeightNode->Pins[1].Id;
+			S.HeightStage.PeaksInputId = HeightNode->Pins[2].Id;
+		}
+		if (!FVoxelLandM4WorldConfigInternals::M4AssetWithinCaptureLimits(
+				Continental, EVoxelLandM4ControlChannel::Continental, OutError)
+			|| !FVoxelLandM4WorldConfigInternals::M4AssetWithinCaptureLimits(
+				Mountain, EVoxelLandM4ControlChannel::Mountain, OutError)
+			|| !FVoxelLandM4WorldConfigInternals::M4AssetWithinCaptureLimits(
+				Peaks, EVoxelLandM4ControlChannel::Peaks, OutError))
+		{
 			return false;
 		}
-		S.HeightStage.Version = 1;
-		S.HeightStage.OutputNodeId = HeightGraph->HeightOutputId;
-		S.HeightStage.ContinentalInputId = HeightNode->Pins[0].Id;
-		S.HeightStage.MountainInputId = HeightNode->Pins[1].Id;
-		S.HeightStage.PeaksInputId = HeightNode->Pins[2].Id;
-	}
-	if (!FVoxelLandM4WorldConfigInternals::M4AssetWithinCaptureLimits(
-			Continental, EVoxelLandM4ControlChannel::Continental, OutError)
-		|| !FVoxelLandM4WorldConfigInternals::M4AssetWithinCaptureLimits(
-			Mountain, EVoxelLandM4ControlChannel::Mountain, OutError)
-		|| !FVoxelLandM4WorldConfigInternals::M4AssetWithinCaptureLimits(
-			Peaks, EVoxelLandM4ControlChannel::Peaks, OutError))
-	{
-		return false;
-	}
-	if (!FVoxelLandM4WorldConfigInternals::M4AssetCaptureControl(
-			Continental, EVoxelLandM4ControlChannel::Continental, S.Continental, OutError)
-		|| !FVoxelLandM4WorldConfigInternals::M4AssetCaptureControl(
-			Mountain, EVoxelLandM4ControlChannel::Mountain, S.Mountain, OutError)
-		|| !FVoxelLandM4WorldConfigInternals::M4AssetCaptureControl(
-			Peaks, EVoxelLandM4ControlChannel::Peaks, S.Peaks, OutError))
-	{
-		return false;
+		if (!FVoxelLandM4WorldConfigInternals::M4AssetCaptureControl(
+				Continental, EVoxelLandM4ControlChannel::Continental, S.Continental, OutError)
+			|| !FVoxelLandM4WorldConfigInternals::M4AssetCaptureControl(
+				Mountain, EVoxelLandM4ControlChannel::Mountain, S.Mountain, OutError)
+			|| !FVoxelLandM4WorldConfigInternals::M4AssetCaptureControl(
+				Peaks, EVoxelLandM4ControlChannel::Peaks, S.Peaks, OutError))
+		{
+			return false;
+		}
 	}
 	S.FormatVersion = FormatVersion;
 	S.Seed = Seed;
 	S.VoxelSizeCm = VoxelSizeCm;
-	S.BaseHeightQ8 = BaseHeightQ8;
-	S.Domain.Mode = bUnlimited ? EVoxelLandM4DomainMode::Unlimited : EVoxelLandM4DomainMode::Finite;
-	S.Domain.bGlobalErosion = bGlobalErosion;
+	S.BaseHeightQ8 = S.AuthoredHeightOutputId.IsValid() ? FMath::RoundToInt(BaseElevationCm * 256.f) : BaseHeightQ8;
+	S.Domain.Mode = IsInfinite() ? EVoxelLandM4DomainMode::Unlimited : EVoxelLandM4DomainMode::Finite;
+	S.Domain.bGlobalErosion = !IsInfinite() && bGlobalErosion;
 	S.Domain.OriginXCm = OriginXCm;
 	S.Domain.OriginYCm = OriginYCm;
 	S.Domain.CellsX = CellsX;
@@ -714,31 +768,35 @@ bool UVoxelLandM4WorldConfig::CaptureSnapshotInternal(
 	S.HorizontalRadius = HorizontalRadius;
 	S.VerticalRadius = VerticalRadius;
 	S.MaterialSetupPath = MaterialSetup.ToSoftObjectPath();
+	if (S.AuthoredHeightOutputId.IsValid() && !CaptureBoundOutput(S.AuthoredHeightSource, OutError))
+	{
+		return false;
+	}
 	OutSnapshot = MoveTemp(S);
 	return true;
 }
 
-bool UVoxelLandM4WorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S) const
+bool UVoxelLandWorldConfig::MatchesSnapshot(const FVoxelLandM4WorldSnapshot& S) const
 {
 	return MatchesSnapshotInternal(S, true, false);
 }
 #if WITH_EDITOR
-bool UVoxelLandM4WorldConfig::MatchesPreviewSnapshot(const FVoxelLandM4WorldSnapshot& S) const
+bool UVoxelLandWorldConfig::MatchesPreviewSnapshot(const FVoxelLandM4WorldSnapshot& S) const
 {
 	return MatchesSnapshotInternal(S, false, false);
 }
 #endif
-bool UVoxelLandM4WorldConfig::MatchesM5Snapshot(const FVoxelLandM5WorldSnapshot& S) const
+bool UVoxelLandWorldConfig::MatchesM5Snapshot(const FVoxelLandM5WorldSnapshot& S) const
 {
 	return MatchesM5SnapshotInternal(S, true);
 }
 #if WITH_EDITOR
-bool UVoxelLandM4WorldConfig::MatchesM5PreviewSnapshot(const FVoxelLandM5WorldSnapshot& S) const
+bool UVoxelLandWorldConfig::MatchesM5PreviewSnapshot(const FVoxelLandM5WorldSnapshot& S) const
 {
 	return MatchesM5SnapshotInternal(S, false);
 }
 #endif
-bool UVoxelLandM4WorldConfig::MatchesM5SnapshotInternal(
+bool UVoxelLandWorldConfig::MatchesM5SnapshotInternal(
 	const FVoxelLandM5WorldSnapshot& S, bool bCompareBakedCurves) const
 {
 	if (!IsInGameThread() || (!Caves.bEnabled && !Caves.Pockets.bEnabled) || S.FormatVersion != 1)
@@ -754,10 +812,21 @@ bool UVoxelLandM4WorldConfig::MatchesM5SnapshotInternal(
 		&& FVoxelLandM5CaveSettings::StaticStruct()->CompareScriptStruct(&Caves, &S.Caves, 0)
 		&& MatchesSnapshotInternal(S.Base, bCompareBakedCurves, true);
 }
-bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
+bool UVoxelLandWorldConfig::MatchesSnapshotInternal(
 	const FVoxelLandM4WorldSnapshot& S, bool bCompareBakedCurves, bool bAllowM5) const
 {
-	if (!IsInGameThread() || (!bAllowM5 && (Caves.bEnabled || Caves.Pockets.bEnabled)))
+	if (S.AuthoredHeightOutputId.IsValid())
+	{
+		FVoxelLandM4WorldSnapshot Current;
+		FString Error;
+		if (IsDirectDensity() || !CaptureSnapshotInternal(Current, Error, bAllowM5))
+		{
+			return false;
+		}
+		Current.MaterialSetupPath = S.MaterialSetupPath;
+		return FVoxelLandM4WorldSnapshot::StaticStruct()->CompareScriptStruct(&Current, &S, 0);
+	}
+	if (!IsInGameThread() || IsDirectDensity() || (!bAllowM5 && (Caves.bEnabled || Caves.Pockets.bEnabled)))
 	{
 		return false;
 	}
@@ -777,9 +846,9 @@ bool UVoxelLandM4WorldConfig::MatchesSnapshotInternal(
 		&& HeightDetail.FrequencyPerCm == S.HeightDetail.FrequencyPerCm && HeightDetail.NodeId == S.HeightDetail.NodeId
 		&& HeightDetail.Salt == S.HeightDetail.Salt && SmoothVersion == int32(S.Smooth.Version)
 		&& bSmoothEnabled == S.Smooth.bEnabled && (!bSmoothEnabled || SmoothStrength == S.Smooth.Strength)
-		&& (bUnlimited ? S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
-					   : S.Domain.Mode == EVoxelLandM4DomainMode::Finite)
-		&& bGlobalErosion == S.Domain.bGlobalErosion && OriginXCm == S.Domain.OriginXCm
+		&& (IsInfinite() ? S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
+						 : S.Domain.Mode == EVoxelLandM4DomainMode::Finite)
+		&& (!IsInfinite() && bGlobalErosion) == S.Domain.bGlobalErosion && OriginXCm == S.Domain.OriginXCm
 		&& OriginYCm == S.Domain.OriginYCm && CellsX == S.Domain.CellsX && CellsY == S.Domain.CellsY
 		&& GridSpacingCm == S.Domain.GridSpacingCm && ErosionStageId == S.ErosionStageId && ErosionSalt == S.ErosionSalt
 		&& DropletCount == S.DropletCount && MaxSteps == S.Erosion.MaxSteps

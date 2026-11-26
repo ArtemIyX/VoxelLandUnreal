@@ -1,5 +1,5 @@
 #if WITH_DEV_AUTOMATION_TESTS
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Misc/AutomationTest.h"
@@ -8,7 +8,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4CookedCurveTest, "VoxelLand.M4.Cook
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandM4CookedCurveTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	FVoxelLandM4ControlConfig* Controls[] = {&Config->Continental, &Config->Mountain, &Config->Peaks};
 	for (FVoxelLandM4ControlConfig* Control : Controls)
 	{
@@ -46,9 +46,15 @@ bool FVoxelLandM4CookedCurveTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("unknown bake version rejected"), Config->ValidateBakedCurves(Error));
 	Config->ClearBakedCurves();
 	TestFalse(TEXT("cleared bake rejected"), Config->ValidateBakedCurves(Error));
-	Config->bUnlimited = true;
+	Config->WorldExtent = EVoxelLandWorldExtent::Infinite;
 	Config->bGlobalErosion = true;
-	TestFalse(TEXT("unlimited rejects global erosion"), Config->CaptureSnapshot(Snapshot, Error));
+	TestTrue(
+		TEXT("unlimited capture accepts stored finite erosion settings"), Config->CaptureSnapshot(Snapshot, Error));
+	TestFalse(TEXT("unlimited snapshot disables global erosion"), Snapshot.Domain.bGlobalErosion);
+	Config->WorldExtent = EVoxelLandWorldExtent::Finite;
+	TestTrue(TEXT("finite capture restores the authored erosion preference"), Config->CaptureSnapshot(Snapshot, Error));
+	TestTrue(TEXT("finite snapshot retains global erosion"), Snapshot.Domain.bGlobalErosion);
+	Config->WorldExtent = EVoxelLandWorldExtent::Infinite;
 	Config->bGlobalErosion = false;
 	Config->CellsX = 0;
 	TestTrue(TEXT("unlimited without erosion is accepted"), Config->CaptureSnapshot(Snapshot, Error));

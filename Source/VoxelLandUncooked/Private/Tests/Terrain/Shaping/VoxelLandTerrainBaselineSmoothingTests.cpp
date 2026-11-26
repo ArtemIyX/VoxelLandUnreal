@@ -1,7 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Async/Async.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Terrain/Shaping/VoxelLandTerrainSmoothingSettings.h"
 #include "Data/Terrain/ChunkLocal/VoxelLandChunkLocalTerrainConfig.h"
@@ -41,7 +41,7 @@ void M4SmoothInitControl(FVoxelLandM4ControlConfig& Control, UObject* Outer)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4SmoothAssetTest, "VoxelLand.M4.Smooth.Asset", M4SmoothTestFlags)
 bool FVoxelLandM4SmoothAssetTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	M4SmoothInitControl(Config->Continental, Config);
 	M4SmoothInitControl(Config->Mountain, Config);
 	M4SmoothInitControl(Config->Peaks, Config);

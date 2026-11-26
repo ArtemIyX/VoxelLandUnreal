@@ -1,5 +1,5 @@
 #if WITH_DEV_AUTOMATION_TESTS && WITH_EDITOR
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Misc/AutomationTest.h"
 #include "Serialization/ArchiveSavePackageData.h"
 #include "Serialization/MemoryWriter.h"
@@ -10,7 +10,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM5AuthoringCookGuardTest, "VoxelLand.
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandM5AuthoringCookGuardTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	FObjectSaveContextData SaveData;
 	SaveData.ObjectSaveContextPhase = EObjectSaveContextPhase::Write;
 	FObjectSavePackageSerializeContext SerializeContext(SaveData);

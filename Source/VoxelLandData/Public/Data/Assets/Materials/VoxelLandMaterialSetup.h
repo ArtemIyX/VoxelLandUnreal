@@ -7,7 +7,7 @@
 class UMaterialInterface;
 
 // A soft reference keeps data-only consumers from loading the material and GPU resources.
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, HideDropdown)
 class VOXELLANDDATA_API UVoxelLandMaterialSetup : public UDataAsset
 {
 	GENERATED_BODY()

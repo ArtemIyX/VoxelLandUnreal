@@ -7,7 +7,7 @@
 
 // A shared authored graph whose three named terminals are compiled separately.
 // Existing terrain graphs and their single compiled program are unchanged.
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, HideDropdown)
 class VOXELLANDDATA_API UVoxelLandM4ControlGraph : public UVoxelLandTerrainGraph
 {
 	GENERATED_BODY()

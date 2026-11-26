@@ -2,7 +2,7 @@
 #include "../../../VoxelLandEditorBake.h"
 #include "Async/Async.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Terrain/Persistence/VoxelLandSavedTerrainWorldRecord.h"
 #include "Generation/Field/VoxelLandGenerator.h"
@@ -76,7 +76,7 @@ bool FVoxelLandM4NamedPersistenceTest::RunTest(const FString& Parameters)
 	M4PersistenceAppendOutput(*Graph, 0, -1.f, Graph->ContinentalOutputId);
 	M4PersistenceAppendOutput(*Graph, 1, 0.f, Graph->MountainOutputId);
 	M4PersistenceAppendOutput(*Graph, 2, 1.f, Graph->PeaksOutputId);
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
 	FVoxelLandM4CurveAuthoringKey First, Last;
 	Last.InputQ16 = 65535;
@@ -107,9 +107,11 @@ bool FVoxelLandM4NamedPersistenceTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	bool bSaved = false, bRoundTrip = false, bSameKey = false, bChangedIdentity = false, bChangedKey = false;
+	bool bRejectedLegacy = false;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4SavedWorld Saved;
-		bSaved = VoxelLandM4SavedWorld::Capture(Original, Saved, Error);
+		bSaved = VoxelLandM4WorldIdentity::CaptureVersion(Original, 1, Saved.Identity, Error);
+		Saved.Snapshot = Original;
 		if (!bSaved)
 		{
 			return;
@@ -123,7 +125,10 @@ bool FVoxelLandM4NamedPersistenceTest::RunTest(const FString& Parameters)
 		FVoxelLandM4SavedWorld Loaded;
 		FVoxelLandM4SavedWorld::StaticStruct()->SerializeItem(Reader, &Loaded, nullptr);
 		FVoxelLandM4WorldSnapshot Restored;
-		bRoundTrip = !Writer.IsError() && !Reader.IsError() && VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error)
+		bRejectedLegacy =
+			!VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error) && Error.Contains(TEXT("regenerating"));
+		Restored = Loaded.Snapshot;
+		bRoundTrip = !Writer.IsError() && !Reader.IsError()
 				  && VoxelLandM4WorldIdentity::Matches(Saved.Identity, Restored, Error);
 		if (!bRoundTrip)
 		{
@@ -139,8 +144,9 @@ bool FVoxelLandM4NamedPersistenceTest::RunTest(const FString& Parameters)
 		bChangedIdentity = !VoxelLandM4WorldIdentity::Matches(Saved.Identity, Reassigned, Error);
 		bChangedKey = OriginalKey != ReassignedKey;
 	}).Get();
-	TestTrue(FString::Printf(TEXT("named snapshot saves: %s"), *Error), bSaved);
-	TestTrue(TEXT("serialized named snapshot restores and matches"), bRoundTrip);
+	TestTrue(FString::Printf(TEXT("legacy snapshot identity is available for inspection: %s"), *Error), bSaved);
+	TestTrue(TEXT("serialized legacy named snapshot remains readable"), bRoundTrip);
+	TestTrue(TEXT("legacy named snapshot requires reauthoring before regeneration"), bRejectedLegacy);
 	TestTrue(TEXT("restored named snapshot preserves prepass dependencies"), bSameKey);
 	TestTrue(TEXT("output reassignment changes world identity"), bChangedIdentity);
 	TestTrue(TEXT("output reassignment changes prepass key"), bChangedKey);

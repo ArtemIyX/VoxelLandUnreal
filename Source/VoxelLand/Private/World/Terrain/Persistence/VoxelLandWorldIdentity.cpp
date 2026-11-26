@@ -14,6 +14,8 @@
 #include "World/Terrain/Controls/VoxelLandOverrideValidation.h"
 #include "World/Terrain/Curves/VoxelLandCurveValidation.h"
 #include "World/Terrain/Worlds/VoxelLandTerrainPreparation.h"
+#include "World/Terrain/Worlds/VoxelLandAuthoredHeightProgram.h"
+#include "World/Terrain/Persistence/VoxelLandSavedTerrainWorldPreflight.h"
 
 class FVoxelLandM4WorldIdentityInternals final
 {
@@ -22,6 +24,9 @@ public:
 	static void M4WorldIdentityGuid(FCanonicalWriter& W, const FGuid& G);
 	static bool M4WorldIdentityOverrides(FCanonicalWriter& W, const FVoxelLandM4ControlSnapshot& Channel);
 	static int64 M4WorldIdentityHash(const TArray<uint8>& Bytes);
+	static void WriteShaping(FCanonicalWriter& W, const FVoxelLandM4WorldSnapshot& S);
+	static bool CaptureAuthoredHeight(
+		const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error);
 };
 
 void FVoxelLandM4WorldIdentityInternals::M4WorldIdentityU64(FCanonicalWriter& W, uint64 V)
@@ -98,11 +103,112 @@ int64 FVoxelLandM4WorldIdentityInternals::M4WorldIdentityHash(const TArray<uint8
 	return Bits;
 }
 
+void FVoxelLandM4WorldIdentityInternals::WriteShaping(FCanonicalWriter& W, const FVoxelLandM4WorldSnapshot& S)
+{
+	W.U8(S.bNormalizeSlope ? 1 : 0);
+
+	W.U32(S.Smooth.Version);
+
+	W.U8(S.Smooth.bEnabled ? 1 : 0);
+
+	if (S.Smooth.bEnabled)
+
+	{
+
+		W.Float(S.Smooth.Strength);
+	}
+
+	W.U8(S.bOverhangEnabled ? 1 : 0);
+
+	if (S.bOverhangEnabled)
+
+	{
+
+		W.U32(uint32(S.OverhangAmplitudeQ8));
+
+		W.U32(uint32(S.OverhangBandQ8));
+
+		W.Float(S.OverhangFrequencyPerCm);
+
+		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.OverhangNodeId);
+
+		W.U32(uint32(S.OverhangSalt));
+	}
+
+	W.U32(uint32(S.HeightDetail.AlgorithmVersion));
+
+	W.U8(S.HeightDetail.bEnabled ? 1 : 0);
+
+	if (S.HeightDetail.bEnabled)
+
+	{
+
+		W.U32(uint32(S.HeightDetail.AmplitudeQ8));
+
+		W.Float(S.HeightDetail.FrequencyPerCm);
+
+		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.HeightDetail.NodeId);
+
+		W.U32(S.HeightDetail.Salt);
+	}
+}
+
+bool FVoxelLandM4WorldIdentityInternals::CaptureAuthoredHeight(
+	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
+{
+	if (!VoxelLandM4SavedWorldPreflight::ValidateSnapshot(S, Error))
+	{
+		return false;
+	}
+	FVoxelLandGeneratorSettings Settings;
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Source;
+	if (!VoxelLandAuthoredHeightProgram::CreateSource(S, Settings, Source, Error))
+	{
+		return false;
+	}
+	FCanonicalWriter W;
+	W.U32(0x35574c56); // VLW5, little-endian.
+	W.U32(VoxelLandM4WorldIdentity::AuthoredHeightVersion);
+	W.U32(1); // authored Float to Q8 height conversion
+	W.U32(1); // fixed-lattice numeric and shaping contract
+	W.U8(uint8(S.Domain.Mode));
+	W.U32(uint32(S.VoxelSizeCm));
+	M4WorldIdentityU64(W, uint64(S.Seed));
+	M4WorldIdentityGuid(W, S.AuthoredHeightOutputId);
+	M4WorldIdentityU64(W, Source->GetProgram().GetFingerprint());
+	W.U32(uint32(S.HeightScaleCm));
+	W.U32(uint32(S.BaseHeightQ8));
+	if (S.Domain.Mode == EVoxelLandM4DomainMode::Finite)
+	{
+		const TArray<uint8> Prepass = VoxelLandAuthoredHeightProgram::BuildPrepassKey(S, Source->GetProgram());
+		W.U32(uint32(Prepass.Num()));
+		W.Bytes.Append(Prepass);
+	}
+	else
+	{
+		W.U32(0);
+	}
+	WriteShaping(W, S);
+	FVoxelLandM4IdentityRecord Result;
+	Result.FormatVersion = VoxelLandM4WorldIdentity::AuthoredHeightVersion;
+	Result.CanonicalBytes = MoveTemp(W.Bytes);
+	Result.FingerprintBits = M4WorldIdentityHash(Result.CanonicalBytes);
+	Out = MoveTemp(Result);
+	return true;
+}
+
 bool VoxelLandM4WorldIdentity::CaptureVersion(
 	const FVoxelLandM4WorldSnapshot& S, int32 Version, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
 	Error.Reset();
-	if (Version != 1
+	const bool bAuthored = S.AuthoredHeightOutputId.IsValid();
+	if ((bAuthored && Version != AuthoredHeightVersion) || (!bAuthored && Version == AuthoredHeightVersion))
+	{
+		Error = TEXT(
+			"Height identity requires a named Float output. Reauthor legacy three-channel terrain and regenerate the world.");
+		return false;
+	}
+	if ((Version != 1 && Version != AuthoredHeightVersion)
 		|| (S.Domain.Mode == EVoxelLandM4DomainMode::Unlimited
 			&& (S.Domain.bGlobalErosion
 				|| (S.bOverhangEnabled && S.OverhangAmplitudeQ8 != 0
@@ -123,6 +229,10 @@ bool VoxelLandM4WorldIdentity::CaptureVersion(
 	{
 		Error = TEXT("Invalid or unsupported M4 identity inputs, or capture was called on the game thread");
 		return false;
+	}
+	if (bAuthored)
+	{
+		return FVoxelLandM4WorldIdentityInternals::CaptureAuthoredHeight(S, Out, Error);
 	}
 	if (!VoxelLandM4HeightStageValidation::Validate(S, Error))
 	{
@@ -209,31 +319,7 @@ bool VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(const FVoxelLandM4Wo
 	{
 		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityU64(W, Program->GetFingerprint());
 	}
-	W.U8(S.bNormalizeSlope ? 1 : 0);
-	W.U32(S.Smooth.Version);
-	W.U8(S.Smooth.bEnabled ? 1 : 0);
-	if (S.Smooth.bEnabled)
-	{
-		W.Float(S.Smooth.Strength);
-	}
-	W.U8(S.bOverhangEnabled ? 1 : 0);
-	if (S.bOverhangEnabled)
-	{
-		W.U32(uint32(S.OverhangAmplitudeQ8));
-		W.U32(uint32(S.OverhangBandQ8));
-		W.Float(S.OverhangFrequencyPerCm);
-		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.OverhangNodeId);
-		W.U32(uint32(S.OverhangSalt));
-	}
-	W.U32(uint32(S.HeightDetail.AlgorithmVersion));
-	W.U8(S.HeightDetail.bEnabled ? 1 : 0);
-	if (S.HeightDetail.bEnabled)
-	{
-		W.U32(uint32(S.HeightDetail.AmplitudeQ8));
-		W.Float(S.HeightDetail.FrequencyPerCm);
-		FVoxelLandM4WorldIdentityInternals::M4WorldIdentityGuid(W, S.HeightDetail.NodeId);
-		W.U32(S.HeightDetail.Salt);
-	}
+	FVoxelLandM4WorldIdentityInternals::WriteShaping(W, S);
 	const FVoxelLandM4ControlSnapshot* Channels[] = {&S.Continental, &S.Mountain, &S.Peaks};
 	for (const FVoxelLandM4ControlSnapshot* Channel : Channels)
 	{
@@ -268,13 +354,14 @@ bool VoxelLandM4WorldIdentityInternal::SerializeFromPrepass(const FVoxelLandM4Wo
 bool VoxelLandM4WorldIdentity::Capture(
 	const FVoxelLandM4WorldSnapshot& S, FVoxelLandM4IdentityRecord& Out, FString& Error)
 {
-	return CaptureVersion(S, 1, Out, Error);
+	return CaptureVersion(S, S.AuthoredHeightOutputId.IsValid() ? AuthoredHeightVersion : 1, Out, Error);
 }
 
 bool VoxelLandM4WorldIdentity::Matches(
 	const FVoxelLandM4IdentityRecord& Record, const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error)
 {
-	if (Record.FormatVersion != 1 || Record.CanonicalBytes.Num() < 8 || Record.CanonicalBytes.Num() > 8 * 1024 * 1024
+	if ((Record.FormatVersion != 1 && Record.FormatVersion != AuthoredHeightVersion) || Record.CanonicalBytes.Num() < 8
+		|| Record.CanonicalBytes.Num() > 8 * 1024 * 1024
 		|| Record.FingerprintBits != FVoxelLandM4WorldIdentityInternals::M4WorldIdentityHash(Record.CanonicalBytes))
 	{
 		Error = TEXT("Unsupported or corrupt M4 identity record");

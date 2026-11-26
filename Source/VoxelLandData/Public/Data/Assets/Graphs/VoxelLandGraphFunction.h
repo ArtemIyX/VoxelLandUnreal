@@ -6,7 +6,7 @@
 #include "VoxelLandGraphFunction.generated.h"
 
 // Source-only function. Inherited graph parameters are its typed input interface.
-UCLASS()
+UCLASS(HideDropdown)
 class VOXELLANDDATA_API UVoxelLandGraphFunction : public UVoxelLandTerrainGraph
 {
 	GENERATED_BODY()

@@ -1,7 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Async/Async.h"
 #include "Data/Assets/Worlds/VoxelLandFiniteWorld.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Program/Serialization/VoxelLandCanonicalWriter.h"
@@ -105,7 +105,7 @@ bool MakePocketColumnControl(FVoxelLandM4ControlSnapshot& Out, FString& Error)
 	return true;
 }
 void ApplyPocketColumnControl(
-	UVoxelLandM4WorldConfig& Owner, FVoxelLandM4ControlConfig& Target, const FVoxelLandM4ControlSnapshot& Source)
+	UVoxelLandWorldConfig& Owner, FVoxelLandM4ControlConfig& Target, const FVoxelLandM4ControlSnapshot& Source)
 {
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(&Owner);
 	Graph->SourceVersion = Source.Source.SourceVersion;
@@ -136,11 +136,11 @@ bool FVoxelLandM5PocketSurfaceColumnsTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TStrongObjectPtr<UVoxelLandM4WorldConfig> Config(NewObject<UVoxelLandM4WorldConfig>());
+	TStrongObjectPtr<UVoxelLandWorldConfig> Config(NewObject<UVoxelLandWorldConfig>());
 	ApplyPocketColumnControl(*Config.Get(), Config->Continental, Control);
 	ApplyPocketColumnControl(*Config.Get(), Config->Mountain, Control);
 	ApplyPocketColumnControl(*Config.Get(), Config->Peaks, Control);
-	TStrongObjectPtr<UVoxelLandFiniteWorld> Asset(NewObject<UVoxelLandFiniteWorld>());
+	TStrongObjectPtr<UVoxelLandFiniteWorldSource> Asset(NewObject<UVoxelLandFiniteWorldSource>());
 	Asset->Common.Continental = Config->Continental;
 	Asset->Common.Mountain = Config->Mountain;
 	Asset->Common.Peaks = Config->Peaks;

@@ -6,10 +6,9 @@
 #include "VoxelLandWorld.generated.h"
 
 class FVoxelLandGenerator;
-class UVoxelLandWorldSettings;
-class UVoxelLandWorldDefinition;
-class UVoxelLandM4WorldConfig;
-class UVoxelLandM6WorldConfig;
+class UVoxelLandWorldConfig;
+class UVoxelLandWorldSource;
+class UVoxelLandWorldConfig;
 class UPrimitiveComponent;
 class FVoxelLandInitializationJob;
 class FVoxelLandDemoJob;
@@ -60,9 +59,14 @@ public:
 	AVoxelLandWorld();
 	AVoxelLandWorld(FVTableHelper& Helper);
 	virtual ~AVoxelLandWorld() override;
-	virtual void BeginPlay() override;
+
 	virtual void Tick(float DeltaSeconds) override;
+
+protected:
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+public:
 	virtual void Destroyed() override;
 	virtual void BeginDestroy() override;
 	// Generator snapshots must have been created on a worker thread. Replacing one invalidates prior jobs.
@@ -70,20 +74,13 @@ public:
 	void Initialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator);
 	// Copies settings on the game thread and initializes asynchronously. No work starts in BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
-	bool InitializeFromSettings(UVoxelLandWorldSettings* Settings);
+	bool InitializeFromConfig(UVoxelLandWorldConfig* Config, FIntVector StartupChunk);
 	// Initializes cave-disabled finite definitions asynchronously. The initial
 	// chunk is selected near the control-grid center and its demand bubble must fit.
 	// Enabled caves and other definitions remain rejected pending preparation.
-	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
-	bool InitializeFromWorldDefinition(UVoxelLandWorldDefinition* Definition);
-	// Explicit M4 startup. The entire requested startup radius must fit the selected mode.
-	// Admission reserves a conservative 128 MiB estimate per retained grid under
-	// voxel.M4.PrepassBudgetMiB; actual allocator/backend usage is not measured.
-	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
-	bool InitializeM4FromSettings(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk);
-	// Explicit generation-time overlay. The complete startup footprint is validated asynchronously.
-	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
-	bool InitializeM6FromSettings(UVoxelLandM6WorldConfig* Settings, FIntVector StartupChunk);
+#if WITH_DEV_AUTOMATION_TESTS
+	bool InitializeFiniteSourceForTests(UVoxelLandWorldSource* Definition);
+#endif
 	// Game-thread copy of the published authored M6 identity. False means no active overlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool GetM6WorldIdentity(TArray<uint8>& OutIdentity) const;
@@ -195,7 +192,8 @@ public:
 	TObjectPtr<UMaterialInterface> TerrainMaterial;
 
 private:
-	bool InitializeAuthoredM4(UVoxelLandM4WorldConfig* Settings, FIntVector StartupChunk, UVoxelLandM6WorldConfig* M6);
+	bool InitializeDirectDensity(UVoxelLandWorldConfig* Settings, FIntVector StartupChunk);
+	bool InitializeAuthoredM4(UVoxelLandWorldConfig* Settings, FIntVector StartupChunk);
 	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
 		const FVoxelLandChunkKey* Startup = nullptr, TArray<uint8> M6Identity = {});
 	bool ConfigureClipmap(FVoxelLandWorldState& Candidate);

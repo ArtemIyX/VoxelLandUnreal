@@ -18,6 +18,10 @@ public:
 public:
 	virtual TSharedRef<SWidget> GetDefaultValueWidget() override
 	{
+		if (GraphPinObj->bDefaultValueIsIgnored)
+		{
+			return SNullWidget::NullWidget;
+		}
 		if (GraphPinObj->PinType.PinCategory == TEXT("bool"))
 		{
 			return SNew(SCheckBox)

@@ -1,6 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
@@ -23,9 +23,9 @@ void M4AssetSetValidCurve(FVoxelLandM4ControlConfig& Control)
 	Control.CurveKeys = {First, Last};
 }
 
-UVoxelLandM4WorldConfig* M4AssetMakeValid()
+UVoxelLandWorldConfig* M4AssetMakeValid()
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->Continental.Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	Config->Mountain.Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	Config->Peaks.Graph = NewObject<UVoxelLandTerrainGraph>(Config);
@@ -39,7 +39,7 @@ UVoxelLandM4WorldConfig* M4AssetMakeValid()
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4AssetSnapshotTest, "VoxelLand.M4.Asset.Snapshot", M4AssetTestsFlags)
 bool FVoxelLandM4AssetSnapshotTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = M4AssetMakeValid();
+	UVoxelLandWorldConfig* Config = M4AssetMakeValid();
 	FVoxelLandM4WorldSnapshot Snapshot;
 	FString Error;
 	if (!TestTrue(TEXT("valid editable settings snapshot"), Config->CaptureSnapshot(Snapshot, Error)))
@@ -64,7 +64,7 @@ bool FVoxelLandM4AssetSnapshotTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4AssetValidationTest, "VoxelLand.M4.Asset.Validation", M4AssetTestsFlags)
 bool FVoxelLandM4AssetValidationTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = M4AssetMakeValid();
+	UVoxelLandWorldConfig* Config = M4AssetMakeValid();
 	FVoxelLandM4WorldSnapshot Snapshot;
 	Snapshot.Seed = 999;
 	FString Error;
@@ -93,7 +93,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4AssetCaptureLimitsTest, "VoxelLand.M4.Asset.CaptureLimits", M4AssetTestsFlags)
 bool FVoxelLandM4AssetCaptureLimitsTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = M4AssetMakeValid();
+	UVoxelLandWorldConfig* Config = M4AssetMakeValid();
 	FVoxelLandM4WorldSnapshot Snapshot;
 	Snapshot.Seed = 999;
 	FString Error;
@@ -124,7 +124,7 @@ bool FVoxelLandM4AssetCaptureLimitsTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4AssetOverrideTest, "VoxelLand.M4.Asset.Overrides", M4AssetTestsFlags)
 bool FVoxelLandM4AssetOverrideTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = M4AssetMakeValid();
+	UVoxelLandWorldConfig* Config = M4AssetMakeValid();
 	FVoxelLandGraphParameter Parameter;
 	Parameter.Id = FGuid(1, 2, 3, 4);
 	Parameter.Name = TEXT("Height");

@@ -10,6 +10,9 @@ FVoxelLandPreviewScene::FVoxelLandPreviewScene()
 	// obscure large terrain previews. Keep the sky light, but remove the backdrop.
 	RemovedEnvironment = SkyComponent;
 	RemoveComponent(RemovedEnvironment);
+	SetLightDirection(FRotator(-35.0, 125.0, 0.0));
+	SetLightBrightness(0.85f);
+	SetSkyBrightness(0.18f);
 }
 
 void FVoxelLandPreviewScene::AddReferencedObjects(FReferenceCollector& Collector)

@@ -18,6 +18,9 @@ namespace VoxelLandM4Preparation
 // Called on the game thread before finite requests capture a snapshot. Pins
 // module code and enables key-first admission without reserving a grid yet.
 VOXELLAND_API bool EnsureCoordinatorReady();
+// Worker-only authored graph and selected backend validation. No prepass or
+// chunk generation is performed. Errors identify the relevant authored node.
+VOXELLAND_API bool ValidateAuthoredHeight(const FVoxelLandM4WorldSnapshot& Snapshot, FString& Error);
 // Bounded per-consumer allowance for snapshot capture and validation before
 // key-first producer admission. Hold it until the captured snapshot is freed.
 VOXELLAND_API TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ReserveValidation();

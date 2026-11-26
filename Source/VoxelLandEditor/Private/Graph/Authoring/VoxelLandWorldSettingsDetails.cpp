@@ -1,6 +1,10 @@
 #include "VoxelLandWorldSettingsDetails.h"
 #include "VoxelLandFloatTypeInterface.h"
-#include "Data/Assets/Worlds/VoxelLandWorldSettings.h"
+#include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
+#include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Widgets/Input/SComboButton.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
@@ -18,22 +22,22 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 	inline static int32 RefreshNotificationsForTests = 0;
 #endif
-	static const FVoxelLandGraphParameter* FindParameter(const UVoxelLandWorldSettings* Settings, const FGuid& Id)
+	static const FVoxelLandGraphParameter* FindParameter(const UVoxelLandWorldConfig* Settings, const FGuid& Id)
 	{
 		return Settings && Settings->Graph ? Settings->Graph->Parameters.FindByPredicate(
 												 [&Id](const FVoxelLandGraphParameter& P) { return P.Id == Id; })
 										   : nullptr;
 	}
-	static FVoxelLandParameterOverride* FindOverride(UVoxelLandWorldSettings* Settings, const FGuid& Id)
+	static FVoxelLandParameterOverride* FindOverride(UVoxelLandWorldConfig* Settings, const FGuid& Id)
 	{
 		return Settings ? Settings->Overrides.FindByPredicate(
 							  [&Id](const FVoxelLandParameterOverride& O) { return O.ParameterId == Id; })
 						: nullptr;
 	}
-	static void EditOverride(TWeakObjectPtr<UVoxelLandWorldSettings> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle,
-		TFunction<void(UVoxelLandWorldSettings&, const FVoxelLandGraphParameter&)> Edit)
+	static void EditOverride(TWeakObjectPtr<UVoxelLandWorldConfig> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle,
+		TFunction<void(UVoxelLandWorldConfig&, const FVoxelLandGraphParameter&)> Edit)
 	{
-		UVoxelLandWorldSettings* Settings = Weak.Get();
+		UVoxelLandWorldConfig* Settings = Weak.Get();
 		const FVoxelLandGraphParameter* Parameter = FindParameter(Settings, Id);
 		if (!Settings || !Parameter || !Handle.IsValid())
 		{
@@ -48,14 +52,14 @@ public:
 		Handle->NotifyFinishedChangingProperties();
 	}
 	static void ToggleOverride(
-		TWeakObjectPtr<UVoxelLandWorldSettings> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool bEnabled)
+		TWeakObjectPtr<UVoxelLandWorldConfig> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool bEnabled)
 	{
 		if ((FindOverride(Weak.Get(), Id) != nullptr) == bEnabled)
 		{
 			return;
 		}
 		EditOverride(
-			Weak, Id, Handle, [Id, bEnabled](UVoxelLandWorldSettings& Settings, const FVoxelLandGraphParameter& P) {
+			Weak, Id, Handle, [Id, bEnabled](UVoxelLandWorldConfig& Settings, const FVoxelLandGraphParameter& P) {
 				Settings.Overrides.RemoveAll(
 					[Id](const FVoxelLandParameterOverride& O) { return O.ParameterId == Id; });
 				if (bEnabled)
@@ -70,7 +74,7 @@ public:
 			});
 	}
 	static void SetFloat(
-		TWeakObjectPtr<UVoxelLandWorldSettings> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, float Value)
+		TWeakObjectPtr<UVoxelLandWorldConfig> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, float Value)
 	{
 		const FVoxelLandGraphParameter* P = FindParameter(Weak.Get(), Id);
 		const FVoxelLandParameterOverride* Current = FindOverride(Weak.Get(), Id);
@@ -80,7 +84,7 @@ public:
 		{
 			return;
 		}
-		EditOverride(Weak, Id, Handle, [Id, Value](UVoxelLandWorldSettings& S, const FVoxelLandGraphParameter&) {
+		EditOverride(Weak, Id, Handle, [Id, Value](UVoxelLandWorldConfig& S, const FVoxelLandGraphParameter&) {
 			if (FVoxelLandParameterOverride* O = FindOverride(&S, Id))
 			{
 				O->FloatValue = Value;
@@ -88,7 +92,7 @@ public:
 		});
 	}
 	static void SetInt(
-		TWeakObjectPtr<UVoxelLandWorldSettings> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, int32 Value)
+		TWeakObjectPtr<UVoxelLandWorldConfig> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, int32 Value)
 	{
 		const FVoxelLandGraphParameter* P = FindParameter(Weak.Get(), Id);
 		const FVoxelLandParameterOverride* Current = FindOverride(Weak.Get(), Id);
@@ -97,7 +101,7 @@ public:
 		{
 			return;
 		}
-		EditOverride(Weak, Id, Handle, [Id, Value](UVoxelLandWorldSettings& S, const FVoxelLandGraphParameter&) {
+		EditOverride(Weak, Id, Handle, [Id, Value](UVoxelLandWorldConfig& S, const FVoxelLandGraphParameter&) {
 			if (FVoxelLandParameterOverride* O = FindOverride(&S, Id))
 			{
 				O->IntValue = Value;
@@ -105,7 +109,7 @@ public:
 		});
 	}
 	static void SetBool(
-		TWeakObjectPtr<UVoxelLandWorldSettings> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool Value)
+		TWeakObjectPtr<UVoxelLandWorldConfig> Weak, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool Value)
 	{
 		const FVoxelLandGraphParameter* P = FindParameter(Weak.Get(), Id);
 		const FVoxelLandParameterOverride* Current = FindOverride(Weak.Get(), Id);
@@ -114,14 +118,14 @@ public:
 		{
 			return;
 		}
-		EditOverride(Weak, Id, Handle, [Id, Value](UVoxelLandWorldSettings& S, const FVoxelLandGraphParameter&) {
+		EditOverride(Weak, Id, Handle, [Id, Value](UVoxelLandWorldConfig& S, const FVoxelLandGraphParameter&) {
 			if (FVoxelLandParameterOverride* O = FindOverride(&S, Id))
 			{
 				O->BoolValue = Value;
 			}
 		});
 	}
-	static bool NeedsRawOverrides(UVoxelLandWorldSettings* Settings)
+	static bool NeedsRawOverrides(UVoxelLandWorldConfig* Settings)
 	{
 		if (!Settings)
 		{
@@ -138,7 +142,7 @@ public:
 		}
 		return false;
 	}
-	static FText Diagnostic(TWeakObjectPtr<UVoxelLandWorldSettings> Weak, FGuid Id)
+	static FText Diagnostic(TWeakObjectPtr<UVoxelLandWorldConfig> Weak, FGuid Id)
 	{
 		const FVoxelLandGraphParameter* P = FindParameter(Weak.Get(), Id);
 		const FVoxelLandParameterOverride* O = FindOverride(Weak.Get(), Id);
@@ -163,7 +167,7 @@ public:
 		}
 		return FText::GetEmpty();
 	}
-	static TSharedRef<SWidget> ValueWidget(TWeakObjectPtr<UVoxelLandWorldSettings> Weak,
+	static TSharedRef<SWidget> ValueWidget(TWeakObjectPtr<UVoxelLandWorldConfig> Weak,
 		const FVoxelLandGraphParameter& Parameter, TSharedPtr<IPropertyHandle> Handle)
 	{
 		const FGuid Id = Parameter.Id;
@@ -213,22 +217,22 @@ public:
 
 #if WITH_DEV_AUTOMATION_TESTS
 void FVoxelLandWorldSettingsDetails::SetEnabledForTests(
-	UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool bEnabled)
+	UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool bEnabled)
 {
 	FVoxelLandWorldSettingsDetailsInternals::ToggleOverride(Settings, Id, Handle, bEnabled);
 }
 void FVoxelLandWorldSettingsDetails::SetFloatForTests(
-	UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, float Value)
+	UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, float Value)
 {
 	FVoxelLandWorldSettingsDetailsInternals::SetFloat(Settings, Id, Handle, Value);
 }
 void FVoxelLandWorldSettingsDetails::SetIntForTests(
-	UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, int32 Value)
+	UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, int32 Value)
 {
 	FVoxelLandWorldSettingsDetailsInternals::SetInt(Settings, Id, Handle, Value);
 }
 void FVoxelLandWorldSettingsDetails::SetBoolForTests(
-	UVoxelLandWorldSettings* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool Value)
+	UVoxelLandWorldConfig* Settings, FGuid Id, TSharedPtr<IPropertyHandle> Handle, bool Value)
 {
 	FVoxelLandWorldSettingsDetailsInternals::SetBool(Settings, Id, Handle, Value);
 }
@@ -236,11 +240,11 @@ int32 FVoxelLandWorldSettingsDetails::GetRefreshNotificationsForTests()
 {
 	return FVoxelLandWorldSettingsDetailsInternals::RefreshNotificationsForTests;
 }
-bool FVoxelLandWorldSettingsDetails::NeedsRawOverridesForTests(UVoxelLandWorldSettings* Settings)
+bool FVoxelLandWorldSettingsDetails::NeedsRawOverridesForTests(UVoxelLandWorldConfig* Settings)
 {
 	return FVoxelLandWorldSettingsDetailsInternals::NeedsRawOverrides(Settings);
 }
-FText FVoxelLandWorldSettingsDetails::DiagnosticForTests(UVoxelLandWorldSettings* Settings, FGuid Id)
+FText FVoxelLandWorldSettingsDetails::DiagnosticForTests(UVoxelLandWorldConfig* Settings, FGuid Id)
 {
 	return FVoxelLandWorldSettingsDetailsInternals::Diagnostic(Settings, Id);
 }
@@ -269,19 +273,82 @@ void FVoxelLandWorldSettingsDetails::CustomizeDetails(IDetailLayoutBuilder& Buil
 	{
 		return;
 	}
-	TWeakObjectPtr<UVoxelLandWorldSettings> Settings = Cast<UVoxelLandWorldSettings>(Objects[0].Get());
+	TWeakObjectPtr<UVoxelLandWorldConfig> Settings = Cast<UVoxelLandWorldConfig>(Objects[0].Get());
 	if (!Settings.IsValid())
 	{
 		return;
 	}
+	TWeakPtr<IPropertyUtilities> Properties = Builder.GetPropertyUtilities();
+	Builder.GetProperty(GET_MEMBER_NAME_CHECKED(UVoxelLandWorldConfig, TerrainSource))
+		->SetOnPropertyValueChanged(FSimpleDelegate::CreateLambda([Properties]() {
+			if (const TSharedPtr<IPropertyUtilities> Utilities = Properties.Pin())
+			{
+				Utilities->RequestForceRefresh();
+			}
+		}));
+	UnbindGraphObservers();
+	Builder.EditCategory(TEXT("World"), FText::GetEmpty(), ECategoryPriority::Important)
+		.AddCustomRow(NSLOCTEXT("VoxelLand", "TerrainOutput", "Terrain Output"))
+		.NameContent()[SNew(STextBlock).Text(NSLOCTEXT("VoxelLand", "TerrainOutput", "Terrain Output"))]
+		.ValueContent()[SNew(SComboButton)
+			.ButtonContent()[SNew(STextBlock).Text_Lambda([Settings] {
+				if (!Settings.IsValid() || !Settings->TerrainOutputId.IsValid())
+				{
+					return NSLOCTEXT("VoxelLand", "SelectTerrainOutput", "Select Float Output");
+				}
+				if (const UVoxelLandTerrainGraph* Graph = Settings->Graph.Get())
+				{
+					for (const FVoxelLandGraphNodeRecord& Output : Graph->Nodes)
+					{
+						if (Output.Id == Settings->TerrainOutputId)
+						{
+							return FText::FromString(FVoxelLandGraphOutputs::GetName(Output));
+						}
+					}
+				}
+				return FText::Format(NSLOCTEXT("VoxelLand", "MissingTerrainOutput", "Missing output: {0}"),
+					FText::FromString(Settings->TerrainOutputLabel));
+			})]
+			.OnGetMenuContent_Lambda([Settings] {
+				FMenuBuilder Menu(true, nullptr);
+				if (Settings.IsValid() && Settings->Graph)
+				{
+					for (const FVoxelLandGraphNodeRecord& Output : Settings->Graph->Nodes)
+					{
+						if (Output.OperatorId != VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::FloatOutput)
+							&& Output.OperatorId != VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput))
+						{
+							continue;
+						}
+						const FString Name = FVoxelLandGraphOutputs::GetName(Output);
+						Menu.AddMenuEntry(FText::FromString(Name), FText::GetEmpty(), FSlateIcon(),
+							FUIAction(FExecuteAction::CreateLambda([Settings, Id = Output.Id, Name] {
+								if (Settings.IsValid())
+								{
+									const FScopedTransaction Transaction(NSLOCTEXT("VoxelLand", "BindTerrainOutput", "Bind Terrain Output"));
+									Settings->Modify();
+									Settings->TerrainOutputId = Id;
+									Settings->TerrainOutputLabel = Name;
+									Settings->PostEditChange();
+								}
+							})));
+					}
+				}
+				return Menu.MakeWidget();
+			})];
+
+	if (!Settings->IsDirectDensity())
+	{
+		return;
+	}
 	TSharedRef<IPropertyHandle> Overrides =
-		Builder.GetProperty(GET_MEMBER_NAME_CHECKED(UVoxelLandWorldSettings, Overrides));
+		Builder.GetProperty(GET_MEMBER_NAME_CHECKED(UVoxelLandWorldConfig, Overrides));
 	if (!FVoxelLandWorldSettingsDetailsInternals::NeedsRawOverrides(Settings.Get()))
 	{
 		Builder.HideProperty(Overrides);
 	}
 	TSharedRef<IPropertyHandle> GraphHandle =
-		Builder.GetProperty(GET_MEMBER_NAME_CHECKED(UVoxelLandWorldSettings, Graph));
+		Builder.GetProperty(GET_MEMBER_NAME_CHECKED(UVoxelLandWorldConfig, Graph));
 	TWeakPtr<IPropertyUtilities> Utilities = Builder.GetPropertyUtilities();
 	UnbindGraphObservers();
 	auto RefreshGraph = [Settings, Utilities](UObject* Object) {

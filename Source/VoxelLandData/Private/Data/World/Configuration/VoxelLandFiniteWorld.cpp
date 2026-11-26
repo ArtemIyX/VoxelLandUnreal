@@ -4,7 +4,7 @@
 #include "Data/World/Configuration/VoxelLandFiniteWorldSnapshot.h"
 #include "UObject/StrongObjectPtr.h"
 
-bool UVoxelLandFiniteWorld::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSnapshot, FString& OutError) const
+bool UVoxelLandFiniteWorldSource::CaptureSnapshot(FVoxelLandFiniteWorldSnapshot& OutSnapshot, FString& OutError) const
 {
 	OutError.Reset();
 	if (!IsInGameThread())

@@ -2,7 +2,8 @@
 
 #include "Data/World/Configuration/VoxelLandInfiniteWorldSnapshot.h"
 
-bool UVoxelLandInfiniteWorld::CaptureSnapshot(FVoxelLandInfiniteWorldSnapshot& OutSnapshot, FString& OutError) const
+bool UVoxelLandInfiniteWorldSource::CaptureSnapshot(
+	FVoxelLandInfiniteWorldSnapshot& OutSnapshot, FString& OutError) const
 {
 	OutError.Reset();
 	if (!IsInGameThread())

@@ -2,7 +2,7 @@
 
 #include "Async/Async.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
-#include "Data/Assets/Worlds/VoxelLandWorldSettings.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Generation/Field/VoxelLandGenerator.h"
@@ -90,16 +90,18 @@ bool FVoxelLandWorldLifecycleIsolationTest::RunTest(const FString& Parameters)
 		TestTrue(
 			TEXT("replacement stages valid startup"), Actors[1]->TryInitializeWithStartupForTests(Generator, Startup));
 		TestTrue(TEXT("startup demand is queued in replacement"), Actors[1]->IsExplicitChunkForTests(Startup));
-		TestFalse(TEXT("missing settings rejected"), Actors[1]->InitializeFromSettings(nullptr));
+		TestFalse(TEXT("missing settings rejected"), Actors[1]->InitializeFromConfig(nullptr, FIntVector::ZeroValue));
 		TestTrue(TEXT("missing settings preserve terrain state"), Actors[1]->HasWorldStateForTests());
 		TestFalse(
-			TEXT("missing M4 settings rejected"), Actors[1]->InitializeM4FromSettings(nullptr, FIntVector::ZeroValue));
+			TEXT("missing M4 settings rejected"), Actors[1]->InitializeFromConfig(nullptr, FIntVector::ZeroValue));
 		TestTrue(TEXT("missing M4 settings preserve terrain state"), Actors[1]->HasWorldStateForTests());
-		UVoxelLandWorldSettings* Replacement = NewObject<UVoxelLandWorldSettings>();
+		UVoxelLandWorldConfig* Replacement = NewObject<UVoxelLandWorldConfig>();
+		Replacement->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 		Replacement->Graph = NewObject<UVoxelLandTerrainGraph>(Replacement);
 		Replacement->HorizontalRadius = 1;
 		const int32 OriginalRadius = Actors[1]->HorizontalRadius;
-		if (TestTrue(TEXT("replacement preparation starts"), Actors[1]->InitializeFromSettings(Replacement)))
+		if (TestTrue(TEXT("replacement preparation starts"),
+				Actors[1]->InitializeFromConfig(Replacement, FIntVector::ZeroValue)))
 		{
 			TestTrue(TEXT("active terrain remains during preparation"), Actors[1]->HasWorldStateForTests());
 			TestEqual(TEXT("active demand remains during preparation"), Actors[1]->HorizontalRadius, OriginalRadius);
@@ -112,7 +114,7 @@ bool FVoxelLandWorldLifecycleIsolationTest::RunTest(const FString& Parameters)
 		Actors[1]->Shutdown();
 		TestTrue(TEXT("reentrant replacement survives retiring old state"), Actors[1]->HasWorldStateForTests());
 		TestTrue(TEXT("reentrant replacement keeps ticking"), Actors[1]->IsActorTickEnabled());
-		Actors[0]->EndPlay(EEndPlayReason::EndPlayInEditor);
+		Actors[0]->RouteEndPlay(EEndPlayReason::EndPlayInEditor);
 		TestFalse(TEXT("first actor stops its own job"), Actors[0]->IsActorTickEnabled());
 		TestTrue(TEXT("other world retains terrain state"), Actors[1]->HasWorldStateForTests());
 		TestTrue(TEXT("other world remains enabled"), Actors[1]->IsActorTickEnabled());

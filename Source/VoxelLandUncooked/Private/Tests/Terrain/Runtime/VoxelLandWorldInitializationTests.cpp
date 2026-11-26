@@ -3,11 +3,12 @@
 #include "VoxelLandRuntimeTestInputs.h"
 
 #include "Async/Async.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Worlds/VoxelLandFiniteWorld.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
+#include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Data/Terrain/Persistence/VoxelLandSavedTerrainWorldRecord.h"
 #include "Engine/Engine.h"
@@ -68,6 +69,16 @@ bool FVoxelLandM4RuntimeTestInputs::MakeProgram(UVoxelLandTerrainGraph& Graph, F
 	return bPacked;
 }
 
+void FVoxelLandM4RuntimeTestInputs::BindAuthoredHeight(UVoxelLandWorldConfig& Config, UVoxelLandTerrainGraph& Graph)
+{
+	FVoxelLandGraphNodeRecord& Output = Graph.Nodes.Last();
+	Output.OperatorId = VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::FloatOutput);
+	FVoxelLandGraphOutputs::SetName(Output, TEXT("Height"));
+	Config.Graph = &Graph;
+	Config.TerrainOutputId = Output.Id;
+	Config.TerrainOutputLabel = TEXT("Height");
+}
+
 void FVoxelLandM4RuntimeTestInputs::SetCurve(FVoxelLandM4ControlConfig& Channel)
 {
 	FVoxelLandM4CurveAuthoringKey First, Last;
@@ -82,7 +93,7 @@ class FM4RuntimeCommand final : public IAutomationLatentCommand
 {
 public:
 	FM4RuntimeCommand(FAutomationTestBase* InTest, UWorld* InWorld, AVoxelLandWorld* InActor,
-		UVoxelLandM4WorldConfig* InConfig, IConsoleVariable* InBudget, int32 InPreviousBudget)
+		UVoxelLandWorldConfig* InConfig, IConsoleVariable* InBudget, int32 InPreviousBudget)
 		: Test(InTest)
 		, World(InWorld)
 		, Actor(InActor)
@@ -123,9 +134,9 @@ public:
 			RestoreBudget();
 			Actor->SetPresentationHookForTests([this] {
 				bReentered = true;
-				bReentryStarted = Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue);
+				bReentryStarted = Actor->InitializeFromConfig(Config, FIntVector::ZeroValue);
 			});
-			if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
+			if (!Actor->InitializeFromConfig(Config, FIntVector::ZeroValue))
 			{
 				Test->AddError(TEXT("M4 initialization did not start after budget restoration"));
 				Cleanup();
@@ -148,7 +159,7 @@ public:
 			Test->TestTrue(TEXT("startup chunk reaches data-ready"), Actor->HasDataChunk(FIntVector::ZeroValue));
 			Test->TestTrue(TEXT("success reports no error"), Actor->LastInitializationError.IsEmpty());
 			PublishedStartupChunk = Actor->FindChunk(FVoxelLandChunkKey{});
-			if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
+			if (!Actor->InitializeFromConfig(Config, FIntVector::ZeroValue))
 			{
 				Test->AddError(TEXT("M4 stale-result fixture did not start"));
 				Cleanup();
@@ -164,13 +175,13 @@ public:
 				PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 			Test->TestTrue(
 				TEXT("stale rejection is reported"), Actor->LastInitializationError.Contains(TEXT("superseded")));
-			if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
+			if (!Actor->InitializeFromConfig(Config, FIntVector::ZeroValue))
 			{
 				Test->AddError(TEXT("M4 graph-change fixture did not start"));
 				Cleanup();
 				return true;
 			}
-			Config->Continental.Graph->Nodes[0].Pins[0].FloatDefault = 0.25f;
+			Config->Graph->Nodes[0].Pins[0].FloatDefault = 0.25f;
 			Phase = 2;
 			return false;
 		}
@@ -180,8 +191,8 @@ public:
 				PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 			Test->TestTrue(TEXT("graph change reports stale rejection"),
 				Actor->LastInitializationError.Contains(TEXT("superseded")));
-			Config->Continental.Graph->Nodes[0].Pins[0].FloatDefault = 0.f;
-			if (!Actor->InitializeM4FromSettings(Config, FIntVector(100, 0, 0)))
+			Config->Graph->Nodes[0].Pins[0].FloatDefault = 0.f;
+			if (!Actor->InitializeFromConfig(Config, FIntVector(100, 0, 0)))
 			{
 				Test->AddError(TEXT("M4 boundary fixture did not start"));
 				Cleanup();
@@ -196,7 +207,7 @@ public:
 				PublishedStartupChunk.IsValid() && Actor->FindChunk(FVoxelLandChunkKey{}) == PublishedStartupChunk);
 			Test->TestTrue(TEXT("boundary rejection identifies startup"),
 				Actor->LastInitializationError.Contains(TEXT("startup")));
-			if (Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
+			if (Actor->InitializeFromConfig(Config, FIntVector::ZeroValue))
 			{
 				Actor->CancelInitialization();
 				Test->TestFalse(TEXT("cancel detaches initialization"), Actor->bInitializing);
@@ -293,7 +304,7 @@ private:
 	FAutomationTestBase* Test;
 	UWorld* World;
 	AVoxelLandWorld* Actor;
-	UVoxelLandM4WorldConfig* Config;
+	UVoxelLandWorldConfig* Config;
 	IConsoleVariable* Budget;
 	int32 PreviousBudget;
 	double Start;
@@ -313,7 +324,7 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 		AddError(TEXT("Engine unavailable"));
 		return false;
 	}
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	FString Error;
@@ -323,22 +334,12 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 		Config->RemoveFromRoot();
 		return false;
 	}
-	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Graph;
-	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Continental);
-	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Mountain);
-	FVoxelLandM4RuntimeTestInputs::SetCurve(Config->Peaks);
-	TArray<int32> BakedCurve;
-	BakedCurve.Init(0, 4097);
-	if (!Config->SetBakedCurves(BakedCurve, BakedCurve, BakedCurve, 1, Error))
-	{
-		AddError(FString::Printf(TEXT("Could not prepare baked curves: %s"), *Error));
-		Config->RemoveFromRoot();
-		return false;
-	}
+	FVoxelLandM4RuntimeTestInputs::BindAuthoredHeight(*Config, *Graph);
 	Config->CellsX = Config->CellsY = 8;
 	Config->OriginXCm = Config->OriginYCm = -25600;
 	Config->GridSpacingCm = 6400;
-	Config->bGlobalErosion = false;
+	Config->bGlobalErosion = true;
+	Config->DropletCount = 32;
 	// Use a fresh prepass identity so another test's retained cache cannot
 	// satisfy the zero-budget miss without invoking producer admission.
 	const FGuid UniqueSeed = FGuid::NewGuid();
@@ -367,6 +368,11 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 	Actor->bDataOnly = true;
 	Actor->DispatchBeginPlay();
 	TestFalse(TEXT("BeginPlay leaves terrain inert"), Actor->HasWorldStateForTests());
+	const FGuid OutputId = Config->TerrainOutputId;
+	Config->TerrainOutputId.Invalidate();
+	TestFalse(TEXT("Unbound Height cannot start"), Actor->InitializeFromConfig(Config, FIntVector::ZeroValue));
+	TestTrue(TEXT("Unbound Height explains migration"), Actor->LastInitializationError.Contains(TEXT("Reauthor")));
+	Config->TerrainOutputId = OutputId;
 	IConsoleVariable* Budget = IConsoleManager::Get().FindConsoleVariable(TEXT("voxel.M4.PrepassBudgetMiB"));
 	if (!TestNotNull(TEXT("M4 admission budget exists"), Budget))
 	{
@@ -379,7 +385,7 @@ bool FVoxelLandM4RuntimeInitializationTest::RunTest(const FString& Parameters)
 	}
 	const int32 PreviousBudget = Budget->GetInt();
 	Budget->SetWithCurrentPriority(0);
-	if (!Actor->InitializeM4FromSettings(Config, FIntVector::ZeroValue))
+	if (!Actor->InitializeFromConfig(Config, FIntVector::ZeroValue))
 	{
 		Budget->SetWithCurrentPriority(PreviousBudget);
 		AddError(FString::Printf(TEXT("Could not dispatch budget-miss request: %s"), *Actor->LastInitializationError));
@@ -398,7 +404,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4RuntimeSharedPrepassTest, "VoxelLand.M4.Runtime.SharedPrepass", M4RuntimeFlags)
 bool FVoxelLandM4RuntimeSharedPrepassTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	FString Error;
@@ -525,9 +531,9 @@ bool FVoxelLandTypedFiniteDispatchTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	UVoxelLandFiniteWorld* Definition = NewObject<UVoxelLandFiniteWorld>();
+	UVoxelLandFiniteWorldSource* Definition = NewObject<UVoxelLandFiniteWorldSource>();
 	Definition->AddToRoot();
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Definition);
 	FString Error;
@@ -575,11 +581,11 @@ bool FVoxelLandTypedFiniteDispatchTest::RunTest(const FString& Parameters)
 		Actor->DispatchBeginPlay();
 		TestFalse(TEXT("begin play is inert"), Actor->HasWorldStateForTests());
 		if (TestTrue(TEXT("disabled finite capture starts initialization"),
-				Actor->InitializeFromWorldDefinition(Definition)))
+				Actor->InitializeFiniteSourceForTests(Definition)))
 		{
 			TestTrue(TEXT("initialization is pending"), Actor->bInitializing);
 			Definition->Common.Caves.bEnabled = true;
-			TestFalse(TEXT("enabled cave initialization rejected"), Actor->InitializeFromWorldDefinition(Definition));
+			TestFalse(TEXT("enabled cave initialization rejected"), Actor->InitializeFiniteSourceForTests(Definition));
 			TestTrue(TEXT("rejected request retains current pending job"), Actor->bInitializing);
 			Actor->CancelInitialization();
 			TestFalse(TEXT("cancel removes pending job"), Actor->bInitializing);
@@ -598,7 +604,7 @@ class FTypedFiniteLifecycleCommand final : public IAutomationLatentCommand
 {
 public:
 	FTypedFiniteLifecycleCommand(FAutomationTestBase* InTest, UWorld* InWorld, AVoxelLandWorld* InActor,
-		UVoxelLandFiniteWorld* InDefinition, UVoxelLandM4WorldConfig* InConfig, UVoxelLandTerrainGraph* InGraph)
+		UVoxelLandFiniteWorldSource* InDefinition, UVoxelLandWorldConfig* InConfig, UVoxelLandTerrainGraph* InGraph)
 		: Test(InTest)
 		, World(InWorld)
 		, Actor(InActor)
@@ -638,7 +644,7 @@ public:
 			}
 			Test->TestTrue(
 				TEXT("disabled finite world publishes center chunk"), Actor->HasDataChunk(FIntVector(-2, -2, 0)));
-			if (!Actor->InitializeFromWorldDefinition(Definition))
+			if (!Actor->InitializeFiniteSourceForTests(Definition))
 			{
 				Test->AddError(TEXT("Could not start stale settings request"));
 				Cleanup();
@@ -653,7 +659,7 @@ public:
 			Test->TestTrue(TEXT("changed typed settings reject completion"),
 				Actor->LastInitializationError.Contains(TEXT("superseded")));
 			Definition->Common.HorizontalRadius = 1;
-			if (!Actor->InitializeFromWorldDefinition(Definition))
+			if (!Actor->InitializeFiniteSourceForTests(Definition))
 			{
 				Test->AddError(TEXT("Could not start stale graph request"));
 				Cleanup();
@@ -698,8 +704,8 @@ private:
 	FAutomationTestBase* Test;
 	UWorld* World;
 	AVoxelLandWorld* Actor;
-	UVoxelLandFiniteWorld* Definition;
-	UVoxelLandM4WorldConfig* Config;
+	UVoxelLandFiniteWorldSource* Definition;
+	UVoxelLandWorldConfig* Config;
 	UVoxelLandTerrainGraph* Graph;
 	double Start;
 	int32 Phase = 0;
@@ -713,9 +719,9 @@ bool FVoxelLandTypedFiniteLifecycleTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	UVoxelLandFiniteWorld* Definition = NewObject<UVoxelLandFiniteWorld>();
+	UVoxelLandFiniteWorldSource* Definition = NewObject<UVoxelLandFiniteWorldSource>();
 	Definition->AddToRoot();
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Definition);
 	FString Error;
@@ -770,7 +776,7 @@ bool FVoxelLandTypedFiniteLifecycleTest::RunTest(const FString& Parameters)
 	}
 	Actor->bDataOnly = true;
 	Actor->DispatchBeginPlay();
-	if (!Actor->InitializeFromWorldDefinition(Definition))
+	if (!Actor->InitializeFiniteSourceForTests(Definition))
 	{
 		AddError(
 			FString::Printf(TEXT("Could not start typed finite initialization: %s"), *Actor->LastInitializationError));

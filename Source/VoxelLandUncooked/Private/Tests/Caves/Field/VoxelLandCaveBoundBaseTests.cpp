@@ -3,7 +3,7 @@
 #include "Data/Assets/Worlds/VoxelLandFiniteWorld.h"
 #include "Data/Caves/Field/VoxelLandCaveProtectionAsset.h"
 #include "Data/World/Configuration/VoxelLandFiniteWorldSnapshot.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Data/Terrain/Domains/VoxelLandTerrainDomainMode.h"
@@ -92,7 +92,7 @@ bool M5BoundBaseMakeControl(FVoxelLandM4ControlSnapshot& Out, FString& Error)
 }
 
 void M5BoundBaseApplyControl(
-	UVoxelLandM4WorldConfig& Config, FVoxelLandM4ControlConfig& Target, const FVoxelLandM4ControlSnapshot& Source)
+	UVoxelLandWorldConfig& Config, FVoxelLandM4ControlConfig& Target, const FVoxelLandM4ControlSnapshot& Source)
 {
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(&Config);
 	Graph->SourceVersion = Source.Source.SourceVersion;
@@ -124,8 +124,8 @@ bool FVoxelLandM5BoundBaseTest::RunTest(const FString& Parameters)
 		AddError(Error);
 		return false;
 	}
-	TStrongObjectPtr<UVoxelLandM4WorldConfig> ConfigOwner(NewObject<UVoxelLandM4WorldConfig>());
-	UVoxelLandM4WorldConfig* Config = ConfigOwner.Get();
+	TStrongObjectPtr<UVoxelLandWorldConfig> ConfigOwner(NewObject<UVoxelLandWorldConfig>());
+	UVoxelLandWorldConfig* Config = ConfigOwner.Get();
 	M5BoundBaseApplyControl(*Config, Config->Continental, Control);
 	M5BoundBaseApplyControl(*Config, Config->Mountain, Control);
 	M5BoundBaseApplyControl(*Config, Config->Peaks, Control);
@@ -285,7 +285,7 @@ bool FVoxelLandM5BoundBaseTest::RunTest(const FString& Parameters)
 	// Preserve the finite capture reader while proving its claimed reservation
 	// has been released; snapshots and their metadata leases may remain alive.
 	Capture.Reset();
-	Config->bUnlimited = true;
+	Config->WorldExtent = EVoxelLandWorldExtent::Infinite;
 	Config->Caves.PlanningMode = EVoxelLandM5PlanningMode::Regional;
 	Config->Caves.Bounds.MinInclusive.X = Config->Caves.Bounds.MinInclusive.Y = -204800;
 	Config->Caves.Bounds.MaxExclusive.X = Config->Caves.Bounds.MaxExclusive.Y = 204800;
@@ -380,11 +380,11 @@ bool FVoxelLandM5TypedFiniteBaseCaptureTest::RunTest(const FString& Parameters)
 		AddError(Error);
 		return false;
 	}
-	TStrongObjectPtr<UVoxelLandM4WorldConfig> Config(NewObject<UVoxelLandM4WorldConfig>());
+	TStrongObjectPtr<UVoxelLandWorldConfig> Config(NewObject<UVoxelLandWorldConfig>());
 	M5BoundBaseApplyControl(*Config.Get(), Config->Continental, Control);
 	M5BoundBaseApplyControl(*Config.Get(), Config->Mountain, Control);
 	M5BoundBaseApplyControl(*Config.Get(), Config->Peaks, Control);
-	TStrongObjectPtr<UVoxelLandFiniteWorld> Definition(NewObject<UVoxelLandFiniteWorld>());
+	TStrongObjectPtr<UVoxelLandFiniteWorldSource> Definition(NewObject<UVoxelLandFiniteWorldSource>());
 	Definition->Common.Continental = Config->Continental;
 	Definition->Common.Mountain = Config->Mountain;
 	Definition->Common.Peaks = Config->Peaks;

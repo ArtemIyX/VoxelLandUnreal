@@ -1,7 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Async/Async.h"
 #include "Data/Assets/Worlds/VoxelLandFiniteWorld.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Caves/Field/VoxelLandCaveProtectionAsset.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
@@ -69,7 +69,7 @@ public:
 		return true;
 	}
 	static void Apply(
-		UVoxelLandM4WorldConfig& Owner, FVoxelLandM4ControlConfig& Target, const FVoxelLandM4ControlSnapshot& Source)
+		UVoxelLandWorldConfig& Owner, FVoxelLandM4ControlConfig& Target, const FVoxelLandM4ControlSnapshot& Source)
 	{
 		UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(&Owner);
 		Graph->SourceVersion = Source.Source.SourceVersion;
@@ -102,11 +102,11 @@ bool FVoxelLandM5CapturedBaselineTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TStrongObjectPtr<UVoxelLandM4WorldConfig> Config(NewObject<UVoxelLandM4WorldConfig>());
+	TStrongObjectPtr<UVoxelLandWorldConfig> Config(NewObject<UVoxelLandWorldConfig>());
 	FVoxelLandM5CapturedBaselineFixture::Apply(*Config.Get(), Config->Continental, Control);
 	FVoxelLandM5CapturedBaselineFixture::Apply(*Config.Get(), Config->Mountain, Control);
 	FVoxelLandM5CapturedBaselineFixture::Apply(*Config.Get(), Config->Peaks, Control);
-	TStrongObjectPtr<UVoxelLandFiniteWorld> Definition(NewObject<UVoxelLandFiniteWorld>());
+	TStrongObjectPtr<UVoxelLandFiniteWorldSource> Definition(NewObject<UVoxelLandFiniteWorldSource>());
 	Definition->Common.Continental = Config->Continental;
 	Definition->Common.Mountain = Config->Mountain;
 	Definition->Common.Peaks = Config->Peaks;

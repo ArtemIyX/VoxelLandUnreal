@@ -28,7 +28,7 @@
 #include "../../Graph/Authoring/VoxelLandEditorFloat.h"
 #include "../../Graph/Authoring/VoxelLandFloatTypeInterface.h"
 #include "../../Graph/Authoring/VoxelLandWorldSettingsDetails.h"
-#include "Data/Assets/Worlds/VoxelLandWorldSettings.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "PropertyEditorModule.h"
 #include "IDetailsView.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
@@ -332,12 +332,13 @@ bool FVoxelLandWorldSettingsOverridesTest::RunTest(const FString& Parameters)
 	P.FloatMin = 0.f;
 	P.FloatMax = 1.f;
 	const FGuid Id = P.Id;
-	UVoxelLandWorldSettings* Settings =
-		NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transactional);
+	UVoxelLandWorldConfig* Settings =
+		NewObject<UVoxelLandWorldConfig>(GetTransientPackage(), NAME_None, RF_Transactional);
+	Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 	Settings->Graph = Graph;
 	FPropertyEditorModule& Module = FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
 	const TSharedPtr<ISinglePropertyView> View = Module.CreateSingleProperty(
-		Settings, GET_MEMBER_NAME_CHECKED(UVoxelLandWorldSettings, Overrides), FSinglePropertyParams());
+		Settings, GET_MEMBER_NAME_CHECKED(UVoxelLandWorldConfig, Overrides), FSinglePropertyParams());
 	if (!TestTrue(TEXT("Override property view created"), View.IsValid()))
 	{
 		return false;
@@ -385,9 +386,11 @@ bool FVoxelLandWorldSettingsOverridesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Boolean callback sets matching typed value"), Settings->Overrides[0].BoolValue);
 	FVoxelLandWorldSettingsDetails::SetIntForTests(Settings, Id, Handle, 2);
 	TestEqual(TEXT("Stale integer callback cannot modify bool override"), Settings->Overrides[0].IntValue, 3);
+	Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 	Settings->Graph = nullptr;
 	TestTrue(TEXT("Null graph exposes raw overrides for repair"),
 		FVoxelLandWorldSettingsDetails::NeedsRawOverridesForTests(Settings));
+	Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 	Settings->Graph = Graph;
 	TestFalse(TEXT("Valid override does not require raw repair"),
 		FVoxelLandWorldSettingsDetails::NeedsRawOverridesForTests(Settings));
@@ -436,7 +439,7 @@ bool FVoxelLandPreviewSettingsUndoTest::RunTest(const FString& Parameters)
 		NewObject<UVoxelLandTerrainGraph>(GetTransientPackage(), NAME_None, RF_Transactional);
 	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
 	Toolkit->InitializeForTests(Asset);
-	UVoxelLandWorldSettings* Settings = Toolkit->GetPreviewSettingsForTests();
+	UVoxelLandWorldConfig* Settings = Toolkit->GetPreviewSettingsForTests();
 	Toolkit->SetPreviewRadiusForTests(2, true);
 	TestEqual(TEXT("Radius control updates settings"), Settings->HorizontalRadius, 2);
 	TestEqual(TEXT("Radius control updates preview"), Toolkit->GetPreviewHorizontalRadiusForTests(), 2);
@@ -522,7 +525,7 @@ bool FVoxelLandPreviewSettingsUndoTest::RunTest(const FString& Parameters)
 		const FScopedTransaction Transaction(
 			NSLOCTEXT("VoxelLandTests", "ChangePreviewBounds", "Change preview bounds"));
 		Settings->Modify();
-		Settings->VoxelSizeCm = 125.f;
+		Settings->DirectVoxelSizeCm = 125.f;
 		Settings->HorizontalRadius = 2;
 		Toolkit->SynchronizePreviewForTests();
 	}
@@ -575,8 +578,8 @@ bool FVoxelLandPreviewPickersTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Clearing material uses surface fallback"), Toolkit->GetEffectiveMaterialForTests() == Material);
 	TestEqual(
 		TEXT("Clearing material does not regenerate density"), Toolkit->GetPreviewRevisionForTests(), BeforeMaterial);
-	UVoxelLandWorldSettings* Source =
-		NewObject<UVoxelLandWorldSettings>(GetTransientPackage(), NAME_None, RF_Transient);
+	UVoxelLandWorldConfig* Source = NewObject<UVoxelLandWorldConfig>(GetTransientPackage(), NAME_None, RF_Transient);
+	Source->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 	Source->Graph = Graph;
 	Source->Seed = 5678;
 	Toolkit->SetSettingsPickerForTests(Source);
@@ -811,10 +814,10 @@ bool FVoxelLandRealPackageReloadTest::RunTest(const FString& Parameters)
 			MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
 		Toolkit->SetPreviewReloadBarrierForTests(PreviewBarrier);
 		Toolkit->StartPreviewForTests();
-		UVoxelLandWorldSettings* SourceSettings = LoadObject<UVoxelLandWorldSettings>(
-			nullptr, TEXT("/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings"));
-		UVoxelLandWorldSettings* Settings =
-			SourceSettings ? DuplicateObject<UVoxelLandWorldSettings>(SourceSettings, GetTransientPackage()) : nullptr;
+		UVoxelLandWorldConfig* SourceSettings = LoadObject<UVoxelLandWorldConfig>(
+			nullptr, TEXT("/VoxelLand/Examples/DA_DirectDensityWorld.DA_DirectDensityWorld"));
+		UVoxelLandWorldConfig* Settings =
+			SourceSettings ? DuplicateObject<UVoxelLandWorldConfig>(SourceSettings, GetTransientPackage()) : nullptr;
 		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 		AVoxelLandWorld* Actor = nullptr;
 		bool bWorldRegistered = false;
@@ -822,6 +825,7 @@ bool FVoxelLandRealPackageReloadTest::RunTest(const FString& Parameters)
 			MakeShared<FVoxelLandReloadTestBarrier, ESPMode::ThreadSafe>();
 		if (TestNotNull(TEXT("Example settings for reload"), Settings) && TestNotNull(TEXT("Test world"), World))
 		{
+			Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
 			Settings->Graph = Asset;
 			World->AddToRoot();
 			bWorldRegistered = true;
@@ -834,7 +838,8 @@ bool FVoxelLandRealPackageReloadTest::RunTest(const FString& Parameters)
 				Actor->bDataOnly = true;
 				Actor->DispatchBeginPlay();
 				Actor->SetInitReloadBarrierForTests(InitBarrier);
-				TestTrue(TEXT("World settings initialization starts"), Actor->InitializeFromSettings(Settings));
+				TestTrue(TEXT("World settings initialization starts"),
+					Actor->InitializeFromConfig(Settings, FIntVector::ZeroValue));
 			}
 		}
 		const double JobsDeadline = FPlatformTime::Seconds() + 5.0;
@@ -1301,7 +1306,7 @@ bool FVoxelLandAssetWorkflowTest::RunTest(const FString& Parameters)
 {
 	const FString Unique = FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	const TArray<FString> Sources = {TEXT("/VoxelLand/Examples/DA_M3_Hills.DA_M3_Hills"),
-		TEXT("/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings"),
+		TEXT("/VoxelLand/Examples/DA_DirectDensityWorld.DA_DirectDensityWorld"),
 		TEXT("/VoxelLand/Examples/DA_M3_MaterialSetup.DA_M3_MaterialSetup")};
 	TArray<FString> Files;
 	TArray<FString> PackageNames;
@@ -1338,7 +1343,7 @@ bool FVoxelLandAssetWorkflowTest::RunTest(const FString& Parameters)
 		}
 		else if (Index == 1)
 		{
-			Factory = NewObject<UVoxelLandWorldSettingsFactory>();
+			Factory = NewObject<UVoxelLandWorldConfigFactory>();
 		}
 		else
 		{
@@ -1452,11 +1457,11 @@ bool FVoxelLandAssetWorkflowTest::RunTest(const FString& Parameters)
 							&& Links == ReopenedLinks);
 				}
 			}
-			if (const UVoxelLandWorldSettings* Settings = Cast<UVoxelLandWorldSettings>(Reopened))
+			if (const UVoxelLandWorldConfig* Settings = Cast<UVoxelLandWorldConfig>(Reopened))
 			{
-				const UVoxelLandWorldSettings* Expected = CastChecked<UVoxelLandWorldSettings>(Source);
+				const UVoxelLandWorldConfig* Expected = CastChecked<UVoxelLandWorldConfig>(Source);
 				TestTrue(TEXT("World settings values and graph reference survive reopen"),
-					Settings->Seed == Expected->Seed && Settings->VoxelSizeCm == Expected->VoxelSizeCm
+					Settings->Seed == Expected->Seed && Settings->DirectVoxelSizeCm == Expected->DirectVoxelSizeCm
 						&& Settings->Graph == Expected->Graph && Settings->MaterialSetup == Expected->MaterialSetup);
 			}
 			if (const UVoxelLandMaterialSetup* Setup = Cast<UVoxelLandMaterialSetup>(Reopened))
@@ -1772,14 +1777,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandInitializationReplacementTest,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandInitializationReplacementTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandWorldSettings* Source = LoadObject<UVoxelLandWorldSettings>(
-		nullptr, TEXT("/VoxelLand/Examples/DA_M3_WorldSettings.DA_M3_WorldSettings"));
+	UVoxelLandWorldConfig* Source = LoadObject<UVoxelLandWorldConfig>(
+		nullptr, TEXT("/VoxelLand/Examples/DA_DirectDensityWorld.DA_DirectDensityWorld"));
 	if (!Source || !Source->Graph || !GEngine)
 	{
 		AddError(TEXT("Example settings unavailable"));
 		return false;
 	}
-	UVoxelLandWorldSettings* Settings = DuplicateObject<UVoxelLandWorldSettings>(Source, GetTransientPackage());
+	UVoxelLandWorldConfig* Settings = DuplicateObject<UVoxelLandWorldConfig>(Source, GetTransientPackage());
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 	if (!World)
 	{
@@ -1801,7 +1806,7 @@ bool FVoxelLandInitializationReplacementTest::RunTest(const FString& Parameters)
 	}
 	Actor->bDataOnly = true;
 	Actor->DispatchBeginPlay();
-	if (!Actor->InitializeFromSettings(Settings))
+	if (!Actor->InitializeFromConfig(Settings, FIntVector::ZeroValue))
 	{
 		AddError(FString::Printf(TEXT("Initialization failed to start: %s"), *Actor->LastInitializationError));
 		Actor->Shutdown();

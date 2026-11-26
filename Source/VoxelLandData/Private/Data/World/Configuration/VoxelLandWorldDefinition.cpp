@@ -17,7 +17,7 @@
 #include "UObject/ObjectSaveContext.h"
 #endif
 
-TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandWorldDefinition::CaptureSource(
+TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandWorldSource::CaptureSource(
 	FString& OutError) const
 {
 	if (!IsInGameThread())
@@ -25,7 +25,7 @@ TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandW
 		OutError = TEXT("World settings must be captured on the game thread.");
 		return nullptr;
 	}
-	if (const auto* Finite = Cast<UVoxelLandFiniteWorld>(this))
+	if (const auto* Finite = Cast<UVoxelLandFiniteWorldSource>(this))
 	{
 		FVoxelLandFiniteWorldSnapshot Snapshot;
 		if (Finite->CaptureSnapshot(Snapshot, OutError))
@@ -34,7 +34,7 @@ TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandW
 		}
 		return nullptr;
 	}
-	if (const auto* Infinite = Cast<UVoxelLandInfiniteWorld>(this))
+	if (const auto* Infinite = Cast<UVoxelLandInfiniteWorldSource>(this))
 	{
 		FVoxelLandInfiniteWorldSnapshot Snapshot;
 		if (Infinite->CaptureSnapshot(Snapshot, OutError))
@@ -47,19 +47,19 @@ TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> UVoxelLandW
 	return nullptr;
 }
 
-bool UVoxelLandWorldDefinition::HasRepresentableVerticalExtent(int64 Minimum, int64 Maximum)
+bool UVoxelLandWorldSource::HasRepresentableVerticalExtent(int64 Minimum, int64 Maximum)
 {
 	return Minimum < Maximum && (Minimum >= 0 || Maximum <= MAX_int64 + Minimum);
 }
 
-const TCHAR* UVoxelLandWorldDefinition::GetPreparationBlocker() const
+const TCHAR* UVoxelLandWorldSource::GetPreparationBlocker() const
 {
-	if (IsA<UVoxelLandFiniteWorld>())
+	if (IsA<UVoxelLandFiniteWorldSource>())
 	{
 		return TEXT("Finite world preparation is blocked on a metered bounded prepass and final-field certification. "
 					"Cooked reconstruction also requires a current descriptor.");
 	}
-	if (IsA<UVoxelLandInfiniteWorld>())
+	if (IsA<UVoxelLandInfiniteWorldSource>())
 	{
 		return TEXT("Infinite world preparation is blocked on metered local sampling and certified neighboring plan "
 					"sets. Cooked reconstruction also requires a current descriptor.");
@@ -67,7 +67,7 @@ const TCHAR* UVoxelLandWorldDefinition::GetPreparationBlocker() const
 	return TEXT("Unsupported world definition type.");
 }
 
-void UVoxelLandWorldDefinition::Serialize(FArchive& Ar)
+void UVoxelLandWorldSource::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
 #if WITH_EDITOR
@@ -76,7 +76,7 @@ void UVoxelLandWorldDefinition::Serialize(FArchive& Ar)
 }
 
 #if WITH_EDITOR
-EDataValidationResult UVoxelLandWorldDefinition::IsDataValid(FDataValidationContext& Context) const
+EDataValidationResult UVoxelLandWorldSource::IsDataValid(FDataValidationContext& Context) const
 {
 	if (!IsInGameThread())
 	{
@@ -93,7 +93,7 @@ EDataValidationResult UVoxelLandWorldDefinition::IsDataValid(FDataValidationCont
 	return EDataValidationResult::NotValidated;
 }
 
-void UVoxelLandWorldDefinition::EnforceCookPreparation(FArchive& Ar) const
+void UVoxelLandWorldSource::EnforceCookPreparation(FArchive& Ar) const
 {
 	const FObjectSavePackageSerializeContext* Context = Ar.GetArchiveState().GetSavePackageSerializeContext();
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) && Ar.IsSaving() && Ar.IsCooking() && Context
@@ -724,7 +724,7 @@ void FVoxelLandWorldDefinitionValidation::CopyGenerationSettings(
 		Kind == EVoxelLandWorldKind::Finite ? EVoxelLandM5PlanningMode::Finite : EVoxelLandM5PlanningMode::Regional;
 }
 
-bool UVoxelLandWorldDefinition::CaptureCommon(EVoxelLandWorldKind Kind, TFunctionRef<bool()> IsModeCurrent,
+bool UVoxelLandWorldSource::CaptureCommon(EVoxelLandWorldKind Kind, TFunctionRef<bool()> IsModeCurrent,
 	FVoxelLandWorldCommonSnapshot& OutSnapshot, FString& OutError) const
 {
 	OutError.Reset();
@@ -738,7 +738,7 @@ bool UVoxelLandWorldDefinition::CaptureCommon(EVoxelLandWorldKind Kind, TFunctio
 		OutError = TEXT("Unsupported world kind.");
 		return false;
 	}
-	TStrongObjectPtr<UVoxelLandWorldDefinition> Owner(const_cast<UVoxelLandWorldDefinition*>(this));
+	TStrongObjectPtr<UVoxelLandWorldSource> Owner(const_cast<UVoxelLandWorldSource*>(this));
 	const FSoftObjectPath& MaterialPath = Common.MaterialSetup.ToSoftObjectPath();
 	const FTopLevelAssetPath MaterialAssetPath = MaterialPath.GetAssetPath();
 	const uint64 MaterialPathLength = uint64(MaterialAssetPath.GetPackageName().GetStringLength())

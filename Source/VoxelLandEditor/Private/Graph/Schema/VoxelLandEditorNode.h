@@ -14,10 +14,10 @@ class UVoxelLandEditorNode : public UEdGraphNode
 	GENERATED_BODY()
 
 public:
-	UPROPERTY(VisibleAnywhere, Category = "VoxelLand")
+	UPROPERTY(VisibleAnywhere, AdvancedDisplay, Category = "VoxelLand")
 	int32 Kind = 1;
 
-	UPROPERTY(EditAnywhere, Category = "VoxelLand")
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "VoxelLand")
 	FGuid ParameterId;
 
 	UPROPERTY()
@@ -41,7 +41,7 @@ public:
 	UPROPERTY()
 	TMap<FGuid, FGuid> FunctionPinIds;
 
-	UPROPERTY(EditAnywhere, Category = "VoxelLand")
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "VoxelLand")
 	int32 SeedSalt = 0;
 
 	UPROPERTY()

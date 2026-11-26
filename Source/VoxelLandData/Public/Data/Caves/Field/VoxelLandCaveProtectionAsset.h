@@ -6,7 +6,7 @@
 #include "VoxelLandCaveProtectionAsset.generated.h"
 
 // Authored binary protection cells. A set cell protects its whole half-open box.
-UCLASS(BlueprintType)
+UCLASS(BlueprintType, HideDropdown)
 class VOXELLANDDATA_API UVoxelLandM5ProtectionAsset : public UDataAsset
 {
 	GENERATED_BODY()

@@ -1,12 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Async/Async.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
-#include "Data/Program/Serialization/VoxelLandCanonicalWriter.h"
 #include "Data/Terrain/Persistence/VoxelLandSavedTerrainWorldRecord.h"
-#include "Generation/Field/VoxelLandGenerator.h"
-#include "Graph/Compilation/VoxelLandGraphCompiler.h"
-#include "Graph/Serialization/VoxelLandProgramCodec.h"
-#include "Hash/xxhash.h"
 #include "Misc/AutomationTest.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
@@ -14,6 +9,7 @@
 #include "UObject/Class.h"
 #include "World/Terrain/Persistence/VoxelLandSavedTerrainWorld.h"
 #include "World/Terrain/Persistence/VoxelLandWorldIdentity.h"
+#include "World/Terrain/Worlds/VoxelLandTerrainPreparation.h"
 
 namespace
 {
@@ -27,6 +23,8 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 	bool bCaptured = false, bRestored = false, bFields = false, bIdentity = false;
 	bool bTampered = false, bUnknown = false, bAtomic = false, bBadProgram = false;
 	bool bCaptureRadius = false, bCaptureOversized = false, bCaptureAtomic = false;
+	bool bOutputIdentity = false, bCompiledIdentity = false, bScaleIdentity = false, bBaseIdentity = false;
+	bool bLegacyRejected = false, bBackendNode = false;
 	FString Error;
 	Async(EAsyncExecution::ThreadPool, [&] {
 		FVoxelLandM4WorldSnapshot Original;
@@ -54,33 +52,10 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 		Link.SourcePin = Constant.Pins[1].Id;
 		Link.TargetNode = Output.Id;
 		Link.TargetPin = Output.Pins[0].Id;
-		FVoxelLandM4ControlSnapshot* Channels[] = {&Original.Continental, &Original.Mountain, &Original.Peaks};
-		for (FVoxelLandM4ControlSnapshot* C : Channels)
-		{
-			C->Source.Nodes = {Constant, Output};
-			C->Source.Links = {Link};
-			FVoxelLandProgramDraft Draft;
-			TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
-			if (!FVoxelLandGraphCompiler::Compile(C->Source, Draft, Error)
-				|| FVoxelLandProgram::Validate(Draft, Program)
-				|| !FVoxelLandProgramCodec::Pack(C->Source, *Program, C->Payload, Error))
-			{
-				return;
-			}
-			FVoxelLandM4CurveAuthoringKey First, Last;
-			Last.InputQ16 = 65535;
-			C->CurveKeys = {First, Last};
-			C->CookedCurve.SourceKeys = C->CurveKeys;
-			C->CookedCurve.BakeVersion = 1;
-			C->CookedCurve.SamplesQ8.Init(0, 4097);
-			FCanonicalWriter W;
-			for (int32 Value : C->CookedCurve.SamplesQ8)
-			{
-				W.U32(uint32(Value));
-			}
-			const uint64 Hash = FXxHash64::HashBuffer(W.Bytes.GetData(), W.Bytes.Num()).Hash;
-			FMemory::Memcpy(&C->CookedCurve.SamplesHash, &Hash, sizeof(Hash));
-		}
+		Original.AuthoredHeightOutputId = FGuid(3, 1, 1, 1);
+		Original.AuthoredHeightSource.Nodes = {Constant, Output};
+		Original.AuthoredHeightSource.Links = {Link};
+		Original.HeightScaleCm = 2750;
 		FVoxelLandM4SavedWorld Saved;
 		bCaptured = VoxelLandM4SavedWorld::Capture(Original, Saved, Error);
 		if (!bCaptured)
@@ -95,7 +70,7 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 		bCaptureAtomic = Protected.Snapshot.Seed == Saved.Snapshot.Seed
 					  && Protected.Identity.CanonicalBytes == Saved.Identity.CanonicalBytes;
 		InvalidSnapshot = Original;
-		InvalidSnapshot.Continental.Source.Functions.SetNum(17);
+		InvalidSnapshot.AuthoredHeightSource.Functions.SetNum(17);
 		bCaptureOversized = !VoxelLandM4SavedWorld::Capture(InvalidSnapshot, Protected, Error)
 						 && Error.Contains(TEXT("admission"))
 						 && Protected.Identity.CanonicalBytes == Saved.Identity.CanonicalBytes;
@@ -116,10 +91,39 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 		bFields = Restored.Seed == Original.Seed && Restored.BaseHeightQ8 == Original.BaseHeightQ8
 			   && Restored.HeightDetail.AmplitudeQ8 == 500 && Restored.HorizontalRadius == 2
 			   && Restored.MaterialSetupPath == Original.MaterialSetupPath
-			   && Restored.Continental.Source.Nodes.Num() == 2 && Restored.Mountain.Source.Links.Num() == 1
-			   && Restored.Peaks.Payload.ProgramFingerprint == Original.Peaks.Payload.ProgramFingerprint
-			   && Restored.Peaks.CookedCurve.SamplesQ8.Num() == 4097;
+			   && Restored.AuthoredHeightSource.Nodes.Num() == 2 && Restored.AuthoredHeightSource.Links.Num() == 1
+			   && Restored.AuthoredHeightOutputId == Original.AuthoredHeightOutputId
+			   && Restored.HeightScaleCm == Original.HeightScaleCm
+			   && Saved.Identity.FormatVersion == VoxelLandM4WorldIdentity::AuthoredHeightVersion
+			   && Loaded.FormatVersion == FVoxelLandM4SavedWorld::AuthoredFormatVersion;
 		bIdentity = VoxelLandM4WorldIdentity::Matches(Saved.Identity, Restored, Error);
+		auto Changed = [&](const FVoxelLandM4WorldSnapshot& Snapshot) {
+			FVoxelLandM4IdentityRecord Identity;
+			return VoxelLandM4WorldIdentity::Capture(Snapshot, Identity, Error)
+				&& Identity.CanonicalBytes != Saved.Identity.CanonicalBytes;
+		};
+		FVoxelLandM4WorldSnapshot Variant = Original;
+		++Variant.AuthoredHeightOutputId.D;
+		bOutputIdentity = Changed(Variant);
+		Variant = Original;
+		Variant.AuthoredHeightSource.Nodes[0].Pins[0].FloatDefault = 0.5f;
+		bCompiledIdentity = Changed(Variant);
+		Variant = Original;
+		++Variant.HeightScaleCm;
+		bScaleIdentity = Changed(Variant);
+		Variant = Original;
+		++Variant.BaseHeightQ8;
+		bBaseIdentity = Changed(Variant);
+		Variant = Original;
+		Variant.Domain.Mode = EVoxelLandM4DomainMode::Unlimited;
+		Variant.AuthoredHeightSource.Nodes[0].Pins[0].FloatDefault = 65.f;
+		bBackendNode = !VoxelLandM4Preparation::ValidateAuthoredHeight(Variant, Error)
+					&& Error.Contains(TEXT("fixed-lattice")) && Error.Contains(Constant.Id.ToString());
+
+		FVoxelLandM4SavedWorld Legacy;
+		Legacy.Snapshot.Seed = 19;
+		bLegacyRejected = !VoxelLandM4SavedWorld::Restore(Legacy, Restored, Error)
+					   && Error.Contains(TEXT("reauthoring")) && Restored.Seed == Original.Seed;
 		Loaded.Snapshot.Seed++;
 		Restored.Seed = 777;
 		bTampered = !VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error);
@@ -128,7 +132,7 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 		Loaded.FormatVersion++;
 		bUnknown = !VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error) && Restored.Seed == 777;
 		Loaded.FormatVersion--;
-		Loaded.Snapshot.Continental.Payload.ProgramVersion = -1;
+		Loaded.Snapshot.AuthoredHeightSource.Links.Reset();
 		bBadProgram = !VoxelLandM4SavedWorld::Restore(Loaded, Restored, Error) && Restored.Seed == 777;
 	}).Get();
 	TestTrue(FString::Printf(TEXT("world captured: %s"), *Error), bCaptured);
@@ -136,12 +140,18 @@ bool FVoxelLandM4SavedWorldTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("capture rejects invalid startup radius"), bCaptureRadius);
 	TestTrue(TEXT("capture rejects excessive nested metadata"), bCaptureOversized);
 	TestTrue(TEXT("failed capture leaves its prior output unchanged"), bCaptureAtomic);
-	TestTrue(TEXT("settings, source, program and LUT survive"), bFields);
+	TestTrue(TEXT("settings, projected graph and output binding survive"), bFields);
 	TestTrue(TEXT("restored density identity matches"), bIdentity);
+	TestTrue(TEXT("stable output ID changes authored identity"), bOutputIdentity);
+	TestTrue(TEXT("compiled program changes authored identity"), bCompiledIdentity);
+	TestTrue(TEXT("height scale changes authored identity"), bScaleIdentity);
+	TestTrue(TEXT("base elevation changes authored identity"), bBaseIdentity);
+	TestTrue(TEXT("legacy saves require reauthoring and preserve output"), bLegacyRejected);
+	TestTrue(TEXT("fixed backend diagnostic identifies the authored node"), bBackendNode);
 	TestTrue(TEXT("tampered density setting rejected"), bTampered);
 	TestTrue(TEXT("unsupported version rejected"), bUnknown);
 	TestTrue(TEXT("failed restore leaves output unchanged"), bAtomic);
-	TestTrue(TEXT("invalid compiled program rejected"), bBadProgram);
+	TestTrue(TEXT("invalid projected program rejected"), bBadProgram);
 	return true;
 }
 #endif

@@ -25,6 +25,5 @@ private:
 	TSharedPtr<class IAssetTypeActions> GraphAssetActions;
 	TSharedPtr<class IAssetTypeActions> FunctionAssetActions;
 	TSharedPtr<class IAssetTypeActions> M4ControlGraphAssetActions;
-	TSharedPtr<class IAssetTypeActions> FiniteWorldAssetActions;
-	TSharedPtr<class IAssetTypeActions> InfiniteWorldAssetActions;
+	TArray<TSharedRef<IAssetTypeActions>> DataAssetActions;
 };

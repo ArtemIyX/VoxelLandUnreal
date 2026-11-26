@@ -8,8 +8,8 @@
 struct FVoxelLandFiniteWorldSnapshot;
 class UVoxelLandM5ProtectionAsset;
 
-UCLASS(BlueprintType)
-class VOXELLANDDATA_API UVoxelLandFiniteWorld : public UVoxelLandWorldDefinition
+UCLASS(Transient)
+class VOXELLANDDATA_API UVoxelLandFiniteWorldSource : public UVoxelLandWorldSource
 {
 	GENERATED_BODY()
 

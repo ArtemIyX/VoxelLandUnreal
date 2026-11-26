@@ -3,7 +3,7 @@
 #include "../../../Worlds/Assets/VoxelLandAssetFactories.h"
 #include "../../../VoxelLandEditorBake.h"
 #include "Async/Async.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
 #include "Editor.h"
@@ -68,9 +68,9 @@ bool M4EditorBakeMakeGraph(UVoxelLandTerrainGraph& Graph, FString& Error)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4EditorBakeTest, "VoxelLand.M4.Editor.Bake", M4EditorBakeFlags)
 bool FVoxelLandM4EditorBakeTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfigFactory* Factory = NewObject<UVoxelLandM4WorldConfigFactory>();
-	UVoxelLandM4WorldConfig* Config = Cast<UVoxelLandM4WorldConfig>(Factory->FactoryCreateNew(
-		UVoxelLandM4WorldConfig::StaticClass(), GetTransientPackage(), NAME_None, RF_Transient, nullptr, nullptr));
+	UVoxelLandWorldConfigFactory* Factory = NewObject<UVoxelLandWorldConfigFactory>();
+	UVoxelLandWorldConfig* Config = Cast<UVoxelLandWorldConfig>(Factory->FactoryCreateNew(
+		UVoxelLandWorldConfig::StaticClass(), GetTransientPackage(), NAME_None, RF_Transient, nullptr, nullptr));
 	if (!TestNotNull(TEXT("factory creates an M4 configuration"), Config))
 	{
 		return false;
@@ -108,7 +108,7 @@ class FM4EditorPreviewSafetyCommand final : public IAutomationLatentCommand
 {
 public:
 	FM4EditorPreviewSafetyCommand(
-		FAutomationTestBase* InTest, UVoxelLandM4WorldConfig* InConfig, TSharedRef<FVoxelLandGraphToolkit> InToolkit)
+		FAutomationTestBase* InTest, UVoxelLandWorldConfig* InConfig, TSharedRef<FVoxelLandGraphToolkit> InToolkit)
 		: Test(InTest)
 		, Config(InConfig)
 		, Toolkit(InToolkit)
@@ -173,7 +173,7 @@ private:
 		}
 	}
 	FAutomationTestBase* Test;
-	UVoxelLandM4WorldConfig* Config;
+	UVoxelLandWorldConfig* Config;
 	TSharedRef<FVoxelLandGraphToolkit> Toolkit;
 	double Started;
 	int32 Phase = 0;
@@ -184,7 +184,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4EditorPreviewSafetyTest, "VoxelLand.M4.Editor.PreviewSafety", M4EditorBakeFlags)
 bool FVoxelLandM4EditorPreviewSafetyTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	FString Error;
@@ -224,8 +224,8 @@ bool FVoxelLandM4EditorUndoTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	UVoxelLandM4WorldConfig* Config =
-		NewObject<UVoxelLandM4WorldConfig>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
+	UVoxelLandWorldConfig* Config =
+		NewObject<UVoxelLandWorldConfig>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config, NAME_None, RF_Transactional);
 	FString Error;
 	if (!M4EditorBakeMakeGraph(*Graph, Error))
@@ -301,7 +301,7 @@ bool FVoxelLandM4EditorValidationAdmissionTest::RunTest(const FString& Parameter
 		}
 		Permits.Add(MoveTemp(Permit));
 	}
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	TSharedRef<FVoxelLandGraphToolkit> Toolkit = MakeShared<FVoxelLandGraphToolkit>();
 	Toolkit->InitializeForTests(Graph);
@@ -339,7 +339,7 @@ bool FVoxelLandM4CrossEditorControlChangeTest::RunTest(const FString& Parameters
 	UVoxelLandTerrainGraph* Control = NewObject<UVoxelLandTerrainGraph>();
 	UVoxelLandTerrainGraph* Host = NewObject<UVoxelLandTerrainGraph>();
 	UVoxelLandTerrainGraph* Unrelated = NewObject<UVoxelLandTerrainGraph>();
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->Continental.Graph = Config->Mountain.Graph = Config->Peaks.Graph = Control;
 	TSharedRef<FVoxelLandGraphToolkit> ControlEditor = MakeShared<FVoxelLandGraphToolkit>();
 	TSharedRef<FVoxelLandGraphToolkit> PreviewEditor = MakeShared<FVoxelLandGraphToolkit>();
@@ -393,7 +393,7 @@ namespace
 class FM4LiveCurvePreviewCommand final : public IAutomationLatentCommand
 {
 public:
-	FM4LiveCurvePreviewCommand(FAutomationTestBase* InTest, UVoxelLandM4WorldConfig* InConfig,
+	FM4LiveCurvePreviewCommand(FAutomationTestBase* InTest, UVoxelLandWorldConfig* InConfig,
 		TSharedRef<FVoxelLandGraphToolkit> InToolkit, int64 InSavedHash)
 		: Test(InTest)
 		, Config(InConfig)
@@ -449,7 +449,7 @@ private:
 		}
 	}
 	FAutomationTestBase* Test;
-	UVoxelLandM4WorldConfig* Config;
+	UVoxelLandWorldConfig* Config;
 	TSharedRef<FVoxelLandGraphToolkit> Toolkit;
 	int64 SavedHash;
 	double Started;
@@ -460,7 +460,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4LiveCurvePreviewTest, "VoxelLand.M4.Editor.LiveCurvePreview", M4EditorBakeFlags)
 bool FVoxelLandM4LiveCurvePreviewTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	Config->AddToRoot();
 	UVoxelLandTerrainGraph* Graph = NewObject<UVoxelLandTerrainGraph>(Config);
 	FString Error;

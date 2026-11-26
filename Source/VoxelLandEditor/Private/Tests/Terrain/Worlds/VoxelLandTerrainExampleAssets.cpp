@@ -2,7 +2,7 @@
 #include "../../../VoxelLandEditorBake.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
 #include "Data/Terrain/Worlds/VoxelLandTerrainWorldSnapshot.h"
 #include "Data/Terrain/HeightGraph/VoxelLandHeightStageValidation.h"
@@ -208,7 +208,7 @@ void M4ExampleSetCurve(FVoxelLandM4ControlConfig& Channel, int32 First, int32 Mi
 	Channel.CurveKeys = {A, B, C};
 }
 
-bool M4ExampleConfigure(UVoxelLandM4WorldConfig& Config, UVoxelLandTerrainGraph* const (&Graphs)[3], FString& Error)
+bool M4ExampleConfigure(UVoxelLandWorldConfig& Config, UVoxelLandTerrainGraph* const (&Graphs)[3], FString& Error)
 {
 	Config.Continental.Graph = Graphs[0];
 	Config.Mountain.Graph = Graphs[1];
@@ -228,7 +228,7 @@ bool M4ExampleConfigure(UVoxelLandM4WorldConfig& Config, UVoxelLandTerrainGraph*
 	return Config.ValidateSettings(Error) && VoxelLandM4Editor::BakeWorldConfig(Config, Error);
 }
 
-bool M4ExampleCheckHeight(UVoxelLandM4WorldConfig& Config, UVoxelLandM4ControlGraph& Graph, FString& Error)
+bool M4ExampleCheckHeight(UVoxelLandWorldConfig& Config, UVoxelLandM4ControlGraph& Graph, FString& Error)
 {
 	if (Config.Continental.Graph != &Graph || Config.Mountain.Graph != &Graph || Config.Peaks.Graph != &Graph
 		|| !Graph.HeightOutputId.IsValid() || !Graph.EditorGraph || !Config.bGlobalErosion
@@ -292,7 +292,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4ExampleAuthoring, "VoxelLand.M4.Exa
 
 bool FVoxelLandM4ExampleAuthoring::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	UVoxelLandTerrainGraph* Graphs[3] = {NewObject<UVoxelLandTerrainGraph>(Config),
 		NewObject<UVoxelLandTerrainGraph>(Config), NewObject<UVoxelLandTerrainGraph>(Config)};
 	FString Error;
@@ -350,8 +350,8 @@ bool FVoxelLandM4CreateExampleAssets::RunTest(const FString& Parameters)
 			return false;
 		}
 	}
-	UVoxelLandM4WorldConfig* Config =
-		NewObject<UVoxelLandM4WorldConfig>(CreatePackage(*Paths[3]), FName(M4ExampleNames[3]), Flags);
+	UVoxelLandWorldConfig* Config =
+		NewObject<UVoxelLandWorldConfig>(CreatePackage(*Paths[3]), FName(M4ExampleNames[3]), Flags);
 	if (!M4ExampleConfigure(*Config, Graphs, Error))
 	{
 		AddError(Error);
@@ -398,7 +398,7 @@ bool FVoxelLandM4VerifyExampleAssets::RunTest(const FString& Parameters)
 		}
 	}
 	const FString ConfigPath = FString(M4ExampleRoot) + M4ExampleNames[3] + TEXT(".") + M4ExampleNames[3];
-	UVoxelLandM4WorldConfig* Config = LoadObject<UVoxelLandM4WorldConfig>(nullptr, *ConfigPath);
+	UVoxelLandWorldConfig* Config = LoadObject<UVoxelLandWorldConfig>(nullptr, *ConfigPath);
 	if (!TestNotNull(TEXT("saved M4 config loads"), Config))
 	{
 		return false;
@@ -429,7 +429,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FVoxelLandM4HeightExampleAuthoring::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	UVoxelLandM4ControlGraph* Graph = NewObject<UVoxelLandM4ControlGraph>(Config);
 	FString Error;
 	if (!TestTrue(TEXT("editable shared height graph builds"), M4ExampleBuildHeightGraph(*Graph, Error)))
@@ -479,8 +479,7 @@ bool FVoxelLandM4CreateHeightExampleAssets::RunTest(const FString& Parameters)
 	const EObjectFlags Flags = RF_Public | RF_Standalone | RF_Transactional;
 	UVoxelLandM4ControlGraph* Graph =
 		NewObject<UVoxelLandM4ControlGraph>(CreatePackage(*Paths[0]), FName(Names[0]), Flags);
-	UVoxelLandM4WorldConfig* Config =
-		NewObject<UVoxelLandM4WorldConfig>(CreatePackage(*Paths[1]), FName(Names[1]), Flags);
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>(CreatePackage(*Paths[1]), FName(Names[1]), Flags);
 	UVoxelLandTerrainGraph* Graphs[3] = {Graph, Graph, Graph};
 	FString Error;
 	if (!M4ExampleBuildHeightGraph(*Graph, Error) || !M4ExampleConfigure(*Config, Graphs, Error)
@@ -506,7 +505,7 @@ bool FVoxelLandM4VerifyHeightExampleAssets::RunTest(const FString& Parameters)
 	}
 	UVoxelLandM4ControlGraph* Graph = LoadObject<UVoxelLandM4ControlGraph>(
 		nullptr, TEXT("/Game/VoxelLandExamples/M4/DA_M4_HeightGraph.DA_M4_HeightGraph"));
-	UVoxelLandM4WorldConfig* Config = LoadObject<UVoxelLandM4WorldConfig>(
+	UVoxelLandWorldConfig* Config = LoadObject<UVoxelLandWorldConfig>(
 		nullptr, TEXT("/Game/VoxelLandExamples/M4/DA_M4_HeightWorld.DA_M4_HeightWorld"));
 	if (!TestNotNull(TEXT("saved shared graph loads"), Graph)
 		|| !TestNotNull(TEXT("saved height config loads"), Config))
@@ -514,13 +513,19 @@ bool FVoxelLandM4VerifyHeightExampleAssets::RunTest(const FString& Parameters)
 		return false;
 	}
 	FString Error;
-	if (!TestTrue(
-			TEXT("saved height graph and projections remain valid"), M4ExampleCheckHeight(*Config, *Graph, Error)))
+	FVoxelLandGraphSnapshot Source;
+	TestTrue(TEXT("Legacy graph still loads for inspection"), Graph->CaptureSnapshot(Source, Error));
+	FVoxelLandM4WorldSnapshot Snapshot;
+	if (!Config->CaptureSnapshot(Snapshot, Error))
 	{
 		AddError(Error);
 		return false;
 	}
-	TestEqual(TEXT("saved graph retains editable layout"), Graph->EditorGraph->Nodes.Num(), 6);
+	TestTrue(TEXT("The project config now binds an authored Height output"), Snapshot.AuthoredHeightOutputId.IsValid());
+	if (TestNotNull(TEXT("Legacy graph retains its editable layout"), Graph->EditorGraph.Get()))
+	{
+		TestEqual(TEXT("Original nodes are retained"), Graph->EditorGraph->Nodes.Num(), 6);
+	}
 	return true;
 }
 

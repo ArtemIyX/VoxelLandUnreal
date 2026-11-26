@@ -2,7 +2,7 @@
 
 #include "../../../VoxelLandEditorBake.h"
 #include "Async/Async.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Graph/Schema/VoxelLandBuiltinNode.h"
 #include "Generation/Field/VoxelLandGenerator.h"
@@ -65,7 +65,7 @@ bool M4CookGuardMakeGraph(UVoxelLandTerrainGraph& Graph, FString& Error)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM4CookGuardTest, "VoxelLand.M4.Editor.CookGuard", M4CookGuardFlags)
 bool FVoxelLandM4CookGuardTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	FDataValidationContext EmptyContext;
 	TestTrue(
 		TEXT("unconfigured asset is invalid"), Config->IsDataValid(EmptyContext) == EDataValidationResult::Invalid);
@@ -88,9 +88,10 @@ bool FVoxelLandM4CookGuardTest::RunTest(const FString& Parameters)
 		AddError(Error);
 		return false;
 	}
-	FDataValidationContext ValidContext;
-	TestTrue(
-		TEXT("saved settings and LUTs validate"), Config->IsDataValid(ValidContext) == EDataValidationResult::Valid);
+	FDataValidationContext LegacyContext;
+	TestEqual(TEXT("Legacy recipes require reauthoring even with baked LUTs"), Config->IsDataValid(LegacyContext),
+		EDataValidationResult::Invalid);
+	TestTrue(TEXT("Legacy LUTs remain readable for inspection"), Config->ValidateBakedCurves(Error));
 
 	const FVoxelLandSerializedProgram GoodPayload = Graph->CompiledProgram;
 	Graph->CompiledProgram.EnvelopeVersion = 99;
@@ -126,7 +127,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVoxelLandM4CookArchiveGuardTest, "VoxelLand.M4.Editor.CookArchiveGuard", M4CookGuardFlags)
 bool FVoxelLandM4CookArchiveGuardTest::RunTest(const FString& Parameters)
 {
-	UVoxelLandM4WorldConfig* Config = NewObject<UVoxelLandM4WorldConfig>();
+	UVoxelLandWorldConfig* Config = NewObject<UVoxelLandWorldConfig>();
 	FObjectSaveContextData SaveData;
 	FObjectSavePackageSerializeContext SerializeContext(SaveData);
 	FArchiveCookContext CookContext(

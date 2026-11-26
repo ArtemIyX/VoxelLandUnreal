@@ -2,7 +2,7 @@
 
 #include "Data/Assets/Worlds/VoxelLandFiniteWorld.h"
 #include "Data/Caves/Field/VoxelLandCaveProtectionAsset.h"
-#include "Data/Terrain/Worlds/VoxelLandTerrainWorldConfig.h"
+#include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Data/World/Configuration/VoxelLandFiniteWorldSnapshot.h"
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "Generation/Terrain/Worlds/VoxelLandTerrainGridLease.h"
@@ -54,7 +54,7 @@ FVoxelLandM5BaseCapture::FVoxelLandM5BaseCapture(TSharedRef<FVoxelLandM5Budget, 
 {
 }
 
-FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandM4WorldConfig& Config,
+FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandWorldConfig& Config,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
 	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture)
 {
@@ -64,7 +64,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandM4WorldConfig&
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 base capture requires the game thread"));
 	}
 	// Graph capture may load assets and reenter game-thread code.
-	TStrongObjectPtr<UVoxelLandM4WorldConfig> ConfigGuard(&Config);
+	TStrongObjectPtr<UVoxelLandWorldConfig> ConfigGuard(&Config);
 	int64 MaxBytes = 0, MaxWork = 0;
 	InBudget->GetLimits(MaxBytes, MaxWork);
 	if (MaxBytes > Config.Caves.Limits.MaxBytes || MaxWork > Config.Caves.Limits.MaxValidationWork)
@@ -111,7 +111,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandM4WorldConfig&
 	return {};
 }
 
-FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& Definition,
+FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorldSource& Definition,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> InBudget,
 	TSharedPtr<const FVoxelLandM5BaseCapture, ESPMode::ThreadSafe>& OutCapture)
 {
@@ -120,7 +120,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 		return FVoxelLandM5BoundBaseInternals::M5BoundBaseFailure(
 			EVoxelLandM5ErrorCode::InvalidInput, TEXT("M5 finite capture requires a valid asset and the game thread"));
 	}
-	TStrongObjectPtr<UVoxelLandFiniteWorld> DefinitionGuard(&Definition);
+	TStrongObjectPtr<UVoxelLandFiniteWorldSource> DefinitionGuard(&Definition);
 	UVoxelLandM5ProtectionAsset* const AuthoredMask = Definition.ProtectionMask.Get();
 	if (AuthoredMask && !IsValid(AuthoredMask))
 	{
@@ -223,7 +223,7 @@ FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::Capture(UVoxelLandFiniteWorld& D
 }
 
 FVoxelLandM5Diagnostic FVoxelLandM5BaseCapture::CheckFiniteProtectionCurrent(
-	const UVoxelLandFiniteWorld& Definition, bool& bOutCurrent) const
+	const UVoxelLandFiniteWorldSource& Definition, bool& bOutCurrent) const
 {
 	if (!IsInGameThread() || !IsValid(&Definition))
 	{
@@ -289,7 +289,7 @@ FVoxelLandM5FiniteNativeSource::FVoxelLandM5FiniteNativeSource(
 }
 FVoxelLandM5FiniteNativeSource::~FVoxelLandM5FiniteNativeSource() = default;
 
-FVoxelLandM5Diagnostic FVoxelLandM5BoundBase::CaptureFiniteNative(UVoxelLandFiniteWorld& Asset,
+FVoxelLandM5Diagnostic FVoxelLandM5BoundBase::CaptureFiniteNative(UVoxelLandFiniteWorldSource& Asset,
 	TSharedRef<FVoxelLandM5Budget, ESPMode::ThreadSafe> Budget, uint32 GeometryVersion,
 	TSharedPtr<const FVoxelLandM5FiniteNativeSource, ESPMode::ThreadSafe>& OutSource)
 {

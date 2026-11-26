@@ -1,4 +1,6 @@
 #include "VoxelLandEditorSchema.h"
+#include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
+#include "Graph/Compilation/VoxelLandMaterialGraphProgram.h"
 #include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
 #include "../Authoring/VoxelLandEditorFloat.h"
@@ -330,9 +332,18 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
 	{
 		UE_LOG(LogTemp, Error, TEXT("VoxelLand builtin catalog unavailable: %s"), *CatalogError);
 	}
+	const UVoxelLandTerrainGraph* GraphAsset =
+		ContextMenuBuilder.CurrentGraph ? Cast<UVoxelLandTerrainGraph>(ContextMenuBuilder.CurrentGraph->GetOuter())
+										: nullptr;
+	const bool bMaterialGraph = GraphAsset && GraphAsset->GraphRole == EVoxelLandGraphRole::Material;
 	for (EVoxelLandBuiltinNode Builtin : Builtins)
 	{
 		const int32 Kind = int32(Builtin);
+		if (bMaterialGraph ? !FVoxelLandMaterialGraphProgram::IsSupportedNode(Builtin)
+						   : Kind >= int32(EVoxelLandBuiltinNode::Surface))
+		{
+			continue;
+		}
 		if (Builtin == EVoxelLandBuiltinNode::M4HeightOutput)
 		{
 			continue;

@@ -37,6 +37,7 @@ class FPackageReloadedEvent;
 enum class EPackageReloadPhase : uint8;
 struct FEdGraphEditAction;
 struct FPropertyChangedEvent;
+class FVoxelLandWorldSignalSnapshot;
 class FTransactionObjectEvent;
 struct FVoxelLandReloadTestBarrier;
 struct FVoxelLandZoneProfile;
@@ -55,6 +56,7 @@ public:
 	void Open(UVoxelLandTerrainGraph* InAsset, EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& Host);
 	static bool StoreCompiledProgram(UVoxelLandTerrainGraph& Graph, FVoxelLandSerializedProgram&& Payload);
 	void Stop();
+	void SetMaterialPreviewSignals(TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> Signals);
 	// Stop editor-owned asynchronous work and delegates without closing the
 	// toolkit or tearing down its preview world.
 	void QuiesceForModuleShutdown();
@@ -131,6 +133,12 @@ public:
 		StartM4Preview();
 	}
 	bool HasM4PreviewWorkForTests() const { return PreviewWork.IsValid(); }
+	bool HasMaterialProbeForTests() const { return NoiseTexture != nullptr; }
+	void SelectMaterialProbeForTests(UVoxelLandWorldConfig* Config, FGuid Node, FGuid Pin)
+	{
+		PreviewSettings = Config;
+		SelectPinSlice(Node, Pin, TEXT("Test material mask"));
+	}
 	void RequestCompileForTests() { RequestCompile(); }
 	void SelectNamedOutputForTests(FGuid Id, const FString& Name) { SelectNamedOutput(Id, Name); }
 	bool HasCompileWorkForTests() const { return CompileWork.IsValid(); }
@@ -152,6 +160,8 @@ public:
 private:
 	TSharedRef<SDockTab> SpawnGraph(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnDetails(const FSpawnTabArgs& Args);
+	TSharedRef<SWidget> BuildMaterialBindingMenu();
+	void RefreshTerrainSignalLabels();
 	TSharedRef<SDockTab> SpawnDiagnostics(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnPreview(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnOutputs(const FSpawnTabArgs& Args);
@@ -228,7 +238,7 @@ private:
 	void ApplyPreviewMaterial(UMaterialInterface* Material);
 	void ApplyMaterialSetup(bool bRestartPreview = true);
 	void RefreshTerrainMaterial(const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bRestartPreview);
-	bool CaptureTerrainMaterial(const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, FVoxelLandPreviewWork& Work);
+	bool CaptureTerrainMaterial(const UVoxelLandWorldConfig& Config, FVoxelLandPreviewWork& Work);
 	void SettingsChanged(const FAssetData& Settings);
 	void PreviewPropertiesChanged(const FPropertyChangedEvent& Event);
 	void SynchronizePreviewSettings(bool bApplyChanges);
@@ -279,6 +289,7 @@ private:
 	TSoftObjectPtr<UMaterialInterface> SelectedPreviewMaterial;
 	TSoftObjectPtr<UVoxelLandWorldConfig> SelectedPreviewSettings;
 	TObjectPtr<UVoxelLandWorldConfig> PreviewSettings = nullptr;
+	TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> PreviewMaterialSignals;
 	TObjectPtr<UVoxelLandWorldConfig> M4PreviewConfig = nullptr;
 	TArray<TWeakObjectPtr<UObject>> M4FunctionDependencies;
 	uint64 M4FunctionPresentationRevision = 0;

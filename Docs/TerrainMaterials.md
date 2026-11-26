@@ -22,6 +22,22 @@ Mountain Biome and Rolling Hills are in the VoxelLand Examples folder. The other
 
 After adjusting source maps, tint, period, blend contrast or palette order, rebake and save the palette. For a failed bake, fix the texture or slot named in the diagnostic and retry. The last successful bake remains available during correction. A rule refers to a stable surface ID, so a reordered palette continues to select the intended surfaces after rebaking. Existing setups with a plain Material still use that material.
 
+## Author grass patches with a Material Graph
+
+1. Open **MG_GrassPatches** in **VoxelLand → Examples → TerrainMaterials**. Its preview uses **WC_GrassPatches** and the editable Meadow, Dry Grass and Slate surfaces.
+2. Change the noise size to make patches wider or narrower. Adjust the Remap node's **Lower** and **Upper** values to change the grass blend width. The second Remap blends Slate onto steep slopes.
+3. For your own world, choose **Create → VoxelLand → Material Graph**, assign it under **World Config → Appearance**, and give the world a Material Setup with a baked palette.
+4. Select a Surface node and use **Bind Selected Node** to choose a surface from that palette. Connect surfaces to **Blend Surfaces**, a scalar such as noise to **Alpha**, and the result to **Surface Material**.
+5. In the preview target menu, choose **Terrain** for the result, or select a node and preview its output from above. A Surface node shows its weight across the generated terrain.
+
+**MG_MountainGrassPatches** uses a Terrain Signal bound to **Mountain Mask** from the Mountain Biome terrain graph. The binding menu shows named outputs from the selected preview config. Renaming an output preserves its ID. A missing or incompatible output is reported in Diagnostics.
+
+### Supply a runtime biome or moisture map
+
+Create one or more `FVoxelLandWorldSignalGrid` values in logical centimeters. Every grid has a channel name, origin, uniform spacing, dimensions and row-major values. Float values are bilinear. Int and Bool grids use the nearest cell. A World Signal node uses its Default value outside the map. Required channels must exist before the world can use the graph.
+
+Create the read-only map with `FVoxelLandWorldSignalSnapshot::Create` and pass it to `AVoxelLandWorld::SetMaterialWorldSignals` on the game thread. Call it before `InitializeFromConfig` for the initial map, or afterwards to refresh appearance. If the terrain inputs or palette change, reinitialize with the new configuration before refreshing the map. Use the refresh error string or the world's initialization diagnostics to inspect an invalid request.
+
 ## Automated checks and examples
 
 Run the tests from the UE 5.7 Automation window or use `UnrealEditor-Cmd.exe` with the project path and the listed arguments.

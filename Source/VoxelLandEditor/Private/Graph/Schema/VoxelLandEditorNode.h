@@ -7,6 +7,7 @@
 #include "VoxelLandEditorNode.generated.h"
 
 class UVoxelLandGraphFunction;
+class UVoxelLandSurfaceMaterial;
 
 UCLASS()
 class UVoxelLandEditorNode : public UEdGraphNode
@@ -50,6 +51,18 @@ public:
 	UPROPERTY(
 		EditAnywhere, Category = "Output", meta = (EditCondition = "Kind >= 53 && Kind <= 55", EditConditionHides))
 	FString OutputName;
+
+	UPROPERTY(EditAnywhere, Category = "Surface", meta = (EditCondition = "Kind == 57", EditConditionHides))
+	TSoftObjectPtr<UVoxelLandSurfaceMaterial> SurfaceMaterial;
+
+	UPROPERTY(EditAnywhere, Category = "Signal", meta = (EditCondition = "Kind == 61", EditConditionHides))
+	FGuid TerrainSignalOutputId;
+
+	UPROPERTY(Transient)
+	FString TerrainSignalLabel;
+
+	UPROPERTY(EditAnywhere, Category = "Signal", meta = (EditCondition = "Kind == 62", EditConditionHides))
+	FName WorldSignalName;
 
 	UPROPERTY(EditAnywhere, Category = "Noise",
 		meta = (DisplayName = "Hill Size", ClampMin = "2.0", EditCondition = "Kind == 56", EditConditionHides,

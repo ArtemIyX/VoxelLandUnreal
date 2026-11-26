@@ -7,6 +7,20 @@ FText FVoxelLandBuiltinPresentationCatalog::ExplicitTitle(EVoxelLandBuiltinNode 
 {
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::Surface:
+			return LOCTEXT("TitleSurface", "Surface");
+		case EVoxelLandBuiltinNode::BlendSurfaces:
+			return LOCTEXT("TitleBlendSurfaces", "Blend Surfaces");
+		case EVoxelLandBuiltinNode::SurfaceMaterialOutput:
+			return LOCTEXT("TitleSurfaceMaterialOutput", "Surface Material");
+		case EVoxelLandBuiltinNode::SurfaceSlope:
+			return LOCTEXT("TitleSurfaceSlope", "Surface Slope");
+		case EVoxelLandBuiltinNode::TerrainSignal:
+			return LOCTEXT("TitleTerrainSignal", "Terrain Signal");
+		case EVoxelLandBuiltinNode::WorldSignal:
+			return LOCTEXT("TitleWorldSignal", "World Signal");
+		case EVoxelLandBuiltinNode::MaterialRemap:
+			return LOCTEXT("TitleMaterialRemap", "Remap");
 		case EVoxelLandBuiltinNode::FloatOutput:
 			return LOCTEXT("TitleFloatOutput", "Float Output");
 		case EVoxelLandBuiltinNode::IntOutput:
@@ -128,6 +142,20 @@ FText FVoxelLandBuiltinPresentationCatalog::ExplicitDescription(EVoxelLandBuilti
 {
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::Surface:
+			return LOCTEXT("HelpSurface", "Choose a surface from the active palette.");
+		case EVoxelLandBuiltinNode::BlendSurfaces:
+			return LOCTEXT("HelpBlendSurfaces", "Blend two surfaces using a clamped alpha.");
+		case EVoxelLandBuiltinNode::SurfaceMaterialOutput:
+			return LOCTEXT("HelpSurfaceMaterialOutput", "Choose the graph result used to shade terrain.");
+		case EVoxelLandBuiltinNode::SurfaceSlope:
+			return LOCTEXT("HelpSurfaceSlope", "Read the completed surface slope in degrees.");
+		case EVoxelLandBuiltinNode::TerrainSignal:
+			return LOCTEXT("HelpTerrainSignal", "Sample a bound output of the terrain graph.");
+		case EVoxelLandBuiltinNode::WorldSignal:
+			return LOCTEXT("HelpWorldSignal", "Sample a game-provided spatial channel.");
+		case EVoxelLandBuiltinNode::MaterialRemap:
+			return LOCTEXT("HelpMaterialRemap", "Map a scalar range to a clamped blend weight.");
 		case EVoxelLandBuiltinNode::FloatOutput:
 		case EVoxelLandBuiltinNode::IntOutput:
 		case EVoxelLandBuiltinNode::BoolOutput:
@@ -266,6 +294,14 @@ FText FVoxelLandBuiltinPresentationCatalog::ExplicitCategory(EVoxelLandBuiltinNo
 		case EVoxelLandBuiltinNode::IntOutput:
 		case EVoxelLandBuiltinNode::BoolOutput:
 			return LOCTEXT("OutputCategory", "Outputs");
+		case EVoxelLandBuiltinNode::Surface:
+		case EVoxelLandBuiltinNode::BlendSurfaces:
+		case EVoxelLandBuiltinNode::SurfaceMaterialOutput:
+		case EVoxelLandBuiltinNode::SurfaceSlope:
+		case EVoxelLandBuiltinNode::TerrainSignal:
+		case EVoxelLandBuiltinNode::WorldSignal:
+		case EVoxelLandBuiltinNode::MaterialRemap:
+			return LOCTEXT("SurfaceCategory", "Materials");
 		case EVoxelLandBuiltinNode::WorldNoise2D:
 			return LOCTEXT("WorldNoiseCategory", "Noise");
 		case EVoxelLandBuiltinNode::DensityOutput:
@@ -375,6 +411,14 @@ FLinearColor FVoxelLandBuiltinPresentationCatalog::ExplicitTitleColor(EVoxelLand
 {
 	switch (Kind)
 	{
+		case EVoxelLandBuiltinNode::Surface:
+		case EVoxelLandBuiltinNode::BlendSurfaces:
+		case EVoxelLandBuiltinNode::SurfaceMaterialOutput:
+		case EVoxelLandBuiltinNode::SurfaceSlope:
+		case EVoxelLandBuiltinNode::TerrainSignal:
+		case EVoxelLandBuiltinNode::WorldSignal:
+		case EVoxelLandBuiltinNode::MaterialRemap:
+			return FLinearColor(0.24f, 0.46f, 0.28f);
 		case EVoxelLandBuiltinNode::WorldNoise2D:
 			return FLinearColor(0.27f, 0.41f, 0.6f);
 		case EVoxelLandBuiltinNode::FloatOutput:

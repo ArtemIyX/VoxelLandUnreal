@@ -37,6 +37,22 @@ FText UVoxelLandEditorNode::DisplayName(int32 InKind)
 
 FText UVoxelLandEditorNode::GetNodeTitle(ENodeTitleType::Type) const
 {
+	if (Kind == int32(EVoxelLandBuiltinNode::PositionZ) && GetGraph())
+	{
+		const UVoxelLandTerrainGraph* Asset = Cast<UVoxelLandTerrainGraph>(GetGraph()->GetOuter());
+		if (Asset && Asset->GraphRole == EVoxelLandGraphRole::Material)
+		{
+			return LOCTEXT("SurfaceElevation", "Surface Elevation");
+		}
+	}
+	if (Kind == int32(EVoxelLandBuiltinNode::TerrainSignal) && !TerrainSignalLabel.IsEmpty())
+	{
+		return FText::FromString(TerrainSignalLabel);
+	}
+	if (Kind == int32(EVoxelLandBuiltinNode::Surface) && !SurfaceMaterial.IsNull())
+	{
+		return FText::FromString(SurfaceMaterial.GetAssetName());
+	}
 	if (!OutputName.IsEmpty()
 		&& FVoxelLandGraphOutputs::IsNamedOutput(VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode(Kind))))
 	{
@@ -247,7 +263,8 @@ void UVoxelLandEditorNode::AllocateDefaultPins()
 	}
 	for (const FVoxelLandBuiltinPinSpec& PinSpec : Spec.Pins)
 	{
-		const FName Category = PinSpec.Type == EVoxelLandGraphValueType::Float ? FVoxelLandEditorNodeInternals::FloatPin
+		const FName Category = PinSpec.Type == EVoxelLandGraphValueType::Surface ? FName(TEXT("surface"))
+							 : PinSpec.Type == EVoxelLandGraphValueType::Float ? FVoxelLandEditorNodeInternals::FloatPin
 							 : PinSpec.Type == EVoxelLandGraphValueType::Int32 ? FVoxelLandEditorNodeInternals::IntPin
 																			   : FVoxelLandEditorNodeInternals::BoolPin;
 		UEdGraphPin* Pin = CreatePin(PinSpec.bOutput ? EGPD_Output : EGPD_Input, Category, FName(*PinSpec.Name));

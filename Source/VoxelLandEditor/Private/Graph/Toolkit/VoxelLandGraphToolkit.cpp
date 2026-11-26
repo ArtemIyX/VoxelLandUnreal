@@ -1,5 +1,8 @@
 #include "VoxelLandGraphToolkit.h"
+#include "VoxelLandMaterialPreviewRaster.h"
 #include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
+#include "Data/Assets/Materials/VoxelLandSurfaceMaterial.h"
+#include "Graph/Compilation/VoxelLandMaterialGraphProgram.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
 #include "../../VoxelLandEditorBake.h"
 #include "Operators/VoxelLandOperator.h"
@@ -91,6 +94,16 @@ public:
 	static const UVoxelLandWorldConfig* LoadExampleConfig(const UVoxelLandTerrainGraph& Graph)
 	{
 		const FString Package = Graph.GetOutermost()->GetName();
+		if (Package == TEXT("/VoxelLand/Examples/TerrainMaterials/MG_GrassPatches"))
+		{
+			return LoadObject<UVoxelLandWorldConfig>(
+				nullptr, TEXT("/VoxelLand/Examples/TerrainMaterials/WC_GrassPatches.WC_GrassPatches"));
+		}
+		if (Package == TEXT("/VoxelLand/Examples/TerrainMaterials/MG_MountainGrassPatches"))
+		{
+			return LoadObject<UVoxelLandWorldConfig>(
+				nullptr, TEXT("/VoxelLand/Examples/TerrainMaterials/WC_MountainGrassPatches.WC_MountainGrassPatches"));
+		}
 		const FString ExamplePrefix = TEXT("/VoxelLand/Examples/TG_");
 		if (!Package.StartsWith(ExamplePrefix))
 		{
@@ -113,19 +126,31 @@ public:
 		{
 			UVoxelLandWorldConfig* Settings = DuplicateObject<UVoxelLandWorldConfig>(Source, GetTransientPackage());
 			Settings->SetFlags(RF_Transient | RF_Transactional);
+			if (Graph && Graph->GraphRole == EVoxelLandGraphRole::Material)
+			{
+				Settings->MaterialGraph = Graph;
+			}
 			return Settings;
 		}
 		UVoxelLandWorldConfig* Settings =
 			NewObject<UVoxelLandWorldConfig>(GetTransientPackage(), NAME_None, RF_Transient | RF_Transactional);
 		Settings->TerrainSource = EVoxelLandTerrainSource::DirectDensity;
-		Settings->Graph = Graph;
+		if (Graph && Graph->GraphRole == EVoxelLandGraphRole::Material)
+		{
+			Settings->MaterialGraph = Graph;
+		}
+		else
+		{
+			Settings->Graph = Graph;
+		}
 		return Settings;
 	}
 
 	static bool IsPreviewOutput(const FGuid& Operator)
 	{
 		return FVoxelLandGraphOutputs::IsNamedOutput(Operator)
-			|| Operator == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput);
+			|| Operator == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::DensityOutput)
+			|| Operator == VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::SurfaceMaterialOutput);
 	}
 
 	static bool IsDefaultHeightOutput(const FVoxelLandGraphNodeRecord& Node)
@@ -237,6 +262,10 @@ public:
 		{
 			return EVoxelLandGraphValueType::Bool;
 		}
+		if (Pin.PinType.PinCategory == TEXT("surface"))
+		{
+			return EVoxelLandGraphValueType::Surface;
+		}
 		if (Pin.PinType.PinCategory == TEXT("int"))
 		{
 			return EVoxelLandGraphValueType::Int32;
@@ -250,6 +279,10 @@ public:
 		{
 			return TEXT("bool");
 		}
+		if (Type == EVoxelLandGraphValueType::Surface)
+		{
+			return TEXT("surface");
+		}
 		return Type == EVoxelLandGraphValueType::Int32 ? FName(TEXT("int")) : FName(TEXT("float"));
 	}
 
@@ -259,7 +292,7 @@ public:
 		Record.Name = Pin.PinName.ToString();
 		Record.bOutput = Pin.Direction == EGPD_Output;
 		Record.Type = PinType(Pin);
-		if (Record.bOutput)
+		if (Record.bOutput || Record.Type == EVoxelLandGraphValueType::Surface)
 		{
 			return true;
 		}
@@ -356,6 +389,22 @@ public:
 		if (FVoxelLandGraphOutputs::IsNamedOutput(Record.OperatorId))
 		{
 			FVoxelLandGraphOutputs::SetName(Record, Node.OutputName.TrimStartAndEnd());
+		}
+		if (Node.Kind == int32(EVoxelLandBuiltinNode::Surface))
+		{
+			Record.SurfaceAsset = Node.SurfaceMaterial.ToSoftObjectPath();
+			const UVoxelLandSurfaceMaterial* Surface = Node.SurfaceMaterial.LoadSynchronous();
+			FVoxelLandMaterialGraphProgram::WriteGuid(Surface ? Surface->SurfaceId : FGuid(), Record.Configuration);
+		}
+		if (Node.Kind == int32(EVoxelLandBuiltinNode::TerrainSignal))
+		{
+			FVoxelLandMaterialGraphProgram::WriteGuid(Node.TerrainSignalOutputId, Record.Configuration);
+		}
+		if (Node.Kind == int32(EVoxelLandBuiltinNode::WorldSignal))
+		{
+			const FTCHARToUTF8 Name(*Node.WorldSignalName.ToString());
+			Record.Configuration.Reset();
+			Record.Configuration.Append(reinterpret_cast<const uint8*>(Name.Get()), Name.Length());
 		}
 		Record.FunctionPath = Node.FunctionPath;
 		for (const UEdGraphPin* Pin : Node.Pins)
@@ -775,6 +824,23 @@ public:
 class FVoxelLandPreviewWork
 {
 public:
+	void BuildMaterialProbe(TFunctionRef<bool()> IsCancelled)
+	{
+		if (!bSuccess || !MaterialDebugNode.IsValid())
+		{
+			return;
+		}
+		bNoise2D = true;
+		bSuccess = Appearance
+				&& FVoxelLandMaterialPreviewRaster::Build(
+					Meshes, VoxelSize, *Appearance, MaterialDebugNode, IsCancelled, NoisePixels, NoiseMin, NoiseMax);
+		if (!bSuccess)
+		{
+			Error = TEXT("Could not sample this material output on the preview terrain.");
+		}
+	}
+
+	FGuid MaterialDebugNode;
 	TAtomic<bool> Done{false};
 	uint64 PreviewRevision = 0;
 	uint64 SourceRevision = 0;
@@ -922,7 +988,8 @@ FText FVoxelLandGraphToolkit::GetBaseToolkitName() const
 	{
 		return LOCTEXT("FunctionTitle", "Graph Function");
 	}
-	return LOCTEXT("Title", "Terrain Graph");
+	return Asset && Asset->GraphRole == EVoxelLandGraphRole::Material ? LOCTEXT("MaterialGraphTitle", "Material Graph")
+																	  : LOCTEXT("Title", "Terrain Graph");
 }
 
 bool FVoxelLandGraphToolkit::StoreCompiledProgram(UVoxelLandTerrainGraph& Graph, FVoxelLandSerializedProgram&& Payload)
@@ -1229,7 +1296,90 @@ TSharedRef<SDockTab> FVoxelLandGraphToolkit::SpawnDetails(const FSpawnTabArgs&)
 										1)[SNew(SButton).Text(LOCTEXT("AddBool", "+ Bool")).OnClicked_Lambda([this] {
 										  return AddParameter(EVoxelLandGraphValueType::Bool);
 									  })]]
+				  + SVerticalBox::Slot().AutoHeight()[SNew(SComboButton)
+						  .Visibility_Lambda([this] {
+							  return Asset && Asset->GraphRole == EVoxelLandGraphRole::Material
+									   ? EVisibility::Visible
+									   : EVisibility::Collapsed;
+						  })
+						  .ButtonContent()[SNew(STextBlock).Text(LOCTEXT("MaterialBinding", "Bind Selected Node"))]
+						  .OnGetMenuContent(this, &FVoxelLandGraphToolkit::BuildMaterialBindingMenu)]
 				  + SVerticalBox::Slot().FillHeight(1)[Details.ToSharedRef()]];
+}
+
+TSharedRef<SWidget> FVoxelLandGraphToolkit::BuildMaterialBindingMenu()
+{
+	FMenuBuilder Menu(true, nullptr);
+	if (!GraphWidget || !PreviewSettings)
+	{
+		return Menu.MakeWidget();
+	}
+	const FGraphPanelSelectionSet Selection = GraphWidget->GetSelectedNodes();
+	UVoxelLandEditorNode* Node =
+		Selection.Num() == 1 ? Cast<UVoxelLandEditorNode>(*Selection.CreateConstIterator()) : nullptr;
+	if (!Node)
+	{
+		return Menu.MakeWidget();
+	}
+	const TWeakObjectPtr<UVoxelLandEditorNode> Selected(Node);
+	if (Node->Kind == int32(EVoxelLandBuiltinNode::Surface))
+	{
+		const UVoxelLandMaterialSetup* Setup = PreviewSettings->MaterialSetup.LoadSynchronous();
+		const UVoxelLandMaterialPalette* Palette = Setup ? Setup->Palette.LoadSynchronous() : nullptr;
+		if (Palette)
+		{
+			for (UVoxelLandSurfaceMaterial* Surface : Palette->Surfaces)
+			{
+				if (Surface)
+				{
+					const TSoftObjectPtr<UVoxelLandSurfaceMaterial> Ref(Surface);
+					Menu.AddMenuEntry(FText::FromString(Surface->GetName()), FText::GetEmpty(), FSlateIcon(),
+						FUIAction(FExecuteAction::CreateLambda([Selected, Ref] {
+							if (UVoxelLandEditorNode* Target = Selected.Get())
+							{
+								const FScopedTransaction Transaction(LOCTEXT("BindSurface", "Bind palette surface"));
+								Target->Modify();
+								Target->SurfaceMaterial = Ref;
+								Target->GetGraph()->NotifyGraphChanged();
+							}
+						})));
+				}
+			}
+		}
+	}
+	else if (Node->Kind == int32(EVoxelLandBuiltinNode::TerrainSignal) && PreviewSettings->Graph)
+	{
+		for (const FVoxelLandGraphNodeRecord& Output : PreviewSettings->Graph->Nodes)
+		{
+			if (FVoxelLandGraphOutputs::IsNamedOutput(Output.OperatorId) && Output.Pins.Num() == 1)
+			{
+				Menu.AddMenuEntry(FText::FromString(FVoxelLandGraphOutputs::GetName(Output)), FText::GetEmpty(),
+					FSlateIcon(),
+					FUIAction(FExecuteAction::CreateLambda([Selected, Id = Output.Id, Type = Output.Pins[0].Type,
+															   Label = FVoxelLandGraphOutputs::GetName(Output)] {
+						if (UVoxelLandEditorNode* Target = Selected.Get())
+						{
+							const FScopedTransaction Transaction(LOCTEXT("BindTerrainSignal", "Bind terrain signal"));
+							Target->Modify();
+							Target->TerrainSignalOutputId = Id;
+							Target->TerrainSignalLabel = Label;
+							if (!Target->Pins.IsEmpty())
+							{
+								UEdGraphPin* Pin = Target->Pins.Last();
+								const FName Category = FVoxelLandGraphToolkitOperations::Category(Type);
+								if (Category != Pin->PinType.PinCategory)
+								{
+									Pin->BreakAllPinLinks();
+									Pin->PinType.PinCategory = Category;
+								}
+							}
+							Target->GetGraph()->NotifyGraphChanged();
+						}
+					})));
+			}
+		}
+	}
+	return Menu.MakeWidget();
 }
 
 FReply FVoxelLandGraphToolkit::AddParameter(EVoxelLandGraphValueType Type)
@@ -1384,7 +1534,15 @@ void FVoxelLandGraphToolkit::RebuildOutputList()
 				{
 					GraphWidget->ClearSelectionSet();
 					GraphWidget->SetNodeSelection(Selected, true);
-					SelectNamedOutput(Selected->NodeGuid, Selected->GetNodeTitle(ENodeTitleType::ListView).ToString());
+					if (Selected->Kind == int32(EVoxelLandBuiltinNode::SurfaceMaterialOutput))
+					{
+						SelectTerrainPreview();
+					}
+					else
+					{
+						SelectNamedOutput(
+							Selected->NodeGuid, Selected->GetNodeTitle(ENodeTitleType::ListView).ToString());
+					}
 				}
 				return FReply::Handled();
 			})];
@@ -1993,6 +2151,22 @@ void FVoxelLandGraphToolkit::CreateMirror()
 			Node->HillSizeCm = 1.f / Record.Pins[2].FloatDefault;
 		}
 		Node->FunctionPath = Record.FunctionPath;
+		Node->SurfaceMaterial = TSoftObjectPtr<UVoxelLandSurfaceMaterial>(Record.SurfaceAsset);
+		if (Node->Kind == int32(EVoxelLandBuiltinNode::TerrainSignal))
+		{
+			const bool bHasOutput =
+				FVoxelLandMaterialGraphProgram::ReadGuid(Record.Configuration, Node->TerrainSignalOutputId);
+			if (!bHasOutput)
+			{
+				Node->TerrainSignalOutputId.Invalidate();
+			}
+		}
+		if (Node->Kind == int32(EVoxelLandBuiltinNode::WorldSignal) && !Record.Configuration.IsEmpty())
+		{
+			const FUTF8ToTCHAR Name(
+				reinterpret_cast<const ANSICHAR*>(Record.Configuration.GetData()), Record.Configuration.Num());
+			Node->WorldSignalName = FName(FString(Name.Length(), Name.Get()));
+		}
 		if (Node->Kind == int32(VoxelLandGraphFunctionCallId().D))
 		{
 			Node->ExternalPins = Record.Pins;
@@ -2030,7 +2204,10 @@ void FVoxelLandGraphToolkit::CreateMirror()
 	{
 		UVoxelLandM4ControlGraph* Named = Cast<UVoxelLandM4ControlGraph>(Asset);
 		UVoxelLandEditorNode* Output = NewObject<UVoxelLandEditorNode>(Graph, NAME_None, RF_Transactional);
-		Output->Kind = int32(Named ? EVoxelLandBuiltinNode::M4HeightOutput : EVoxelLandBuiltinNode::FloatOutput);
+		Output->Kind =
+			int32(Asset->GraphRole == EVoxelLandGraphRole::Material ? EVoxelLandBuiltinNode::SurfaceMaterialOutput
+				  : Named                                           ? EVoxelLandBuiltinNode::M4HeightOutput
+																	: EVoxelLandBuiltinNode::FloatOutput);
 		Output->OutputName = Named ? FString() : TEXT("Height");
 		Output->CreateNewGuid();
 		Graph->AddNode(Output, false, false);
@@ -2292,11 +2469,36 @@ FGuid FVoxelLandGraphToolkit::GetTerrainPreviewOutput() const
 
 bool FVoxelLandGraphToolkit::StartAuthoredHeightPreview()
 {
-	if (!Asset || PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid())
+	if (!Asset
+		|| (Asset->GraphRole != EVoxelLandGraphRole::Material
+			&& (PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid())))
 	{
 		return false;
 	}
 	UVoxelLandWorldConfig* Selected = SelectedPreviewSettings.IsNull() ? nullptr : PreviewSettings.Get();
+	if (Asset->GraphRole == EVoxelLandGraphRole::Material)
+	{
+		if (!PreviewSettings || !PreviewSettings->Graph)
+		{
+			Status = TEXT("Select a World Config to preview this Material Graph.");
+			return true;
+		}
+		if (PreviewSettings->IsDirectDensity())
+		{
+			bM4Preview = false;
+			return false;
+		}
+		UVoxelLandWorldConfig* Preview = DuplicateObject<UVoxelLandWorldConfig>(PreviewSettings, GetTransientPackage());
+		Preview->MaterialGraph = Asset;
+		Preview->Seed = PreviewSeed;
+		Preview->HorizontalRadius = PreviewHorizontalRadius;
+		Preview->VerticalRadius = PreviewVerticalRadius;
+		M4PreviewConfig = Preview;
+		bM4Preview = true;
+		bM4Inspection = false;
+		StartM4Preview();
+		return true;
+	}
 	if (!FVoxelLandGraphOutputs::HasNamedOutputs(Asset->Nodes)
 		&& (!Selected || Selected->IsDirectDensity() || Asset->IsA<UVoxelLandM4ControlGraph>()))
 	{
@@ -2352,6 +2554,17 @@ bool FVoxelLandGraphToolkit::StartAuthoredHeightPreview()
 	return true;
 }
 
+void FVoxelLandGraphToolkit::SetMaterialPreviewSignals(
+	TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> Signals)
+{
+	if (PreviewMaterialSignals != Signals)
+	{
+		PreviewMaterialSignals = MoveTemp(Signals);
+		CancelPreview();
+		RequestCompile();
+	}
+}
+
 void FVoxelLandGraphToolkit::RequestCompile()
 {
 	if (bStopped || bPIE || bReloadPaused)
@@ -2359,6 +2572,15 @@ void FVoxelLandGraphToolkit::RequestCompile()
 		return;
 	}
 	CompileDue = 0.0;
+	if (Asset && Asset->GraphRole == EVoxelLandGraphRole::Material)
+	{
+		RefreshTerrainSignalLabels();
+		if (!StartAuthoredHeightPreview())
+		{
+			StartPreview();
+		}
+		return;
+	}
 	if (Asset && Asset->IsA<UVoxelLandGraphFunction>())
 	{
 		CancelPreview();
@@ -3073,11 +3295,46 @@ void FVoxelLandGraphToolkit::M4ObjectTransacted(UObject* Object, const FTransact
 	}
 }
 
+void FVoxelLandGraphToolkit::RefreshTerrainSignalLabels()
+{
+	if (!Graph || !Asset || Asset->GraphRole != EVoxelLandGraphRole::Material)
+	{
+		return;
+	}
+	const UVoxelLandTerrainGraph* Terrain = PreviewSettings ? PreviewSettings->Graph.Get() : nullptr;
+	for (UEdGraphNode* Entry : Graph->Nodes)
+	{
+		UVoxelLandEditorNode* Node = Cast<UVoxelLandEditorNode>(Entry);
+		if (!Node || Node->Kind != int32(EVoxelLandBuiltinNode::TerrainSignal))
+		{
+			continue;
+		}
+		const FVoxelLandGraphNodeRecord* Output =
+			Terrain ? Terrain->Nodes.FindByPredicate([Node](const FVoxelLandGraphNodeRecord& Candidate) {
+				return Candidate.Id == Node->TerrainSignalOutputId;
+			})
+					: nullptr;
+		Node->TerrainSignalLabel = Output ? FVoxelLandGraphOutputs::GetName(*Output) : FString();
+	}
+}
+
 void FVoxelLandGraphToolkit::M4ControlGraphSourceChanged(UVoxelLandTerrainGraph* Changed)
 {
 	// The originating toolkit already schedules compilation/preview through
 	// its own mirror. Do not create a reentrant notification cycle.
-	if (bStopped || bPIE || bReloadPaused || !bM4Preview || !M4PreviewConfig || !Changed || Changed == Asset)
+	if (bStopped || bPIE || bReloadPaused || !Changed || Changed == Asset)
+	{
+		return;
+	}
+	if (PreviewSettings
+		&& (Changed == PreviewSettings->MaterialGraph.Get()
+			|| (Asset && Asset->GraphRole == EVoxelLandGraphRole::Material && Changed == PreviewSettings->Graph)))
+	{
+		CancelPreview();
+		CompileDue = FPlatformTime::Seconds() + 0.2;
+		return;
+	}
+	if (!bM4Preview || !M4PreviewConfig)
 	{
 		return;
 	}
@@ -3174,6 +3431,14 @@ void FVoxelLandGraphToolkit::ApplyMaterialSetup(bool bRestartPreview)
 void FVoxelLandGraphToolkit::RefreshTerrainMaterial(
 	const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bRestartPreview)
 {
+	if (PreviewSettings && !PreviewSettings->MaterialGraph.IsNull())
+	{
+		if (bRestartPreview)
+		{
+			RequestCompile();
+		}
+		return;
+	}
 	const TSoftObjectPtr<UVoxelLandMaterialSetup> Path = SetupPath;
 	const uint64 PreviewTicket = PreviewRevision;
 	const uint64 GraphRevision = Revision;
@@ -3228,8 +3493,7 @@ void FVoxelLandGraphToolkit::RefreshTerrainMaterial(
 	StartPreview();
 }
 
-bool FVoxelLandGraphToolkit::CaptureTerrainMaterial(
-	const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, FVoxelLandPreviewWork& Work)
+bool FVoxelLandGraphToolkit::CaptureTerrainMaterial(const UVoxelLandWorldConfig& Config, FVoxelLandPreviewWork& Work)
 {
 	if (!Work.bM4 && bHasExplicitPreviewMaterial)
 	{
@@ -3237,9 +3501,8 @@ bool FVoxelLandGraphToolkit::CaptureTerrainMaterial(
 		PendingMaterialDiagnostic = MaterialDiagnostic;
 		return true;
 	}
-	const TSoftObjectPtr<UVoxelLandMaterialSetup> Path = SetupPath;
 	const FVoxelLandTerrainPresentation Presentation =
-		FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), Path);
+		FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), Config, PreviewMaterialSignals);
 	if (bStopped || bPIE || bReloadPaused || Work.PreviewRevision != PreviewRevision || Work.SourceRevision != Revision)
 	{
 		return false;
@@ -3251,6 +3514,10 @@ bool FVoxelLandGraphToolkit::CaptureTerrainMaterial(
 		return false;
 	}
 	Work.Appearance = Presentation.Appearance;
+	if (Asset && Asset->GraphRole == EVoxelLandGraphRole::Material)
+	{
+		Work.MaterialDebugNode = PreviewNodeId;
+	}
 	PendingTerrainMaterial = Presentation.Material.Get();
 	PendingMaterialLayout = Presentation.LayoutIdentity;
 	PendingMaterialDiagnostic = Presentation.Diagnostic;
@@ -3337,6 +3604,7 @@ void FVoxelLandGraphToolkit::SynchronizePreviewSettings(bool bApplyChanges)
 	}
 	FCanonicalWriter Writer;
 	Writer.String(GetPathNameSafe(PreviewSettings->Graph));
+	Writer.String(PreviewSettings->MaterialGraph.ToSoftObjectPath().ToString());
 	Writer.U32(uint32(PreviewSettings->FormatVersion));
 	Writer.U32(uint32(uint64(PreviewSettings->Seed)));
 	Writer.U32(uint32(uint64(PreviewSettings->Seed) >> 32));
@@ -3441,7 +3709,9 @@ FReply FVoxelLandGraphToolkit::FramePreviewTerrain()
 bool FVoxelLandGraphToolkit::BuildPreviewProfile(
 	const FVoxelLandSerializedProgram& Payload, FVoxelLandZoneProfile& Profile, FString& Error) const
 {
-	if (!PreviewSettings || PreviewSettings->Graph != Asset || !PreviewSettings->ValidateDirectDensitySettings(Error))
+	if (!PreviewSettings
+		|| (PreviewSettings->Graph != Asset && (!Asset || Asset->GraphRole != EVoxelLandGraphRole::Material))
+		|| !PreviewSettings->ValidateDirectDensitySettings(Error))
 	{
 		Error = FString::Printf(TEXT("Settings must reference this graph and be valid. %s"), *Error);
 		return false;
@@ -3678,7 +3948,7 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 	Work->M4Peaks = M4PreviewConfig->Peaks.Graph;
 	Work->PreviewRevision = PreviewRevision;
 	Work->SourceRevision = Revision;
-	if (!CaptureTerrainMaterial(M4PreviewConfig->MaterialSetup, *Work))
+	if (!CaptureTerrainMaterial(*M4PreviewConfig, *Work))
 	{
 		return;
 	}
@@ -3765,6 +4035,7 @@ void FVoxelLandGraphToolkit::StartM4Preview()
 					MAX_uint64, CenterXY, Work->Appearance.Get());
 			}
 		}
+		Work->BuildMaterialProbe(IsCancelled);
 		Work->GenerationMs = (FPlatformTime::Seconds() - Started) * 1000.0;
 		Work->Done.Store(true);
 	}));
@@ -3803,9 +4074,17 @@ void FVoxelLandGraphToolkit::StartPreview()
 	FString Error;
 	FVoxelLandGraphSnapshot Snapshot;
 	bool bValidDefaults = true;
-	const bool bSnapshotValid = PreviewNodeId.IsValid()
+	const bool bMaterialGraph = Asset && Asset->GraphRole == EVoxelLandGraphRole::Material;
+	UVoxelLandTerrainGraph* GeometryGraph =
+		bMaterialGraph && PreviewSettings ? PreviewSettings->Graph.Get() : Asset.Get();
+	if (!GeometryGraph)
+	{
+		Status = TEXT("Select a World Config to preview this Material Graph.");
+		return;
+	}
+	const bool bSnapshotValid = PreviewNodeId.IsValid() && !bMaterialGraph
 								  ? CaptureMirrorWithDependencies(Snapshot, bValidDefaults, Error) && bValidDefaults
-								  : Asset->CaptureSnapshot(Snapshot, Error);
+								  : GeometryGraph->CaptureSnapshot(Snapshot, Error);
 	if (!bSnapshotValid)
 	{
 		Status = FString::Printf(TEXT("Stale preview: source unavailable or invalid. %s"), *Error);
@@ -3815,7 +4094,23 @@ void FVoxelLandGraphToolkit::StartPreview()
 		Snapshot, PreviewNamedOutputId.IsValid() ? PreviewNamedOutputId : PreviewNodeId, PreviewPinId);
 	const uint64 SourceHash = FVoxelLandProgramCodec::SourceFingerprint(Snapshot);
 	FVoxelLandSerializedProgram Payload;
-	if (PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid() || GetTerrainPreviewOutput().IsValid())
+	if (bMaterialGraph)
+	{
+		if (!FVoxelLandGraphOutputs::Project(Snapshot, PreviewSettings->TerrainOutputId, false, Error))
+		{
+			Status = Error;
+			return;
+		}
+		FVoxelLandProgramDraft Draft;
+		TSharedPtr<const FVoxelLandProgram, ESPMode::ThreadSafe> Program;
+		if (!FVoxelLandGraphCompiler::Compile(Snapshot, Draft, Error) || FVoxelLandProgram::Validate(Draft, Program)
+			|| !FVoxelLandProgramCodec::Pack(Snapshot, *Program, Payload, Error))
+		{
+			Status = Error.IsEmpty() ? TEXT("Material preview could not compile the terrain geometry.") : Error;
+			return;
+		}
+	}
+	else if (PreviewNodeId.IsValid() || PreviewNamedOutputId.IsValid() || GetTerrainPreviewOutput().IsValid())
 	{
 		if (!NodePreviewPayload || !NodePreviewSnapshot || NodePreviewSourceHash != SourceHash)
 		{
@@ -3846,7 +4141,7 @@ void FVoxelLandGraphToolkit::StartPreview()
 	PreviewCancel = Cancel;
 	const int32 HorizontalRadius = PreviewHorizontalRadius;
 	const int32 VerticalRadius = PreviewVerticalRadius;
-	const bool bMakeNoise2D = bNoisePreview;
+	const bool bMakeNoise2D = bNoisePreview && !bMaterialGraph;
 	TOptional<FVoxelLandDensityBounds> Bounds;
 	if (!SelectedPreviewSettings.IsNull() && PreviewSettings->IsDirectDensity() && !PreviewSettings->IsInfinite())
 	{
@@ -3862,7 +4157,7 @@ void FVoxelLandGraphToolkit::StartPreview()
 	Work->SourceRevision = Revision;
 	Work->bNoise2D = bMakeNoise2D;
 	Work->SliceType = SliceType;
-	if (!bMakeNoise2D && !CaptureTerrainMaterial(PreviewSettings->MaterialSetup, *Work))
+	if (!bMakeNoise2D && !CaptureTerrainMaterial(*PreviewSettings, *Work))
 	{
 		return;
 	}
@@ -3903,6 +4198,7 @@ void FVoxelLandGraphToolkit::StartPreview()
 #endif
 				);
 			}
+			Work->BuildMaterialProbe([&Cancel] { return Cancel->Load(); });
 			Work->GenerationMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
 			Work->Done.Store(true);
 		}));

@@ -166,6 +166,10 @@ public:
 	bool IsM4Unlimited() const { return M4Unlimited.IsValid(); }
 	// Coarse render sampling supports ordinary finite and erosion-disabled local worlds.
 	bool SupportsM7CompletedField() const;
+	// Authored infinite terrain with a single-valued surface and no volumetric processing.
+	bool SupportsHeightClipmap() const;
+	FVoxelLandError SampleHeightClipmap(
+		TConstArrayView<FInt64Vector> Locations, TArray<int32>& OutHeightQ8, TFunctionRef<bool()> IsCancelled) const;
 	const FVoxelLandProgram& GetProgram() const { return *Program; }
 	// This payload supplements the baseline generator inputs. An inactive stage has no bytes.
 	TConstArrayView<uint8> GetM6StampIdentity() const { return M6StampIdentity; }

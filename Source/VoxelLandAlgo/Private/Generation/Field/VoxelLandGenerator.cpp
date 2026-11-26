@@ -1807,6 +1807,63 @@ FVoxelLandError FVoxelLandGenerator::GenerateM4StridedDetail(const FVoxelLandM7S
 	return {};
 }
 
+bool FVoxelLandGenerator::SupportsHeightClipmap() const
+{
+	return M4Unlimited && M4Unlimited->AuthoredHeightGenerator && !M5Lease.IsValid() && GetM6CompatibilityHalo() == 0
+		&& M6Stamps.IsEmpty() && M6Filters.IsEmpty() && M6RedistanceBand == 0
+		&& !(M4Overhang.Displacement.bEnabled && M4Overhang.Displacement.AmplitudeQ8 != 0);
+}
+
+FVoxelLandError FVoxelLandGenerator::SampleHeightClipmap(
+	TConstArrayView<FInt64Vector> Locations, TArray<int32>& OutHeightQ8, TFunctionRef<bool()> IsCancelled) const
+{
+	if (IsInGameThread())
+	{
+		return {EVoxelLandErrorCode::GameThreadNotAllowed, TEXT("Height clipmap sampling requires a worker thread")};
+	}
+	if (!SupportsHeightClipmap())
+	{
+		return {EVoxelLandErrorCode::UnsupportedLod, TEXT("Height clipmap requires an authored single-valued field")};
+	}
+
+	const FVoxelLandGenerator& HeightSource = *M4Unlimited->AuthoredHeightGenerator;
+	const bool bApplyDetail = M4HeightDetail.bEnabled && M4HeightDetail.AmplitudeQ8 != 0;
+	TArray<int64> Registers;
+	TArray<int32> Heights;
+	Heights.Reserve(Locations.Num());
+	constexpr int32 CancelPollInterval = 64;
+	for (int32 Index = 0; Index < Locations.Num(); ++Index)
+	{
+		if (Index % CancelPollInterval == 0 && IsCancelled())
+		{
+			return {EVoxelLandErrorCode::Cancelled, TEXT("Height clipmap sampling cancelled")};
+		}
+		const FInt64Vector& Point = Locations[Index];
+		int32 HeightQ8 = 0;
+		if (const FVoxelLandError Error = VoxelLandM4FixedLattice::EvaluateValidatedHeightPoint(
+				HeightSource, Point.X, Point.Y, M4Unlimited->BaseQ8, M4Unlimited->HeightScaleCm, Registers, HeightQ8))
+		{
+			return Error;
+		}
+		int32 NoiseQ = 0;
+		if (bApplyDetail
+			&& (!VoxelLandM4FixedLattice::SampleShaping2D(
+					Point.X, Point.Y, M4HeightDetail.FrequencyPerCm, uint64(uint32(M4HeightDetailSeed)), NoiseQ)
+				|| !FVoxelLandGeneratorValidation::ApplyHeightDetail(
+					HeightQ8, NoiseQ, M4HeightDetail.AmplitudeQ8, HeightQ8)))
+		{
+			return {EVoxelLandErrorCode::InvalidMathDomain, TEXT("Invalid height clipmap detail sample")};
+		}
+		Heights.Add(HeightQ8);
+	}
+	if (IsCancelled())
+	{
+		return {EVoxelLandErrorCode::Cancelled, TEXT("Height clipmap sampling cancelled")};
+	}
+	OutHeightQ8 = MoveTemp(Heights);
+	return {};
+}
+
 bool FVoxelLandGenerator::SampleM4BaseHeight(
 	int64 X, int64 Y, int32& Height, TFunctionRef<bool(int64, int64, int32&)>* LocalHeight) const
 {

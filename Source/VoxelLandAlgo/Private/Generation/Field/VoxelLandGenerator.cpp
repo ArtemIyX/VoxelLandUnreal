@@ -484,22 +484,37 @@ FVoxelLandError FVoxelLandGenerator::CreateM4Unlimited(const FVoxelLandGenerator
 	}
 	const TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Controls[] = {
 		Config.ContinentalGenerator, Config.MountainGenerator, Config.PeaksGenerator};
-	if (!Config.ContinentalCurve || !Config.MountainCurve || !Config.PeaksCurve)
+	if (Config.AuthoredHeightGenerator)
 	{
-		return FVoxelLandGeneratorValidation::Fail(
-			EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local control curves are required"));
-	}
-	for (const auto& Control : Controls)
-	{
-		if (!Control || Control->M4HeightGrid || Control->M4Unlimited)
+		if (Config.HeightScaleCm < 1 || Config.HeightScaleCm > 2000000)
 		{
 			return FVoxelLandGeneratorValidation::Fail(
-				EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local controls must be ordinary VM generators"));
+				EVoxelLandErrorCode::InvalidParameter, TEXT("Invalid Height Scale"));
 		}
-		const FVoxelLandError Error = VoxelLandM4FixedLattice::Validate(*Control);
-		if (Error)
+		if (const FVoxelLandError Error = VoxelLandM4FixedLattice::Validate(*Config.AuthoredHeightGenerator))
 		{
 			return Error;
+		}
+	}
+	else
+	{
+		if (!Config.ContinentalCurve || !Config.MountainCurve || !Config.PeaksCurve)
+		{
+			return FVoxelLandGeneratorValidation::Fail(
+				EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local control curves are required"));
+		}
+		for (const auto& Control : Controls)
+		{
+			if (!Control || Control->M4HeightGrid || Control->M4Unlimited)
+			{
+				return FVoxelLandGeneratorValidation::Fail(
+					EVoxelLandErrorCode::InvalidParameter, TEXT("M4 local controls must be ordinary VM generators"));
+			}
+			const FVoxelLandError Error = VoxelLandM4FixedLattice::Validate(*Control);
+			if (Error)
+			{
+				return Error;
+			}
 		}
 	}
 	// The chunk-local backend produces the M4 baseline using only these inputs.

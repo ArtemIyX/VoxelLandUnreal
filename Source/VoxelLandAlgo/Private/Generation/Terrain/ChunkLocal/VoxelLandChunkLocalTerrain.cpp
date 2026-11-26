@@ -74,6 +74,17 @@ FVoxelLandError PrepareFiniteBaseline(const FVoxelLandGeneratorSettings& FinalSe
 		return FVoxelLandM4UnlimitedInternals::M4UnlimitedError(
 			EVoxelLandErrorCode::Cancelled, TEXT("M4 local terrain cancelled"));
 	}
+	TArray<int32> Heights;
+	if (Config.AuthoredHeightGenerator)
+	{
+		if (const FVoxelLandError Error = VoxelLandM4FixedLattice::EvaluateHeight(*Config.AuthoredHeightGenerator,
+				Geometry, Config.BaseQ8, Config.HeightScaleCm, Heights, IsCancelled))
+		{
+			return Error;
+		}
+	}
+	else
+	{
 	if (!Config.ContinentalGenerator || !Config.MountainGenerator || !Config.PeaksGenerator || !Config.ContinentalCurve
 		|| !Config.MountainCurve || !Config.PeaksCurve)
 	{
@@ -101,12 +112,12 @@ FVoxelLandError PrepareFiniteBaseline(const FVoxelLandGeneratorSettings& FinalSe
 		}
 	}
 
-	TArray<int32> Heights;
 	if (const FVoxelLandError Error =
 			VoxelLandM4HeightPrepass::BuildBaseHeights(Region, Continental, *Config.ContinentalCurve, Mountain,
 				*Config.MountainCurve, Peaks, *Config.PeaksCurve, Config.BaseQ8, Heights, IsCancelled))
 	{
 		return Error;
+	}
 	}
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> Grid;
 	bool bCancelled = false;

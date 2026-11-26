@@ -348,8 +348,9 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, int64 OriginX, in
 	return Evaluate(Generator, {OriginX, OriginY, SpacingCm, CellsX, CellsY}, Out, IsCancelled);
 }
 
-FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM4LatticeGeometry& Geometry,
-	TArray<uint16>& Out, TFunctionRef<bool()> IsCancelled)
+template <typename ValueType, typename SampleType>
+static FVoxelLandError EvaluateLattice(const FVoxelLandGenerator& Generator, const FVoxelLandM4LatticeGeometry& Geometry,
+	TArray<ValueType>& Out, TFunctionRef<bool()> IsCancelled, SampleType&& Sample)
 {
 	const int64 OriginX = Geometry.OriginX;
 	const int64 OriginY = Geometry.OriginY;
@@ -381,7 +382,7 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 		return Error;
 	}
 	TArray<int64> Registers;
-	TArray<uint16> Values;
+	TArray<ValueType> Values;
 	Values.Reserve((CellsX + 1) * (CellsY + 1));
 	for (int32 Y = 0; Y <= CellsY; ++Y)
 	{
@@ -393,8 +394,8 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 		for (int32 X = 0; X <= CellsX; ++X)
 		{
 			const int64 WorldX = OriginX + int64(X) * SpacingCm, WorldY = OriginY + int64(Y) * SpacingCm;
-			uint16 Value = 0;
-			if (const FVoxelLandError Error = EvaluateValidatedPoint(Generator, WorldX, WorldY, Registers, Value))
+			ValueType Value = 0;
+			if (const FVoxelLandError Error = Sample(Generator, WorldX, WorldY, Registers, Value))
 			{
 				return Error;
 			}
@@ -410,15 +411,15 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 	return {};
 }
 
-FVoxelLandError EvaluateValidatedPoint(
-	const FVoxelLandGenerator& Generator, int64 WorldX, int64 WorldY, TArray<int64>& Registers, uint16& OutValue)
+static FVoxelLandError EvaluateSignedPoint(
+	const FVoxelLandGenerator& Generator, int64 WorldX, int64 WorldY, TArray<int64>& Registers, int64& OutValue)
 {
 	const FVoxelLandProgramDraft& D = Generator.GetProgram().GetData();
 	if (Registers.Num() != D.RegisterCount)
 	{
 		Registers.SetNumZeroed(D.RegisterCount);
 	}
-	uint16 StoredValue = 0;
+	int64 StoredValue = 0;
 	bool bStored = false;
 	for (int32 Index = 0; Index < D.Instructions.Num(); ++Index)
 	{
@@ -473,11 +474,7 @@ FVoxelLandError EvaluateValidatedPoint(
 				break;
 			case EVoxelLandOpcode::StoreDensity:
 			{
-				const int64 Clamped = FMath::Clamp<int64>(
-					Registers[I.A], -FVoxelLandM4FixedLatticeInternals::Q, FVoxelLandM4FixedLatticeInternals::Q);
-				StoredValue = uint16(
-					((Clamped + FVoxelLandM4FixedLatticeInternals::Q) * 65535 + FVoxelLandM4FixedLatticeInternals::Q)
-					/ (2 * FVoxelLandM4FixedLatticeInternals::Q));
+				StoredValue = Registers[I.A];
 				bStored = true;
 				continue;
 			}
@@ -498,4 +495,55 @@ FVoxelLandError EvaluateValidatedPoint(
 	OutValue = StoredValue;
 	return {};
 }
+
+FVoxelLandError EvaluateValidatedPoint(
+	const FVoxelLandGenerator& Generator, int64 WorldX, int64 WorldY, TArray<int64>& Registers, uint16& OutValue)
+{
+	int64 Raw = 0;
+	if (const FVoxelLandError Error = EvaluateSignedPoint(Generator, WorldX, WorldY, Registers, Raw))
+	{
+		return Error;
+	}
+	constexpr int64 Q = FVoxelLandM4FixedLatticeInternals::Q;
+	OutValue = uint16(((FMath::Clamp(Raw, -Q, Q) + Q) * 65535 + Q) / (2 * Q));
+	return {};
+}
+
+FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM4LatticeGeometry& Geometry,
+	TArray<uint16>& Out, TFunctionRef<bool()> IsCancelled)
+{
+	return EvaluateLattice(Generator, Geometry, Out, IsCancelled, EvaluateValidatedPoint);
+}
+
+FVoxelLandError EvaluateHeight(const FVoxelLandGenerator& Generator, const FVoxelLandM4LatticeGeometry& Geometry,
+	int32 BaseQ8, int32 ScaleCm, TArray<int32>& Out, TFunctionRef<bool()> IsCancelled)
+{
+	constexpr int32 MaxScaleCm = 2000000;
+	if (ScaleCm < 1 || ScaleCm > MaxScaleCm)
+	{
+		return FVoxelLandM4FixedLatticeInternals::Fail(
+			TEXT("Height Scale must be between 1 and 2000000 cm"), INDEX_NONE, EVoxelLandErrorCode::InvalidMathDomain);
+	}
+	return EvaluateLattice(Generator, Geometry, Out, IsCancelled,
+		[BaseQ8, ScaleCm](const FVoxelLandGenerator& Source, int64 X, int64 Y, TArray<int64>& Registers, int32& Height) {
+			int64 Raw = 0;
+			if (const FVoxelLandError Error = EvaluateSignedPoint(Source, X, Y, Registers, Raw))
+			{
+				return Error;
+			}
+			constexpr int64 Q = FVoxelLandM4FixedLatticeInternals::Q;
+			const int64 Scaled = Raw * int64(ScaleCm) * 256;
+			const int64 Delta = Scaled >= 0 ? (Scaled + Q / 2) / Q : (Scaled - Q / 2) / Q;
+			const int64 Value = BaseQ8 + Delta;
+			if (Value < -512000000ll || Value > 512000000ll)
+			{
+				return FVoxelLandM4FixedLatticeInternals::Fail(
+					TEXT("Authored height exceeds the supported elevation range"), INDEX_NONE,
+					EVoxelLandErrorCode::InvalidMathDomain);
+			}
+			Height = int32(Value);
+			return FVoxelLandError{};
+		});
+}
+
 }

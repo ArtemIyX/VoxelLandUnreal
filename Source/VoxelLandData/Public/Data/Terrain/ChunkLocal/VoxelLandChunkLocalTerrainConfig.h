@@ -18,6 +18,8 @@ struct FVoxelLandM4UnlimitedConfig
 	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> ContinentalCurve;
 	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> MountainCurve;
 	TSharedPtr<const FVoxelLandM4CurveLut, ESPMode::ThreadSafe> PeaksCurve;
+	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> AuthoredHeightGenerator;
+	int32 HeightScaleCm = 1000;
 	int32 BaseQ8 = 0;
 	bool bNormalizeSlope = false;
 	FVoxelLandM4OverhangConfig Overhang;

@@ -1,4 +1,5 @@
 #include "VoxelLandEditorSchema.h"
+#include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
 #include "../Authoring/VoxelLandEditorFloat.h"
 #include "Operators/VoxelLandOperator.h"
@@ -332,16 +333,14 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
 	for (EVoxelLandBuiltinNode Builtin : Builtins)
 	{
 		const int32 Kind = int32(Builtin);
-		if (Builtin == EVoxelLandBuiltinNode::M4HeightOutput
-			&& (!ContextMenuBuilder.CurrentGraph
-				|| !ContextMenuBuilder.CurrentGraph->GetOuter()->IsA<UVoxelLandM4ControlGraph>()))
+		if (Builtin == EVoxelLandBuiltinNode::M4HeightOutput)
 		{
 			continue;
 		}
 		if (ContextMenuBuilder.CurrentGraph
 			&& ContextMenuBuilder.CurrentGraph->GetOuter()->IsA<UVoxelLandGraphFunction>()
 			&& (Kind == int32(EVoxelLandBuiltinNode::DensityOutput)
-				|| Kind == int32(EVoxelLandBuiltinNode::SmoothDensity)))
+				|| Kind == int32(EVoxelLandBuiltinNode::SmoothDensity) || FVoxelLandGraphOutputs::IsNamedOutput(VoxelLandBuiltinNodeId(Builtin))))
 		{
 			continue;
 		}

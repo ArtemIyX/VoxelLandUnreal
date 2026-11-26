@@ -47,6 +47,15 @@ public:
 	UPROPERTY()
 	int32 VariadicInputs = 2;
 
+	UPROPERTY(
+		EditAnywhere, Category = "Output", meta = (EditCondition = "Kind >= 53 && Kind <= 55", EditConditionHides))
+	FString OutputName;
+
+	UPROPERTY(EditAnywhere, Category = "Noise",
+		meta = (DisplayName = "Hill Size", ClampMin = "2.0", EditCondition = "Kind == 56", EditConditionHides,
+			Units = "cm"))
+	float HillSizeCm = 10000.f;
+
 	virtual void AllocateDefaultPins() override;
 	virtual void AutowireNewNode(UEdGraphPin* FromPin) override;
 	virtual FText GetNodeTitle(ENodeTitleType::Type TitleType) const override;
@@ -58,6 +67,7 @@ public:
 	virtual void PinConnectionListChanged(UEdGraphPin* Pin) override;
 	virtual void GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const override;
 	void RefreshFunctionInterface();
+	void ConfigureNoiseAuthoringPins();
 	void AddVariadicInput();
 	void RemoveVariadicInput(FGuid PinId);
 	void MoveVariadicInput(FGuid PinId, int32 Direction);

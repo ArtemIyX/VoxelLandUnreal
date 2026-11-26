@@ -56,7 +56,8 @@ public:
 			Setup->Palette = TSoftObjectPtr<UVoxelLandMaterialPalette>(
 				FSoftObjectPath(TEXT("/Game/VoxelLandHeadlessTestMissing.Palette")));
 			Config->MaterialSetup = Setup.Get();
-			if (!Test.TestTrue(TEXT("Data-only worlds accept a setup with missing render assets"),
+			Config->TerrainAmbientOcclusionStrength = 1.0f;
+			if (!Test.TestTrue(TEXT("Data-only worlds ignore AO and missing render assets"),
 					Actor.InitializeFromConfig(Config.Get(), FIntVector::ZeroValue)))
 			{
 				return Finish();
@@ -66,6 +67,7 @@ public:
 
 		Test.TestTrue(TEXT("Data-only regeneration publishes a replacement"), Chunk != Baseline);
 		Test.TestEqual(TEXT("Presentation settings do not change density identity"), Chunk->Hash, Baseline->Hash);
+		Test.AddInfo(FString::Printf(TEXT("Headless density hash with AO off and on: %llu"), Chunk->Hash));
 		Test.TestTrue(TEXT("No material instance was created"), Actor.TerrainMaterial == nullptr);
 		const TActorIterator<AVoxelLandRegion> Regions(&World);
 		Test.TestFalse(TEXT("No terrain regions were created"), bool(Regions));

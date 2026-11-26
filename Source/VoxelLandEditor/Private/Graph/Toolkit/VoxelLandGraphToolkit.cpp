@@ -43,6 +43,7 @@
 #include "Graph/Serialization/VoxelLandProgramCodec.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
 #include "Generation/Meshing/VoxelLandMaterialMeshing.h"
+#include "Generation/Meshing/Lighting/VoxelLandTerrainAmbientOcclusion.h"
 #include "Rendering/Components/VoxelLandChunkComponent.h"
 #include "Rendering/Diagnostics/VoxelLandPreviewUploadObservation.h"
 #include "Rendering/Materials/VoxelLandTerrainMaterial.h"
@@ -470,7 +471,8 @@ public:
 	static bool IsSameMaterialAppearance(
 		const FVoxelLandMaterialAppearance& Left, const FVoxelLandMaterialAppearance& Right)
 	{
-		if (Left.SlotCount != Right.SlotCount || Left.Rules.Num() != Right.Rules.Num())
+		if (Left.SlotCount != Right.SlotCount || Left.Rules.Num() != Right.Rules.Num()
+			|| Left.TerrainAmbientOcclusionStrength != Right.TerrainAmbientOcclusionStrength)
 		{
 			return false;
 		}
@@ -601,7 +603,8 @@ public:
 							const FVoxelLandMeshData& Mesh = *Meshes.Last().Value;
 							RetainedMeshBytes += uint64(Mesh.Vertices.GetAllocatedSize())
 											   + uint64(Mesh.Indices.GetAllocatedSize())
-											   + uint64(Mesh.MaterialBlend.GetAllocatedSize());
+											   + uint64(Mesh.MaterialBlend.GetAllocatedSize())
+											   + uint64(Mesh.AmbientVisibility.GetAllocatedSize());
 							if (RetainedMeshBytes + uint64(Meshes.GetAllocatedSize()) > MaxRetainedMeshBytes)
 							{
 								Error = TEXT("Inspection mesh buffers exceed the 64 MiB retention limit.");
@@ -644,13 +647,26 @@ public:
 			}
 			if (!Mesh->Indices.IsEmpty())
 			{
-				if (Appearance
-					&& !FVoxelLandMaterialMeshing::Pack(*Mesh, *Appearance,
-						VoxelLandMeshCoordinates::RenderOrigin(Position, VoxelSize),
-						[&Cancel] { return Cancel->Load(); }))
+				if (Appearance)
 				{
-					Error = TEXT("Preview material packing failed or was cancelled.");
-					return false;
+					const FVector3d Origin = VoxelLandMeshCoordinates::RenderOrigin(Position, VoxelSize);
+					const auto IsCancelled = [&Cancel] {
+						return Cancel->Load();
+					};
+					if (!FVoxelLandMaterialMeshing::Pack(*Mesh, *Appearance, Origin, IsCancelled))
+					{
+						Error = TEXT("Preview material packing failed or was cancelled.");
+						return false;
+					}
+					if (Appearance->TerrainAmbientOcclusionStrength > 0.0f)
+					{
+						if (const FVoxelLandError Failure = FVoxelLandTerrainAmbientOcclusion::Bake(
+								*Mesh, Generator, Worker, Key, Origin, IsCancelled, Chunk.Get()))
+						{
+							Error = Failure.Message;
+							return false;
+						}
+					}
 				}
 				if (Cancel->Load())
 				{
@@ -3461,7 +3477,9 @@ void FVoxelLandGraphToolkit::RefreshTerrainMaterial(
 		return;
 	}
 	const FVoxelLandTerrainPresentation Presentation =
-		FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), Path);
+		PreviewSettings && PreviewSettings->MaterialSetup == Path
+			? FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), *PreviewSettings)
+			: FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), Path);
 	if (bStopped || bPIE || bReloadPaused || PreviewRevision != PreviewTicket || Revision != GraphRevision)
 	{
 		return;
@@ -3650,6 +3668,7 @@ void FVoxelLandGraphToolkit::SynchronizePreviewSettings(bool bApplyChanges)
 	}
 	FCanonicalWriter MaterialWriter;
 	MaterialWriter.String(PreviewSettings->MaterialSetup.ToSoftObjectPath().ToString());
+	MaterialWriter.Float(PreviewSettings->TerrainAmbientOcclusionStrength);
 	const UVoxelLandMaterialSetup* Setup = PreviewSettings->MaterialSetup.LoadSynchronous();
 	MaterialWriter.U8(Setup ? 1 : 0);
 	if (Setup)

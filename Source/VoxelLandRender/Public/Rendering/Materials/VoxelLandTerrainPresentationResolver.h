@@ -18,6 +18,6 @@ public:
 	static TArray<uint8> CaptureIdentity(const UVoxelLandWorldConfig& Config);
 
 private:
-	static FVoxelLandTerrainPresentation ResolveSetup(
-		UObject* Outer, const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bUseRules);
+	static FVoxelLandTerrainPresentation ResolveSetup(UObject* Outer,
+		const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bUseRules, float OcclusionStrength);
 };

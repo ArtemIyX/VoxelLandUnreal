@@ -6,6 +6,8 @@
 #include "Generation/Clipmap/Seams/VoxelLandVerticalTerrainSeams.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
 #include "Generation/Meshing/VoxelLandMaterialMeshing.h"
+#include "Generation/Meshing/Lighting/VoxelLandTerrainAmbientOcclusion.h"
+#include "Data/Meshing/VoxelLandMaterialAppearance.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace VoxelLandWorldPrivate
@@ -46,7 +48,7 @@ FVoxelLandError Cancelled()
 int64 MeshBytes(const FVoxelLandMeshData& Mesh)
 {
 	return int64(Mesh.Vertices.GetAllocatedSize()) + int64(Mesh.Indices.GetAllocatedSize())
-		 + int64(Mesh.MaterialBlend.GetAllocatedSize());
+		 + int64(Mesh.MaterialBlend.GetAllocatedSize()) + int64(Mesh.AmbientVisibility.GetAllocatedSize());
 }
 
 int64 SourceBytes(const FVoxelLandM7SeamMesh& Mesh)
@@ -254,34 +256,50 @@ FVoxelLandError PrepareSeams(const FVoxelLandM7ClipmapLayout& Layout, const FM7S
 	return {};
 }
 
-bool PackDrawMesh(FM7MeshPtr& Mesh, const FVoxelLandMaterialAppearance& Appearance, const FVector3d& Origin,
-	int64& RetainedBytes, TFunctionRef<bool()> IsCancelled)
+struct FDrawPreparation
+{
+	const FVoxelLandGenerator& Generator;
+	FVoxelLandWorkerContext& Worker;
+	TFunctionRef<bool()> IsCancelled;
+	int64 RetainedBytes;
+};
+
+FVoxelLandError PrepareDrawMesh(
+	FM7MeshPtr& Mesh, const FVoxelLandMaterialAppearance& Appearance, const FM7Draw& Draw, FDrawPreparation& Work)
 {
 	if (!Mesh)
 	{
-		return true;
+		return {};
 	}
 	TSharedPtr<FVoxelLandMeshData, ESPMode::ThreadSafe> Packed =
 		MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>(*Mesh);
-	if (!FVoxelLandMaterialMeshing::Pack(*Packed, Appearance, Origin, IsCancelled))
+	if (!FVoxelLandMaterialMeshing::Pack(*Packed, Appearance, Draw.LogicalOrigin, Work.IsCancelled))
 	{
-		return false;
+		return Work.IsCancelled() ? Cancelled() : Failed(TEXT("Terrain material packing failed."));
 	}
-	RetainedBytes += MeshBytes(*Packed);
-	if (RetainedBytes > MaxRevisionMeshBytes)
+	if (Appearance.TerrainAmbientOcclusionStrength > 0.0f)
 	{
-		return false;
+		if (const FVoxelLandError Error = FVoxelLandTerrainAmbientOcclusion::Bake(
+				*Packed, Work.Generator, Work.Worker, Draw.Key, Draw.LogicalOrigin, Work.IsCancelled))
+		{
+			return Error;
+		}
+	}
+	Work.RetainedBytes += MeshBytes(*Packed);
+	if (Work.RetainedBytes > MaxRevisionMeshBytes)
+	{
+		return Failed(TEXT("Terrain draw exceeds the clipmap mesh budget."));
 	}
 	Mesh = MoveTemp(Packed);
-	return true;
+	return {};
 }
 
 FVoxelLandError MakeDraws(FM7RenderRevision& Revision, TMap<FVoxelLandChunkKey, FOverride>& Overrides,
-	const FM7RenderRequest& Request, int64 RetainedBytes, TFunctionRef<bool()> IsCancelled)
+	const FM7RenderRequest& Request, FDrawPreparation& Work)
 {
 	for (const FVoxelLandChunkKey& Key : Revision.Layout.Leaves)
 	{
-		if (IsCancelled())
+		if (Work.IsCancelled())
 		{
 			return Cancelled();
 		}
@@ -308,12 +326,15 @@ FVoxelLandError MakeDraws(FM7RenderRevision& Revision, TMap<FVoxelLandChunkKey, 
 		{
 			Draw.Terrain = FM7MeshPtr(Source, &Source->Terrain);
 		}
-		if (Request.Appearance
-			&& (!PackDrawMesh(Draw.Terrain, *Request.Appearance, Draw.LogicalOrigin, RetainedBytes, IsCancelled)
-				|| !PackDrawMesh(Draw.Curtain, *Request.Appearance, Draw.LogicalOrigin, RetainedBytes, IsCancelled)))
+		if (Request.Appearance)
 		{
-			return IsCancelled() ? Cancelled()
-								 : Failed(TEXT("Terrain material packing failed or exceeded the clipmap mesh budget."));
+			for (FM7MeshPtr* Mesh : {&Draw.Terrain, &Draw.Curtain})
+			{
+				if (const FVoxelLandError Error = PrepareDrawMesh(*Mesh, *Request.Appearance, Draw, Work))
+				{
+					return Error;
+				}
+			}
 		}
 		if (Draw.Terrain || Draw.Curtain)
 		{
@@ -406,7 +427,8 @@ FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVo
 		}
 		if (Refine.IsEmpty())
 		{
-			if (const FVoxelLandError Error = MakeDraws(*Revision, Overrides, Request, BuildBytes, IsCancelled))
+			FDrawPreparation DrawWork{Generator, Worker, IsCancelled, BuildBytes};
+			if (const FVoxelLandError Error = MakeDraws(*Revision, Overrides, Request, DrawWork))
 			{
 				return Error;
 			}

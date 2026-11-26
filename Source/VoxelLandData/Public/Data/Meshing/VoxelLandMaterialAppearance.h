@@ -14,6 +14,7 @@ struct FVoxelLandMaterialAppearance
 	TArray<FVoxelLandResolvedMaterialRule> Rules;
 	uint8 SlotCount = 1;
 	uint64 Seed = 0;
+	float TerrainAmbientOcclusionStrength = 0.0f;
 	TSharedPtr<const FVoxelLandMaterialGraphProgram, ESPMode::ThreadSafe> Program;
 	TSharedPtr<const IVoxelLandMaterialSignalSource, ESPMode::ThreadSafe> Signals;
 };

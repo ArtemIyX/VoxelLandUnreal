@@ -10,6 +10,8 @@
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
 #include "Generation/Meshing/VoxelLandMaterialMeshing.h"
+#include "Generation/Meshing/Lighting/VoxelLandTerrainAmbientOcclusion.h"
+#include "Data/Meshing/VoxelLandMaterialAppearance.h"
 #include "Data/World/Streaming/VoxelLandPublication.h"
 #include "Data/World/Streaming/VoxelLandWorldState.h"
 #include "Data/World/Streaming/VoxelLandTestBarrier.h"
@@ -152,7 +154,17 @@ public:
 							}
 							else
 							{
-								Done.Mesh = Mesh;
+								if (Job.Appearance && Job.Appearance->TerrainAmbientOcclusionStrength > 0.0f)
+								{
+									Done.Error = FVoxelLandTerrainAmbientOcclusion::Bake(
+										*Mesh, *Current, *Context, Job.Key, Origin, IsCancelled, Done.Data.Get());
+									Done.bCancelled =
+										IsCancelled() || Done.Error.Code == EVoxelLandErrorCode::Cancelled;
+								}
+								if (!Done.Error && !Done.bCancelled)
+								{
+									Done.Mesh = Mesh;
+								}
 							}
 						}
 					}
@@ -1164,7 +1176,8 @@ void AVoxelLandWorld::PumpCompletions()
 			Record->Vertices = Done.Mesh->Vertices.Num();
 			Record->Triangles = Done.Mesh->Indices.Num() / 3;
 			Record->MeshBytes = Done.Mesh->Vertices.GetAllocatedSize() + Done.Mesh->Indices.GetAllocatedSize()
-							  + Done.Mesh->MaterialBlend.GetAllocatedSize();
+							  + Done.Mesh->MaterialBlend.GetAllocatedSize()
+							  + Done.Mesh->AmbientVisibility.GetAllocatedSize();
 		}
 	}
 }

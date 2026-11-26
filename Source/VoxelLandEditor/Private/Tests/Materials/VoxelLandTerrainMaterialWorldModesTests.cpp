@@ -59,6 +59,8 @@ public:
 		}
 		Config->WorldExtent = Mode == FiniteHeightMode || Mode == FiniteDensityMode ? EVoxelLandWorldExtent::Finite
 																					: EVoxelLandWorldExtent::Infinite;
+		Config->TerrainAmbientOcclusionStrength =
+			FParse::Param(FCommandLine::Get(), TEXT("VoxelLandOutdoorLightingWorldModes")) ? 0.75f : 0.0f;
 		Config->HorizontalRadius = 1;
 		Config->VerticalRadius = 2;
 		Actor.bEnableM7Clipmap = Mode < HeightModeCount;
@@ -287,6 +289,7 @@ private:
 		int32 Count = 0;
 		bool bAllSharePalette = true;
 		bool bAllHaveLogicalOrigin = true;
+		bool bAllHaveExpectedVisibility = true;
 		for (TActorIterator<AVoxelLandRegion> It(&World); It; ++It)
 		{
 			if (It->IsHidden())
@@ -302,6 +305,8 @@ private:
 					++Count;
 					bAllSharePalette = bAllSharePalette && Component->GetMaterial(0) == Actor.TerrainMaterial;
 					bAllHaveLogicalOrigin = bAllHaveLogicalOrigin && HasLogicalOrigin(*Component);
+					bAllHaveExpectedVisibility &=
+						Component->HasAmbientVisibilityForTests() == (Config->TerrainAmbientOcclusionStrength > 0.0f);
 				}
 			}
 		}
@@ -309,12 +314,19 @@ private:
 		{
 			const UVoxelLandMaterialSetup* Setup = Config->MaterialSetup.Get();
 			const UVoxelLandMaterialPalette* Palette = Setup ? Setup->Palette.Get() : nullptr;
-			const UMaterialInstanceDynamic* Instance = Cast<UMaterialInstanceDynamic>(Actor.TerrainMaterial);
+			UMaterialInstanceDynamic* const Instance = Cast<UMaterialInstanceDynamic>(Actor.TerrainMaterial);
 			Test.TestTrue(TEXT("Visible chunks share the instance of the expected baked palette master"),
 				bAllSharePalette && Instance && Palette && Palette->MasterMaterial
 					&& Instance->GetMaterial() == Palette->MasterMaterial->GetMaterial());
 			Test.TestTrue(
 				TEXT("Every published packed component receives its logical texture origin"), bAllHaveLogicalOrigin);
+			Test.TestTrue(TEXT("Geometry visibility is present only when requested"), bAllHaveExpectedVisibility);
+			if (Instance)
+			{
+				Test.TestEqual(TEXT("Terrain material receives the configured AO strength"),
+					Instance->K2_GetScalarParameterValue(FVoxelLandTerrainMaterial::AmbientOcclusionStrengthParameter),
+					Config->TerrainAmbientOcclusionStrength);
+			}
 		}
 		return Count;
 	}

@@ -19,6 +19,9 @@ public:
 #if WITH_EDITOR
 	void SetPreviewUploadObservation(TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> InObservation);
 #endif
+#if WITH_DEV_AUTOMATION_TESTS
+	bool HasAmbientVisibilityForTests() const { return Mesh && !Mesh->AmbientVisibility.IsEmpty(); }
+#endif
 	void ClearMesh();
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
 	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;

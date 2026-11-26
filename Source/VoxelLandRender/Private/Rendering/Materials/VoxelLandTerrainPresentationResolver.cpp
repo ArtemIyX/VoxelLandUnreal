@@ -53,6 +53,7 @@ TArray<uint8> FVoxelLandTerrainPresentationResolver::CaptureIdentity(const UVoxe
 {
 	FCanonicalWriter Writer;
 	Writer.Bytes = CaptureIdentity(Config.MaterialSetup);
+	Writer.Float(Config.TerrainAmbientOcclusionStrength);
 	Writer.String(Config.MaterialGraph.ToSoftObjectPath().ToString());
 	if (!Config.MaterialGraph.IsNull())
 	{
@@ -96,7 +97,11 @@ FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::Resolve(UOb
 	const UVoxelLandWorldConfig& Config,
 	TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> WorldSignals)
 {
-	FVoxelLandTerrainPresentation Result = ResolveSetup(Outer, Config.MaterialSetup, Config.MaterialGraph.IsNull());
+	const float Strength = FMath::IsFinite(Config.TerrainAmbientOcclusionStrength)
+							 ? FMath::Clamp(Config.TerrainAmbientOcclusionStrength, 0.0f, 1.0f)
+							 : 0.0f;
+	FVoxelLandTerrainPresentation Result =
+		ResolveSetup(Outer, Config.MaterialSetup, Config.MaterialGraph.IsNull(), Strength);
 	if (Config.MaterialGraph.IsNull())
 	{
 		Result.SourceIdentity = CaptureIdentity(Config);
@@ -147,11 +152,11 @@ FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::Resolve(UOb
 FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::Resolve(
 	UObject* Outer, const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath)
 {
-	return ResolveSetup(Outer, SetupPath, true);
+	return ResolveSetup(Outer, SetupPath, true, 0.0f);
 }
 
 FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::ResolveSetup(
-	UObject* Outer, const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bUseRules)
+	UObject* Outer, const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bUseRules, float OcclusionStrength)
 {
 	check(IsInGameThread());
 	FVoxelLandTerrainPresentation Result;
@@ -198,9 +203,12 @@ FVoxelLandTerrainPresentation FVoxelLandTerrainPresentationResolver::ResolveSetu
 			}
 			if (Result.Diagnostic.IsEmpty())
 			{
-				Result.Material.Reset(FVoxelLandTerrainMaterial::CreateInstance(Outer, *Palette));
-				if (Result.Material)
+				if (UMaterialInstanceDynamic* Material = FVoxelLandTerrainMaterial::CreateInstance(Outer, *Palette))
 				{
+					Material->SetScalarParameterValue(
+						FVoxelLandTerrainMaterial::AmbientOcclusionStrengthParameter, OcclusionStrength);
+					Result.Material.Reset(Material);
+					Appearance->TerrainAmbientOcclusionStrength = OcclusionStrength;
 					Result.Appearance = Appearance;
 					Result.LayoutIdentity = Palette->LayoutIdentity;
 					return Result;

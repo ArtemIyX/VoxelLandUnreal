@@ -41,7 +41,9 @@ private:
 	void ConfigureFlight();
 	void StartFlight();
 	void AdvanceFlight();
+	void SampleFlightCoverage(int32 Checkpoint, double Offset);
 	void StopFlight();
+	double GetSettledFlightElapsed(double Now);
 	double GetFlightOffsetCm(double Elapsed, int32& OutCheckpoint, bool& bOutComplete) const;
 
 	TWeakObjectPtr<ACameraActor> FlightCamera;
@@ -52,8 +54,11 @@ private:
 	double NextFlightSampleAt = 0.0;
 	double FlightHoldSeconds = 5.0;
 	uint64 FlightLastTicket = 0;
+	uint64 FlightDepartureTicket = 0;
 	int32 FlightLastCheckpoint = INDEX_NONE;
 	bool bFlightRequested = false;
 	bool bFlightReady = false;
+	bool bFlightDepartureSettled = false;
+	bool bFlightReturnSettled = false;
 #endif
 };

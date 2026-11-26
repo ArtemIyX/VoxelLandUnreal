@@ -12,7 +12,9 @@ class FVoxelLandClipmapFlightCoverage final
 {
 public:
 	static constexpr int32 LodCount = 6;
-	static constexpr int32 MovingProbeCount = 5;
+	static constexpr int32 CameraProbeIndex = 1;
+	static constexpr int32 FirstEdgeProbeIndex = 2;
+	static constexpr int32 MovingProbeCount = 6;
 	static constexpr double OuterProbeFraction = 0.999;
 
 	static FString JoinIntegers(TConstArrayView<int32> Values)
@@ -75,7 +77,7 @@ public:
 };
 
 bool AVoxelLandWorld::DescribeClipmapFlightCoverage(
-	TConstArrayView<FVector2D> FixedProbes, uint64& LastTicket, FString& Out) const
+	const FVector& LogicalCamera, TConstArrayView<FVector2D> FixedProbes, uint64& LastTicket, FString& Out) const
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_CollectFlightCoverage);
 	const VoxelLandWorldPrivate::FM7VisualState* Visual = State ? State->M7Visual.Get() : nullptr;
@@ -88,10 +90,12 @@ bool AVoxelLandWorld::DescribeClipmapFlightCoverage(
 	const VoxelLandWorldPrivate::FM7RenderRevision& Revision = *Visual->Published;
 	const FVector& View = Revision.Layout.Settings.ViewCm;
 	const FVector2D ViewXY(View.X, View.Y);
+	const FVector2D CameraXY(LogicalCamera.X, LogicalCamera.Y);
 	const double RadiusCm = Revision.Layout.Settings.HorizontalRadiusCm;
 	const double OuterCm = RadiusCm * FCoverage::OuterProbeFraction;
 	TArray<FVector2D, TInlineAllocator<16>> Probes;
 	Probes.Add(ViewXY);
+	Probes.Add(CameraXY);
 	Probes.Add(ViewXY + FVector2D(OuterCm, 0.0));
 	Probes.Add(ViewXY - FVector2D(OuterCm, 0.0));
 	Probes.Add(ViewXY + FVector2D(0.0, OuterCm));
@@ -129,16 +133,32 @@ bool AVoxelLandWorld::DescribeClipmapFlightCoverage(
 		}
 	}
 
-	Out = FString::Printf(
-		TEXT(
-			"viewCm=(%.0f,%.0f,%.0f) radiusCm=%.0f leaves=%d refinements=%d terrain=[%s] near=%d edgeCm=%.0f edges=[%s] fixed=[%s]"),
+	Out = FString::Printf(TEXT("viewCm=(%.0f,%.0f,%.0f) radiusCm=%.0f leaves=%d refinements=%d terrain=[%s] near=%d "
+							   "camera=%d cameraCm=(%.0f,%.0f,%.0f) lagXYCm=%.0f edgeCm=%.0f edges=[%s] fixed=[%s]"),
 		View.X, View.Y, View.Z, RadiusCm, Revision.Layout.Leaves.Num(), Revision.RefinedLeaves,
-		*FCoverage::JoinIntegers(MakeArrayView(DrawCounts)), SurfaceLods[0], OuterCm,
-		*FCoverage::JoinIntegers(MakeArrayView(SurfaceLods.GetData() + 1, FCoverage::MovingProbeCount - 1)),
+		*FCoverage::JoinIntegers(MakeArrayView(DrawCounts)), SurfaceLods[0], SurfaceLods[FCoverage::CameraProbeIndex],
+		LogicalCamera.X, LogicalCamera.Y, LogicalCamera.Z, (CameraXY - ViewXY).Size(), OuterCm,
+		*FCoverage::JoinIntegers(MakeArrayView(SurfaceLods.GetData() + FCoverage::FirstEdgeProbeIndex,
+			FCoverage::MovingProbeCount - FCoverage::FirstEdgeProbeIndex)),
 		*FCoverage::JoinIntegers(
 			MakeArrayView(SurfaceLods.GetData() + FCoverage::MovingProbeCount, FixedProbes.Num())));
 	LastTicket = Visual->PublishedTicket;
 	return true;
+}
+
+uint64 AVoxelLandWorld::GetSettledClipmapFlightTicket(const FVector& LogicalView) const
+{
+	const VoxelLandWorldPrivate::FM7VisualState* Visual = State ? State->M7Visual.Get() : nullptr;
+	if (!Visual || !Visual->Published || Visual->Published->Draws.IsEmpty())
+	{
+		return 0;
+	}
+	const FVoxelLandM7ClipmapSettings& Published = Visual->Published->Layout.Settings;
+	const FVector Offset = Published.ViewCm - LogicalView;
+	// The submitted horizontal view is rounded to the nearest eight voxels.
+	constexpr double HalfViewStepInVoxels = 4.0;
+	const double ToleranceCm = HalfViewStepInVoxels * Published.BaseVoxelSizeCm + UE_DOUBLE_SMALL_NUMBER;
+	return FMath::Abs(Offset.X) <= ToleranceCm && FMath::Abs(Offset.Y) <= ToleranceCm ? Visual->PublishedTicket : 0;
 }
 
 #endif

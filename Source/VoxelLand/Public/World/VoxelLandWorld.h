@@ -71,7 +71,9 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 #if !UE_BUILD_SHIPPING && !UE_SERVER
-	bool DescribeClipmapFlightCoverage(TConstArrayView<FVector2D> FixedProbes, uint64& LastTicket, FString& Out) const;
+	bool DescribeClipmapFlightCoverage(
+		const FVector& LogicalCamera, TConstArrayView<FVector2D> FixedProbes, uint64& LastTicket, FString& Out) const;
+	uint64 GetSettledClipmapFlightTicket(const FVector& LogicalView) const;
 #endif
 
 public:

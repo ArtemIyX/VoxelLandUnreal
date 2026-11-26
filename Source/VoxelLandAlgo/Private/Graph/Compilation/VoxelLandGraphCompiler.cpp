@@ -1243,6 +1243,28 @@ bool FVoxelLandGraphCompiler::Compile(const FVoxelLandGraphSnapshot& Snapshot,
 	return FVoxelLandGraphCompilePass::CompileSource(Snapshot, Providers, OutDraft, OutDiagnostic, nullptr, nullptr);
 }
 
+bool FVoxelLandGraphCompiler::CompileWithInstructionOrigins(const FVoxelLandGraphSnapshot& Snapshot,
+	FVoxelLandProgramDraft& OutDraft, TArray<FVoxelLandGraphNodeOrigin>& OutOrigins,
+	FVoxelLandGraphDiagnostic& OutDiagnostic)
+{
+	OutDraft = {};
+	OutOrigins.Reset();
+	TArray<FGuid> Instructions;
+	TMap<FGuid, FVoxelLandGraphNodeOrigin> Origins;
+	if (!FVoxelLandGraphCompilePass::CompileSource(
+			Snapshot, FVoxelLandOperatorRegistry::Snapshot(), OutDraft, OutDiagnostic, &Instructions, &Origins))
+	{
+		return false;
+	}
+	OutOrigins.Reserve(Instructions.Num());
+	for (const FGuid& Id : Instructions)
+	{
+		const FVoxelLandGraphNodeOrigin* Origin = Origins.Find(Id);
+		OutOrigins.Add(Origin ? *Origin : FVoxelLandGraphNodeOrigin{Id, {}});
+	}
+	return true;
+}
+
 bool FVoxelLandGraphCompilePass::CompileSource(const FVoxelLandGraphSnapshot& Snapshot,
 	const FVoxelLandOperatorRegistrySnapshot& Providers, FVoxelLandProgramDraft& OutDraft,
 	FVoxelLandGraphDiagnostic& OutDiagnostic, TArray<FGuid>* InstructionNodes,

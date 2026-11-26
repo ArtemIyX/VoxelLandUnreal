@@ -6,6 +6,7 @@
 #include "Data/Program/Execution/VoxelLandProgramDraft.h"
 #include "Data/World/Configuration/VoxelLandWorldKind.h"
 #include "Graph/Capabilities/VoxelLandWorldCapabilitiesDiagnostic.h"
+#include "Graph/Compilation/VoxelLandGraphNodeOrigin.h"
 #include "Templates/Function.h"
 
 class FVoxelLandOperatorRegistrySnapshot;
@@ -22,6 +23,9 @@ public:
 		FVoxelLandGraphDiagnostic& OutDiagnostic);
 	static bool Compile(const FVoxelLandGraphSnapshot& Snapshot, const FVoxelLandOperatorRegistrySnapshot& Providers,
 		FVoxelLandProgramDraft& OutDraft, FVoxelLandGraphDiagnostic& OutDiagnostic);
+
+	static bool CompileWithInstructionOrigins(const FVoxelLandGraphSnapshot& Snapshot, FVoxelLandProgramDraft& OutDraft,
+		TArray<FVoxelLandGraphNodeOrigin>& OutOrigins, FVoxelLandGraphDiagnostic& OutDiagnostic);
 
 	// World-directed compilation must use the same immutable source and frozen
 	// provider snapshot for both capability validation and compilation. The

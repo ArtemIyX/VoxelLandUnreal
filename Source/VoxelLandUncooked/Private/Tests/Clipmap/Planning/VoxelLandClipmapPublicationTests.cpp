@@ -82,6 +82,8 @@ public:
 				return CheckUnsupported();
 			case EStage::Headless:
 				return CheckHeadless();
+			case EStage::RefinementBudget:
+				return CheckRefinementBudget();
 		}
 		return Finish();
 	}
@@ -94,7 +96,8 @@ private:
 		BlockedReplacement,
 		NewestReplacement,
 		Unsupported,
-		Headless
+		Headless,
+		RefinementBudget
 	};
 
 	bool CheckInitial()
@@ -205,6 +208,43 @@ private:
 		Test.TestFalse(TEXT("Data-only mode never queues a visual revision"), Actor.IsM7ReplacementPendingForTests());
 		Test.TestEqual(TEXT("Data-only mode has no visible render regions"), CountVisibleRegions(World), 0);
 		Test.TestEqual(TEXT("Data-only mode publishes no visual leaves"), Actor.M7PublishedLeafCount, 0);
+		// Splitting the root at the view creates two intersecting mixed faces on the plane.
+		// The requested box fits as nine LOD0 leaves, but splitting both neighboring roots exceeds the budget.
+		Actor.bDataOnly = false;
+		Actor.M7MaxLOD = 2;
+		Actor.M7MaxLeaves = 16;
+		Actor.M7HorizontalRadiusCm = 4000.0;
+		Actor.M7VerticalRadiusCm = 1000.0;
+		Actor.Initialize(Generator);
+		Actor.SetTestViewLocation(FVector(1600, 1600, 1600));
+		Stage = EStage::RefinementBudget;
+		return false;
+	}
+
+	bool CheckRefinementBudget()
+	{
+		if (!Actor.M7ClipmapError.IsEmpty() && !Actor.IsM7ReplacementPendingForTests())
+		{
+			Test.AddError(Actor.M7ClipmapError);
+			return Finish();
+		}
+		if (Actor.GetM7PublishedTicketForTests() == 0)
+		{
+			return false;
+		}
+
+		TArray<FVoxelLandChunkKey> Keys;
+		Actor.CopyM7PublishedKeysForTests(Keys);
+		Test.TestEqual(TEXT("Fallback covers the full requested box"), Keys.Num(), 9);
+		for (int32 Y = -1; Y <= 1; ++Y)
+		{
+			for (int32 X = -1; X <= 1; ++X)
+			{
+				const FVoxelLandChunkKey Key{FIntVector(X, Y, 0), 0};
+				Test.TestTrue(TEXT("Requested LOD0 chunk is covered"), Keys.Contains(Key));
+			}
+		}
+		Test.TestTrue(TEXT("Fallback terrain is visible on cold start"), CountVisibleRegions(World) > 0);
 		return Finish();
 	}
 

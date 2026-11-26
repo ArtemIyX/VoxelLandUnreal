@@ -343,35 +343,23 @@ FVoxelLandError MakeDraws(FM7RenderRevision& Revision, TMap<FVoxelLandChunkKey, 
 	}
 	return {};
 }
-}
 
-FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVoxelLandGenerator& Generator,
-	FVoxelLandWorkerContext& Worker, FVoxelLandMeshingScratch& Scratch, TFunctionRef<bool()> IsCancelled,
-	TSharedPtr<const FM7RenderRevision, ESPMode::ThreadSafe>& OutRevision)
+FVoxelLandError PrepareRevision(const FM7RenderRequest& Request, FVoxelLandMeshingScratch& Scratch,
+	FDrawPreparation& Work, FM7RenderRevision& Revision, bool& bCanReplan)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_BuildM7VisualRevision);
-	auto Revision = MakeShared<FM7RenderRevision, ESPMode::ThreadSafe>();
-	Revision->Appearance = Request.Appearance;
-	const FVoxelLandM7ClipmapLayout* Previous = Request.Previous ? &Request.Previous->Layout : nullptr;
-	if (IsCancelled())
-	{
-		return Cancelled();
-	}
-	if (!Generator.SupportsM7CompletedField() || Request.Settings.BaseVoxelSizeCm != Generator.GetProfile().VoxelSizeCm
-		|| !FVoxelLandM7Clipmap::Build(Request.Settings, Previous, Revision->Layout))
-	{
-		return Failed(TEXT("M7 clipmap demand exceeds the configured roots, precision or leaf budget"));
-	}
+	const FVoxelLandGenerator& Generator = Work.Generator;
+	FVoxelLandWorkerContext& Worker = Work.Worker;
+	const TFunctionRef<bool()> IsCancelled = Work.IsCancelled;
 	for (int32 Pass = 0; Pass < MaxRefinementPasses; ++Pass)
 	{
 		TSet<FVoxelLandChunkKey> Refine;
 		TSet<FVoxelLandChunkKey> Wanted;
-		Wanted.Reserve(Revision->Layout.Leaves.Num());
-		for (const FVoxelLandChunkKey& Key : Revision->Layout.Leaves)
+		Wanted.Reserve(Revision.Layout.Leaves.Num());
+		for (const FVoxelLandChunkKey& Key : Revision.Layout.Leaves)
 		{
 			Wanted.Add(Key);
 		}
-		for (auto Cursor = Revision->Sources.CreateIterator(); Cursor; ++Cursor)
+		for (FM7Sources::TIterator Cursor = Revision.Sources.CreateIterator(); Cursor; ++Cursor)
 		{
 			if (!Wanted.Contains(Cursor.Key()))
 			{
@@ -379,13 +367,13 @@ FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVo
 			}
 		}
 		int64 BuildBytes = 0;
-		for (const FVoxelLandChunkKey& Key : Revision->Layout.Leaves)
+		for (const FVoxelLandChunkKey& Key : Revision.Layout.Leaves)
 		{
 			if (IsCancelled())
 			{
 				return Cancelled();
 			}
-			FM7SourcePtr Source = Revision->Sources.FindRef(Key);
+			FM7SourcePtr Source = Revision.Sources.FindRef(Key);
 			if (!Source && Request.Previous)
 			{
 				Source = Request.Previous->Sources.FindRef(Key);
@@ -413,34 +401,25 @@ FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVo
 			{
 				return Failed(TEXT("M7 source CPU mesh budget exceeded"));
 			}
-			Revision->Sources.Add(Key, MoveTemp(Source));
+			Revision.Sources.Add(Key, MoveTemp(Source));
 		}
 
 		TMap<FVoxelLandChunkKey, FOverride> Overrides;
 		if (Refine.IsEmpty())
 		{
 			if (const FVoxelLandError Error = PrepareSeams(
-					Revision->Layout, Revision->Sources, Generator, Worker, IsCancelled, BuildBytes, Overrides, Refine))
+					Revision.Layout, Revision.Sources, Generator, Worker, IsCancelled, BuildBytes, Overrides, Refine))
 			{
 				return Error;
 			}
 		}
 		if (Refine.IsEmpty())
 		{
-			FDrawPreparation DrawWork{Generator, Worker, IsCancelled, BuildBytes};
-			if (const FVoxelLandError Error = MakeDraws(*Revision, Overrides, Request, DrawWork))
-			{
-				return Error;
-			}
-			if (IsCancelled())
-			{
-				return Cancelled();
-			}
-			OutRevision = Revision;
-			return {};
+			Work.RetainedBytes = BuildBytes;
+			return MakeDraws(Revision, Overrides, Request, Work);
 		}
 		TArray<FVoxelLandChunkKey> Ordered;
-		for (const FVoxelLandChunkKey& Key : Revision->Layout.Leaves)
+		for (const FVoxelLandChunkKey& Key : Revision.Layout.Leaves)
 		{
 			if (Refine.Contains(Key))
 			{
@@ -448,13 +427,82 @@ FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVo
 			}
 		}
 		FVoxelLandM7ClipmapLayout Finer;
-		if (!FVoxelLandM7Clipmap::Refine(Request.Settings, Revision->Layout, Ordered, Finer))
+		if (!FVoxelLandM7Clipmap::Refine(Revision.Layout.Settings, Revision.Layout, Ordered, Finer))
 		{
+			bCanReplan = true;
 			return Failed(TEXT("M7 source or seam coverage needs finer leaves beyond the balanced fallback budget"));
 		}
-		Revision->RefinedLeaves += Ordered.Num();
-		Revision->Layout = MoveTemp(Finer);
+		Revision.RefinedLeaves += Ordered.Num();
+		Revision.Layout = MoveTemp(Finer);
 	}
+	bCanReplan = true;
 	return Failed(TEXT("M7 balanced fallback exhausted the admitted refinement passes"));
+}
+}
+
+FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVoxelLandGenerator& Generator,
+	FVoxelLandWorkerContext& Worker, FVoxelLandMeshingScratch& Scratch, TFunctionRef<bool()> IsCancelled,
+	TSharedPtr<const FM7RenderRevision, ESPMode::ThreadSafe>& OutRevision)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_BuildM7VisualRevision);
+	if (!Generator.SupportsM7CompletedField() || Request.Settings.BaseVoxelSizeCm != Generator.GetProfile().VoxelSizeCm)
+	{
+		return Failed(TEXT("M7 clipmap requires a compatible completed field"));
+	}
+
+	FDrawPreparation Work{Generator, Worker, IsCancelled, 0};
+	FVoxelLandError InitialError;
+	const FVoxelLandM7ClipmapLayout* Previous = Request.Previous ? &Request.Previous->Layout : nullptr;
+	const int32 RequestedMaxLod = Request.Settings.MaxLod;
+	// Smaller roots reduce padding outside the view. If those layouts cannot fit,
+	// try the original roots with the full split budget reserved for required coverage.
+	for (int32 MaxLod = RequestedMaxLod; MaxLod >= -1; --MaxLod)
+	{
+		if (IsCancelled())
+		{
+			return Cancelled();
+		}
+
+		FVoxelLandM7ClipmapSettings Settings = Request.Settings;
+		const bool bReserveAllSplits = MaxLod < 0;
+		Settings.MaxLod = bReserveAllSplits ? Request.Settings.MaxLod : static_cast<uint8>(MaxLod);
+		if (bReserveAllSplits)
+		{
+			Settings.FallbackReserveLeaves = Settings.MaxLeaves;
+		}
+
+		TSharedRef<FM7RenderRevision, ESPMode::ThreadSafe> Revision =
+			MakeShared<FM7RenderRevision, ESPMode::ThreadSafe>();
+		Revision->Appearance = Request.Appearance;
+		if (!FVoxelLandM7Clipmap::Build(Settings, bReserveAllSplits ? nullptr : Previous, Revision->Layout))
+		{
+			if (MaxLod == RequestedMaxLod)
+			{
+				return Failed(TEXT("M7 clipmap demand exceeds the configured roots, precision or leaf budget"));
+			}
+			continue;
+		}
+
+		bool bCanReplan = false;
+		const FVoxelLandError Error = PrepareRevision(Request, Scratch, Work, *Revision, bCanReplan);
+		if (IsCancelled() || Error.Code == EVoxelLandErrorCode::Cancelled)
+		{
+			return Cancelled();
+		}
+		if (!Error)
+		{
+			OutRevision = Revision;
+			return {};
+		}
+		if (MaxLod == RequestedMaxLod)
+		{
+			if (!bCanReplan || MaxLod == 0)
+			{
+				return Error;
+			}
+			InitialError = Error;
+		}
+	}
+	return InitialError;
 }
 }

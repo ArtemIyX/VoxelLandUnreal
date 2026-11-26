@@ -2,8 +2,10 @@
 #include "Rendering/Materials/VoxelLandTerrainMaterial.h"
 #include "DynamicMeshBuilder.h"
 #include "Engine/CollisionProfile.h"
+#include "Engine/Engine.h"
 #include "LocalVertexFactory.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialRenderProxy.h"
 #include "PrimitiveSceneProxy.h"
 #include "PrimitiveViewRelevance.h"
 #include "RHIResourceUtils.h"
@@ -124,6 +126,16 @@ public:
 		virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily,
 			uint32 VisibilityMap, FMeshElementCollector& Collector) const override
 		{
+			const bool bWireframe =
+				AllowDebugViewmodes() && ViewFamily.EngineShowFlags.Wireframe && GEngine && GEngine->WireframeMaterial;
+			const FMaterialRenderProxy* DrawMaterial = MaterialProxy;
+			if (bWireframe)
+			{
+				FColoredMaterialRenderProxy* WireframeProxy = new FColoredMaterialRenderProxy(
+					GEngine->WireframeMaterial->GetRenderProxy(), FLinearColor(0.0f, 0.5f, 1.0f));
+				Collector.RegisterOneFrameMaterialProxy(WireframeProxy);
+				DrawMaterial = WireframeProxy;
+			}
 			for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 			{
 				if (!(VisibilityMap & (1u << ViewIndex)))
@@ -132,11 +144,12 @@ public:
 				}
 				FMeshBatch& Batch = Collector.AllocateMesh();
 				Batch.VertexFactory = &Factory;
-				Batch.MaterialRenderProxy = MaterialProxy;
+				Batch.MaterialRenderProxy = DrawMaterial;
+				Batch.bWireframe = bWireframe;
 				// Surface Nets triangles follow the outward density gradient. Unreal's
 				// rasterizer front-face convention requires the opposite cull mode.
 				Batch.ReverseCulling = !IsLocalToWorldDeterminantNegative();
-				Batch.CastShadow = IsShadowCast(Views[ViewIndex]);
+				Batch.CastShadow = !bWireframe && IsShadowCast(Views[ViewIndex]);
 				Batch.Type = PT_TriangleList;
 				Batch.DepthPriorityGroup = SDPG_World;
 				FMeshBatchElement& Element = Batch.Elements[0];

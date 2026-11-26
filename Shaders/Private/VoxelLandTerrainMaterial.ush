@@ -3,6 +3,13 @@
 
 #include "/Engine/Private/DoubleFloat.ush"
 
+// FXC cannot dynamically index the material parameter arrays inside a rolled loop.
+#if COMPILER_FXC
+	#define VOXELLAND_LAYER_LOOP UNROLL
+#else
+	#define VOXELLAND_LAYER_LOOP LOOP
+#endif
+
 struct FVoxelLandMaterialAxes
 {
 	uint2 Indices;
@@ -77,10 +84,9 @@ float3 VoxelLandUnpackProjectionNormal(float2 Encoded, uint Axis, float Sign, fl
 {
 	const float2 XY = Encoded * 2.0 - 1.0;
 	const float Z = sqrt(saturate(1.0 - dot(XY, XY)));
-	float3 Perturbation = 0.0;
-	const uint U = VoxelLandNextAxis(Axis);
-	Perturbation[U] = XY.x;
-	Perturbation[VoxelLandNextAxis(U)] = XY.y * Sign;
+	const float SignedY = XY.y * Sign;
+	float3 Perturbation = Axis == 0 ? float3(0.0, XY.x, SignedY)
+		: Axis == 1 ? float3(SignedY, 0.0, XY.x) : float3(XY.x, SignedY, 0.0);
 	// Project the perturbation onto the terrain tangent plane. A flat texture keeps the geometric normal.
 	Perturbation -= dot(Perturbation, SurfaceNormal) * SurfaceNormal;
 	return SurfaceNormal * Z + Perturbation;
@@ -211,12 +217,13 @@ float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSample
 	if (Distance >= FarDistanceCm)
 	{
 		float3 Color = 0.0;
-		[loop]
+		VOXELLAND_LAYER_LOOP
 		for (uint LayerIndex = 0; LayerIndex < 2; ++LayerIndex)
 		{
+			BRANCH
 			if (FarWeights[LayerIndex] <= 0.0)
 			{
-				break;
+				continue;
 			}
 			const uint Slot = Slots[LayerIndex];
 			const float Period = VoxelLandSlotPeriod(PackedPeriods, Slot);
@@ -238,13 +245,14 @@ float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSample
 	float3 ORMSum = 0.0;
 	float3 FarColor = 0.0;
 	float HeightWeightSum = 0.0;
-	[loop]
+	VOXELLAND_LAYER_LOOP
 	for (uint LayerIndex = 0; LayerIndex < 3; ++LayerIndex)
 	{
 		const float Weight = NearWeights[LayerIndex];
+		BRANCH
 		if (Weight <= 0.0)
 		{
-			break;
+			continue;
 		}
 		const uint Slot = Slots[LayerIndex];
 		const float Period = VoxelLandSlotPeriod(PackedPeriods, Slot);

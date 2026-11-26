@@ -7,6 +7,7 @@
 #include "Data/Assets/Materials/VoxelLandSurfaceMaterial.h"
 #include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "Materials/VoxelLandMaterialPaletteBaker.h"
+#include "Rendering/Materials/VoxelLandTerrainMaterial.h"
 #include "Engine/Texture2D.h"
 #include "HAL/PlatformProcess.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -69,6 +70,7 @@ bool FVoxelLandTerrainPalettePreviewTest::RunTest(const FString& Parameters)
 	Rule.Input = EVoxelLandMaterialRuleInput::ElevationCm;
 	Rule.BlendWidth = 1000.0;
 	Config->MaterialSetup = Setup.Get();
+	Config->TerrainAmbientOcclusionStrength = 0.75f;
 	Config->HorizontalRadius = 1;
 	Config->VerticalRadius = 1;
 
@@ -84,8 +86,13 @@ bool FVoxelLandTerrainPalettePreviewTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(*Toolkit->GetStatusForTests(), Toolkit->GetPreviewPublishCountForTests(), 1);
 	TestTrue(TEXT("Terrain published the resolved mesh appearance"), Toolkit->HasPublishedAppearanceForTests());
-	TestNotNull(TEXT("Terrain bound its palette material instance"),
-		Cast<UMaterialInstanceDynamic>(Toolkit->GetEffectiveMaterialForTests()));
+	UMaterialInstanceDynamic* const Material = Cast<UMaterialInstanceDynamic>(Toolkit->GetEffectiveMaterialForTests());
+	if (TestNotNull(TEXT("Terrain bound its palette material instance"), Material))
+	{
+		TestEqual(TEXT("Terrain preview uses the selected World Config AO strength"),
+			Material->K2_GetScalarParameterValue(FVoxelLandTerrainMaterial::AmbientOcclusionStrengthParameter),
+			Config->TerrainAmbientOcclusionStrength);
+	}
 	TestTrue(TEXT("Terrain produced visible geometry"), Toolkit->GetPreviewBoundsForTests().IsValid != 0);
 
 	const TStrongObjectPtr<UMaterialInterface> FirstMaterial(Toolkit->GetEffectiveMaterialForTests());

@@ -3447,7 +3447,8 @@ void FVoxelLandGraphToolkit::ApplyMaterialSetup(bool bRestartPreview)
 void FVoxelLandGraphToolkit::RefreshTerrainMaterial(
 	const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bRestartPreview)
 {
-	if (PreviewSettings && !PreviewSettings->MaterialGraph.IsNull())
+	const UVoxelLandWorldConfig* Config = bM4Preview && M4PreviewConfig ? M4PreviewConfig.Get() : PreviewSettings.Get();
+	if (Config && !Config->MaterialGraph.IsNull())
 	{
 		if (bRestartPreview)
 		{
@@ -3477,8 +3478,8 @@ void FVoxelLandGraphToolkit::RefreshTerrainMaterial(
 		return;
 	}
 	const FVoxelLandTerrainPresentation Presentation =
-		PreviewSettings && PreviewSettings->MaterialSetup == Path
-			? FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), *PreviewSettings)
+		Config && Config->MaterialSetup == Path
+			? FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), *Config)
 			: FVoxelLandTerrainPresentationResolver::Resolve(GetTransientPackage(), Path);
 	if (bStopped || bPIE || bReloadPaused || PreviewRevision != PreviewTicket || Revision != GraphRevision)
 	{

@@ -42,8 +42,12 @@ public:
 	void SetTerrainMaterial(UMaterialInterface* Material);
 	bool IsEmpty() const { return Components.IsEmpty() && CurtainComponents.IsEmpty(); }
 	bool IsChunkEffectivelyVisible(const FIntVector& Key) const;
+	void BeginHeightClipmapStaging();
+	TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> SetHeightClipmapVisible(bool bVisible);
 
 private:
+	TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> HeightClipmapVisibility;
+	bool bHeightClipmapVisible = true;
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;
 	UPROPERTY()
@@ -133,6 +137,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "VoxelLand|Data")
 	bool GetDataChunkError(FIntVector Coordinate, FString& OutError) const;
 	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> FindChunk(const FVoxelLandChunkKey& Key) const;
+	// A planar height clipmap uses Z=0 for the visibility of each XY terrain region.
 	void SetRegionHidden(FIntVector Region, bool bRegionHidden);
 	void SetTerrainMaterial(UMaterialInterface* Material);
 	[[nodiscard]] bool SetMaterialWorldSignals(

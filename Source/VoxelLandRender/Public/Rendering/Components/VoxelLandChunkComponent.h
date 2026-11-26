@@ -2,6 +2,7 @@
 #include "CoreMinimal.h"
 #include "Components/PrimitiveComponent.h"
 #include "Data/Meshing/VoxelLandMeshData.h"
+#include "Templates/Atomic.h"
 #include "VoxelLandChunkComponent.generated.h"
 
 #if WITH_EDITOR
@@ -16,6 +17,10 @@ public:
 	UVoxelLandChunkComponent();
 	// Must be called on the game thread. Invalid payloads leave the previous mesh intact.
 	bool SetMesh(TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> InMesh);
+	// Set before registration. A render-thread batch can change the state without rebuilding the proxy.
+	void SetClipmapVisibilityState(TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> State);
+	static void CommitClipmapVisibility(TArray<TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>> Show,
+		TArray<TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>> Hide);
 #if WITH_EDITOR
 	void SetPreviewUploadObservation(TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> InObservation);
 #endif
@@ -35,6 +40,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> TerrainMaterial;
 	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh;
+	TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> ClipmapVisibilityState;
 #if WITH_EDITOR
 	TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> PreviewUploadObservation;
 #endif

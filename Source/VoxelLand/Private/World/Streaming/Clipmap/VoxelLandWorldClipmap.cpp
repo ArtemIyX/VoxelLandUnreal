@@ -8,6 +8,9 @@
 #include "HAL/Event.h"
 #include "Misc/ScopeLock.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
+#if !UE_SERVER
+#include "Rendering/Components/VoxelLandChunkComponent.h"
+#endif
 
 using namespace VoxelLandWorldPrivate;
 
@@ -351,7 +354,14 @@ void AVoxelLandWorld::AdvanceM7Publication()
 				DiscardM7Staging();
 				return;
 			}
-			Region->SetActorHiddenInGame(true);
+			if (Revision->bHeightSurface)
+			{
+				Region->BeginHeightClipmapStaging();
+			}
+			else
+			{
+				Region->SetActorHiddenInGame(true);
+			}
 			Visual->StagedRegions.Add(RegionKey, Region);
 		}
 		const bool bTerrainReady =
@@ -423,6 +433,8 @@ void AVoxelLandWorld::AdvanceM7Publication()
 	M7PublishedLeafCount = Revision->Layout.Leaves.Num();
 	M7FallbackRefinements = Revision->RefinedLeaves;
 	M7ClipmapError.Reset();
+	TArray<TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>> Show;
+	TArray<TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>> Hide;
 	for (const TPair<FVoxelLandChunkKey, TWeakObjectPtr<AVoxelLandRegion>>& Pair : Visual->Regions)
 	{
 		if (!Visual->ReusableStagedRegions.Contains(Pair.Key))
@@ -430,7 +442,18 @@ void AVoxelLandWorld::AdvanceM7Publication()
 			AVoxelLandRegion* Region = Pair.Value.Get();
 			Regions.Add(Region);
 			Region->SetTerrainMaterial(TerrainMaterial);
-			Region->SetActorHiddenInGame(State->HiddenRegions.Contains(Pair.Key.Coordinate));
+			const bool bVisible = !State->HiddenRegions.Contains(Pair.Key.Coordinate);
+			if (TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> Visibility = Region->SetHeightClipmapVisible(bVisible))
+			{
+				if (bVisible)
+				{
+					Show.Add(MoveTemp(Visibility));
+				}
+			}
+			else
+			{
+				Region->SetActorHiddenInGame(!bVisible);
+			}
 		}
 	}
 	Visual->ReusableStagedRegions.Reset();
@@ -439,7 +462,14 @@ void AVoxelLandWorld::AdvanceM7Publication()
 		if (AVoxelLandRegion* Region = Pair.Value.Get())
 		{
 			Regions.Remove(Region);
-			Region->SetActorHiddenInGame(true);
+			if (TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> Visibility = Region->SetHeightClipmapVisible(false))
+			{
+				Hide.Add(MoveTemp(Visibility));
+			}
+			else
+			{
+				Region->SetActorHiddenInGame(true);
+			}
 			Visual->RetiredRegions.Add(Pair.Value);
 		}
 	}
@@ -465,5 +495,8 @@ void AVoxelLandWorld::CopyM7PublishedKeysForTests(TArray<FVoxelLandChunkKey>& Ou
 	{
 		Out = Visual->Published->Layout.Leaves;
 	}
+#if !UE_SERVER
+	UVoxelLandChunkComponent::CommitClipmapVisibility(MoveTemp(Show), MoveTemp(Hide));
+#endif
 }
 #endif

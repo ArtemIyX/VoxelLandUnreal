@@ -8,6 +8,7 @@
 #include "Materials/MaterialRenderProxy.h"
 #include "PrimitiveSceneProxy.h"
 #include "PrimitiveViewRelevance.h"
+#include "RenderingThread.h"
 #include "RHIResourceUtils.h"
 #include "SceneManagement.h"
 #include "StaticMeshResources.h"
@@ -35,7 +36,8 @@ public:
 	{
 	public:
 		FVoxelLandChunkProxy(
-			UVoxelLandChunkComponent* Component, TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> InMesh
+			UVoxelLandChunkComponent* Component, TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> InMesh,
+			TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> InClipmapVisibilityState
 #if WITH_EDITOR
 			,
 			TSharedPtr<FVoxelLandPreviewUploadObservation, ESPMode::ThreadSafe> InObservation
@@ -43,6 +45,7 @@ public:
 			)
 			: FPrimitiveSceneProxy(Component)
 			, Mesh(MoveTemp(InMesh))
+			, ClipmapVisibilityState(MoveTemp(InClipmapVisibilityState))
 			, Factory(GetScene().GetFeatureLevel(), "VoxelLandChunk")
 #if WITH_EDITOR
 			, UploadObservation(MoveTemp(InObservation))
@@ -126,6 +129,10 @@ public:
 		virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily,
 			uint32 VisibilityMap, FMeshElementCollector& Collector) const override
 		{
+			if (!IsClipmapVisible())
+			{
+				return;
+			}
 			const bool bWireframe =
 				AllowDebugViewmodes() && ViewFamily.EngineShowFlags.Wireframe && GEngine && GEngine->WireframeMaterial;
 			const FMaterialRenderProxy* DrawMaterial = MaterialProxy;
@@ -166,6 +173,10 @@ public:
 		virtual FPrimitiveViewRelevance GetViewRelevance(const FSceneView* View) const override
 		{
 			FPrimitiveViewRelevance Result;
+			if (!IsClipmapVisible())
+			{
+				return Result;
+			}
 			Result.bDrawRelevance = IsShown(View);
 			Result.bDynamicRelevance = true;
 			Result.bShadowRelevance = IsShadowCast(View);
@@ -185,7 +196,10 @@ public:
 		virtual uint32 GetMemoryFootprint() const override { return sizeof(*this) + GetAllocatedSize(); }
 
 	private:
+		bool IsClipmapVisible() const { return !ClipmapVisibilityState || ClipmapVisibilityState->Load(); }
+
 		TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh;
+		TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> ClipmapVisibilityState;
 		FStaticMeshVertexBuffers Buffers;
 		FVoxelLandIndexBuffer IndexBuffer;
 		FLocalVertexFactory Factory;
@@ -235,6 +249,36 @@ bool UVoxelLandChunkComponent::SetMesh(TSharedPtr<const FVoxelLandMeshData, ESPM
 	return true;
 }
 
+void UVoxelLandChunkComponent::SetClipmapVisibilityState(TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> State)
+{
+	check(IsInGameThread() && !IsRegistered());
+	ClipmapVisibilityState = MoveTemp(State);
+}
+
+void UVoxelLandChunkComponent::CommitClipmapVisibility(TArray<TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>> Show,
+	TArray<TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>> Hide)
+{
+	check(IsInGameThread());
+	if (Show.IsEmpty() && Hide.IsEmpty())
+	{
+		return;
+	}
+	ENQUEUE_RENDER_COMMAND(VoxelLandCommitClipmapVisibility)
+	([Show = MoveTemp(Show), Hide = MoveTemp(Hide)](FRHICommandListImmediate&) {
+		TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_CommitClipmapVisibility);
+		for (const TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>& State : Hide)
+		{
+			check(State.IsValid());
+			State->Store(false);
+		}
+		for (const TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>& State : Show)
+		{
+			check(State.IsValid());
+			State->Store(true);
+		}
+	});
+}
+
 void UVoxelLandChunkComponent::ClearMesh()
 {
 	check(IsInGameThread());
@@ -249,7 +293,7 @@ FPrimitiveSceneProxy* UVoxelLandChunkComponent::CreateSceneProxy()
 	{
 		return nullptr;
 	}
-	return new FVoxelLandChunkComponentInternals::FVoxelLandChunkProxy(this, Mesh
+	return new FVoxelLandChunkComponentInternals::FVoxelLandChunkProxy(this, Mesh, ClipmapVisibilityState
 #if WITH_EDITOR
 		,
 		MoveTemp(PreviewUploadObservation)

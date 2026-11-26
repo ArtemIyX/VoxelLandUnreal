@@ -210,6 +210,22 @@ AVoxelLandRegion::AVoxelLandRegion()
 	SetActorEnableCollision(false);
 	PrimaryActorTick.bCanEverTick = false;
 }
+void AVoxelLandRegion::BeginHeightClipmapStaging()
+{
+	check(Components.IsEmpty() && CurtainComponents.IsEmpty());
+	HeightClipmapVisibility = MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+	bHeightClipmapVisible = false;
+}
+
+TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> AVoxelLandRegion::SetHeightClipmapVisible(const bool bVisible)
+{
+	if (HeightClipmapVisibility)
+	{
+		bHeightClipmapVisible = bVisible;
+	}
+	return HeightClipmapVisibility;
+}
+
 #if !UE_SERVER
 bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 	TSharedPtr<const FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh, UMaterialInterface* Material, bool bCurtain)
@@ -233,6 +249,10 @@ bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 		Slot = Component;
 		AddInstanceComponent(Component);
 		Component->SetupAttachment(Root);
+		if (HeightClipmapVisibility)
+		{
+			Component->SetClipmapVisibilityState(HeightClipmapVisibility);
+		}
 		Component->RegisterComponent();
 	}
 	// Unreal moves registered actors/components on an origin shift. New meshes
@@ -272,7 +292,8 @@ void AVoxelLandRegion::Remove(const FIntVector& Key)
 bool AVoxelLandRegion::IsChunkEffectivelyVisible(const FIntVector& Key) const
 {
 	const TObjectPtr<UPrimitiveComponent>* Component = Components.Find(Key);
-	return !IsHidden() && Component && *Component && (*Component)->IsRegistered() && (*Component)->IsVisible();
+	return bHeightClipmapVisible && !IsHidden() && Component && *Component && (*Component)->IsRegistered()
+		&& (*Component)->IsVisible();
 }
 
 void AVoxelLandRegion::SetTerrainMaterial(UMaterialInterface* Material)
@@ -751,16 +772,35 @@ void AVoxelLandWorld::SetRegionHidden(FIntVector Region, bool bRegionHidden)
 			Found->Get()->SetActorHiddenInGame(bRegionHidden);
 		}
 	}
+#if !UE_SERVER
 	if (State->M7Visual)
 	{
-		for (const auto& Pair : State->M7Visual->Regions)
+		TArray<TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe>> Changed;
+		for (const TPair<FVoxelLandChunkKey, TWeakObjectPtr<AVoxelLandRegion>>& Pair : State->M7Visual->Regions)
 		{
 			if (Pair.Key.Coordinate == Region && Pair.Value.IsValid())
 			{
-				Pair.Value->SetActorHiddenInGame(bRegionHidden);
+				if (TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> Visibility =
+						Pair.Value->SetHeightClipmapVisible(!bRegionHidden))
+				{
+					Changed.Add(MoveTemp(Visibility));
+				}
+				else
+				{
+					Pair.Value->SetActorHiddenInGame(bRegionHidden);
+				}
 			}
 		}
+		if (bRegionHidden)
+		{
+			UVoxelLandChunkComponent::CommitClipmapVisibility({}, MoveTemp(Changed));
+		}
+		else
+		{
+			UVoxelLandChunkComponent::CommitClipmapVisibility(MoveTemp(Changed), {});
+		}
 	}
+#endif
 }
 
 void AVoxelLandWorld::SetTerrainMaterial(UMaterialInterface* Material)

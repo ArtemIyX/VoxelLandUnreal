@@ -14,6 +14,7 @@
 #include "Data/World/Streaming/VoxelLandReloadTestBarrier.h"
 #endif
 #include "Data/Assets/Materials/VoxelLandMaterialSetup.h"
+#include "Data/World/Presentation/VoxelLandTerrainPresentation.h"
 #include "Data/Assets/Worlds/VoxelLandFiniteWorld.h"
 #include "Data/World/Configuration/VoxelLandFiniteWorldSnapshot.h"
 #include "Data/World/Configuration/VoxelLandWorldSourceSnapshot.h"
@@ -54,7 +55,8 @@
 #include "UObject/PackageReload.h"
 #endif
 #if !UE_SERVER
-#include "Materials/Material.h"
+#include "Rendering/Materials/VoxelLandTerrainPresentationResolver.h"
+#include "Misc/App.h"
 #include "Materials/MaterialInterface.h"
 #endif
 
@@ -119,7 +121,7 @@ public:
 	public:
 		virtual ~FInitializationRequest() = default;
 		virtual bool IsCurrent() const = 0;
-		virtual TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld&) const { return {}; }
+		virtual TOptional<TSoftObjectPtr<UVoxelLandMaterialSetup>> GetPresentationSetup() const { return {}; }
 		virtual void ApplyDemand(AVoxelLandWorld&) const = 0;
 		virtual TOptional<FVoxelLandChunkKey> GetStartup() const { return {}; }
 #if WITH_EDITOR
@@ -180,18 +182,12 @@ public:
 			World.VerticalRadius = VerticalRadius;
 		}
 
-		TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld& World) const override
+		TOptional<TSoftObjectPtr<UVoxelLandMaterialSetup>> GetPresentationSetup() const override
 		{
-#if !UE_SERVER
-			if (!World.bDataOnly && World.GetNetMode() != NM_DedicatedServer)
+			if (const UVoxelLandWorldConfig* Settings = WeakSettings.Get())
 			{
-				TStrongObjectPtr<UVoxelLandWorldConfig> Settings(WeakSettings.Get());
-				if (Settings.IsValid())
-				{
-					return TWeakObjectPtr<UMaterialInterface>(ResolveTerrainMaterial(*Settings));
-				}
+				return Settings->MaterialSetup;
 			}
-#endif
 			return {};
 		}
 
@@ -617,23 +613,16 @@ public:
 			return Key;
 		}
 
-		TOptional<TWeakObjectPtr<UMaterialInterface>> ResolvePresentation(AVoxelLandWorld& World) const override
+		TOptional<TSoftObjectPtr<UVoxelLandMaterialSetup>> GetPresentationSetup() const override
 		{
-#if !UE_SERVER
-			if (!World.bDataOnly && World.GetNetMode() != NM_DedicatedServer)
+			if (const UVoxelLandFiniteWorldSource* Definition = WeakDefinition.Get())
 			{
-				TStrongObjectPtr<UVoxelLandFiniteWorldSource> Definition(WeakDefinition.Get());
-				if (Definition.IsValid())
-				{
-					return TWeakObjectPtr<UMaterialInterface>(ResolveDefinitionTerrainMaterial(*Definition));
-				}
-				TStrongObjectPtr<UVoxelLandWorldConfig> Config(WeakConfig.Get());
-				if (Config.IsValid())
-				{
-					return TWeakObjectPtr<UMaterialInterface>(ResolveM4TerrainMaterial(*Config));
-				}
+				return Definition->Common.MaterialSetup;
 			}
-#endif
+			if (const UVoxelLandWorldConfig* Config = WeakConfig.Get())
+			{
+				return Config->MaterialSetup;
+			}
 			return {};
 		}
 
@@ -795,53 +784,6 @@ public:
 		TOptional<FVoxelLandM6WorldOverlay> Overlay;
 	};
 
-#if !UE_SERVER
-	static UMaterialInterface* ResolveTerrainMaterial(const UVoxelLandWorldConfig& Settings)
-	{
-		const UVoxelLandMaterialSetup* Setup = Settings.MaterialSetup.LoadSynchronous();
-		const TSoftObjectPtr<UMaterialInterface> MaterialPath =
-			Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
-		UMaterialInterface* Material = MaterialPath.LoadSynchronous();
-		if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
-		{
-			UE_LOG(LogTemp, Warning,
-				TEXT("VoxelLand: missing or unsupported terrain material; using the default surface material"));
-			return UMaterial::GetDefaultMaterial(MD_Surface);
-		}
-		return Material;
-	}
-
-	static UMaterialInterface* ResolveDefinitionTerrainMaterial(const UVoxelLandFiniteWorldSource& Definition)
-	{
-		const UVoxelLandMaterialSetup* Setup = Definition.Common.MaterialSetup.LoadSynchronous();
-		const TSoftObjectPtr<UMaterialInterface> MaterialPath =
-			Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
-		UMaterialInterface* Material = MaterialPath.LoadSynchronous();
-		if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
-		{
-			UE_LOG(LogTemp, Warning,
-				TEXT("VoxelLand: missing or unsupported terrain material; using the default surface material"));
-			return UMaterial::GetDefaultMaterial(MD_Surface);
-		}
-		return Material;
-	}
-
-	static UMaterialInterface* ResolveM4TerrainMaterial(const UVoxelLandWorldConfig& Settings)
-	{
-		const UVoxelLandMaterialSetup* Setup = Settings.MaterialSetup.LoadSynchronous();
-		// Copy the path before a second synchronous load can dispatch callbacks or GC.
-		const TSoftObjectPtr<UMaterialInterface> MaterialPath =
-			Setup && Setup->FormatVersion == 1 ? Setup->Material : TSoftObjectPtr<UMaterialInterface>();
-		UMaterialInterface* Material = MaterialPath.LoadSynchronous();
-		if (!Material || !Material->GetMaterial() || Material->GetMaterial()->MaterialDomain != MD_Surface)
-		{
-			UE_LOG(LogTemp, Warning,
-				TEXT("VoxelLand: missing or unsupported terrain material; using the default surface material"));
-			return UMaterial::GetDefaultMaterial(MD_Surface);
-		}
-		return Material;
-	}
-#endif
 };
 
 void VoxelLandM4Preparation::StartCoordinator()
@@ -1869,7 +1811,18 @@ void AVoxelLandWorld::PollInitialization()
 		return;
 	}
 	const uint64 PresentationEpoch = ConfigurationEpoch;
-	const TOptional<TWeakObjectPtr<UMaterialInterface>> Presentation = Job->Request->ResolvePresentation(*this);
+	TOptional<FVoxelLandTerrainPresentation> Presentation;
+#if !UE_SERVER
+	TOptional<TSoftObjectPtr<UVoxelLandMaterialSetup>> PresentationSetup;
+	if (!bDataOnly && GetNetMode() != NM_DedicatedServer && FApp::CanEverRender())
+	{
+		PresentationSetup = Job->Request->GetPresentationSetup();
+		if (PresentationSetup.IsSet())
+		{
+			Presentation.Emplace(FVoxelLandTerrainPresentationResolver::Resolve(this, PresentationSetup.GetValue()));
+		}
+	}
+#endif
 #if WITH_DEV_AUTOMATION_TESTS
 	if (PresentationHookForTests)
 	{
@@ -1890,16 +1843,37 @@ void AVoxelLandWorld::PollInitialization()
 	{
 		return;
 	}
-	if (!bStillCurrent)
+	bool bPresentationCurrent = true;
+#if !UE_SERVER
+	if (PresentationSetup.IsSet())
+	{
+		bPresentationCurrent =
+			PresentationSetup == Job->Request->GetPresentationSetup()
+			&& Presentation->SourceIdentity
+				   == FVoxelLandTerrainPresentationResolver::CaptureIdentity(PresentationSetup.GetValue());
+	}
+#endif
+	if (!bStillCurrent || !bPresentationCurrent)
 	{
 		LastInitializationError = TEXT("Initialization result was superseded during presentation setup");
 		SetActorTickEnabled(State.IsValid());
 		OnInitializationFinished.Broadcast(false);
 		return;
 	}
+	if (Presentation.IsSet() && Presentation->bHasConfiguredPalette && !Presentation->Appearance && State
+		&& State->Appearance)
+	{
+		LastInitializationError = Presentation->Diagnostic;
+		SetActorTickEnabled(true);
+		OnInitializationFinished.Broadcast(false);
+		return;
+	}
 	const TOptional<FVoxelLandChunkKey> Startup = Job->Request->GetStartup();
 	const uint64 StartupEpoch = ConfigurationEpoch;
-	if (!TryInitialize(Job->Generator, Startup.IsSet() ? &Startup.GetValue() : nullptr, MoveTemp(Job->M6Identity)))
+	const TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance =
+		Presentation.IsSet() ? Presentation->Appearance : nullptr;
+	if (!TryInitialize(
+			Job->Generator, Startup.IsSet() ? &Startup.GetValue() : nullptr, MoveTemp(Job->M6Identity), Appearance))
 	{
 		if (ConfigurationEpoch != StartupEpoch || bLifecycleEnded || IsActorBeingDestroyed() || !GetWorld()
 			|| GetWorld()->bIsTearingDown)
@@ -1912,7 +1886,11 @@ void AVoxelLandWorld::PollInitialization()
 	Job->Request->ApplyDemand(*this);
 	if (Presentation.IsSet())
 	{
-		SetTerrainMaterial(Presentation->Get());
+		SetTerrainMaterial(Presentation->Material.Get());
+		if (!Presentation->Diagnostic.IsEmpty())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("VoxelLand: %s"), *Presentation->Diagnostic);
+		}
 	}
 	LastInitializationError.Reset();
 	OnInitializationFinished.Broadcast(true);

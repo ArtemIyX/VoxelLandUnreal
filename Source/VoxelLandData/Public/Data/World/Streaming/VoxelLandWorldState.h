@@ -7,6 +7,7 @@
 class AVoxelLandRegion;
 class FRunnableThread;
 class FVoxelLandGenerator;
+struct FVoxelLandMaterialAppearance;
 namespace VoxelLandWorldPrivate
 {
 class FWorker;
@@ -21,6 +22,7 @@ struct FVoxelLandWorldState
 	int32 Active = 0;
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 	TArray<uint8> M6Identity;
+	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance;
 	TSharedRef<VoxelLandWorldPrivate::FSharedWork, ESPMode::ThreadSafe> Work =
 		MakeShared<VoxelLandWorldPrivate::FSharedWork, ESPMode::ThreadSafe>();
 	TArray<TUniquePtr<VoxelLandWorldPrivate::FWorker>> Workers;

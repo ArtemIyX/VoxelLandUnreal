@@ -7,6 +7,7 @@
 #include "Data/World/Streaming/VoxelLandTestBarrier.h"
 #endif
 class FVoxelLandGenerator;
+struct FVoxelLandMaterialAppearance;
 
 namespace VoxelLandWorldPrivate
 {
@@ -19,6 +20,7 @@ struct FJob
 	TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator;
 	TSharedPtr<FCancel, ESPMode::ThreadSafe> Cancel;
 	TSharedPtr<const FM7RenderRequest, ESPMode::ThreadSafe> M7Visual;
+	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance;
 	bool bRender = false;
 #if WITH_DEV_AUTOMATION_TESTS
 	TSharedPtr<FVoxelLandTestBarrier, ESPMode::ThreadSafe> Barrier;

@@ -5,6 +5,7 @@
 #include "Generation/Clipmap/Seams/VoxelLandSeamNormalFrames.h"
 #include "Generation/Clipmap/Seams/VoxelLandVerticalTerrainSeams.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
+#include "Generation/Meshing/VoxelLandMaterialMeshing.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace VoxelLandWorldPrivate
@@ -44,7 +45,8 @@ FVoxelLandError Cancelled()
 
 int64 MeshBytes(const FVoxelLandMeshData& Mesh)
 {
-	return int64(Mesh.Vertices.GetAllocatedSize()) + int64(Mesh.Indices.GetAllocatedSize());
+	return int64(Mesh.Vertices.GetAllocatedSize()) + int64(Mesh.Indices.GetAllocatedSize())
+		 + int64(Mesh.MaterialBlend.GetAllocatedSize());
 }
 
 int64 SourceBytes(const FVoxelLandM7SeamMesh& Mesh)
@@ -252,14 +254,36 @@ FVoxelLandError PrepareSeams(const FVoxelLandM7ClipmapLayout& Layout, const FM7S
 	return {};
 }
 
-bool MakeDraws(
-	FM7RenderRevision& Revision, TMap<FVoxelLandChunkKey, FOverride>& Overrides, TFunctionRef<bool()> IsCancelled)
+bool PackDrawMesh(FM7MeshPtr& Mesh, const FVoxelLandMaterialAppearance& Appearance, const FVector3d& Origin,
+	int64& RetainedBytes, TFunctionRef<bool()> IsCancelled)
+{
+	if (!Mesh)
+	{
+		return true;
+	}
+	TSharedPtr<FVoxelLandMeshData, ESPMode::ThreadSafe> Packed =
+		MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>(*Mesh);
+	if (!FVoxelLandMaterialMeshing::Pack(*Packed, Appearance, Origin, IsCancelled))
+	{
+		return false;
+	}
+	RetainedBytes += MeshBytes(*Packed);
+	if (RetainedBytes > MaxRevisionMeshBytes)
+	{
+		return false;
+	}
+	Mesh = MoveTemp(Packed);
+	return true;
+}
+
+FVoxelLandError MakeDraws(FM7RenderRevision& Revision, TMap<FVoxelLandChunkKey, FOverride>& Overrides,
+	const FM7RenderRequest& Request, int64 RetainedBytes, TFunctionRef<bool()> IsCancelled)
 {
 	for (const FVoxelLandChunkKey& Key : Revision.Layout.Leaves)
 	{
 		if (IsCancelled())
 		{
-			return false;
+			return Cancelled();
 		}
 		const FM7SourcePtr& Source = Revision.Sources.FindChecked(Key);
 		FM7Draw Draw;
@@ -284,12 +308,19 @@ bool MakeDraws(
 		{
 			Draw.Terrain = FM7MeshPtr(Source, &Source->Terrain);
 		}
+		if (Request.Appearance
+			&& (!PackDrawMesh(Draw.Terrain, *Request.Appearance, Draw.LogicalOrigin, RetainedBytes, IsCancelled)
+				|| !PackDrawMesh(Draw.Curtain, *Request.Appearance, Draw.LogicalOrigin, RetainedBytes, IsCancelled)))
+		{
+			return IsCancelled() ? Cancelled()
+								 : Failed(TEXT("Terrain material packing failed or exceeded the clipmap mesh budget."));
+		}
 		if (Draw.Terrain || Draw.Curtain)
 		{
 			Revision.Draws.Add(MoveTemp(Draw));
 		}
 	}
-	return true;
+	return {};
 }
 }
 
@@ -374,7 +405,11 @@ FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVo
 		}
 		if (Refine.IsEmpty())
 		{
-			if (!MakeDraws(*Revision, Overrides, IsCancelled) || IsCancelled())
+			if (const FVoxelLandError Error = MakeDraws(*Revision, Overrides, Request, BuildBytes, IsCancelled))
+			{
+				return Error;
+			}
+			if (IsCancelled())
 			{
 				return Cancelled();
 			}

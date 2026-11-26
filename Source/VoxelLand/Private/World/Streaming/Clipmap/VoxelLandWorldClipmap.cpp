@@ -111,6 +111,7 @@ void AVoxelLandWorld::DispatchM7Revision()
 	Request->Settings = Visual.Settings;
 	Request->Settings.ViewCm = Visual.DesiredView.GetValue();
 	Request->Previous = Visual.Published;
+	Request->Appearance = State->Appearance;
 
 	FJob Job;
 	Job.Generator = State->Generator;

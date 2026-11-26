@@ -3,11 +3,13 @@
 #include "Streaming/Clipmap/VoxelLandClipmapRenderWork.h"
 #if !UE_SERVER
 #include "Rendering/Components/VoxelLandChunkComponent.h"
+#include "Rendering/Materials/VoxelLandTerrainMaterial.h"
 #endif
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
+#include "Generation/Meshing/VoxelLandMaterialMeshing.h"
 #include "Data/World/Streaming/VoxelLandPublication.h"
 #include "Data/World/Streaming/VoxelLandWorldState.h"
 #include "Data/World/Streaming/VoxelLandTestBarrier.h"
@@ -132,7 +134,25 @@ public:
 						}
 						else if (!Mesh->Indices.IsEmpty())
 						{
-							Done.Mesh = Mesh;
+							const FVector3d Origin = VoxelLandMeshCoordinates::RenderOrigin(
+								Job.Key.Coordinate, Current->GetProfile().VoxelSizeCm);
+							const auto IsCancelled = [&] {
+								return Job.Cancel->bCancelled.Load() || Work->bStop.Load();
+							};
+							if (Job.Appearance
+								&& !FVoxelLandMaterialMeshing::Pack(*Mesh, *Job.Appearance, Origin, IsCancelled))
+							{
+								Done.bCancelled = IsCancelled();
+								if (!Done.bCancelled)
+								{
+									Done.Error.Code = EVoxelLandErrorCode::InvalidParameter;
+									Done.Error.Message = TEXT("Terrain material mesh packing failed.");
+								}
+							}
+							else
+							{
+								Done.Mesh = Mesh;
+							}
 						}
 					}
 				}
@@ -206,6 +226,10 @@ bool AVoxelLandRegion::Publish(const FIntVector& Key, const FVector& Origin,
 	// Unreal moves registered actors/components on an origin shift. New meshes
 	// use the current origin so their positions agree with the shifted ones.
 	Component->SetWorldLocation(LocalOrigin);
+	if (Mesh && !Mesh->MaterialBlend.IsEmpty())
+	{
+		FVoxelLandTerrainMaterial::SetLogicalOrigin(*Component, Origin);
+	}
 	Component->SetMaterial(0, Material);
 	if (!Component->SetMesh(Mesh))
 	{
@@ -452,7 +476,8 @@ void AVoxelLandWorld::StopCandidateWorkers(FVoxelLandWorldState& Candidate)
 }
 
 bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
-	const FVoxelLandChunkKey* Startup, TArray<uint8> M6Identity)
+	const FVoxelLandChunkKey* Startup, TArray<uint8> M6Identity,
+	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance)
 {
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
@@ -470,6 +495,10 @@ bool AVoxelLandWorld::TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMod
 	Candidate->Generator = Generator;
 	Candidate->M6Identity = MoveTemp(M6Identity);
 	Candidate->bServer = bDataOnly || GetNetMode() == NM_DedicatedServer;
+	if (!Candidate->bServer)
+	{
+		Candidate->Appearance = MoveTemp(Appearance);
+	}
 	if (!ConfigureClipmap(*Candidate))
 	{
 		return false;
@@ -1120,7 +1149,8 @@ void AVoxelLandWorld::PumpCompletions()
 		{
 			Record->Vertices = Done.Mesh->Vertices.Num();
 			Record->Triangles = Done.Mesh->Indices.Num() / 3;
-			Record->MeshBytes = Done.Mesh->Vertices.GetAllocatedSize() + Done.Mesh->Indices.GetAllocatedSize();
+			Record->MeshBytes = Done.Mesh->Vertices.GetAllocatedSize() + Done.Mesh->Indices.GetAllocatedSize()
+							  + Done.Mesh->MaterialBlend.GetAllocatedSize();
 		}
 	}
 }
@@ -1180,6 +1210,10 @@ void AVoxelLandWorld::Dispatch()
 		Job.Epoch = State->Epoch;
 		Job.Ticket = ++State->NextTicket;
 		Job.bRender = !State->bServer && !State->M7Visual;
+		if (Job.bRender)
+		{
+			Job.Appearance = State->Appearance;
+		}
 		Job.Cancel = MakeShared<FCancel, ESPMode::ThreadSafe>();
 #if WITH_DEV_AUTOMATION_TESTS
 		Job.Barrier = MoveTemp(State->NextBarrier);

@@ -11,6 +11,7 @@ class FVoxelLandGenerator;
 class FVoxelLandWorkerContext;
 struct FVoxelLandM7SeamMesh;
 struct FVoxelLandMeshData;
+struct FVoxelLandMaterialAppearance;
 struct FVoxelLandMeshingScratch;
 
 namespace VoxelLandWorldPrivate
@@ -40,6 +41,7 @@ struct FM7RenderRequest
 {
 	FVoxelLandM7ClipmapSettings Settings;
 	TSharedPtr<const FM7RenderRevision, ESPMode::ThreadSafe> Previous;
+	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance;
 };
 
 // Game thread only. Workers receive immutable request/previous revision pointers.

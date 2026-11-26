@@ -195,7 +195,8 @@ private:
 	bool InitializeDirectDensity(UVoxelLandWorldConfig* Settings, FIntVector StartupChunk);
 	bool InitializeAuthoredM4(UVoxelLandWorldConfig* Settings, FIntVector StartupChunk);
 	bool TryInitialize(TSharedPtr<const FVoxelLandGenerator, ESPMode::ThreadSafe> Generator,
-		const FVoxelLandChunkKey* Startup = nullptr, TArray<uint8> M6Identity = {});
+		const FVoxelLandChunkKey* Startup = nullptr, TArray<uint8> M6Identity = {},
+		TSharedPtr<const struct FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance = nullptr);
 	bool ConfigureClipmap(FVoxelLandWorldState& Candidate);
 	bool QueueStartupChunk(FVoxelLandWorldState& Candidate, const FVoxelLandChunkKey& Startup);
 	bool StartTerrainWorkers(FVoxelLandWorldState& Candidate);

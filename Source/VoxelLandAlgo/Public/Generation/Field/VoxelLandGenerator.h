@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/World/Configuration/VoxelLandDensityBounds.h"
 #include "Data/Field/Execution/VoxelLandBackendOptions.h"
 #include "Data/Field/Chunks/VoxelLandChunkClassification.h"
 #include "Data/Field/Chunks/VoxelLandChunkData.h"
@@ -152,6 +153,9 @@ public:
 	FVoxelLandError EvaluateSamplesRaw(
 		TConstArrayView<FVector3f> Positions, FVoxelLandWorkerContext& Worker, TArray<float>& OutValues) const;
 	const FVoxelLandZoneProfile& GetProfile() const { return Profile; }
+	bool IncludesChunk(const FVoxelLandChunkKey& Key) const;
+	const TOptional<FVoxelLandDensityBounds>& GetDirectDensityBounds() const { return DirectDensityBounds; }
+	uint64 GetDirectDensityIdentity() const;
 	bool IsM4Unlimited() const { return M4Unlimited.IsValid(); }
 	// Coarse render sampling supports ordinary finite and erosion-disabled local worlds.
 	bool SupportsM7CompletedField() const;
@@ -212,6 +216,10 @@ private:
 	FVoxelLandError GenerateExternalFilteredChunkCancellable(const FVoxelLandChunkKey& Key,
 		FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
 		TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError GenerateDirectDensityChunk(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
+	FVoxelLandError ClipDirectDensityChunk(
+		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& Chunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError GeneratePureChunkCancellable(const FVoxelLandChunkKey& Key, FVoxelLandWorkerContext& Worker,
 		TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk, TFunctionRef<bool()> IsCancelled) const;
 	FVoxelLandError InitializeM6Spheres(const FVoxelLandM6SphereSettings& Settings);
@@ -278,6 +286,8 @@ private:
 	bool bM4FixedLatticeShaping = false;
 	FVoxelLandM4HeightDetailConfig M4HeightDetail;
 	int32 M4HeightDetailSeed = 0;
+	TOptional<FVoxelLandDensityBounds> DirectDensityBounds;
+	uint64 DirectDensitySeed = 0;
 	FVoxelLandZoneProfile Profile;
 	FVoxelLandBackendOptions Options;
 	bool bSmoothEnabled = false;

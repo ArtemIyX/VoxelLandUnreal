@@ -6,6 +6,7 @@
 #include "Data/TerrainOverlay/Redistance/VoxelLandTerrainRedistanceSettings.h"
 #include "Data/TerrainOverlay/Stamps/VoxelLandTerrainSphereSettings.h"
 #include "Data/TerrainOverlay/Stamps/VoxelLandTerrainStampSettings.h"
+#include "Data/World/Configuration/VoxelLandDensityBounds.h"
 #include "Data/World/Configuration/VoxelLandZoneProfile.h"
 
 class FVoxelLandProgram;
@@ -24,4 +25,5 @@ struct FVoxelLandGeneratorSettings
 	FVoxelLandM6StampSettings M6Stamps;
 	FVoxelLandM6FilterSettings M6Filters;
 	FVoxelLandM6RedistanceSettings M6Redistance;
+	TOptional<FVoxelLandDensityBounds> DirectDensityBounds;
 };

@@ -648,6 +648,13 @@ FVoxelLandError FVoxelLandGenerator::CreateInternal(const FVoxelLandGeneratorSet
 	}
 	TSharedPtr<FVoxelLandGenerator, ESPMode::ThreadSafe> Result = MakeShareable(new FVoxelLandGenerator);
 	Result->Program = Program;
+	if (Settings.DirectDensityBounds.IsSet() && (HeightGrid || !Settings.DirectDensityBounds->IsValid()))
+	{
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidProfile, TEXT("Invalid finite direct-density bounds"));
+	}
+	Result->DirectDensityBounds = Settings.DirectDensityBounds;
+	Result->DirectDensitySeed = WorldSeed;
 	Result->M4HeightGrid = MoveTemp(HeightGrid);
 	if (bLegacySpheres)
 	{
@@ -1548,6 +1555,32 @@ FVoxelLandError FVoxelLandGenerator::GenerateChunkCancellable(const FVoxelLandCh
 				 ? VoxelLandM4Unlimited::GenerateChunk(*M4UnlimitedSettings, *M4Unlimited, Key, OutChunk, IsCancelled)
 				 : GenerateM4LocalChunkWithStamps(Key, Worker, OutChunk, IsCancelled);
 	}
+	if (!DirectDensityBounds.IsSet())
+	{
+		return GenerateDirectDensityChunk(Key, Worker, OutChunk, IsCancelled);
+	}
+	if (!IncludesChunk(Key))
+	{
+		return FVoxelLandGeneratorValidation::Fail(
+			EVoxelLandErrorCode::InvalidProfile, TEXT("Chunk lies outside the finite density world"));
+	}
+	TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Chunk;
+	if (const FVoxelLandError Error = GenerateDirectDensityChunk(Key, Worker, Chunk, IsCancelled))
+	{
+		return Error;
+	}
+	if (const FVoxelLandError Error = ClipDirectDensityChunk(Chunk, IsCancelled))
+	{
+		return Error;
+	}
+	OutChunk = MoveTemp(Chunk);
+	return {};
+}
+
+FVoxelLandError FVoxelLandGenerator::GenerateDirectDensityChunk(const FVoxelLandChunkKey& Key,
+	FVoxelLandWorkerContext& Worker, TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe>& OutChunk,
+	TFunctionRef<bool()> IsCancelled) const
+{
 	if (Program->GetData().ExternalFilterIndex != INDEX_NONE)
 	{
 		return GenerateExternalFilteredChunkCancellable(Key, Worker, OutChunk, IsCancelled);

@@ -3,6 +3,7 @@
 #include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 
 #include "Components/SceneComponent.h"
+#include "Misc/App.h"
 #include "TimerManager.h"
 
 AVoxelLandClipmapDemo::AVoxelLandClipmapDemo()
@@ -29,6 +30,7 @@ void AVoxelLandClipmapDemo::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AVoxelLandClipmapDemo::StartTerrain()
 {
+	bDataOnly = bDataOnly || IsRunningDedicatedServer() || !FApp::CanEverRender();
 	if (!IsValid(TerrainConfig.Get()))
 	{
 		LastInitializationError = TEXT("Assign a World Config asset on the demo actor.");

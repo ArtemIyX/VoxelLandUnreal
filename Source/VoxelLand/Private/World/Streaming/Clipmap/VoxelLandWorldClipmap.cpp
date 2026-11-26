@@ -157,8 +157,13 @@ void AVoxelLandWorld::AcceptM7Completion(const FCompletion& Done)
 	if (Done.Error || !Done.M7Visual)
 	{
 		++State->Failed;
-		M7ClipmapError = Done.Error.Message.IsEmpty() ? TEXT("M7 clipmap returned no complete visual coverage")
-													  : Done.Error.Message.Left(1024);
+		const FString Error = Done.Error.Message.IsEmpty() ? TEXT("M7 clipmap returned no complete visual coverage")
+														   : Done.Error.Message.Left(1024);
+		if (M7ClipmapError != Error)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("%s: %s"), *GetName(), *Error);
+			M7ClipmapError = Error;
+		}
 		return;
 	}
 	Visual->Staged = Done.M7Visual;

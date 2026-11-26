@@ -515,6 +515,26 @@ FVoxelLandError Evaluate(const FVoxelLandGenerator& Generator, const FVoxelLandM
 	return EvaluateLattice(Generator, Geometry, Out, IsCancelled, EvaluateValidatedPoint);
 }
 
+FVoxelLandError EvaluateValidatedHeightPoint(const FVoxelLandGenerator& Generator, int64 X, int64 Y, int32 BaseQ8,
+	int32 ScaleCm, TArray<int64>& Registers, int32& OutHeight)
+{
+	int64 Raw = 0;
+	if (const FVoxelLandError Error = EvaluateSignedPoint(Generator, X, Y, Registers, Raw))
+	{
+		return Error;
+	}
+	const int64 Scaled = Raw * int64(ScaleCm) * 256;
+	const int64 Delta = FVoxelLandM4FixedLatticeInternals::RoundRatio(Scaled, FVoxelLandM4FixedLatticeInternals::Q);
+	const int64 Height = BaseQ8 + Delta;
+	if (Height < -512000000ll || Height > 512000000ll)
+	{
+		return FVoxelLandM4FixedLatticeInternals::Fail(TEXT("Authored height exceeds the supported elevation range"),
+			INDEX_NONE, EVoxelLandErrorCode::InvalidMathDomain);
+	}
+	OutHeight = int32(Height);
+	return {};
+}
+
 FVoxelLandError EvaluateHeight(const FVoxelLandGenerator& Generator, const FVoxelLandM4LatticeGeometry& Geometry,
 	int32 BaseQ8, int32 ScaleCm, TArray<int32>& Out, TFunctionRef<bool()> IsCancelled)
 {
@@ -525,25 +545,8 @@ FVoxelLandError EvaluateHeight(const FVoxelLandGenerator& Generator, const FVoxe
 			TEXT("Height Scale must be between 1 and 2000000 cm"), INDEX_NONE, EVoxelLandErrorCode::InvalidMathDomain);
 	}
 	return EvaluateLattice(Generator, Geometry, Out, IsCancelled,
-		[BaseQ8, ScaleCm](const FVoxelLandGenerator& Source, int64 X, int64 Y, TArray<int64>& Registers, int32& Height) {
-			int64 Raw = 0;
-			if (const FVoxelLandError Error = EvaluateSignedPoint(Source, X, Y, Registers, Raw))
-			{
-				return Error;
-			}
-			constexpr int64 Q = FVoxelLandM4FixedLatticeInternals::Q;
-			const int64 Scaled = Raw * int64(ScaleCm) * 256;
-			const int64 Delta = Scaled >= 0 ? (Scaled + Q / 2) / Q : (Scaled - Q / 2) / Q;
-			const int64 Value = BaseQ8 + Delta;
-			if (Value < -512000000ll || Value > 512000000ll)
-			{
-				return FVoxelLandM4FixedLatticeInternals::Fail(
-					TEXT("Authored height exceeds the supported elevation range"), INDEX_NONE,
-					EVoxelLandErrorCode::InvalidMathDomain);
-			}
-			Height = int32(Value);
-			return FVoxelLandError{};
-		});
+		[BaseQ8, ScaleCm](const FVoxelLandGenerator& Source, int64 X, int64 Y, TArray<int64>& Registers,
+			int32& Height) { return EvaluateValidatedHeightPoint(Source, X, Y, BaseQ8, ScaleCm, Registers, Height); });
 }
 
 }

@@ -13,6 +13,8 @@ public:
 	FVoxelLandError PreferSourceError(const FVoxelLandError& Fallback) const;
 
 private:
+	FVoxelLandError SampleLegacyControls(int64 X, int64 Y, int32& Height);
+
 	static constexpr int32 MaxCacheEntries = 8192;
 	static constexpr int64 MaxControlWork = 64 * 1024 * 1024;
 

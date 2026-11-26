@@ -14,6 +14,7 @@ class FVoxelLandM7CompletedFieldFixture final
 public:
 	static FString Pointwise();
 	static FString Neighborhood();
+	static FString AuthoredInfinite();
 
 private:
 	using FFixture = FVoxelLandM7CheckpointTestFixture;
@@ -280,6 +281,54 @@ FString FVoxelLandM7CompletedFieldFixture::Neighborhood()
 	return {};
 }
 
+FString FVoxelLandM7CompletedFieldFixture::AuthoredInfinite()
+{
+	FVoxelLandProgramDraft Draft;
+	Draft.RegisterCount = 1;
+	FVoxelLandInstruction Load, Store;
+	Load.Op = EVoxelLandOpcode::LoadConstant;
+	Store.Op = EVoxelLandOpcode::StoreDensity;
+	Draft.Instructions = {Load, Store};
+	// At scale 101 cm, the signed Q24 output is -25906.5 in Q8.
+	// It must round to -25907 and stay below -1 instead of clamping.
+	Draft.Constants = {-1.001953125f};
+	FVoxelLandGeneratorSettings Settings;
+	FGeneratorPtr Source, Local;
+	if (FVoxelLandProgram::Validate(Draft, Settings.Program) || FVoxelLandGenerator::Create(Settings, Source))
+	{
+		return TEXT("Could not build an authored fixed-lattice source");
+	}
+
+	const FVoxelLandM6FilterStage Smooth = FVoxelLandM6RegionFilterTestFixture::Stage(
+		1, EVoxelLandM6FilterKind::Smooth, FInt64Vector(100), FInt64Vector(400));
+	Settings.M6Filters.Stages = MakeArrayView(&Smooth, 1);
+	FVoxelLandM4UnlimitedConfig Config;
+	Config.AuthoredHeightGenerator = Source;
+	Config.BaseQ8 = 400 * 256;
+	Config.HeightScaleCm = 101;
+	Config.bNormalizeSlope = true;
+	TUniquePtr<FVoxelLandWorkerContext> Worker;
+	if (FVoxelLandGenerator::CreateM4Unlimited(Settings, Config, Local) || Local->CreateWorker(Worker))
+	{
+		return TEXT("Authored infinite setup without legacy controls failed");
+	}
+
+	TMap<FIntVector, FChunkPtr> FineCache;
+	const FVoxelLandChunkKey Keys[] = {{FIntVector::ZeroValue, 1}, {FIntVector(-1, 0, 0), MaxLod}};
+	for (const FVoxelLandChunkKey& Key : Keys)
+	{
+		FChunkPtr Coarse;
+		if (Local->GenerateChunk(Key, *Worker, Coarse) || !Coarse
+			|| !CheckCoincident(*Local, *Worker, *Coarse, FineCache)
+			|| Coarse->Density[FFixture::Index(FIntVector::ZeroValue)] != -3060)
+		{
+			return TEXT("Authored coarse samples did not preserve signed fixed Height or coincide with LOD0");
+		}
+	}
+	return CheckNormal(*Local, *Worker) ? FString{}
+										: TEXT("Authored normal stencils did not match the local completed field");
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM7CompletedFieldPointwiseTest, "VoxelLand.M7.Field.PointwiseAcrossLevels",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FVoxelLandM7CompletedFieldPointwiseTest::RunTest(const FString& Parameters)
@@ -296,6 +345,15 @@ bool FVoxelLandM7CompletedFieldNeighborhoodTest::RunTest(const FString& Paramete
 	const FString Error = Async(EAsyncExecution::ThreadPool, &FVoxelLandM7CompletedFieldFixture::Neighborhood).Get();
 	return TestTrue(
 		Error.IsEmpty() ? TEXT("Coarse M6 patches and normal stencils retain completed-field semantics") : Error,
+		Error.IsEmpty());
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandM7AuthoredInfiniteFieldTest, "VoxelLand.M7.Field.AuthoredInfinite",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FVoxelLandM7AuthoredInfiniteFieldTest::RunTest(const FString& Parameters)
+{
+	const FString Error =
+		Async(EAsyncExecution::ThreadPool, &FVoxelLandM7CompletedFieldFixture::AuthoredInfinite).Get();
+	return TestTrue(Error.IsEmpty() ? TEXT("Authored infinite coarse field and normals coincide with LOD0") : Error,
 		Error.IsEmpty());
 }
 #endif

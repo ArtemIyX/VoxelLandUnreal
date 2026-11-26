@@ -235,8 +235,10 @@ private:
 	TSharedPtr<FVoxelLandDemoJob, ESPMode::ThreadSafe> PendingDemo;
 	TFuture<void> DemoTask;
 	TSharedPtr<const FVoxelLandWorldSignalSnapshot, ESPMode::ThreadSafe> MaterialWorldSignals;
-	TWeakObjectPtr<UVoxelLandWorldConfig> MaterialWorldConfig;
+	UPROPERTY(Transient)
+	TObjectPtr<UVoxelLandWorldConfig> MaterialWorldConfig;
 	FGuid ActiveMaterialLayout;
+	TArray<uint8> ActiveMaterialSourceIdentity;
 	uint64 ConfigurationEpoch = 0;
 	bool bLifecycleEnded = false;
 	FDelegateHandle WorldTearDownHandle;

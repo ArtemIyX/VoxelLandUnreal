@@ -543,8 +543,9 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 	M7PublishedLeafCount = 0;
 	M7FallbackRefinements = 0;
 	++ConfigurationEpoch;
-	MaterialWorldConfig.Reset();
+	MaterialWorldConfig = nullptr;
 	ActiveMaterialLayout.Invalidate();
+	ActiveMaterialSourceIdentity.Reset();
 	StopDemo();
 	StopPendingInitialization();
 	if (!State)

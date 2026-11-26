@@ -32,7 +32,12 @@ bool AVoxelLandWorld::SetMaterialWorldSignals(
 			Error = TEXT("The world changed while material signals were being resolved.");
 			return false;
 		}
-		if (!Replacement.Appearance || Replacement.LayoutIdentity != ActiveMaterialLayout)
+		if (Replacement.SourceIdentity != ActiveMaterialSourceIdentity || Replacement.LayoutIdentity != ActiveMaterialLayout)
+		{
+			Error = TEXT("Terrain or palette settings changed. Reinitialize before replacing material signals.");
+			return false;
+		}
+		if (!Replacement.Appearance)
 		{
 			Error =
 				Replacement.Diagnostic.IsEmpty()
@@ -41,6 +46,7 @@ bool AVoxelLandWorld::SetMaterialWorldSignals(
 			return false;
 		}
 
+		MaterialWorldSignals = MoveTemp(Signals);
 		State->Appearance = Replacement.Appearance;
 		if (VoxelLandWorldPrivate::FM7VisualState* Visual = State->M7Visual.Get())
 		{
@@ -52,6 +58,7 @@ bool AVoxelLandWorld::SetMaterialWorldSignals(
 			{
 				Visual->DesiredView = Visual->LastSubmittedView;
 			}
+			Visual->LastSubmittedView.Reset();
 			DiscardM7Staging();
 		}
 		else
@@ -71,6 +78,7 @@ bool AVoxelLandWorld::SetMaterialWorldSignals(
 				}
 			}
 		}
+		return true;
 	}
 #endif
 	MaterialWorldSignals = MoveTemp(Signals);

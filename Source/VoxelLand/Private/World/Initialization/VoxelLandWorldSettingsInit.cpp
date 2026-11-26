@@ -1902,6 +1902,7 @@ void AVoxelLandWorld::PollInitialization()
 #if !UE_SERVER
 		MaterialWorldConfig = MaterialConfig.Get();
 		ActiveMaterialLayout = Presentation->LayoutIdentity;
+		ActiveMaterialSourceIdentity = Presentation->SourceIdentity;
 #endif
 		if (!Presentation->Diagnostic.IsEmpty())
 		{

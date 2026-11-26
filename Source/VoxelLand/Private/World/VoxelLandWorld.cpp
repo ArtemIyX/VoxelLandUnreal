@@ -405,6 +405,7 @@ bool AVoxelLandWorld::ConfigureClipmap(FVoxelLandWorldState& Candidate)
 			return false;
 		}
 		Candidate.M7Visual = MakeUnique<FM7VisualState>();
+		Candidate.M7Visual->bHeightSurface = Candidate.Generator->SupportsHeightClipmap();
 		FVoxelLandM7ClipmapSettings& Clipmap = Candidate.M7Visual->Settings;
 		Clipmap.BaseVoxelSizeCm = Candidate.Generator->GetProfile().VoxelSizeCm;
 		Clipmap.MaxLod = FMath::Min<uint8>(M7MaxLOD, 5);
@@ -577,6 +578,13 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 		}
 		if (Retired->M7Visual)
 		{
+			for (const TWeakObjectPtr<AVoxelLandRegion>& WeakRegion : Retired->M7Visual->RetiredRegions)
+			{
+				if (AVoxelLandRegion* Region = WeakRegion.Get())
+				{
+					RetiredRegions.Emplace(Region);
+				}
+			}
 			for (const auto& Pair : Retired->M7Visual->StagedRegions)
 			{
 				if (AVoxelLandRegion* Region = Pair.Value.Get())

@@ -2,6 +2,8 @@
 
 #include "Generation/Field/VoxelLandGenerator.h"
 #include "Generation/Clipmap/Planning/VoxelLandClipmap.h"
+#include "Generation/Clipmap/Planning/VoxelLandHeightClipmap.h"
+#include "Generation/Clipmap/Meshing/VoxelLandHeightClipmapMesher.h"
 #include "Generation/Clipmap/Seams/VoxelLandSeamNormalFrames.h"
 #include "Generation/Clipmap/Seams/VoxelLandVerticalTerrainSeams.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
@@ -264,6 +266,24 @@ struct FDrawPreparation
 	int64 RetainedBytes;
 };
 
+FVoxelLandError PrepareDrawPayload(FVoxelLandMeshData& Mesh, const FVoxelLandMaterialAppearance& Appearance,
+	const FM7Draw& Draw, FDrawPreparation& Work)
+{
+	if (!FVoxelLandMaterialMeshing::Pack(Mesh, Appearance, Draw.LogicalOrigin, Work.IsCancelled))
+	{
+		return Work.IsCancelled() ? Cancelled() : Failed(TEXT("Terrain material packing failed."));
+	}
+	if (Appearance.TerrainAmbientOcclusionStrength > 0.0f)
+	{
+		if (const FVoxelLandError Error = FVoxelLandTerrainAmbientOcclusion::Bake(
+				Mesh, Work.Generator, Work.Worker, Draw.Key, Draw.LogicalOrigin, Work.IsCancelled))
+		{
+			return Error;
+		}
+	}
+	return {};
+}
+
 FVoxelLandError PrepareDrawMesh(
 	FM7MeshPtr& Mesh, const FVoxelLandMaterialAppearance& Appearance, const FM7Draw& Draw, FDrawPreparation& Work)
 {
@@ -271,26 +291,18 @@ FVoxelLandError PrepareDrawMesh(
 	{
 		return {};
 	}
-	TSharedPtr<FVoxelLandMeshData, ESPMode::ThreadSafe> Packed =
+	const TSharedRef<FVoxelLandMeshData, ESPMode::ThreadSafe> Packed =
 		MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>(*Mesh);
-	if (!FVoxelLandMaterialMeshing::Pack(*Packed, Appearance, Draw.LogicalOrigin, Work.IsCancelled))
+	if (const FVoxelLandError Error = PrepareDrawPayload(*Packed, Appearance, Draw, Work))
 	{
-		return Work.IsCancelled() ? Cancelled() : Failed(TEXT("Terrain material packing failed."));
-	}
-	if (Appearance.TerrainAmbientOcclusionStrength > 0.0f)
-	{
-		if (const FVoxelLandError Error = FVoxelLandTerrainAmbientOcclusion::Bake(
-				*Packed, Work.Generator, Work.Worker, Draw.Key, Draw.LogicalOrigin, Work.IsCancelled))
-		{
-			return Error;
-		}
+		return Error;
 	}
 	Work.RetainedBytes += MeshBytes(*Packed);
 	if (Work.RetainedBytes > MaxRevisionMeshBytes)
 	{
 		return Failed(TEXT("Terrain draw exceeds the clipmap mesh budget."));
 	}
-	Mesh = MoveTemp(Packed);
+	Mesh = Packed;
 	return {};
 }
 
@@ -341,6 +353,99 @@ FVoxelLandError MakeDraws(FM7RenderRevision& Revision, TMap<FVoxelLandChunkKey, 
 			Revision.Draws.Add(MoveTemp(Draw));
 		}
 	}
+	return {};
+}
+
+const FM7Draw* FindReusableHeightDraw(
+	const FM7RenderRevision* Previous, const FVoxelLandChunkKey& Key, const uint8 CoarseEdges)
+{
+	if (Previous && Previous->HeightCoarseEdgeMasks.FindRef(Key) == CoarseEdges)
+	{
+		if (const int32* Index = Previous->HeightDrawIndices.Find(Key))
+		{
+			return &Previous->Draws[*Index];
+		}
+	}
+	return nullptr;
+}
+
+FVoxelLandError PrepareHeightDraw(const FVoxelLandChunkKey& Key, const uint8 CoarseEdges,
+	const FM7RenderRevision& Revision, FDrawPreparation& Work, FM7Draw& Draw)
+{
+	float Spacing = 0.0f;
+	const float BaseVoxel = Revision.Layout.Settings.BaseVoxelSizeCm;
+	if (!VoxelLandMeshCoordinates::TryGetLevelSpacing(BaseVoxel, Key.LOD, Spacing)
+		|| !VoxelLandMeshCoordinates::IsMeshKeyInPrecisionRange(Key, BaseVoxel, true))
+	{
+		return Failed(TEXT("Height clipmap tile exceeds the mesh precision envelope"));
+	}
+	Draw.Key = Key;
+	Draw.LogicalOrigin = VoxelLandMeshCoordinates::RenderOrigin(Key.Coordinate, Spacing);
+	const TSharedRef<FVoxelLandMeshData, ESPMode::ThreadSafe> Mesh = MakeShared<FVoxelLandMeshData, ESPMode::ThreadSafe>();
+	if (const FVoxelLandError Error =
+			FVoxelLandHeightClipmapMesher::Build(Key, CoarseEdges, Work.Generator, Work.IsCancelled, *Mesh))
+	{
+		return Error;
+	}
+	if (Revision.Appearance)
+	{
+		if (const FVoxelLandError Error = PrepareDrawPayload(*Mesh, *Revision.Appearance, Draw, Work))
+		{
+			return Error;
+		}
+	}
+	Draw.Terrain = Mesh;
+	return {};
+}
+
+FVoxelLandError PrepareHeightRevision(const FM7RenderRequest& Request, FDrawPreparation& Work,
+	TSharedPtr<const FM7RenderRevision, ESPMode::ThreadSafe>& OutRevision)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_BuildHeightClipmapRevision);
+	const TSharedRef<FM7RenderRevision, ESPMode::ThreadSafe> Revision = MakeShared<FM7RenderRevision, ESPMode::ThreadSafe>();
+	Revision->bHeightSurface = true;
+	Revision->Appearance = Request.Appearance;
+	const FM7RenderRevision* Previous = Request.Previous && Request.Previous->bHeightSurface ? Request.Previous.Get() : nullptr;
+	if (!FVoxelLandHeightClipmap::Build(Request.Settings, Previous ? &Previous->Layout : nullptr,
+			Revision->Layout, Revision->HeightCoarseEdgeMasks))
+	{
+		return Failed(TEXT("Height clipmap coverage exceeds the configured tile budget"));
+	}
+	if (Previous && Previous->Appearance != Request.Appearance)
+	{
+		Previous = nullptr;
+	}
+	Revision->Draws.Reserve(Revision->Layout.Leaves.Num());
+	Revision->HeightDrawIndices.Reserve(Revision->Layout.Leaves.Num());
+	for (const FVoxelLandChunkKey& Key : Revision->Layout.Leaves)
+	{
+		if (Work.IsCancelled())
+		{
+			return Cancelled();
+		}
+		const uint8 CoarseEdges = Revision->HeightCoarseEdgeMasks.FindRef(Key);
+		FM7Draw Draw;
+		if (const FM7Draw* Reusable = FindReusableHeightDraw(Previous, Key, CoarseEdges))
+		{
+			Draw = *Reusable;
+		}
+		else if (const FVoxelLandError Error = PrepareHeightDraw(Key, CoarseEdges, *Revision, Work, Draw))
+		{
+			return Error;
+		}
+
+		Work.RetainedBytes += MeshBytes(*Draw.Terrain);
+		if (Work.RetainedBytes > MaxRevisionMeshBytes)
+		{
+			return Failed(TEXT("Height clipmap exceeds the CPU mesh memory budget"));
+		}
+		Revision->HeightDrawIndices.Add(Key, Revision->Draws.Add(MoveTemp(Draw)));
+	}
+	if (Work.IsCancelled())
+	{
+		return Cancelled();
+	}
+	OutRevision = Revision;
 	return {};
 }
 
@@ -451,6 +556,10 @@ FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVo
 	}
 
 	FDrawPreparation Work{Generator, Worker, IsCancelled, 0};
+	if (Generator.SupportsHeightClipmap())
+	{
+		return PrepareHeightRevision(Request, Work, OutRevision);
+	}
 	FVoxelLandError InitialError;
 	const FVoxelLandM7ClipmapLayout* Previous = Request.Previous ? &Request.Previous->Layout : nullptr;
 	const int32 RequestedMaxLod = Request.Settings.MaxLod;

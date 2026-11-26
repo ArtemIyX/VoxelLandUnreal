@@ -34,7 +34,10 @@ struct FM7RenderRevision
 	FVoxelLandM7ClipmapLayout Layout;
 	FM7Sources Sources;
 	TArray<FM7Draw> Draws;
+	TMap<FVoxelLandChunkKey, uint8> HeightCoarseEdgeMasks;
+	TMap<FVoxelLandChunkKey, int32> HeightDrawIndices;
 	TSharedPtr<const FVoxelLandMaterialAppearance, ESPMode::ThreadSafe> Appearance;
+	bool bHeightSurface = false;
 	int32 RefinedLeaves = 0;
 };
 
@@ -60,6 +63,9 @@ struct FM7VisualState
 	int32 NextDraw = 0;
 	FM7Regions Regions;
 	FM7Regions StagedRegions;
+	TSet<FVoxelLandChunkKey> ReusableStagedRegions;
+	TArray<TWeakObjectPtr<AVoxelLandRegion>> RetiredRegions;
+	bool bHeightSurface = false;
 };
 
 FVoxelLandError BuildM7RenderRevision(const FM7RenderRequest& Request, const FVoxelLandGenerator& Generator,

@@ -1,6 +1,7 @@
 #include "World/VoxelLandWorld.h"
 
 #include "VoxelLandClipmapRenderWork.h"
+#include "Data/Meshing/VoxelLandMeshData.h"
 #include "Data/World/Streaming/VoxelLandPublication.h"
 #include "Data/World/Streaming/VoxelLandWorldState.h"
 #include "Engine/World.h"
@@ -41,8 +42,72 @@ bool AllRegionsValid(const FM7Regions& Regions)
 	return true;
 }
 
+FVoxelLandChunkKey DrawRegionKey(const FM7Draw& Draw, const FIntVector& RegionDimensions)
+{
+	return {VoxelLandCoordinates::RegionOf(Draw.Key.Coordinate, RegionDimensions), Draw.Key.LOD};
+}
+
+bool SameHeightDraw(const FM7Draw& Draw, const FM7RenderRevision& Other)
+{
+	const int32* Index = Other.HeightDrawIndices.Find(Draw.Key);
+	return Index && Other.Draws[*Index].Terrain == Draw.Terrain;
+}
+
+void FindReusableHeightRegions(FM7VisualState& Visual, const FIntVector& RegionDimensions)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_FindReusableHeightClipmapRegions);
+	Visual.ReusableStagedRegions.Reset();
+	if (!Visual.Staged->bHeightSurface || !Visual.Published || !Visual.Published->bHeightSurface)
+	{
+		return;
+	}
+	for (const TPair<FVoxelLandChunkKey, TWeakObjectPtr<AVoxelLandRegion>>& Pair : Visual.Regions)
+	{
+		if (Pair.Value.IsValid())
+		{
+			Visual.ReusableStagedRegions.Add(Pair.Key);
+		}
+	}
+	for (const FM7Draw& Draw : Visual.Published->Draws)
+	{
+		if (!SameHeightDraw(Draw, *Visual.Staged))
+		{
+			Visual.ReusableStagedRegions.Remove(DrawRegionKey(Draw, RegionDimensions));
+		}
+	}
+	for (const FM7Draw& Draw : Visual.Staged->Draws)
+	{
+		if (!SameHeightDraw(Draw, *Visual.Published))
+		{
+			Visual.ReusableStagedRegions.Remove(DrawRegionKey(Draw, RegionDimensions));
+		}
+	}
+}
+
+int64 EstimateStagedBytes(const FM7MeshPtr& Mesh)
+{
+	return Mesh ? int64(Mesh->Vertices.GetAllocatedSize()) + Mesh->Indices.GetAllocatedSize()
+			+ Mesh->MaterialBlend.GetAllocatedSize() + Mesh->AmbientVisibility.GetAllocatedSize()
+		: 0;
+}
+
 bool SameSourceFrontier(const FM7RenderRevision& A, const FM7RenderRevision& B)
 {
+	if (A.bHeightSurface || B.bHeightSurface)
+	{
+		if (A.bHeightSurface != B.bHeightSurface || A.Draws.Num() != B.Draws.Num())
+		{
+			return false;
+		}
+		for (const FM7Draw& Draw : A.Draws)
+		{
+			if (!SameHeightDraw(Draw, B))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 	if (A.Sources.Num() != B.Sources.Num())
 	{
 		return false;
@@ -63,7 +128,11 @@ bool SameSourceFrontier(const FM7RenderRevision& A, const FM7RenderRevision& B)
 void AVoxelLandWorld::UpdateM7Demand(const FVector& LogicalView)
 {
 	FM7VisualState& Visual = *State->M7Visual;
-	const FVector Quantized = QuantizeView(LogicalView, Visual.Settings.BaseVoxelSizeCm);
+	FVector Quantized = QuantizeView(LogicalView, Visual.Settings.BaseVoxelSizeCm);
+	if (Visual.bHeightSurface)
+	{
+		Quantized.Z = 0.0;
+	}
 	if (Quantized.ContainsNaN())
 	{
 		return;
@@ -169,6 +238,7 @@ void AVoxelLandWorld::AcceptM7Completion(const FCompletion& Done)
 	Visual->Staged = Done.M7Visual;
 	Visual->StagedTicket = Done.Job.Ticket;
 	Visual->NextDraw = 0;
+	FindReusableHeightRegions(*Visual, State->RegionDimensions);
 }
 
 void AVoxelLandWorld::DiscardM7Staging()
@@ -178,12 +248,10 @@ void AVoxelLandWorld::DiscardM7Staging()
 	Visual.Staged.Reset();
 	Visual.StagedTicket = 0;
 	Visual.NextDraw = 0;
-	for (const auto& Pair : Retired)
+	Visual.ReusableStagedRegions.Reset();
+	for (const TPair<FVoxelLandChunkKey, TWeakObjectPtr<AVoxelLandRegion>>& Pair : Retired)
 	{
-		if (AVoxelLandRegion* Region = Pair.Value.Get())
-		{
-			Region->Destroy();
-		}
+		Visual.RetiredRegions.Add(Pair.Value);
 	}
 }
 
@@ -192,7 +260,32 @@ void AVoxelLandWorld::AdvanceM7Publication()
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_StageM7VisualRevision);
 	FM7VisualState* Visual = State ? State->M7Visual.Get() : nullptr;
 	UWorld* World = GetWorld();
-	if (!Visual || !Visual->Staged || !World || World->bIsTearingDown)
+	if (!Visual || !World || World->bIsTearingDown)
+	{
+		return;
+	}
+	constexpr int32 RetirementsPerTick = 2;
+	constexpr double StageSecondsPerTick = 0.001;
+	const double Deadline = FPlatformTime::Seconds() + StageSecondsPerTick;
+	for (int32 Index = 0; Index < RetirementsPerTick && !Visual->RetiredRegions.IsEmpty(); ++Index)
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_RetireClipmapRegion);
+		const uint64 RetirementEpoch = ConfigurationEpoch;
+		const TWeakObjectPtr<AVoxelLandRegion> WeakRegion = Visual->RetiredRegions.Pop(EAllowShrinking::No);
+		if (AVoxelLandRegion* Region = WeakRegion.Get())
+		{
+			Region->Destroy();
+		}
+		if (!State || ConfigurationEpoch != RetirementEpoch)
+		{
+			return;
+		}
+		if (FPlatformTime::Seconds() >= Deadline)
+		{
+			break;
+		}
+	}
+	if (!Visual->Staged)
 	{
 		return;
 	}
@@ -210,18 +303,32 @@ void AVoxelLandWorld::AdvanceM7Publication()
 		Visual->PublishedTicket = Ticket;
 		Visual->Staged.Reset();
 		Visual->StagedTicket = 0;
+		Visual->ReusableStagedRegions.Reset();
 		M7FallbackRefinements = Revision->RefinedLeaves;
 		M7ClipmapError.Reset();
 		return;
 	}
 
 	constexpr int32 DrawsPerTick = 4;
-	const int32 Stop = FMath::Min(Revision->Draws.Num(), Visual->NextDraw + DrawsPerTick);
-	while (Visual->NextDraw < Stop)
+	constexpr int64 StagedBytesPerTick = 512 * 1024;
+	int32 StagedDraws = 0;
+	int64 StagedBytes = 0;
+	while (Visual->NextDraw < Revision->Draws.Num() && StagedDraws < DrawsPerTick)
 	{
 		const FM7Draw& Draw = Revision->Draws[Visual->NextDraw];
-		const FVoxelLandChunkKey RegionKey{
-			VoxelLandCoordinates::RegionOf(Draw.Key.Coordinate, State->RegionDimensions), Draw.Key.LOD};
+		const FVoxelLandChunkKey RegionKey = DrawRegionKey(Draw, State->RegionDimensions);
+		if (Visual->ReusableStagedRegions.Contains(RegionKey))
+		{
+			++Visual->NextDraw;
+			continue;
+		}
+		const int64 DrawBytes = EstimateStagedBytes(Draw.Terrain) + EstimateStagedBytes(Draw.Curtain);
+		if (StagedDraws > 0 && (StagedBytes + DrawBytes > StagedBytesPerTick || FPlatformTime::Seconds() >= Deadline))
+		{
+			break;
+		}
+		++StagedDraws;
+		StagedBytes += DrawBytes;
 		AVoxelLandRegion* Region = Visual->StagedRegions.FindRef(RegionKey).Get();
 		if (!Region)
 		{
@@ -273,6 +380,20 @@ void AVoxelLandWorld::AdvanceM7Publication()
 	{
 		return;
 	}
+	bool bNeedsRestaging = false;
+	for (TSet<FVoxelLandChunkKey>::TIterator It = Visual->ReusableStagedRegions.CreateIterator(); It; ++It)
+	{
+		if (!Visual->Regions.FindRef(*It).IsValid())
+		{
+			It.RemoveCurrent();
+			bNeedsRestaging = true;
+		}
+	}
+	if (bNeedsRestaging)
+	{
+		Visual->NextDraw = 0;
+		return;
+	}
 	if (!AllRegionsValid(Visual->StagedRegions))
 	{
 		M7ClipmapError = TEXT("An M7 staged render region was retired before publication");
@@ -283,8 +404,17 @@ void AVoxelLandWorld::AdvanceM7Publication()
 
 	// The full replacement has validated components before any old region is
 	// hidden or retired. Both terrain and skirt have separate render payloads.
+	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_SwapClipmapRegions);
 	FM7Regions Old = MoveTemp(Visual->Regions);
 	Visual->Regions = MoveTemp(Visual->StagedRegions);
+	for (const FVoxelLandChunkKey& Key : Visual->ReusableStagedRegions)
+	{
+		TWeakObjectPtr<AVoxelLandRegion> Region;
+		if (Old.RemoveAndCopyValue(Key, Region))
+		{
+			Visual->Regions.Add(Key, Region);
+		}
+	}
 	Visual->Published = Revision;
 	Visual->PublishedTicket = Ticket;
 	Visual->Staged.Reset();
@@ -293,26 +423,24 @@ void AVoxelLandWorld::AdvanceM7Publication()
 	M7PublishedLeafCount = Revision->Layout.Leaves.Num();
 	M7FallbackRefinements = Revision->RefinedLeaves;
 	M7ClipmapError.Reset();
-	for (const auto& Pair : Visual->Regions)
+	for (const TPair<FVoxelLandChunkKey, TWeakObjectPtr<AVoxelLandRegion>>& Pair : Visual->Regions)
 	{
-		AVoxelLandRegion* Region = Pair.Value.Get();
-		Regions.Add(Region);
-		Region->SetTerrainMaterial(TerrainMaterial);
-		Region->SetActorHiddenInGame(State->HiddenRegions.Contains(Pair.Key.Coordinate));
+		if (!Visual->ReusableStagedRegions.Contains(Pair.Key))
+		{
+			AVoxelLandRegion* Region = Pair.Value.Get();
+			Regions.Add(Region);
+			Region->SetTerrainMaterial(TerrainMaterial);
+			Region->SetActorHiddenInGame(State->HiddenRegions.Contains(Pair.Key.Coordinate));
+		}
 	}
-	for (const auto& Pair : Old)
+	Visual->ReusableStagedRegions.Reset();
+	for (const TPair<FVoxelLandChunkKey, TWeakObjectPtr<AVoxelLandRegion>>& Pair : Old)
 	{
 		if (AVoxelLandRegion* Region = Pair.Value.Get())
 		{
 			Regions.Remove(Region);
 			Region->SetActorHiddenInGame(true);
-		}
-	}
-	for (const auto& Pair : Old)
-	{
-		if (AVoxelLandRegion* Region = Pair.Value.Get())
-		{
-			Region->Destroy();
+			Visual->RetiredRegions.Add(Pair.Value);
 		}
 	}
 }

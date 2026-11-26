@@ -20,6 +20,7 @@ public class VoxelLandEditor : ModuleRules
             {
                 "Engine",
                 "RenderCore",
+                "RHI",
                 "Slate",
                 "SlateCore",
                 "InputCore",

@@ -5,6 +5,6 @@ public class VoxelLandRender : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "VoxelLandData" });
-        PrivateDependencyModuleNames.AddRange(new[] { "RenderCore", "RHI" });
+        PrivateDependencyModuleNames.AddRange(new[] { "RenderCore", "RHI", "Projects" });
     }
 }

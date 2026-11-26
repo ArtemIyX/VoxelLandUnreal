@@ -1,0 +1,284 @@
+#ifndef VOXEL_LAND_TERRAIN_MATERIAL
+#define VOXEL_LAND_TERRAIN_MATERIAL
+
+#include "/Engine/Private/DoubleFloat.ush"
+
+struct FVoxelLandMaterialAxes
+{
+	uint2 Indices;
+	float2 Signs;
+	float2 Weights;
+	float TextureInfluence;
+};
+
+struct FVoxelLandMaterialProjection
+{
+	float2 UV;
+	float2 Dx;
+	float2 Dy;
+};
+
+struct FVoxelLandMaterialLayer
+{
+	float3 Color;
+	float3 Normal;
+	float4 ORMH;
+};
+
+uint VoxelLandNextAxis(uint Axis)
+{
+	return Axis == 2 ? 0 : Axis + 1;
+}
+
+FVoxelLandMaterialAxes VoxelLandSelectProjections(float3 Normal)
+{
+	const float3 Magnitudes = abs(Normal);
+	uint First = Magnitudes.x >= Magnitudes.y ? 0 : 1;
+	First = Magnitudes[First] >= Magnitudes.z ? First : 2;
+	const uint A = VoxelLandNextAxis(First);
+	const uint B = VoxelLandNextAxis(A);
+	const uint Second = Magnitudes[A] > Magnitudes[B] || (Magnitudes[A] == Magnitudes[B] && A < B) ? A : B;
+	const float Third = min(Magnitudes[A], Magnitudes[B]);
+
+	FVoxelLandMaterialAxes Axes;
+	Axes.Indices = uint2(First, Second);
+	Axes.Signs = float2(Normal[First] < 0.0 ? -1.0 : 1.0, Normal[Second] < 0.0 ? -1.0 : 1.0);
+	// Fade the interchangeable secondary projection before it changes axes.
+	const float2 Weights = max(float2(Magnitudes[First], Magnitudes[Second]) - Third, 0.0);
+	const float Sum = Weights.x + Weights.y;
+	Axes.Weights = Sum > 0.0001 ? Weights / Sum : float2(1.0, 0.0);
+	// Fade out projection detail where no continuous two-axis selection exists.
+	Axes.TextureInfluence = smoothstep(0.0, 0.06, Sum);
+	return Axes;
+}
+
+float2 VoxelLandProjectVector(float3 Value, uint Axis, float Sign)
+{
+	const uint U = VoxelLandNextAxis(Axis);
+	const uint V = VoxelLandNextAxis(U);
+	return float2(Value[U], Value[V] * Sign);
+}
+
+FVoxelLandMaterialProjection VoxelLandProject(float3 Phase, float3 Dx, float3 Dy, uint Axis, float Sign)
+{
+	FVoxelLandMaterialProjection Projection;
+	Projection.UV = VoxelLandProjectVector(Phase, Axis, Sign);
+	Projection.Dx = VoxelLandProjectVector(Dx, Axis, Sign);
+	Projection.Dy = VoxelLandProjectVector(Dy, Axis, Sign);
+	return Projection;
+}
+
+float4 VoxelLandSampleArray(Texture2DArray Source, SamplerState SourceSampler, FVoxelLandMaterialProjection Projection, uint Slot)
+{
+	return Source.SampleGrad(SourceSampler, float3(Projection.UV, float(Slot)), Projection.Dx, Projection.Dy);
+}
+
+float3 VoxelLandUnpackProjectionNormal(float2 Encoded, uint Axis, float Sign, float3 SurfaceNormal)
+{
+	const float2 XY = Encoded * 2.0 - 1.0;
+	const float Z = sqrt(saturate(1.0 - dot(XY, XY)));
+	float3 Perturbation = 0.0;
+	const uint U = VoxelLandNextAxis(Axis);
+	Perturbation[U] = XY.x;
+	Perturbation[VoxelLandNextAxis(U)] = XY.y * Sign;
+	// Project the perturbation onto the terrain tangent plane. A flat texture keeps the geometric normal.
+	Perturbation -= dot(Perturbation, SurfaceNormal) * SurfaceNormal;
+	return SurfaceNormal * Z + Perturbation;
+}
+
+void VoxelLandRankLayerPair(inout uint4 Slots, inout float4 Weights, uint A, uint B)
+{
+	if (Weights[A] < Weights[B] || (Weights[A] == Weights[B] && Slots[A] > Slots[B]))
+	{
+		const uint Slot = Slots[A];
+		const float Weight = Weights[A];
+		Slots[A] = Slots[B];
+		Weights[A] = Weights[B];
+		Slots[B] = Slot;
+		Weights[B] = Weight;
+	}
+}
+
+void VoxelLandRankLayers(inout uint4 Slots, inout float4 Weights)
+{
+	VoxelLandRankLayerPair(Slots, Weights, 0, 1);
+	VoxelLandRankLayerPair(Slots, Weights, 2, 3);
+	VoxelLandRankLayerPair(Slots, Weights, 0, 2);
+	VoxelLandRankLayerPair(Slots, Weights, 1, 3);
+	VoxelLandRankLayerPair(Slots, Weights, 1, 2);
+}
+
+float3 VoxelLandWrapPosition(FDFVector3 LogicalPosition, float PeriodCm)
+{
+	// Dividing before demotion keeps phase stable on both sides of zero and across rebases.
+	return DFFracDemote(DFDivide(LogicalPosition, PeriodCm.xxx));
+}
+
+float VoxelLandSlotPeriod(const float4 PackedPeriods[8], uint Slot)
+{
+	return max(PackedPeriods[Slot >> 2][Slot & 3], 0.0001);
+}
+
+float3 VoxelLandNeutralAlbedo(float3 Tint)
+{
+	return Tint * 0.18;
+}
+
+float3 VoxelLandLayerColor(Texture2DArray ColorArray, SamplerState ColorSampler, FVoxelLandMaterialProjection A,
+	FVoxelLandMaterialProjection B, FVoxelLandMaterialAxes Axes, uint Slot, float3 Tint)
+{
+	const float3 ColorA = VoxelLandSampleArray(ColorArray, ColorSampler, A, Slot).rgb;
+	const float3 ColorB = VoxelLandSampleArray(ColorArray, ColorSampler, B, Slot).rgb;
+	const float3 Color = lerp(ColorA, ColorB, Axes.Weights.y) * Tint;
+	return lerp(VoxelLandNeutralAlbedo(Tint), Color, Axes.TextureInfluence);
+}
+
+FVoxelLandMaterialLayer VoxelLandReadLayer(Texture2DArray ColorArray, SamplerState ColorSampler,
+	Texture2DArray NormalArray, SamplerState NormalSampler, Texture2DArray ORMHArray, SamplerState ORMHSampler,
+	FVoxelLandMaterialProjection A, FVoxelLandMaterialProjection B, FVoxelLandMaterialAxes Axes, uint Slot,
+	float3 Tint, float3 SurfaceNormal)
+{
+	FVoxelLandMaterialLayer Layer;
+	Layer.Color = VoxelLandLayerColor(ColorArray, ColorSampler, A, B, Axes, Slot, Tint);
+	const float2 NormalA = VoxelLandSampleArray(NormalArray, NormalSampler, A, Slot).rg;
+	const float2 NormalB = VoxelLandSampleArray(NormalArray, NormalSampler, B, Slot).rg;
+	const float3 ProjectedNormal = lerp(VoxelLandUnpackProjectionNormal(NormalA, Axes.Indices.x, Axes.Signs.x, SurfaceNormal),
+		VoxelLandUnpackProjectionNormal(NormalB, Axes.Indices.y, Axes.Signs.y, SurfaceNormal), Axes.Weights.y);
+	Layer.Normal = lerp(SurfaceNormal, ProjectedNormal, Axes.TextureInfluence);
+	const float4 ProjectedORMH = lerp(VoxelLandSampleArray(ORMHArray, ORMHSampler, A, Slot),
+		VoxelLandSampleArray(ORMHArray, ORMHSampler, B, Slot), Axes.Weights.y);
+	Layer.ORMH = lerp(float4(1.0, 0.75, 0.0, 0.5), ProjectedORMH, Axes.TextureInfluence);
+	return Layer;
+}
+
+float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSampler, Texture2DArray NormalArray,
+	SamplerState NormalSampler, Texture2DArray ORMHArray, SamplerState ORMHSampler, float4 SlotIds, float4 Weights,
+	float3 LocalPosition, float3 OriginHigh, float3 OriginLow, float3 SurfaceNormal, float3 ViewPosition,
+	float FarDistanceCm, float DebugMode, const float4 SlotTintContrast[32], const float4 PackedPeriods[8],
+	out float3 WorldNormal, out float AO, out float Roughness, out float Metallic)
+{
+	uint4 Slots = (uint4)round(clamp(SlotIds, 0.0, 31.0));
+	Weights = max(Weights, 0.0);
+	VoxelLandRankLayers(Slots, Weights);
+	if (Weights.x <= 0.0)
+	{
+		Slots.x = 0;
+		Weights.x = 1.0;
+	}
+
+	const float LengthSquared = dot(SurfaceNormal, SurfaceNormal);
+	SurfaceNormal = LengthSquared > 0.0001 ? SurfaceNormal * rsqrt(LengthSquared) : float3(0, 0, 1);
+	const FVoxelLandMaterialAxes Axes = VoxelLandSelectProjections(SurfaceNormal);
+	const FDFVector3 Position = DFAdd(MakeDFVector3(OriginHigh, OriginLow), LocalPosition);
+	// Take derivatives before either layer/axis selection or wrapping.
+	const float3 PositionDx = ddx(LocalPosition);
+	const float3 PositionDy = ddy(LocalPosition);
+	const float Distance = length(ViewPosition);
+	WorldNormal = SurfaceNormal;
+	AO = 1.0;
+	Roughness = 0.75;
+	Metallic = 0.0;
+
+	[branch]
+	if (DebugMode >= 0.5)
+	{
+		if (DebugMode < 1.5)
+		{
+			return Weights.xyz;
+		}
+
+		if (DebugMode < 2.5)
+		{
+			return frac(float(Slots.x + 1) * float3(0.618034, 0.414214, 0.732051));
+		}
+
+		return VoxelLandWrapPosition(Position, VoxelLandSlotPeriod(PackedPeriods, Slots.x));
+	}
+
+	// A layer reaches zero contribution before it can swap with a discarded one. In a full tie,
+	// use the continuous weighted tint instead of trying to choose a sample from the tied set.
+	const float SourceWeightSum = Weights.x + Weights.y + Weights.z + Weights.w;
+	const float3 WeightedTint = (SlotTintContrast[Slots.x].rgb * Weights.x + SlotTintContrast[Slots.y].rgb * Weights.y
+		+ SlotTintContrast[Slots.z].rgb * Weights.z + SlotTintContrast[Slots.w].rgb * Weights.w) / SourceWeightSum;
+	const float3 NeutralAlbedo = VoxelLandNeutralAlbedo(WeightedTint);
+	const float TieBlendWidth = 0.08 * SourceWeightSum;
+	// The near path uses some of the same samples to fade to these far weights before the branch.
+	const float2 FarWeights = max(Weights.xy - Weights.z, 0.0);
+	const float FarWeightSum = FarWeights.x + FarWeights.y;
+	const float FarInfluence = smoothstep(0.0, TieBlendWidth, FarWeightSum);
+	const float InverseFarWeight = 1.0 / max(FarWeightSum, 0.000001);
+	[branch]
+	if (Distance >= FarDistanceCm)
+	{
+		float3 Color = 0.0;
+		[loop]
+		for (uint LayerIndex = 0; LayerIndex < 2; ++LayerIndex)
+		{
+			if (FarWeights[LayerIndex] <= 0.0)
+			{
+				break;
+			}
+			const uint Slot = Slots[LayerIndex];
+			const float Period = VoxelLandSlotPeriod(PackedPeriods, Slot);
+			const float3 Phase = VoxelLandWrapPosition(Position, Period);
+			const FVoxelLandMaterialProjection A = VoxelLandProject(Phase, PositionDx / Period, PositionDy / Period,
+				Axes.Indices.x, Axes.Signs.x);
+			const FVoxelLandMaterialProjection B = VoxelLandProject(Phase, PositionDx / Period, PositionDy / Period,
+				Axes.Indices.y, Axes.Signs.y);
+			Color += FarWeights[LayerIndex] * VoxelLandLayerColor(ColorArray, ColorSampler, A, B, Axes, Slot,
+				SlotTintContrast[Slot].rgb);
+		}
+		return lerp(NeutralAlbedo, Color * InverseFarWeight, FarInfluence);
+	}
+
+	const float3 NearWeights = max(Weights.xyz - Weights.w, 0.0);
+	const float NearInfluence = smoothstep(0.0, TieBlendWidth, NearWeights.x + NearWeights.y + NearWeights.z);
+	float3 ColorSum = 0.0;
+	float3 NormalSum = 0.0;
+	float3 ORMSum = 0.0;
+	float3 FarColor = 0.0;
+	float HeightWeightSum = 0.0;
+	[loop]
+	for (uint LayerIndex = 0; LayerIndex < 3; ++LayerIndex)
+	{
+		const float Weight = NearWeights[LayerIndex];
+		if (Weight <= 0.0)
+		{
+			break;
+		}
+		const uint Slot = Slots[LayerIndex];
+		const float Period = VoxelLandSlotPeriod(PackedPeriods, Slot);
+		const float3 Phase = VoxelLandWrapPosition(Position, Period);
+		const FVoxelLandMaterialProjection A = VoxelLandProject(Phase, PositionDx / Period, PositionDy / Period,
+			Axes.Indices.x, Axes.Signs.x);
+		const FVoxelLandMaterialProjection B = VoxelLandProject(Phase, PositionDx / Period, PositionDy / Period,
+			Axes.Indices.y, Axes.Signs.y);
+		const float4 TintContrast = SlotTintContrast[Slot];
+		const FVoxelLandMaterialLayer Layer = VoxelLandReadLayer(ColorArray, ColorSampler, NormalArray, NormalSampler,
+			ORMHArray, ORMHSampler, A, B, Axes, Slot, TintContrast.rgb, SurfaceNormal);
+		const float HeightWeight = Weight * exp2((saturate(Layer.ORMH.a) * 2.0 - 1.0) * saturate(TintContrast.a) * 4.0);
+		ColorSum += Layer.Color * HeightWeight;
+		NormalSum += Layer.Normal * HeightWeight;
+		ORMSum += Layer.ORMH.rgb * HeightWeight;
+		HeightWeightSum += HeightWeight;
+		if (LayerIndex < 2)
+		{
+			FarColor += Layer.Color * FarWeights[LayerIndex];
+		}
+	}
+
+	const float Transition = smoothstep(FarDistanceCm * 0.8, FarDistanceCm, Distance);
+	const float InverseHeightWeight = 1.0 / max(HeightWeightSum, 0.000001);
+	const float NearDetail = NearInfluence * (1.0 - Transition);
+	const float3 BlendedNormal = lerp(SurfaceNormal, NormalSum * InverseHeightWeight, NearDetail);
+	WorldNormal = dot(BlendedNormal, BlendedNormal) > 0.0001 ? normalize(BlendedNormal) : SurfaceNormal;
+	const float3 ORM = lerp(float3(AO, Roughness, Metallic), ORMSum * InverseHeightWeight, NearDetail);
+	AO = ORM.x;
+	Roughness = ORM.y;
+	Metallic = ORM.z;
+	const float3 NearResult = lerp(NeutralAlbedo, ColorSum * InverseHeightWeight, NearInfluence);
+	const float3 FarResult = lerp(NeutralAlbedo, FarColor * InverseFarWeight, FarInfluence);
+	return lerp(NearResult, FarResult, Transition);
+}
+
+#endif

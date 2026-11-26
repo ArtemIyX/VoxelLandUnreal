@@ -24,6 +24,9 @@ void AVoxelLandClipmapDemo::BeginPlay()
 void AVoxelLandClipmapDemo::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(StartupTimer);
+#if !UE_BUILD_SHIPPING && !UE_SERVER
+	StopFlight();
+#endif
 	OnInitializationFinished.RemoveDynamic(this, &AVoxelLandClipmapDemo::HandleInitializationFinished);
 	Super::EndPlay(EndPlayReason);
 }
@@ -31,6 +34,9 @@ void AVoxelLandClipmapDemo::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void AVoxelLandClipmapDemo::StartTerrain()
 {
 	bDataOnly = bDataOnly || IsRunningDedicatedServer() || !FApp::CanEverRender();
+#if !UE_BUILD_SHIPPING && !UE_SERVER
+	ConfigureFlight();
+#endif
 	if (!IsValid(TerrainConfig.Get()))
 	{
 		LastInitializationError = TEXT("Assign a World Config asset on the demo actor.");
@@ -48,6 +54,9 @@ void AVoxelLandClipmapDemo::StartTerrain()
 
 void AVoxelLandClipmapDemo::HandleInitializationFinished(bool bSuccess)
 {
+#if !UE_BUILD_SHIPPING && !UE_SERVER
+	bFlightReady = bFlightRequested && bSuccess;
+#endif
 	if (!bSuccess && !LastInitializationError.IsEmpty())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("%s: %s"), *GetName(), *LastInitializationError);

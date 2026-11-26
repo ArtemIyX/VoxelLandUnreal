@@ -5,6 +5,7 @@
 
 #include "VoxelLandClipmapDemo.generated.h"
 
+class ACameraActor;
 class UVoxelLandWorldConfig;
 
 UCLASS(Placeable, Blueprintable, meta = (DisplayName = "VoxelLand Clipmap Demo"))
@@ -14,6 +15,9 @@ class VOXELLAND_API AVoxelLandClipmapDemo : public AVoxelLandWorld
 
 public:
 	AVoxelLandClipmapDemo();
+#if !UE_BUILD_SHIPPING && !UE_SERVER
+	virtual void Tick(float DeltaSeconds) override;
+#endif
 
 protected:
 	virtual void BeginPlay() override;
@@ -32,4 +36,24 @@ private:
 
 	UFUNCTION()
 	void HandleInitializationFinished(bool bSuccess);
+
+#if !UE_BUILD_SHIPPING && !UE_SERVER
+	void ConfigureFlight();
+	void StartFlight();
+	void AdvanceFlight();
+	void StopFlight();
+	double GetFlightOffsetCm(double Elapsed, int32& OutCheckpoint, bool& bOutComplete) const;
+
+	TWeakObjectPtr<ACameraActor> FlightCamera;
+	TWeakObjectPtr<AActor> FlightPreviousView;
+	FVector FlightOrigin = FVector::ZeroVector;
+	TArray<FVector2D> FlightProbes;
+	double FlightStartedAt = 0.0;
+	double NextFlightSampleAt = 0.0;
+	double FlightHoldSeconds = 5.0;
+	uint64 FlightLastTicket = 0;
+	int32 FlightLastCheckpoint = INDEX_NONE;
+	bool bFlightRequested = false;
+	bool bFlightReady = false;
+#endif
 };

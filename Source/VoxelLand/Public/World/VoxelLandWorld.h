@@ -66,6 +66,9 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+#if !UE_BUILD_SHIPPING && !UE_SERVER
+	bool DescribeClipmapFlightCoverage(TConstArrayView<FVector2D> FixedProbes, uint64& LastTicket, FString& Out) const;
+#endif
 
 public:
 	virtual void Destroyed() override;

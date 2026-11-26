@@ -160,7 +160,8 @@ FVoxelLandMaterialLayer VoxelLandReadLayer(Texture2DArray ColorArray, SamplerSta
 float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSampler, Texture2DArray NormalArray,
 	SamplerState NormalSampler, Texture2DArray ORMHArray, SamplerState ORMHSampler, float4 SlotIds, float4 Weights,
 	float3 LocalPosition, float3 OriginHigh, float3 OriginLow, float3 SurfaceNormal, float3 ViewPosition,
-	float FarDistanceCm, float DebugMode, const float4 SlotTintContrast[32], const float4 PackedPeriods[8],
+	float FarDistanceCm, float DebugMode, float AmbientVisibility, float AmbientOcclusionStrength,
+	const float4 SlotTintContrast[32], const float4 PackedPeriods[8],
 	out float3 WorldNormal, out float AO, out float Roughness, out float Metallic)
 {
 	uint4 Slots = (uint4)round(clamp(SlotIds, 0.0, 31.0));
@@ -181,12 +182,19 @@ float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSample
 	const float3 PositionDy = ddy(LocalPosition);
 	const float Distance = length(ViewPosition);
 	WorldNormal = SurfaceNormal;
-	AO = 1.0;
+	const float GeometryAO = lerp(1.0, saturate(AmbientVisibility), saturate(AmbientOcclusionStrength));
+	AO = GeometryAO;
 	Roughness = 0.75;
 	Metallic = 0.0;
 
+	if (DebugMode >= 3.5 && DebugMode < 4.5)
+	{
+		return GeometryAO.xxx;
+	}
+
+	const bool bShowCombinedAO = DebugMode >= 4.5;
 	[branch]
-	if (DebugMode >= 0.5)
+	if (DebugMode >= 0.5 && DebugMode < 3.5)
 	{
 		if (DebugMode < 1.5)
 		{
@@ -216,6 +224,11 @@ float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSample
 	[branch]
 	if (Distance >= FarDistanceCm)
 	{
+		if (bShowCombinedAO)
+		{
+			return AO.xxx;
+		}
+
 		float3 Color = 0.0;
 		VOXELLAND_LAYER_LOOP
 		for (uint LayerIndex = 0; LayerIndex < 2; ++LayerIndex)
@@ -280,13 +293,29 @@ float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSample
 	const float NearDetail = NearInfluence * (1.0 - Transition);
 	const float3 BlendedNormal = lerp(SurfaceNormal, NormalSum * InverseHeightWeight, NearDetail);
 	WorldNormal = dot(BlendedNormal, BlendedNormal) > 0.0001 ? normalize(BlendedNormal) : SurfaceNormal;
-	const float3 ORM = lerp(float3(AO, Roughness, Metallic), ORMSum * InverseHeightWeight, NearDetail);
-	AO = ORM.x;
+	const float3 ORM = lerp(float3(1.0, Roughness, Metallic), ORMSum * InverseHeightWeight, NearDetail);
+	AO = ORM.x * GeometryAO;
 	Roughness = ORM.y;
 	Metallic = ORM.z;
+	if (bShowCombinedAO)
+	{
+		return AO.xxx;
+	}
 	const float3 NearResult = lerp(NeutralAlbedo, ColorSum * InverseHeightWeight, NearInfluence);
 	const float3 FarResult = lerp(NeutralAlbedo, FarColor * InverseFarWeight, FarInfluence);
 	return lerp(NearResult, FarResult, Transition);
+}
+
+// Keep previously generated custom expressions valid until their material is updated.
+float3 VoxelLandShadeTerrain(Texture2DArray ColorArray, SamplerState ColorSampler, Texture2DArray NormalArray,
+	SamplerState NormalSampler, Texture2DArray ORMHArray, SamplerState ORMHSampler, float4 SlotIds, float4 Weights,
+	float3 LocalPosition, float3 OriginHigh, float3 OriginLow, float3 SurfaceNormal, float3 ViewPosition,
+	float FarDistanceCm, float DebugMode, const float4 SlotTintContrast[32], const float4 PackedPeriods[8],
+	out float3 WorldNormal, out float AO, out float Roughness, out float Metallic)
+{
+	return VoxelLandShadeTerrain(ColorArray, ColorSampler, NormalArray, NormalSampler, ORMHArray, ORMHSampler,
+		SlotIds, Weights, LocalPosition, OriginHigh, OriginLow, SurfaceNormal, ViewPosition, FarDistanceCm,
+		DebugMode, 1.0, 1.0, SlotTintContrast, PackedPeriods, WorldNormal, AO, Roughness, Metallic);
 }
 
 #endif

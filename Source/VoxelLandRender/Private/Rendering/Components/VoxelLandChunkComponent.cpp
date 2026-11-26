@@ -1,4 +1,5 @@
 #include "Rendering/Components/VoxelLandChunkComponent.h"
+#include "Rendering/Materials/VoxelLandTerrainMaterial.h"
 #include "DynamicMeshBuilder.h"
 #include "Engine/CollisionProfile.h"
 #include "LocalVertexFactory.h"
@@ -70,12 +71,15 @@ public:
 			Vertices.Reserve(Mesh->Vertices.Num());
 			const bool bHasMaterialBlend =
 				!Mesh->MaterialBlend.IsEmpty() && ensure(Mesh->MaterialBlend.Num() == Mesh->Vertices.Num());
+			const bool bHasAmbientVisibility = !Mesh->AmbientVisibility.IsEmpty();
 			for (int32 Index = 0; Index < Mesh->Vertices.Num(); ++Index)
 			{
 				const FVoxelLandMeshVertex& Source = Mesh->Vertices[Index];
-				FDynamicMeshVertex Vertex;
-				Vertex.Position = Source.Position;
+				FDynamicMeshVertex Vertex(Source.Position);
 				Vertex.TextureCoordinate[0] = Source.UV;
+				const float AmbientVisibility = bHasAmbientVisibility ? Mesh->AmbientVisibility[Index] / 255.0f : 1.0f;
+				Vertex.TextureCoordinate[FVoxelLandTerrainMaterial::AmbientOcclusionUVIndex] =
+					FVector2f(AmbientVisibility, 0.0f);
 				Vertex.Color = Source.Color;
 				Vertex.SetTangents(
 					Source.Tangent, FVector3f::CrossProduct(Source.Normal, Source.Tangent), Source.Normal);
@@ -85,12 +89,13 @@ public:
 				}
 				Vertices.Add(Vertex);
 			}
-			constexpr uint32 MaterialTexCoords = 5;
+			constexpr uint32 MaterialTexCoords = FVoxelLandTerrainMaterial::AmbientOcclusionUVIndex + 1;
 			if (bHasMaterialBlend)
 			{
 				Buffers.StaticMeshVertexBuffer.SetUseFullPrecisionUVs(true);
 			}
-			Buffers.InitFromDynamicVertex(RHICmdList, &Factory, Vertices, bHasMaterialBlend ? MaterialTexCoords : 1);
+			const uint32 TexCoordCount = bHasMaterialBlend || bHasAmbientVisibility ? MaterialTexCoords : 1;
+			Buffers.InitFromDynamicVertex(RHICmdList, &Factory, Vertices, TexCoordCount);
 			IndexBuffer.Indices = Mesh->Indices;
 			IndexBuffer.InitResource(RHICmdList);
 #if WITH_EDITOR
@@ -190,7 +195,8 @@ bool UVoxelLandChunkComponent::SetMesh(TSharedPtr<const FVoxelLandMeshData, ESPM
 {
 	check(IsInGameThread());
 	if (!InMesh || InMesh->Vertices.IsEmpty() || InMesh->Indices.IsEmpty() || InMesh->Indices.Num() % 3 != 0
-		|| !InMesh->Bounds.IsValid)
+		|| !InMesh->Bounds.IsValid
+		|| (!InMesh->AmbientVisibility.IsEmpty() && InMesh->AmbientVisibility.Num() != InMesh->Vertices.Num()))
 	{
 		return false;
 	}

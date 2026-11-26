@@ -17,7 +17,9 @@ public:
 	static const FName LogicalOriginLowParameter;
 	static const FName FarDistanceParameter;
 	static const FName DebugModeParameter;
+	static const FName AmbientOcclusionStrengthParameter;
 
+	static constexpr int32 AmbientOcclusionUVIndex = 5;
 	static constexpr int32 LogicalOriginHighIndex = 0;
 	static constexpr int32 LogicalOriginLowIndex = 4;
 	static constexpr int32 PeriodsPerParameter = 4;

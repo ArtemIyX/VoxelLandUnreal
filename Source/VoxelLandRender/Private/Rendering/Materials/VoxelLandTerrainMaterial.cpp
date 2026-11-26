@@ -12,6 +12,7 @@ const FName FVoxelLandTerrainMaterial::LogicalOriginHighParameter(TEXT("TerrainL
 const FName FVoxelLandTerrainMaterial::LogicalOriginLowParameter(TEXT("TerrainLogicalOriginLow"));
 const FName FVoxelLandTerrainMaterial::FarDistanceParameter(TEXT("TerrainFarDistanceCm"));
 const FName FVoxelLandTerrainMaterial::DebugModeParameter(TEXT("TerrainDebugMode"));
+const FName FVoxelLandTerrainMaterial::AmbientOcclusionStrengthParameter(TEXT("TerrainAmbientOcclusionStrength"));
 
 UMaterialInstanceDynamic* FVoxelLandTerrainMaterial::CreateInstance(
 	UObject* Outer, const UVoxelLandMaterialPalette& Palette)

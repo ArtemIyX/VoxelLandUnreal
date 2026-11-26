@@ -78,6 +78,10 @@ public:
 		return Array;
 	}
 
+	static constexpr const TCHAR* ShaderArguments =
+		TEXT(" FarDistanceCm, DebugMode, MeshUV5.x, AmbientOcclusionStrength, SlotTintContrast, PackedPeriods,"
+			 " WorldNormal, AO, Roughness, Metallic);");
+
 	static constexpr int32 VectorRGBAOutput = 5;
 	static constexpr int32 FirstMaterialUV = 1;
 	static constexpr int32 MaterialUVCount = 4;
@@ -125,6 +129,46 @@ UMaterial* FVoxelLandTerrainMaterialBuilder::CreateSharedMaster()
 	return Material;
 }
 
+UMaterial* FVoxelLandTerrainMaterialBuilder::UpdateSharedMasterAmbientOcclusion(bool& bUpdated)
+{
+	bUpdated = false;
+	UMaterial* Material = LoadSharedMaster();
+	if (!Material)
+	{
+		return nullptr;
+	}
+
+	UMaterialEditorOnlyData* Data = Material->GetEditorOnlyData();
+	UMaterialExpressionCustom* Custom =
+		Data ? Cast<UMaterialExpressionCustom>(Data->AmbientOcclusion.Expression) : nullptr;
+	if (!Custom || !Custom->IncludeFilePaths.Contains(TEXT("/Plugin/VoxelLand/Private/VoxelLandTerrainMaterial.ush")))
+	{
+		return nullptr;
+	}
+	if (Custom->Code.Contains(FVoxelLandTerrainMaterialNodes::ShaderArguments, ESearchCase::CaseSensitive))
+	{
+		return Material;
+	}
+
+	const TCHAR* LegacyArguments =
+		TEXT(" FarDistanceCm, DebugMode, SlotTintContrast, PackedPeriods, WorldNormal, AO, Roughness, Metallic);");
+	const FString UpdatedCode = Custom->Code.Replace(
+		LegacyArguments, FVoxelLandTerrainMaterialNodes::ShaderArguments, ESearchCase::CaseSensitive);
+	if (UpdatedCode == Custom->Code)
+	{
+		return nullptr;
+	}
+
+	Material->Modify();
+	Custom->Modify();
+	AddAmbientOcclusionInputs(*Material, *Custom);
+	Custom->Code = UpdatedCode;
+	Custom->RebuildOutputs();
+	Material->PostEditChange();
+	bUpdated = true;
+	return Material;
+}
+
 void FVoxelLandTerrainMaterialBuilder::BuildExpressions(UMaterial& Material, const UVoxelLandMaterialPalette& Palette)
 {
 	Material.SetShadingModel(MSM_DefaultLit);
@@ -145,6 +189,7 @@ void FVoxelLandTerrainMaterialBuilder::BuildExpressions(UMaterial& Material, con
 		FVoxelLandTerrainMaterialNodes::AddArray(
 			Material, FVoxelLandTerrainMaterial::ORMHParameter, Palette.ORMHArray, SAMPLERTYPE_LinearColor));
 	AddMeshInputs(Material, *Custom);
+	AddAmbientOcclusionInputs(Material, *Custom);
 	AddSlotInputs(Material, *Custom, Palette);
 	ConnectOutputs(Material, *Custom);
 
@@ -193,6 +238,17 @@ void FVoxelLandTerrainMaterialBuilder::AddMeshInputs(UMaterial& Material, UMater
 		FVoxelLandTerrainMaterialNodes::AddScalar(Material, FVoxelLandTerrainMaterial::DebugModeParameter, 0.0f));
 }
 
+void FVoxelLandTerrainMaterialBuilder::AddAmbientOcclusionInputs(UMaterial& Material, UMaterialExpressionCustom& Custom)
+{
+	UMaterialExpressionTextureCoordinate* UV =
+		FVoxelLandTerrainMaterialNodes::Add<UMaterialExpressionTextureCoordinate>(Material);
+	UV->CoordinateIndex = FVoxelLandTerrainMaterial::AmbientOcclusionUVIndex;
+	AddInput(Custom, TEXT("MeshUV5"), UV);
+	AddInput(Custom, TEXT("AmbientOcclusionStrength"),
+		FVoxelLandTerrainMaterialNodes::AddScalar(
+			Material, FVoxelLandTerrainMaterial::AmbientOcclusionStrengthParameter, 1.0f));
+}
+
 void FVoxelLandTerrainMaterialBuilder::AddSlotInputs(
 	UMaterial& Material, UMaterialExpressionCustom& Custom, const UVoxelLandMaterialPalette& Palette)
 {
@@ -223,10 +279,9 @@ void FVoxelLandTerrainMaterialBuilder::AddSlotInputs(
 			"const float4 SlotTintContrast[%d] = { %s };\n"
 			"const float4 PackedPeriods[%d] = { %s };\n"
 			"return VoxelLandShadeTerrain(ColorArray, ColorArraySampler, NormalArray, NormalArraySampler, ORMHArray, ORMHArraySampler,"
-			" float4(MeshUV1, MeshUV2), float4(MeshUV3, MeshUV4), LocalPosition, OriginHigh, OriginLow, GeometricNormal, ViewPosition,"
-			" FarDistanceCm, DebugMode, SlotTintContrast, PackedPeriods, WorldNormal, AO, Roughness, Metallic);"),
+			" float4(MeshUV1, MeshUV2), float4(MeshUV3, MeshUV4), LocalPosition, OriginHigh, OriginLow, GeometricNormal, ViewPosition,%s"),
 		UVoxelLandMaterialPalette::MaxSlots, *TintInputs, FVoxelLandTerrainMaterialNodes::PeriodGroupCount,
-		*PeriodInputs);
+		*PeriodInputs, FVoxelLandTerrainMaterialNodes::ShaderArguments);
 }
 
 void FVoxelLandTerrainMaterialBuilder::ConnectOutputs(UMaterial& Material, UMaterialExpressionCustom& Custom)

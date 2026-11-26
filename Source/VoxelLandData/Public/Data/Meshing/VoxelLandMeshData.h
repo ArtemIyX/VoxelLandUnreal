@@ -13,6 +13,8 @@ struct FVoxelLandMeshData
 	FBox3f Bounds = FBox3f(ForceInit);
 	uint32 NormalFallbacks = 0;
 	TArray<FVoxelLandMaterialBlend> MaterialBlend;
+	// Optional per-vertex terrain ambient visibility. Empty or 255 is neutral.
+	TArray<uint8> AmbientVisibility;
 };
 
 // Mesh-local floats share an exactly representable binary grid relative to a

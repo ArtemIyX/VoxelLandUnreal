@@ -4,6 +4,7 @@
 
 #include "Async/Async.h"
 #include "Generation/Clipmap/Seams/VoxelLandVerticalTerrainSeams.h"
+#include "Generation/Meshing/Lighting/VoxelLandTerrainAmbientOcclusion.h"
 #include "Generation/Meshing/VoxelLandMeshing.h"
 #include "Misc/AutomationTest.h"
 
@@ -343,6 +344,69 @@ bool ReplaceWithAnalytic(FVoxelLandM7SeamMesh& Mesh, bool bStacked)
 		== EVoxelLandMeshResult::Success;
 }
 
+bool AccumulatePairedAmbientVisibility(FVoxelLandMeshData& Mesh, const FVoxelLandChunkKey& Key,
+	const FVoxelLandGenerator& Generator, FVoxelLandWorkerContext& Worker, TMap<FVector3d, uint8>& Out)
+{
+	const FVector3d Origin = MeshOrigin(Key);
+	if (FVoxelLandTerrainAmbientOcclusion::Bake(Mesh, Generator, Worker, Key, Origin, &FFixture::NeverCancel)
+		|| Mesh.AmbientVisibility.Num() != Mesh.Vertices.Num())
+	{
+		return false;
+	}
+	for (const uint32 Index : Mesh.Indices)
+	{
+		const FVector3d Position = Origin + FVector3d(Mesh.Vertices[Index].Position);
+		const uint8 Visibility = Mesh.AmbientVisibility[Index];
+		if (const uint8* Existing = Out.Find(Position); Existing && *Existing != Visibility)
+		{
+			return false;
+		}
+		Out.Add(Position, Visibility);
+	}
+	return true;
+}
+
+bool CheckCurtainAmbientVisibility(const FInputs& Inputs, FVoxelLandM7SeamPatch& Patch,
+	const FVoxelLandGenerator& Generator, FVoxelLandWorkerContext& Worker)
+{
+	TMap<FVector3d, uint8> TerrainVisibility;
+	if (!AccumulatePairedAmbientVisibility(
+			Patch.CoarseTerrain, Inputs.Coarse.Key, Generator, Worker, TerrainVisibility))
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < Inputs.Fine.Num(); ++Index)
+	{
+		if (!AccumulatePairedAmbientVisibility(
+				Patch.FineTerrain[Index], Inputs.Fine[Index].Key, Generator, Worker, TerrainVisibility))
+		{
+			return false;
+		}
+	}
+	const FVector3d Origin = MeshOrigin(Inputs.Coarse.Key);
+	FVoxelLandMeshData& Curtain = Patch.Curtain;
+	if (Curtain.Vertices.IsEmpty()
+		|| FVoxelLandTerrainAmbientOcclusion::Bake(
+			Curtain, Generator, Worker, Inputs.Coarse.Key, Origin, &FFixture::NeverCancel)
+		|| Curtain.AmbientVisibility.Num() != Curtain.Vertices.Num())
+	{
+		return false;
+	}
+	// The lower skirt deliberately overlaps both meshes. Only the top vertices
+	// share exact positions with the visible coarse or fine terrain rim.
+	for (int32 Index = 0; Index < Curtain.Vertices.Num(); Index += 4)
+	{
+		const uint8* First = TerrainVisibility.Find(Origin + FVector3d(Curtain.Vertices[Index].Position));
+		const uint8* Last = TerrainVisibility.Find(Origin + FVector3d(Curtain.Vertices[Index + 1].Position));
+		if (!First || !Last || *First != Curtain.AmbientVisibility[Index]
+			|| *Last != Curtain.AmbientVisibility[Index + 1])
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 FString RunCase(ETestTerrain Terrain, uint8 Axis, bool bPositive)
 {
 	FInputs Inputs;
@@ -388,6 +452,10 @@ FString RunCase(ETestTerrain Terrain, uint8 Axis, bool bPositive)
 	if (Terrain != ETestTerrain::Valley)
 	{
 		return {};
+	}
+	if (Axis == 0 && bPositive && !CheckCurtainAmbientVisibility(Inputs, Patch, *Generator, *Worker))
+	{
+		return TEXT("The curtain top and its adjacent terrain rim disagreed on ambient visibility");
 	}
 	const int32 Prior = Patch.Curtain.Indices.Num();
 	FVoxelLandM7VerticalFace Invalid = Inputs.Face;

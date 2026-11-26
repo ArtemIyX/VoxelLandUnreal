@@ -184,6 +184,7 @@ public:
 	TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> GetM4HeightGrid() const { return M4HeightGrid; }
 
 private:
+	friend class FVoxelLandAmbientOcclusionField;
 	static FVoxelLandM5Diagnostic CreateMeteredInternal(const FVoxelLandGeneratorSettings& Settings,
 		TSharedPtr<const FVoxelLandM4HeightGrid, ESPMode::ThreadSafe> HeightGrid, bool bNormalizeSlope,
 		const FVoxelLandM4OverhangConfig* Overhang, const FVoxelLandM4SmoothSettings* Smooth,

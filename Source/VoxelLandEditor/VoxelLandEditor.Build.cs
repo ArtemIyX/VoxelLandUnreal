@@ -27,6 +27,8 @@ public class VoxelLandEditor : ModuleRules
                 "VoxelLandAlgo",
                 "VoxelLand",
                 "VoxelLandRender",
+                "VoxelLandPCG",
+                "PCG",
                 "UnrealEd",
                 "AssetTools",
                 "AssetRegistry",

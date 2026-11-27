@@ -16,7 +16,7 @@ public:
 	void Tick(AVoxelLandWorld& Terrain);
 	void SuspendAll();
 	void Reset();
-	bool HasManagedProps() const { return !Props.IsEmpty(); }
+	bool HasManagedProps() const;
 	int64 GetHolds() const { return Holds; }
 	int64 GetRecoveries() const { return Recoveries; }
 

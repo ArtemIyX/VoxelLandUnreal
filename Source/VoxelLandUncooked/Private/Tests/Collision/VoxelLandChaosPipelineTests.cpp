@@ -55,12 +55,30 @@ public:
 		}
 	}
 
+	bool HoldShutdownCook(FMesh Mesh, FCompletion Completion)
+	{
+		ShutdownDelivery = MoveTemp(Completion);
+		const TSharedRef<FVoxelLandChaosPipelineProbe, ESPMode::ThreadSafe> Probe = AsShared();
+		if (FVoxelLandChaosCook::Start(Mesh, [Probe](FVoxelLandChaosCookResultPtr Result) {
+				Probe->ShutdownResult = MoveTemp(Result);
+				Probe->bShutdownCookCompleted = true;
+			}))
+		{
+			return true;
+		}
+		bShutdownCookCompleted = true;
+		return false;
+	}
+
 	int32 Submissions = 0;
 	bool bRealCookCompleted = false;
+	bool bShutdownCookCompleted = false;
 	FCompletion Obsolete;
 	FCompletion AwaitingDelivery;
 	FCompletion Detached;
 	FVoxelLandChaosCookResultPtr RealResult;
+	FCompletion ShutdownDelivery;
+	FVoxelLandChaosCookResultPtr ShutdownResult;
 };
 
 class FVoxelLandChaosPipelineCommand final : public IAutomationLatentCommand
@@ -121,6 +139,10 @@ public:
 				return WaitExpanded();
 			case EPhase::WaitTrimmed:
 				return WaitTrimmed();
+			case EPhase::WaitShutdownCook:
+				return WaitShutdownCook();
+			case EPhase::WaitShutdownDrain:
+				return WaitShutdownDrain();
 		}
 		return Finish();
 	}
@@ -136,7 +158,9 @@ private:
 		WaitDetached,
 		WaitActivated,
 		WaitExpanded,
-		WaitTrimmed
+		WaitTrimmed,
+		WaitShutdownCook,
+		WaitShutdownDrain
 	};
 
 	static constexpr int32 FloorHeightCm = 1100;
@@ -351,6 +375,51 @@ private:
 		Test.TestEqual(TEXT("The normalized lease remains ready"), Terrain.GetChaosCollisionReadiness(Owner),
 			EVoxelLandChaosReadiness::Ready);
 		Test.TestTrue(TEXT("The kept tile still blocks after the adjacent body retires"), TraceSurface(KeptHit));
+
+		const TSharedRef<FVoxelLandChaosPipelineProbe, ESPMode::ThreadSafe> CookProbe = Probe;
+		Terrain.SetChaosCookHookForTests([CookProbe](FVoxelLandChaosPipelineProbe::FMesh Mesh,
+											 FVoxelLandChaosPipelineProbe::FCompletion Completion) {
+			return CookProbe->HoldShutdownCook(Mesh, MoveTemp(Completion));
+		});
+		if (!Test.TestTrue(TEXT("Start a real cook to detach by explicit shutdown"),
+				Terrain.RequestChaosCollisionRebuild(Tiles())))
+		{
+			return Finish();
+		}
+		Phase = EPhase::WaitShutdownCook;
+		return false;
+	}
+
+	bool WaitShutdownCook()
+	{
+		if (!Probe->bShutdownCookCompleted)
+		{
+			return false;
+		}
+		if (!Test.TestTrue(TEXT("A valid backend cook awaits delivery"), Probe->ShutdownResult.IsValid())
+			|| !Test.TestEqual(TEXT("One undelivered cook is active"), Terrain.GetChaosCollisionStats().CookActive, 1))
+		{
+			return Finish();
+		}
+		Terrain.Shutdown();
+		Test.TestFalse(TEXT("Explicit shutdown stops the surviving actor's tick"), Terrain.IsActorTickEnabled());
+		Test.TestEqual(TEXT("Explicit shutdown keeps the detached cook accounted for"),
+			Terrain.GetChaosCollisionStats().CookActive, 1);
+		Probe->ShutdownDelivery(MoveTemp(Probe->ShutdownResult));
+		Phase = EPhase::WaitShutdownDrain;
+		return false;
+	}
+
+	bool WaitShutdownDrain()
+	{
+		const FVoxelLandChaosStats Stats = Terrain.GetChaosCollisionStats();
+		if (Stats.CookActive || Stats.DetachedCooks || Stats.PendingBytes)
+		{
+			return false;
+		}
+		FHitResult Hit;
+		Test.TestFalse(TEXT("Cook cleanup does not turn on the actor's tick"), Terrain.IsActorTickEnabled());
+		Test.TestFalse(TEXT("A late successful cook cannot reinstall after shutdown"), TraceSurface(Hit));
 		return Finish();
 	}
 

@@ -19,6 +19,14 @@ bool FVoxelLandChaosProps::Register(
 	AVoxelLandWorld& Terrain, UPrimitiveComponent& Component, FGuid& OutId, const bool bSimulateWhenReady)
 {
 	check(IsInGameThread());
+	for (TMap<FGuid, FVoxelLandChaosManagedProp>::TIterator It = Props.CreateIterator(); It; ++It)
+	{
+		if (!It.Value().Component.IsValid())
+		{
+			Terrain.ReleaseChaosCollisionLease(It.Key());
+			It.RemoveCurrent();
+		}
+	}
 	const FBodyInstance* Body = Component.GetBodyInstance();
 	const UBodySetup* Setup = Body ? Body->GetBodySetup() : nullptr;
 	if (Props.Num() >= MaxManagedProps || Component.GetWorld() != Terrain.GetWorld() || !Component.IsRegistered()
@@ -54,6 +62,18 @@ void FVoxelLandChaosProps::Unregister(AVoxelLandWorld& Terrain, const FGuid& Con
 	{
 		Terrain.ReleaseChaosCollisionLease(ConsumerId);
 	}
+}
+
+bool FVoxelLandChaosProps::HasManagedProps() const
+{
+	for (const TPair<FGuid, FVoxelLandChaosManagedProp>& Entry : Props)
+	{
+		if (Entry.Value.Component.IsValid())
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 void FVoxelLandChaosProps::Tick(AVoxelLandWorld& Terrain)

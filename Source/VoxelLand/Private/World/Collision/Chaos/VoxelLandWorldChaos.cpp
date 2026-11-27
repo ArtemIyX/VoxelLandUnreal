@@ -60,13 +60,30 @@ void AVoxelLandWorld::StopChaosCollision(const bool bDestroyBodies)
 	{
 		const bool bWorldEnds = bLifecycleEnded || !GetWorld() || GetWorld()->bIsTearingDown;
 		ChaosCollision->Disable(bDestroyBodies, bWorldEnds);
+		if (bWorldEnds || (!ChaosCollision->HasOutstanding() && !ChaosCollision->HasRetainedState()))
+		{
+			ChaosCollision.Reset();
+		}
+		else
+		{
+			ChaosCollision->DrainAfterActorShutdown();
+		}
 	}
 }
 
 void AVoxelLandWorld::AdvanceChaosCollision()
 {
-	ChaosCollision->Tick();
-	if (!ChaosCollision->IsEnabled() && !ChaosCollision->HasOutstanding())
+	if (ChaosCollision->IsEnabled())
+	{
+		ChaosCollision->Tick();
+		return;
+	}
+	if (ChaosCollision->HasOutstanding())
+	{
+		ChaosCollision->Tick();
+	}
+	// Runtime deactivation retains accepted policy, while shutdown clears it through Disable.
+	if (!ChaosCollision->HasOutstanding() && !ChaosCollision->HasRetainedState())
 	{
 		ChaosCollision.Reset();
 	}

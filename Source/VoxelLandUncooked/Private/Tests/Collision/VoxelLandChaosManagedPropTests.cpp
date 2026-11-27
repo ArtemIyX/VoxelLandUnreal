@@ -13,6 +13,25 @@
 #include "Misc/AutomationTest.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 
+static USphereComponent* SpawnChaosManagedSphere(UWorld& World, const FVector& Location)
+{
+	AActor* Prop = World.SpawnActor<AActor>();
+	if (!Prop)
+	{
+		return nullptr;
+	}
+	USphereComponent* Sphere = NewObject<USphereComponent>(Prop);
+	Prop->SetRootComponent(Sphere);
+	Prop->AddInstanceComponent(Sphere);
+	Sphere->InitSphereRadius(45.0f);
+	Sphere->SetMobility(EComponentMobility::Movable);
+	Sphere->SetGenerateOverlapEvents(false);
+	Sphere->SetCollisionProfileName(FName(TEXT("PhysicsActor")));
+	Sphere->SetWorldLocation(Location);
+	Sphere->RegisterComponent();
+	return Sphere;
+}
+
 class FVoxelLandChaosManagedPropCommand final : public IAutomationLatentCommand
 {
 public:
@@ -152,7 +171,51 @@ private:
 			Terrain.GetChaosCollisionReadiness(Consumer) == EVoxelLandChaosReadiness::Ready
 				&& Sphere.GetComponentLocation().Z > 1100.0);
 		Terrain.UnregisterChaosProp(Consumer);
+		CheckExpiredRegistrationCap();
 		return Finish(World, &Terrain);
+	}
+
+	void CheckExpiredRegistrationCap()
+	{
+		TArray<TWeakObjectPtr<USphereComponent>, TInlineAllocator<16>> Registered;
+		for (int32 Index = 0; Index < 16; ++Index)
+		{
+			USphereComponent* Temp = SpawnChaosManagedSphere(World, FVector(2900.0, 1600.0, 5000.0 + Index * 100.0));
+			FGuid TempConsumer;
+			if (!Test.TestTrue(TEXT("Fill the managed-prop registration cap"),
+					Temp && Terrain.RegisterChaosProp(*Temp, TempConsumer, false)))
+			{
+				return;
+			}
+			Registered.Add(Temp);
+		}
+
+		FGuid Replacement;
+		Test.TestFalse(
+			TEXT("The full cap rejects another live prop"), Terrain.RegisterChaosProp(Sphere, Replacement, false));
+		if (!Test.TestTrue(
+				TEXT("Disable collision while the cap is full"), Terrain.SetChaosTerrainCollisionEnabled(false)))
+		{
+			return;
+		}
+		for (TWeakObjectPtr<USphereComponent>& Entry : Registered)
+		{
+			if (USphereComponent* Temp = Entry.Get())
+			{
+				Temp->DestroyComponent();
+			}
+			Test.TestFalse(TEXT("Destroyed components expire before another physics tick"), Entry.IsValid());
+		}
+		if (!Test.TestTrue(TEXT("Re-enable collision without another physics tick"),
+				Terrain.SetChaosTerrainCollisionEnabled(true)))
+		{
+			return;
+		}
+		if (Test.TestTrue(TEXT("Expired props free slots before registration checks the cap"),
+				Terrain.RegisterChaosProp(Sphere, Replacement, false)))
+		{
+			Terrain.UnregisterChaosProp(Replacement);
+		}
 	}
 
 	FAutomationTestBase& Test;
@@ -200,21 +263,12 @@ bool FVoxelLandChaosManagedPropTest::RunTest(const FString& Parameters)
 	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
 	World->InitializeActorsForPlay(FURL());
 	AVoxelLandWorld* Terrain = World->SpawnActor<AVoxelLandWorld>();
-	AActor* Prop = World->SpawnActor<AActor>();
-	if (!TestNotNull(TEXT("Terrain actor created"), Terrain) || !TestNotNull(TEXT("Prop actor created"), Prop))
+	USphereComponent* Sphere = SpawnChaosManagedSphere(*World, FVector(2900.0, 1600.0, 1500.0));
+	if (!TestNotNull(TEXT("Terrain actor created"), Terrain) || !TestNotNull(TEXT("Prop sphere created"), Sphere))
 	{
 		FCommand::Finish(*World, Terrain);
 		return false;
 	}
-	USphereComponent* Sphere = NewObject<USphereComponent>(Prop);
-	Prop->SetRootComponent(Sphere);
-	Prop->AddInstanceComponent(Sphere);
-	Sphere->InitSphereRadius(45.0f);
-	Sphere->SetMobility(EComponentMobility::Movable);
-	Sphere->SetGenerateOverlapEvents(false);
-	Sphere->SetCollisionProfileName(FName(TEXT("PhysicsActor")));
-	Sphere->SetWorldLocation(FVector(2900.0, 1600.0, 1500.0));
-	Sphere->RegisterComponent();
 	World->GetWorldSettings()->NotifyBeginPlay();
 	Terrain->WorkerCount = 1;
 	Terrain->bDataOnly = true;

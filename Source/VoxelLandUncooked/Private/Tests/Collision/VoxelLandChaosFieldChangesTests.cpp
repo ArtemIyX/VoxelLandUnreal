@@ -98,6 +98,10 @@ public:
 				return WaitNewField();
 			case EPhase::CheckStaleRevision:
 				return CheckStaleRevision();
+			case EPhase::WaitDisabledDrain:
+				return WaitDisabledDrain();
+			case EPhase::CheckReenabledPolicy:
+				return CheckReenabledPolicy();
 		}
 		return Finish();
 	}
@@ -110,7 +114,9 @@ private:
 		WaitOriginal,
 		WaitBudgetRebuild,
 		WaitNewField,
-		CheckStaleRevision
+		CheckStaleRevision,
+		WaitDisabledDrain,
+		CheckReenabledPolicy
 	};
 
 	TConstArrayView<FVoxelLandChunkKey> Tiles() const { return MakeArrayView(&Tile, 1); }
@@ -244,14 +250,67 @@ private:
 		Test.TestEqual(TEXT("Rejection did not queue a cook"), *Submissions, 3);
 		Test.TestEqual(TEXT("Rejection did not invalidate readiness"), Terrain.GetChaosCollisionReadiness(Owner),
 			EVoxelLandChaosReadiness::Ready);
+		FVoxelLandChaosCollisionOverride Disabled;
+		Disabled.Mode = EVoxelLandChaosCollisionOverrideMode::Disabled;
+		if (!Test.TestTrue(TEXT("Accept a revisioned tile disable before global deactivation"),
+				Terrain.ApplyChaosCollisionOverrideRevision(Tiles(), Disabled, 3))
+			|| !Test.TestTrue(TEXT("Turn the world feature off"), Terrain.SetChaosTerrainCollisionEnabled(false)))
+		{
+			return Finish();
+		}
+		Phase = EPhase::WaitDisabledDrain;
+		return false;
+	}
+
+	bool WaitDisabledDrain()
+	{
+		const FVoxelLandChaosStats Stats = Terrain.GetChaosCollisionStats();
+		FHitResult Hit;
+		if (Stats.MeshActive || Stats.CookActive || Stats.ApplyQueued || Stats.PendingBytes || Stats.ResidentBytes
+			|| Stats.ActiveBodies || TraceSurface(Hit))
+		{
+			DrainedTicks = 0;
+			return false;
+		}
+		if (++DrainedTicks < 2)
+		{
+			return false;
+		}
+		const FVoxelLandChaosCollisionOverride Inherit;
+		if (!Test.TestTrue(
+				TEXT("Re-enable after all disabled work drains"), Terrain.SetChaosTerrainCollisionEnabled(true))
+			|| !Test.TestFalse(TEXT("An older policy cannot clear the retained override"),
+				Terrain.ApplyChaosCollisionOverrideRevision(Tiles(), Inherit, 2))
+			|| !Test.TestFalse(TEXT("An older source revision is still rejected after re-enable"),
+				Terrain.NotifyChaosCollisionSourceChanged(Tiles(), 1))
+			|| !Test.TestEqual(TEXT("The tile override survives global disable and re-enable"),
+				Terrain.UpdateChaosCollisionTiles(Owner, Tiles()), EVoxelLandChaosReadiness::Disabled))
+		{
+			return Finish();
+		}
+		Phase = EPhase::CheckReenabledPolicy;
+		return false;
+	}
+
+	bool CheckReenabledPolicy()
+	{
+		FHitResult Hit;
+		const FVoxelLandChaosStats Stats = Terrain.GetChaosCollisionStats();
+		Test.TestFalse(TEXT("Re-enabling the world does not publish the disabled tile"), TraceSurface(Hit));
+		Test.TestEqual(TEXT("The retained disable starts no mesh work"), Stats.MeshActive, 0);
+		Test.TestEqual(TEXT("The retained disable starts no cook"), Stats.CookActive, 0);
 		return Finish();
+	}
+
+	bool TraceSurface(FHitResult& Hit) const
+	{
+		return World.LineTraceSingleByChannel(
+			Hit, FVector(1600.0, 1600.0, 2300.0), FVector(1600.0, 1600.0, 500.0), ECC_Pawn);
 	}
 
 	bool TraceAtHeight(const int32 HeightCm, FHitResult& Hit) const
 	{
-		return World.LineTraceSingleByChannel(
-				   Hit, FVector(1600.0, 1600.0, 2300.0), FVector(1600.0, 1600.0, 500.0), ECC_Pawn)
-			&& FMath::IsNearlyEqual(Hit.ImpactPoint.Z, double(HeightCm), 2.0);
+		return TraceSurface(Hit) && FMath::IsNearlyEqual(Hit.ImpactPoint.Z, double(HeightCm), 2.0);
 	}
 
 	bool Finish()
@@ -277,6 +336,7 @@ private:
 	const double Started = FPlatformTime::Seconds();
 	const TSharedRef<int32, ESPMode::ThreadSafe> Submissions = MakeShared<int32, ESPMode::ThreadSafe>(0);
 	TWeakObjectPtr<UPrimitiveComponent> PreviousBody;
+	int32 DrainedTicks = 0;
 	EPhase Phase = EPhase::Start;
 };
 

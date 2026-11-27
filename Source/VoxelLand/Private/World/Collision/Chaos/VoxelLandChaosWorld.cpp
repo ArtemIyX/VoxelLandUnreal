@@ -85,7 +85,10 @@ FVoxelLandChaosWorld::FVoxelLandChaosWorld(AVoxelLandWorld& InWorld)
 {
 }
 
-FVoxelLandChaosWorld::~FVoxelLandChaosWorld() = default;
+FVoxelLandChaosWorld::~FVoxelLandChaosWorld()
+{
+	FTSTicker::RemoveTicker(ShutdownDrain);
+}
 
 bool FVoxelLandChaosWorld::Enable(const FVoxelLandChaosCollisionSettings& InSettings, FString& OutError)
 {
@@ -162,9 +165,34 @@ void FVoxelLandChaosWorld::Disable(const bool bDestroyBodies, const bool bWorldE
 	}
 }
 
+void FVoxelLandChaosWorld::DrainAfterActorShutdown()
+{
+	if (ShutdownDrain.IsValid() || !HasOutstanding())
+	{
+		return;
+	}
+	// The core ticker owns the element. Returning false expires its weak handle.
+	const TWeakObjectPtr<AVoxelLandWorld> Terrain(&World);
+	ShutdownDrain =
+		FTSTicker::GetCoreTicker().AddTicker(TEXT("VoxelLand Chaos shutdown drain"), 0.0f, [Terrain](float) {
+			AVoxelLandWorld* Actor = Terrain.Get();
+			if (!Actor || !Actor->ChaosCollision || (Actor->State && Actor->IsActorTickEnabled()))
+			{
+				return false;
+			}
+			Actor->AdvanceChaosCollision();
+			return Actor->ChaosCollision && Actor->ChaosCollision->HasOutstanding();
+		});
+}
+
 bool FVoxelLandChaosWorld::HasOutstanding() const
 {
-	return MeshActive > 0 || CookActive > 0 || !RetiredBodies.IsEmpty() || Props.HasManagedProps();
+	return MeshActive > 0 || CookActive > 0 || !RetiredBodies.IsEmpty() || BodyOwner.IsValid();
+}
+
+bool FVoxelLandChaosWorld::HasRetainedState() const
+{
+	return !Overrides.IsEmpty() || LatestSourceRevision != 0 || LatestPolicyRevision != 0 || Props.HasManagedProps();
 }
 
 EVoxelLandChaosCollisionDetail FVoxelLandChaosWorld::ResolveDetail(const FVoxelLandChunkKey& Key) const

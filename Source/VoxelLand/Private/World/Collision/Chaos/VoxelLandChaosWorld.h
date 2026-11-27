@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Containers/Queue.h"
+#include "Containers/Ticker.h"
 #include "Data/Collision/Chaos/VoxelLandChaosCollisionOverride.h"
 #include "VoxelLandChaosCookCompletion.h"
 #include "VoxelLandChaosLease.h"
@@ -27,9 +28,11 @@ public:
 	~FVoxelLandChaosWorld();
 	bool Enable(const FVoxelLandChaosCollisionSettings& InSettings, FString& OutError);
 	void Disable(bool bDestroyBodies, bool bWorldEnds);
+	void DrainAfterActorShutdown();
 	void Tick();
 	bool IsEnabled() const { return bEnabled; }
 	bool HasOutstanding() const;
+	bool HasRetainedState() const;
 	EVoxelLandChaosReadiness UpdateLease(const FGuid& Owner, TConstArrayView<FVoxelLandChunkKey> Keys);
 	void ReleaseLease(const FGuid& Owner);
 	EVoxelLandChaosReadiness GetReadiness(const FGuid& Owner) const;
@@ -81,6 +84,7 @@ private:
 	TUniquePtr<FVoxelLandChaosViewport> Viewport;
 #endif
 	TWeakObjectPtr<AActor> BodyOwner;
+	FTSTicker::FDelegateHandle ShutdownDrain;
 	TMap<FVoxelLandChunkKey, FVoxelLandChaosTile> Tiles;
 	TMap<FGuid, FVoxelLandChaosLease> Leases;
 	TMap<FVoxelLandChunkKey, FVoxelLandChaosCollisionOverride> Overrides;

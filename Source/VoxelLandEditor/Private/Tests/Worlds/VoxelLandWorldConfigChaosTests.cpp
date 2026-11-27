@@ -7,6 +7,7 @@
 #include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
 #include "World/Collision/Chaos/VoxelLandChaosStats.h"
 #include "World/Collision/Chaos/VoxelLandChaosTerrainComponent.h"
+#include "World/Collision/Chaos/VoxelLandChaosTileInfo.h"
 #include "World/VoxelLandWorld.h"
 #include "Engine/Engine.h"
 #include "Engine/HitResult.h"
@@ -294,6 +295,219 @@ bool FVoxelLandWorldConfigChaosTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FCommand>(*this, *World, *Terrain, *Config));
+	return true;
+}
+
+class FVoxelLandChaosRenderMappingCommand final : public IAutomationLatentCommand
+{
+public:
+	FVoxelLandChaosRenderMappingCommand(
+		FAutomationTestBase& InTest, UWorld& InWorld, AVoxelLandWorld& InTerrain, UVoxelLandWorldConfig& InConfig)
+		: Test(InTest)
+		, World(InWorld)
+		, Terrain(InTerrain)
+		, Config(&InConfig)
+	{
+	}
+
+	bool Update() override
+	{
+		constexpr double TimeoutSeconds = 35.0;
+		constexpr float StepSeconds = 1.f / 60.f;
+		World.Tick(LEVELTICK_All, StepSeconds);
+		if (!Terrain.LastInitializationError.IsEmpty())
+		{
+			Test.AddError(Terrain.LastInitializationError);
+			return Finish();
+		}
+
+		const int32 RenderLod = FindPublishedRenderLod();
+		FVoxelLandChaosTileInfo Info;
+		const bool bHasTile = Terrain.GetChaosCollisionTileInfo(Tile, Info);
+		if (FPlatformTime::Seconds() - Started > TimeoutSeconds)
+		{
+			Test.AddError(FString::Printf(
+				TEXT(
+					"Render mapping stalled at step %d: published LOD %d, requested %d, installed %d, has shape %d, readiness %d"),
+				Step, RenderLod, Info.RequestedLod, Info.InstalledLod, Info.bHasShape,
+				static_cast<int32>(Terrain.GetChaosCollisionReadiness(Consumer))));
+			return Finish();
+		}
+		if (!Terrain.HasWorldStateForTests())
+		{
+			return false;
+		}
+		if (!bViewRequested)
+		{
+			RequestView();
+			return false;
+		}
+		const uint64 Ticket = Terrain.GetM7PublishedTicketForTests();
+		if (Ticket == PreviousTicket || RenderLod != ExpectedRenderLods[Step])
+		{
+			return false;
+		}
+		if (!bHasLease)
+		{
+			const FVoxelLandChunkKey Tiles[] = {Tile};
+			const EVoxelLandChaosReadiness Readiness = Terrain.UpdateChaosCollisionTiles(Consumer, Tiles);
+			if (!Test.TestTrue(TEXT("Admit a bounded lease over the stable base tile"),
+					Readiness == EVoxelLandChaosReadiness::Pending || Readiness == EVoxelLandChaosReadiness::Ready))
+			{
+				return Finish();
+			}
+			bHasLease = true;
+			return false;
+		}
+		if (!bHasTile || !CheckCollisionForRenderLod(RenderLod, Info))
+		{
+			return false;
+		}
+
+		Test.AddInfo(
+			FString::Printf(TEXT("Published render LOD %d mapped to collision LOD %d at the same logical tile"),
+				RenderLod, Info.InstalledLod));
+		++Step;
+		if (Step == UE_ARRAY_COUNT(ExpectedRenderLods))
+		{
+			return Finish();
+		}
+		PreviousTicket = Ticket;
+		RequestView();
+		return false;
+	}
+
+private:
+	static constexpr double SurfaceCm = FVoxelLandWorldConfigChaosCommand::SurfaceCm;
+	static constexpr double ProbeXYCm = 1600.0;
+	static constexpr int32 ExpectedRenderLods[] = {0, 1, 2, 0};
+	static constexpr double ViewLocationsX[] = {1600.0, -13000.0, -24000.0, 1600.0};
+
+	void RequestView()
+	{
+		Terrain.SetTestViewLocation(FVector(ViewLocationsX[Step], ProbeXYCm, SurfaceCm + 300.0));
+		bViewRequested = true;
+	}
+
+	int32 FindPublishedRenderLod() const
+	{
+		TArray<FVoxelLandChunkKey> Leaves;
+		Terrain.CopyM7PublishedKeysForTests(Leaves);
+		// The probe lies within the XY footprint of the origin tile at every planar LOD.
+		for (const FVoxelLandChunkKey& Key : Leaves)
+		{
+			if (Key.Coordinate == FIntVector::ZeroValue)
+			{
+				return Key.LOD;
+			}
+		}
+		return INDEX_NONE;
+	}
+
+	bool CheckCollisionForRenderLod(const int32 RenderLod, const FVoxelLandChaosTileInfo& Info)
+	{
+		FHitResult Hit;
+		const FVector Top(ProbeXYCm, ProbeXYCm, SurfaceCm + 300.0);
+		const FVector Bottom(ProbeXYCm, ProbeXYCm, SurfaceCm - 300.0);
+		const FCollisionQueryParams Query(SCENE_QUERY_STAT(VoxelLandChaosRenderMapping), true);
+		const bool bTraceHits = World.LineTraceSingleByChannel(Hit, Top, Bottom, ECC_Pawn, Query);
+		const EVoxelLandChaosReadiness Readiness = Terrain.GetChaosCollisionReadiness(Consumer);
+		if (RenderLod == 0)
+		{
+			if (!Info.bCoverageReady || !Info.bHasShape || Info.RequestedLod != 1 || Info.InstalledLod != 1
+				|| Readiness != EVoxelLandChaosReadiness::Ready || !bTraceHits)
+			{
+				return false;
+			}
+			Test.TestTrue(TEXT("The effective LOD 1 body blocks Pawn at the same terrain height"),
+				Cast<UVoxelLandChaosTerrainComponent>(Hit.GetComponent())
+					&& FMath::IsNearlyEqual(Hit.ImpactPoint.Z, SurfaceCm, 2.0));
+			return true;
+		}
+		return !Info.bCoverageReady && !Info.bHasShape && Info.RequestedLod == INDEX_NONE
+			&& Info.InstalledLod == INDEX_NONE && Readiness == EVoxelLandChaosReadiness::Disabled && !bTraceHits;
+	}
+
+	bool Finish()
+	{
+		Terrain.ReleaseChaosCollisionLease(Consumer);
+		Terrain.Shutdown();
+		World.EndPlay(EEndPlayReason::Destroyed);
+		World.DestroyWorld(false);
+		GEngine->DestroyWorldContext(&World);
+		World.RemoveFromRoot();
+		return true;
+	}
+
+	FAutomationTestBase& Test;
+	UWorld& World;
+	AVoxelLandWorld& Terrain;
+	TStrongObjectPtr<UVoxelLandWorldConfig> Config;
+	const FVoxelLandChunkKey Tile{};
+	const FGuid Consumer = FGuid::NewGuid();
+	const double Started = FPlatformTime::Seconds();
+	uint64 PreviousTicket = 0;
+	int32 Step = 0;
+	bool bViewRequested = false;
+	bool bHasLease = false;
+};
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVoxelLandChaosRenderMappingTest,
+	"VoxelLand.Collision.Chaos.WorldConfig.RenderLodMapping",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FVoxelLandChaosRenderMappingTest::RunTest(const FString& Parameters)
+{
+	if (!TestNotNull(TEXT("UE engine available"), GEngine))
+	{
+		return false;
+	}
+	const UWorld::InitializationValues Init = UWorld::InitializationValues()
+												  .CreatePhysicsScene(true)
+												  .ShouldSimulatePhysics(true)
+												  .EnableTraceCollision(true)
+												  .CreateNavigation(false)
+												  .CreateAISystem(false);
+	UWorld* World =
+		UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Init);
+	if (!TestNotNull(TEXT("Created a game world with visual clipmap and physics"), World))
+	{
+		return false;
+	}
+	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	AVoxelLandWorld* Terrain = World->SpawnActor<AVoxelLandWorld>();
+	if (!TestNotNull(TEXT("Spawned rendered terrain"), Terrain))
+	{
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		World->RemoveFromRoot();
+		return false;
+	}
+	Terrain->bEnableM7Clipmap = true;
+	Terrain->M7MaxLOD = 2;
+	Terrain->M7HorizontalRadiusCm = 35000.0;
+	Terrain->M7MaxLeaves = 512;
+	World->GetWorldSettings()->NotifyBeginPlay();
+	UVoxelLandWorldConfig* Config = FVoxelLandWorldConfigChaosCommand::CreateConfig(false, true);
+	Config->ChaosCollision.bMapByRenderLod = true;
+	Config->ChaosCollision.UnresolvedRenderDetail = EVoxelLandChaosCollisionDetail::Disabled;
+	Config->ChaosCollision.RenderLodDetails[0] = EVoxelLandChaosCollisionDetail::LOD1;
+	Config->ChaosCollision.RenderLodDetails[1] = EVoxelLandChaosCollisionDetail::Disabled;
+	Config->ChaosCollision.RenderLodDetails[2] = EVoxelLandChaosCollisionDetail::Disabled;
+	if (!TestTrue(TEXT("Initialize the mapped infinite Height world"),
+			Terrain->InitializeFromConfig(Config, FIntVector::ZeroValue)))
+	{
+		AddError(Terrain->LastInitializationError);
+		Terrain->Shutdown();
+		World->EndPlay(EEndPlayReason::Destroyed);
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		World->RemoveFromRoot();
+		return false;
+	}
+	FAutomationTestFramework::Get().EnqueueLatentCommand(
+		MakeShared<FVoxelLandChaosRenderMappingCommand>(*this, *World, *Terrain, *Config));
 	return true;
 }
 

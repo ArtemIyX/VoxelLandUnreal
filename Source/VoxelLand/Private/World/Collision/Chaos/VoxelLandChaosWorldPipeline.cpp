@@ -375,6 +375,17 @@ void FVoxelLandChaosWorld::AdvanceTile(
 		Tile.Ticket = ++Ticket;
 		Tile.Phase = EVoxelLandChaosPhase::Field;
 	}
+	if (Tile.Phase == EVoxelLandChaosPhase::Field)
+	{
+		const VoxelLandWorldPrivate::FRecord* Field = World.State->Records.Find(Key);
+		if (Field && !Field->Data && Field->bFailed
+			&& Field->CollisionRetries >= VoxelLandWorldPrivate::FRecord::MaxCollisionRetries)
+		{
+			Tile.Attempts = MaxAttempts - 1;
+			RecordFailure(Tile);
+			return;
+		}
+	}
 	if (Tile.Phase == EVoxelLandChaosPhase::Apply && PhysicsUpdates < Settings.MaxPhysicsUpdatesPerTick
 		&& Install(Key, Tile))
 	{

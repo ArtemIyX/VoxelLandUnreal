@@ -3,6 +3,7 @@
 #include "../Clipmap/Planning/VoxelLandCheckpointTestFixture.h"
 #include "Data/Collision/Chaos/VoxelLandChaosCollisionOverride.h"
 #include "World/Collision/Chaos/VoxelLandChaosStats.h"
+#include "World/Collision/Chaos/VoxelLandChaosTileInfo.h"
 #include "World/VoxelLandWorld.h"
 
 #include "Async/Async.h"
@@ -39,13 +40,26 @@ public:
 	static FHeightFixture::FGeneratorPtr MakeGenerator()
 	{
 		constexpr int32 Cells = 80;
+		constexpr int32 GridMinCm = -40000;
+		constexpr int32 GridCellWidthCm = 1000;
 		TArray<int32> Heights;
 		Heights.Init(FloorHeightCm * 256, (Cells + 1) * (Cells + 1));
+		if (UsesSlope())
+		{
+			for (int32 X = 0; X <= Cells; ++X)
+			{
+				const int32 HeightQ8 = FMath::RoundToInt32(HeightAt(GridMinCm + X * GridCellWidthCm, true) * 256.0);
+				for (int32 Y = 0; Y <= Cells; ++Y)
+				{
+					Heights[X + Y * (Cells + 1)] = HeightQ8;
+				}
+			}
+		}
 		FVoxelLandGeneratorSettings Settings;
 		FHeightFixture::FGridPtr Grid;
 		FHeightFixture::FGeneratorPtr Generator;
 		if (!FHeightFixture::CreateSettings(Settings)
-			|| !FVoxelLandM4HeightGrid::Create(-40000, -40000, Cells, Cells, 1000, Heights, Grid)
+			|| !FVoxelLandM4HeightGrid::Create(GridMinCm, GridMinCm, Cells, Cells, GridCellWidthCm, Heights, Grid)
 			|| !FHeightFixture::CreateGenerator(Settings, Grid, false, false, Generator))
 		{
 			return {};
@@ -114,6 +128,43 @@ private:
 	static constexpr double StartX = 2750.0;
 	static constexpr double BoundaryX = 3200.0;
 
+	static bool UsesSlope() { return FParse::Param(FCommandLine::Get(), TEXT("VoxelLandChaosSlopeCase")); }
+
+	static double HeightAt(const double LogicalX, const bool bSloped)
+	{
+		constexpr double RisePerCm = 0.05;
+		return FloorHeightCm + (bSloped ? LogicalX * RisePerCm : 0.0);
+	}
+
+	bool ConfigureSlopeTiles()
+	{
+		FVoxelLandChaosCollisionOverride Override;
+		Override.Mode = EVoxelLandChaosCollisionOverrideMode::Enabled;
+		Override.bOverrideDetail = true;
+		Override.Detail = EVoxelLandChaosCollisionDetail::LOD1;
+		const bool bSetLOD1 = Terrain.SetChaosCollisionOverride(MakeArrayView(&Tiles[0], 1), Override);
+		Override.Detail = EVoxelLandChaosCollisionDetail::LOD2;
+		const bool bSetLOD2 = Terrain.SetChaosCollisionOverride(MakeArrayView(&Tiles[1], 1), Override);
+		return Test.TestTrue(
+			TEXT("Apply collision LOD 1 and LOD 2 policy to adjacent slope tiles"), bSetLOD1 && bSetLOD2);
+	}
+
+	bool CheckSlopeTiles()
+	{
+		for (int32 Index = 0; Index < Tiles.Num(); ++Index)
+		{
+			FVoxelLandChaosTileInfo Info;
+			if (!Test.TestTrue(TEXT("Get the active slope tile collision body"),
+					Terrain.GetChaosCollisionTileInfo(Tiles[Index], Info) && Info.bHasShape && Info.bCoverageReady)
+				|| !Test.TestEqual(
+					TEXT("Adjacent slope tile installed its configured collision LOD"), Info.InstalledLod, Index + 1))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool Start()
 	{
 		const FVoxelLandChaosStats OffStats = Terrain.GetChaosCollisionStats();
@@ -145,6 +196,10 @@ private:
 			return false;
 		}
 
+		if (bSlope && !ConfigureSlopeTiles())
+		{
+			return Finish();
+		}
 		const EVoxelLandChaosReadiness Result = Terrain.UpdateChaosCollisionTiles(QueryLease, Tiles);
 		if (!Test.TestEqual(TEXT("Uncooked seam starts pending"), Result, EVoxelLandChaosReadiness::Pending))
 		{
@@ -176,10 +231,10 @@ private:
 
 	bool SpawnProp(const int32 Index)
 	{
-		constexpr double StartAltitudeCm = 1650.0;
+		constexpr double StartDropHeightCm = 550.0;
 		constexpr double InitialY = 1300.0;
 		constexpr double SideSpacingCm = 175.0;
-		const FVector Position(StartX, InitialY + Index * SideSpacingCm, StartAltitudeCm);
+		const FVector Position(StartX, InitialY + Index * SideSpacingCm, HeightAt(StartX, bSlope) + StartDropHeightCm);
 		FActorSpawnParameters SpawnParameters;
 		SpawnParameters.ObjectFlags = RF_Transient;
 		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -216,10 +271,11 @@ private:
 	{
 		FHitResult Hit;
 		const FVector Origin(World.OriginLocation);
-		const FVector Top = FVector(TraceX, TraceY, FloorHeightCm + 400.0) - Origin;
-		const FVector Bottom = FVector(TraceX, TraceY, FloorHeightCm - 400.0) - Origin;
+		const double SeamHeight = HeightAt(TraceX, bSlope);
+		const FVector Top = FVector(TraceX, TraceY, SeamHeight + 400.0) - Origin;
+		const FVector Bottom = FVector(TraceX, TraceY, SeamHeight - 400.0) - Origin;
 		return World.LineTraceSingleByChannel(Hit, Top, Bottom, ECC_Pawn)
-			&& FMath::IsNearlyEqual(Hit.ImpactPoint.Z + Origin.Z, double(FloorHeightCm), 5.0);
+			&& FMath::IsNearlyEqual(Hit.ImpactPoint.Z + Origin.Z, SeamHeight, 5.0);
 	}
 
 	bool UpdateDrop(const double Now)
@@ -228,7 +284,8 @@ private:
 		{
 			return false;
 		}
-		if (!Test.TestTrue(TEXT("A real Chaos Pawn trace hits the cooked seam"), HasSurfaceAtSeam()))
+		if (!Test.TestTrue(TEXT("A real Chaos Pawn trace hits the cooked seam"), HasSurfaceAtSeam())
+			|| (bSlope && !CheckSlopeTiles()))
 		{
 			return Finish();
 		}
@@ -245,6 +302,10 @@ private:
 		{
 			return false;
 		}
+		if (bSlope)
+		{
+			Test.AddInfo(TEXT("Spheres resumed on a 5% authored slope with neighboring collision LOD 1 and LOD 2."));
+		}
 		TRACE_BOOKMARK(TEXT("VoxelLand Chaos playground drops resumed"));
 		Phase = EPhase::Soak;
 		SoakStarted = Now;
@@ -254,11 +315,14 @@ private:
 
 	bool CheckBody(const USphereComponent& Body)
 	{
-		const double BodyZ = Body.GetComponentLocation().Z + World.OriginLocation.Z;
-		if (BodyZ < FloorHeightCm - PropRadiusCm)
+		const FVector Position = Body.GetComponentLocation() + FVector(World.OriginLocation);
+		const double GroundHeight = HeightAt(Position.X, bSlope);
+		if (Position.Z < GroundHeight - PropRadiusCm)
 		{
 			++FallThroughs;
-			Test.AddError(FString::Printf(TEXT("A managed sphere fell through the Chaos plane: z=%.1f"), BodyZ));
+			Test.AddError(
+				FString::Printf(TEXT("A managed sphere fell through Chaos terrain at x=%.1f: z=%.1f, terrain z=%.1f"),
+					Position.X, Position.Z, GroundHeight));
 			return false;
 		}
 		return true;
@@ -279,7 +343,8 @@ private:
 			++SeamCrossings;
 		}
 
-		constexpr double SettledAltitude = FloorHeightCm + PropRadiusCm + 8.0;
+		const double SettledAltitude =
+			HeightAt(Position.X + World.OriginLocation.X, bSlope) + PropRadiusCm + 8.0 - World.OriginLocation.Z;
 		constexpr double RightTurnX = 3750.0;
 		constexpr double LeftTurnX = 2650.0;
 		if (!Body.IsSimulatingPhysics() || Position.Z >= SettledAltitude)
@@ -363,8 +428,11 @@ private:
 		{
 			Test.TestFalse(TEXT("Disabled terrain suspends managed prop simulation"), Body->IsSimulatingPhysics());
 		}
-		if (!Test.TestTrue(TEXT("Clear overrides to restore the same contact"),
-				Terrain.SetChaosCollisionOverride(Tiles, FVoxelLandChaosCollisionOverride{})))
+		const bool bRestored = bSlope
+								 ? ConfigureSlopeTiles()
+								 : Test.TestTrue(TEXT("Clear overrides to restore the same contact"),
+									   Terrain.SetChaosCollisionOverride(Tiles, FVoxelLandChaosCollisionOverride{}));
+		if (!bRestored)
 		{
 			return Finish();
 		}
@@ -380,6 +448,7 @@ private:
 		}
 		const FIntVector OriginAtTest(3200, -3200, 900);
 		if (!Test.TestTrue(TEXT("Restored tile again blocks a real Pawn trace"), HasSurfaceAtSeam())
+			|| (bSlope && !CheckSlopeTiles())
 			|| !Test.TestTrue(TEXT("Rebase the physics world"), World.SetNewWorldOrigin(OriginAtTest))
 			|| !Test.TestTrue(TEXT("The installed body follows its logical origin exactly once"), HasSurfaceAtSeam())
 			|| !Test.TestTrue(TEXT("A newer source invalidates installed coverage"),
@@ -468,6 +537,7 @@ private:
 	FAutomationTestBase& Test;
 	UWorld& World;
 	AVoxelLandWorld& Terrain;
+	const bool bSlope = UsesSlope();
 	TArray<FVoxelLandChunkKey> Tiles;
 	TArray<USphereComponent*> Props;
 	TArray<FGuid> Owners;

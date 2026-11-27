@@ -204,6 +204,36 @@ void AVoxelLandWorld::SetChaosCookHookForTests(FVoxelLandChaosCookHookForTests H
 		check(!Hook);
 	}
 }
+bool AVoxelLandWorld::FailChaosFieldForTests(const FVoxelLandChunkKey& Key)
+{
+	check(IsInGameThread());
+	VoxelLandWorldPrivate::FRecord* Record = State ? State->Records.Find(Key) : nullptr;
+	if (!Record || Record->Data || Record->bRunning || Record->CollisionOwners == 0)
+	{
+		return false;
+	}
+	Record->bQueued = false;
+	Record->bFailed = true;
+	Record->CollisionRetries = VoxelLandWorldPrivate::FRecord::MaxCollisionRetries;
+	Record->Error = TEXT("Injected terminal terrain field failure.");
+	return true;
+}
+
+bool AVoxelLandWorld::ReplaceChaosFieldForTests(TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Field)
+{
+	check(IsInGameThread());
+	if (!State || !Field || Field->Key.LOD != 0 || Field->Density.Num() != FVoxelLandChunkData::SampleCount)
+	{
+		return false;
+	}
+	VoxelLandWorldPrivate::FRecord* Record = State->Records.Find(Field->Key);
+	if (!Record || !Record->Data || Record->bRunning)
+	{
+		return false;
+	}
+	Record->Data = MoveTemp(Field);
+	return true;
+}
 #endif
 
 int32 AVoxelLandWorld::ResolveChaosRenderLod(const FVoxelLandChunkKey& Key) const

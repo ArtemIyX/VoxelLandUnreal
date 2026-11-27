@@ -168,6 +168,8 @@ public:
 	FVoxelLandChaosStats GetChaosCollisionStats() const;
 #if WITH_DEV_AUTOMATION_TESTS
 	void SetChaosCookHookForTests(FVoxelLandChaosCookHookForTests Hook);
+	bool FailChaosFieldForTests(const FVoxelLandChunkKey& Key);
+	bool ReplaceChaosFieldForTests(TSharedPtr<const FVoxelLandChunkData, ESPMode::ThreadSafe> Field);
 #endif
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Data")
 	bool RequestDataChunk(FIntVector Coordinate);

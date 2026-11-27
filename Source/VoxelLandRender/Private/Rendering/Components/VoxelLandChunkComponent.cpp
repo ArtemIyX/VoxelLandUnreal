@@ -126,10 +126,16 @@ public:
 			}
 		}
 
+		static bool IsCollisionView(const FEngineShowFlags& Flags)
+		{
+			// The separate Chaos proxy owns the installed collision geometry.
+			return Flags.CollisionPawn || Flags.CollisionVisibility;
+		}
+
 		virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily,
 			uint32 VisibilityMap, FMeshElementCollector& Collector) const override
 		{
-			if (!IsClipmapVisible())
+			if (!IsClipmapVisible() || IsCollisionView(ViewFamily.EngineShowFlags))
 			{
 				return;
 			}
@@ -173,7 +179,7 @@ public:
 		virtual FPrimitiveViewRelevance GetViewRelevance(const FSceneView* View) const override
 		{
 			FPrimitiveViewRelevance Result;
-			if (!IsClipmapVisible())
+			if (!IsClipmapVisible() || IsCollisionView(View->Family->EngineShowFlags))
 			{
 				return Result;
 			}

@@ -24,6 +24,9 @@ public:
 
 private:
 	friend class FVoxelLandMaterialGraphCompile;
+	friend class FVoxelLandMaskGraphProgram;
+	[[nodiscard]] static bool CompileScalarOutput(const FVoxelLandGraphSnapshot& Source, FGuid Output,
+		TSharedPtr<const FVoxelLandMaterialGraphProgram, ESPMode::ThreadSafe>& Out, FString& Error);
 	TArray<FVoxelLandMaterialGraphInstruction> Instructions;
 	uint8 SlotCount = 0;
 	bool bHasSlope = false;

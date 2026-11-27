@@ -7,5 +7,6 @@ UENUM(BlueprintType)
 enum class EVoxelLandGraphRole : uint8
 {
 	Terrain,
-	Material
+	Material,
+	Mask
 };

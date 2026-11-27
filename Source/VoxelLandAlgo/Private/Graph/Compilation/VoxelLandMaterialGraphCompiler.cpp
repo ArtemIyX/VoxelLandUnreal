@@ -1,8 +1,10 @@
 #include "Graph/Compilation/VoxelLandMaterialGraphProgram.h"
 
 #include "Data/Graph/Schema/VoxelLandBuiltinCatalog.h"
+#include "Data/Graph/Schema/VoxelLandGraphDiagnostic.h"
 #include "Data/Graph/Sources/VoxelLandGraphSnapshot.h"
 #include "Graph/Compilation/VoxelLandGraphFunctionFlatten.h"
+#include "Graph/Compilation/VoxelLandMaskGraphProgram.h"
 
 class FVoxelLandMaterialGraphCompile final
 {
@@ -37,6 +39,40 @@ public:
 		Resolved.Init(INDEX_NONE, Source.Nodes.Num());
 		Program.Instructions.Reserve(Source.Nodes.Num());
 		return Resolve(Root) != INDEX_NONE;
+	}
+
+	bool RunMask(FGuid Output)
+	{
+		int32 UnusedRoot = INDEX_NONE;
+		if (!IndexGraph(UnusedRoot))
+		{
+			return false;
+		}
+		const int32* Index = Nodes.Find(Output);
+		if (!Index)
+		{
+			Error = TEXT("The selected mask output is missing.");
+			return false;
+		}
+		const FVoxelLandGraphNodeRecord& Node = Source.Nodes[*Index];
+		if (Node.OperatorId != VoxelLandBuiltinNodeId(EVoxelLandBuiltinNode::FloatOutput) || Node.OperatorVersion != 1
+			|| Node.Pins.Num() != 1 || Node.Pins[0].bOutput || Node.Pins[0].Type != EVoxelLandGraphValueType::Float
+			|| !Links.Contains(Node.Pins[0].Id))
+		{
+			return Fail(Node, TEXT("Connect a Float to the named mask output."));
+		}
+		Active.Init(false, Source.Nodes.Num());
+		Resolved.Init(INDEX_NONE, Source.Nodes.Num());
+		Program.Instructions.Reserve(Source.Nodes.Num());
+		FVoxelLandMaterialGraphInstruction Instruction;
+		Instruction.Kind = EVoxelLandBuiltinNode::FloatOutput;
+		Instruction.NodeId = Node.Id;
+		if (!ResolveInput(Node, Node.Pins[0], Instruction.Inputs.AddDefaulted_GetRef()))
+		{
+			return false;
+		}
+		Program.Instructions.Add(MoveTemp(Instruction));
+		return true;
 	}
 
 private:
@@ -99,9 +135,11 @@ private:
 		Instruction.NodeId = Node.Id;
 		Instruction.SeedSalt = static_cast<uint32>(Node.SeedSalt);
 		if (Node.OperatorId != VoxelLandBuiltinNodeId(Instruction.Kind) || Node.OperatorVersion != 1
-			|| !FVoxelLandMaterialGraphProgram::IsSupportedNode(Instruction.Kind))
+			|| !(Source.GraphRole == EVoxelLandGraphRole::Mask
+					 ? FVoxelLandMaskGraphProgram::IsSupportedNode(Instruction.Kind)
+					 : FVoxelLandMaterialGraphProgram::IsSupportedNode(Instruction.Kind)))
 		{
-			Fail(Node, TEXT("The node is not supported in material graphs."));
+			Fail(Node, TEXT("The node is not supported in this graph role."));
 			return INDEX_NONE;
 		}
 		FVoxelLandBuiltinNodeSpec Spec;
@@ -262,7 +300,9 @@ private:
 
 	bool Fail(const FVoxelLandGraphNodeRecord& Node, const TCHAR* Reason)
 	{
-		Error = FString::Printf(TEXT("Material node %s: %s"), *Node.Id.ToString(), Reason);
+		Error = FString::Printf(TEXT("%s node %s: %s"),
+			Source.GraphRole == EVoxelLandGraphRole::Mask ? TEXT("Mask Graph") : TEXT("Material"), *Node.Id.ToString(),
+			Reason);
 		return false;
 	}
 
@@ -305,6 +345,20 @@ bool FVoxelLandMaterialGraphProgram::Compile(const FVoxelLandGraphSnapshot& Sour
 	Candidate->SlotCount = static_cast<uint8>(Palette.Num());
 	FVoxelLandMaterialGraphCompile Compiler(*Input, Palette, *Candidate, Error);
 	if (!Compiler.Run())
+	{
+		return false;
+	}
+	Out = Candidate;
+	return true;
+}
+
+bool FVoxelLandMaterialGraphProgram::CompileScalarOutput(const FVoxelLandGraphSnapshot& Source, FGuid Output,
+	TSharedPtr<const FVoxelLandMaterialGraphProgram, ESPMode::ThreadSafe>& Out, FString& Error)
+{
+	const TSharedRef<FVoxelLandMaterialGraphProgram, ESPMode::ThreadSafe> Candidate =
+		MakeShared<FVoxelLandMaterialGraphProgram, ESPMode::ThreadSafe>();
+	FVoxelLandMaterialGraphCompile Compiler(Source, {}, *Candidate, Error);
+	if (!Compiler.RunMask(Output))
 	{
 		return false;
 	}

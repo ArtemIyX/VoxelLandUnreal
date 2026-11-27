@@ -27,7 +27,8 @@ public:
 		bool Validate()
 		{
 			if (Graph.SourceVersion != 1
-				|| (Graph.GraphRole != EVoxelLandGraphRole::Terrain && Graph.GraphRole != EVoxelLandGraphRole::Material)
+				|| (Graph.GraphRole != EVoxelLandGraphRole::Terrain && Graph.GraphRole != EVoxelLandGraphRole::Material
+					&& Graph.GraphRole != EVoxelLandGraphRole::Mask)
 				|| Graph.Nodes.Num() > FVoxelLandTerrainGraphChanges::MaxNodes
 				|| Graph.Links.Num() > FVoxelLandTerrainGraphChanges::MaxLinks)
 			{

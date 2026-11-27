@@ -4,12 +4,44 @@
 #include "Data/Meshing/VoxelLandMeshData.h"
 #include "Graph/Compilation/VoxelLandMaterialGraphPoint.h"
 #include "Graph/Compilation/VoxelLandMaterialGraphProgram.h"
+#include "Graph/Compilation/VoxelLandMaskGraphProgram.h"
 
 bool FVoxelLandMaterialPreviewRaster::Build(TConstArrayView<FPreviewMesh> Meshes, float VoxelSize,
 	const FVoxelLandMaterialAppearance& Appearance, FGuid Node, TFunctionRef<bool()> IsCancelled, TArray<uint8>& Pixels,
 	double& Min, double& Max)
 {
-	if (Meshes.IsEmpty() || !Appearance.Program)
+	if (!Appearance.Program)
+	{
+		return false;
+	}
+	FVoxelLandMaterialGraphPoint Context;
+	Context.Seed = Appearance.Seed;
+	Context.Signals = Appearance.Signals.Get();
+	return BuildRaster(
+		Meshes, VoxelSize, Context,
+		[&Appearance, Node](const FVoxelLandMaterialGraphPoint& Point, double& Out) {
+			return Appearance.Program->EvaluatePreview(Node, Point, Out);
+		},
+		IsCancelled, false, Pixels, Min, Max);
+}
+
+bool FVoxelLandMaterialPreviewRaster::BuildMask(TConstArrayView<FPreviewMesh> Meshes, float VoxelSize,
+	const FVoxelLandMaskGraphProgram& Program, const FVoxelLandMaterialGraphPoint& Context, FGuid Output,
+	TFunctionRef<bool()> IsCancelled, TArray<uint8>& Pixels, double& Min, double& Max)
+{
+	return BuildRaster(
+		Meshes, VoxelSize, Context,
+		[&Program, Output](
+			const FVoxelLandMaterialGraphPoint& Point, double& Out) { return Program.Evaluate(Output, Point, Out); },
+		IsCancelled, true, Pixels, Min, Max);
+}
+
+bool FVoxelLandMaterialPreviewRaster::BuildRaster(TConstArrayView<FPreviewMesh> Meshes, float VoxelSize,
+	const FVoxelLandMaterialGraphPoint& Context,
+	TFunctionRef<bool(const FVoxelLandMaterialGraphPoint&, double&)> Evaluate, TFunctionRef<bool()> IsCancelled,
+	bool bAbsoluteGray, TArray<uint8>& Pixels, double& Min, double& Max)
+{
+	if (Meshes.IsEmpty())
 	{
 		return false;
 	}
@@ -100,13 +132,11 @@ bool FVoxelLandMaterialPreviewRaster::Build(TConstArrayView<FPreviewMesh> Meshes
 			continue;
 		}
 		const FVector2d XY = Corner + FVector2d(Index % Resolution + 0.5, Index / Resolution + 0.5) / ProjectScale;
-		FVoxelLandMaterialGraphPoint Point;
+		FVoxelLandMaterialGraphPoint Point = Context;
 		Point.Position = FVector3d(XY.X, XY.Y, Height[Index]);
 		Point.SlopeDegrees =
 			FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(double(Normal[Index].GetSafeNormal().Z), -1.0, 1.0)));
-		Point.Seed = Appearance.Seed;
-		Point.Signals = Appearance.Signals.Get();
-		if (!Appearance.Program->EvaluatePreview(Node, Point, Values[Index]))
+		if (!Evaluate(Point, Values[Index]))
 		{
 			return false;
 		}
@@ -124,7 +154,9 @@ bool FVoxelLandMaterialPreviewRaster::Build(TConstArrayView<FPreviewMesh> Meshes
 	{
 		if (Height[Index] != EmptyHeight)
 		{
-			const double Alpha = Range > UE_SMALL_NUMBER ? (Values[Index] - Min) / Range : FMath::Clamp(Min, 0.0, 1.0);
+			const double Alpha =
+				bAbsoluteGray ? Values[Index]
+							  : (Range > UE_SMALL_NUMBER ? (Values[Index] - Min) / Range : FMath::Clamp(Min, 0.0, 1.0));
 			const uint8 Shade = static_cast<uint8>(FMath::Clamp(FMath::RoundToInt(Alpha * 255.0), 0, 255));
 			const FColor Color(Shade, Shade, Shade, 255);
 			FMemory::Memcpy(Pixels.GetData() + Index * sizeof(FColor), &Color, sizeof(FColor));

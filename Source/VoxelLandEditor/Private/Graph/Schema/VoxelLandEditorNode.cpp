@@ -40,7 +40,7 @@ FText UVoxelLandEditorNode::GetNodeTitle(ENodeTitleType::Type) const
 	if (Kind == int32(EVoxelLandBuiltinNode::PositionZ) && GetGraph())
 	{
 		const UVoxelLandTerrainGraph* Asset = Cast<UVoxelLandTerrainGraph>(GetGraph()->GetOuter());
-		if (Asset && Asset->GraphRole == EVoxelLandGraphRole::Material)
+		if (Asset && Asset->GraphRole != EVoxelLandGraphRole::Terrain)
 		{
 			return LOCTEXT("SurfaceElevation", "Surface Elevation");
 		}

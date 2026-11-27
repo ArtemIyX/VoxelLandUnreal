@@ -1,6 +1,7 @@
 #include "VoxelLandEditorSchema.h"
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Graph/Compilation/VoxelLandMaterialGraphProgram.h"
+#include "Graph/Compilation/VoxelLandMaskGraphProgram.h"
 #include "Data/Graph/Sources/VoxelLandGraphOutputs.h"
 #include "Data/Terrain/Controls/VoxelLandControlGraph.h"
 #include "../Authoring/VoxelLandEditorFloat.h"
@@ -336,11 +337,13 @@ void UVoxelLandEditorSchema::GetGraphContextActions(FGraphContextMenuBuilder& Co
 		ContextMenuBuilder.CurrentGraph ? Cast<UVoxelLandTerrainGraph>(ContextMenuBuilder.CurrentGraph->GetOuter())
 										: nullptr;
 	const bool bMaterialGraph = GraphAsset && GraphAsset->GraphRole == EVoxelLandGraphRole::Material;
+	const bool bMaskGraph = GraphAsset && GraphAsset->GraphRole == EVoxelLandGraphRole::Mask;
 	for (EVoxelLandBuiltinNode Builtin : Builtins)
 	{
 		const int32 Kind = int32(Builtin);
-		if (bMaterialGraph ? !FVoxelLandMaterialGraphProgram::IsSupportedNode(Builtin)
-						   : Kind >= int32(EVoxelLandBuiltinNode::Surface))
+		if ((bMaterialGraph && !FVoxelLandMaterialGraphProgram::IsSupportedNode(Builtin))
+			|| (bMaskGraph && !FVoxelLandMaskGraphProgram::IsSupportedNode(Builtin))
+			|| (!bMaterialGraph && !bMaskGraph && Kind >= int32(EVoxelLandBuiltinNode::Surface)))
 		{
 			continue;
 		}

@@ -1,5 +1,5 @@
 #include "Rendering/Materials/VoxelLandTerrainPresentationResolver.h"
-#include "VoxelLandMaterialSignalBindings.h"
+#include "Graph/Compilation/VoxelLandMaterialSignalBindings.h"
 
 #include "Data/Assets/Graphs/VoxelLandTerrainGraph.h"
 #include "Data/Assets/Materials/VoxelLandMaterialPalette.h"

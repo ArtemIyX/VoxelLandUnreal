@@ -575,7 +575,7 @@ void FVoxelLandEditorModule::OnObjectPreSave(UObject* Object, FObjectPreSaveCont
 		return;
 	}
 	UVoxelLandTerrainGraph* Graph = Cast<UVoxelLandTerrainGraph>(Object);
-	if (!Graph || Graph->GraphRole == EVoxelLandGraphRole::Material || Graph->IsA<UVoxelLandGraphFunction>()
+	if (!Graph || Graph->GraphRole != EVoxelLandGraphRole::Terrain || Graph->IsA<UVoxelLandGraphFunction>()
 		|| FVoxelLandGraphOutputs::HasNamedOutputs(Graph->Nodes) || !Context.IsFirstConcurrentSave())
 	{
 		return;

@@ -202,6 +202,7 @@ bool FVoxelLandMaterialGraphEvaluation::Scalar(const FVoxelLandMaterialGraphInst
 		case ENode::BoolConstant:
 		case ENode::BoolParameter:
 		case ENode::IntToFloat:
+		case ENode::FloatOutput:
 		case ENode::RerouteFloat:
 		case ENode::RerouteInt:
 		case ENode::RerouteBool:

@@ -238,6 +238,7 @@ private:
 	void ApplyPreviewMaterial(UMaterialInterface* Material);
 	void ApplyMaterialSetup(bool bRestartPreview = true);
 	void RefreshTerrainMaterial(const TSoftObjectPtr<UVoxelLandMaterialSetup>& SetupPath, bool bRestartPreview);
+	bool CaptureMaskPreview(const UVoxelLandWorldConfig& Config, FVoxelLandPreviewWork& Work);
 	bool CaptureTerrainMaterial(const UVoxelLandWorldConfig& Config, FVoxelLandPreviewWork& Work);
 	void SettingsChanged(const FAssetData& Settings);
 	void PreviewPropertiesChanged(const FPropertyChangedEvent& Event);

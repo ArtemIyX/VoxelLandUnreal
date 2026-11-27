@@ -271,6 +271,10 @@ public:
 		meta = (ToolTip = "Optional Material graph. Without a graph, the Material Setup rules assign surfaces."))
 	TSoftObjectPtr<UVoxelLandTerrainGraph> MaterialGraph;
 
+	UPROPERTY(EditAnywhere, Category = "PCG",
+		meta = (ToolTip = "Optional Mask Graph that supplies named weights to procedural generation."))
+	TSoftObjectPtr<UVoxelLandTerrainGraph> MaskGraph;
+
 	UPROPERTY(EditAnywhere, Category = "Appearance",
 		meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Terrain Ambient Occlusion Strength",
 			ToolTip = "Geometry occlusion for palette terrain. Zero skips the geometry bake."))

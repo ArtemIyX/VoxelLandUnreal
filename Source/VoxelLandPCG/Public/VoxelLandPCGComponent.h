@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "VoxelLandPCGCellKey.h"
 #include "VoxelLandPCGCellRecord.h"
+#include "VoxelLandPCGDetachedCell.h"
 #include "VoxelLandPCGLayer.h"
 #include "VoxelLandPCGMaskCompile.h"
 
@@ -114,6 +115,7 @@ private:
 
 	TMap<FVoxelLandPCGCellKey, FVoxelLandPCGCellRecord> Cells;
 	TArray<FVoxelLandPCGCellKey> CellOrder;
+	TArray<FVoxelLandPCGDetachedCell> DetachedCells;
 	FBox PreviewLogicalBounds = FBox(ForceInit);
 	TFuture<FVoxelLandPCGMaskCompile> MaskCompile;
 	TSharedPtr<const FVoxelLandMaskGraphProgram, ESPMode::ThreadSafe> MaskProgram;

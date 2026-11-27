@@ -1,39 +1,54 @@
 #include "VoxelLandPCGVoxelSurfaceSamplerElement.h"
+
 #include "VoxelLandPCGNodes.h"
-#include "Generation/Placement/VoxelLandTerrainPlacement.h"
 #include "VoxelLandPCGTerrainData.h"
+#include "VoxelLandPCGVoxelSurfaceSamplerJob.h"
 #include "VoxelLandPCGVoxelSurfaceSamplerSettings.h"
+#include "Async/Async.h"
 #include "Data/PCGBasePointData.h"
-#include "PCGContext.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 bool FVoxelLandPCGVoxelSurfaceSamplerElement::ExecuteInternal(FPCGContext* Context) const
 {
 	check(Context);
-	const UPCGVoxelTerrainData* Data = FVoxelLandPCGNodes::GetTerrain(*Context);
+	FVoxelLandPCGVoxelSurfaceSamplerContext& State = static_cast<FVoxelLandPCGVoxelSurfaceSamplerContext&>(*Context);
+	const UPCGVoxelTerrainData* Data = FVoxelLandPCGNodes::GetTerrain(State);
 	const UVoxelLandPCGVoxelSurfaceSamplerSettings* Settings =
-		Context->GetInputSettings<UVoxelLandPCGVoxelSurfaceSamplerSettings>();
-	TArray<FVoxelLandTerrainPlacementPoint> Samples;
-	const int32 PlacementSeed =
-		Data && Settings
-			? static_cast<int32>(HashCombineFast(GetTypeHash(Data->GetMaskSeed()), GetTypeHash(Settings->GetSeed())))
-			: 0;
-	if (!Data || !Settings
-		|| !FVoxelLandTerrainPlacement::Sample(
-			Data->GetPlacementInput(), [Data] { return Data->IsCancelled(); }, Settings->MinimumSpacingCm,
-			PlacementSeed, Settings->MaximumSlopeDegrees, Samples))
+		State.GetInputSettings<UVoxelLandPCGVoxelSurfaceSamplerSettings>();
+	if (!Data || !Settings)
 	{
-		if (Data && Data->IsCancelled())
-		{
-			return true;
-		}
-		return FVoxelLandPCGNodes::Fail(*Context,
+		return FVoxelLandPCGNodes::Fail(State, NSLOCTEXT("VoxelLandPCG", "MissingSurfaceInput",
+												   "Voxel Surface Sampler requires a ready voxel terrain input."));
+	}
+	if (Data->IsCancelled())
+	{
+		return true;
+	}
+	if (!State.Job)
+	{
+		return !Launch(State, *Data, *Settings);
+	}
+	if (!State.Job->IsComplete())
+	{
+		return false;
+	}
+	if (State.Job->IsCancelled())
+	{
+		return true;
+	}
+	if (!State.Job->Succeeded())
+	{
+		return FVoxelLandPCGNodes::Fail(State,
 			NSLOCTEXT("VoxelLandPCG", "SurfaceSampleFailed",
 				"Voxel Surface Sampler needs ready terrain, valid spacing and slope, and a candidate count within the cell budget."));
 	}
+
+	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_PCGPublishSurfacePoints);
+	const TConstArrayView<FVoxelLandTerrainPlacementPoint> Samples = State.Job->GetSamples();
 #if WITH_EDITOR
 	Data->RecordCandidateDebug(Samples);
 #endif
-	UPCGBasePointData* Points = FVoxelLandPCGNodes::MakePoints(*Context, Samples.Num());
+	UPCGBasePointData* Points = FVoxelLandPCGNodes::MakePoints(State, Samples.Num());
 	FPCGPointTransform::ValueRange Transforms = Points->GetTransformValueRange();
 	FPCGPointSeed::ValueRange Seeds = Points->GetSeedValueRange();
 	const FVector Origin(Data->GetView().OriginLocation);
@@ -45,8 +60,50 @@ bool FVoxelLandPCGVoxelSurfaceSamplerElement::ExecuteInternal(FPCGContext* Conte
 	if (!FVoxelLandPCGNodes::WriteSurfaceMetadata(*Points, Samples))
 	{
 		return FVoxelLandPCGNodes::Fail(
-			*Context, NSLOCTEXT("VoxelLandPCG", "SurfaceMetadataFailed", "Cannot write voxel surface attributes."));
+			State, NSLOCTEXT("VoxelLandPCG", "SurfaceMetadataFailed", "Cannot write voxel surface attributes."));
 	}
-	FVoxelLandPCGNodes::PublishPoints(*Context, *Points);
+	FVoxelLandPCGNodes::PublishPoints(State, *Points);
 	return true;
+}
+
+void FVoxelLandPCGVoxelSurfaceSamplerElement::AbortInternal(FPCGContext* Context) const
+{
+	if (!Context)
+	{
+		return;
+	}
+	FVoxelLandPCGVoxelSurfaceSamplerContext& State = static_cast<FVoxelLandPCGVoxelSurfaceSamplerContext&>(*Context);
+	if (State.Job)
+	{
+		State.Job->Cancel();
+	}
+}
+
+bool FVoxelLandPCGVoxelSurfaceSamplerElement::Launch(FVoxelLandPCGVoxelSurfaceSamplerContext& Context,
+	const UPCGVoxelTerrainData& Terrain, const UVoxelLandPCGVoxelSurfaceSamplerSettings& Settings)
+{
+	if (!Terrain.GetWorkFence()->TryBeginWorker())
+	{
+		return false;
+	}
+	const TSharedRef<FVoxelLandPCGVoxelSurfaceSamplerJob, ESPMode::ThreadSafe> Job =
+		MakeShared<FVoxelLandPCGVoxelSurfaceSamplerJob, ESPMode::ThreadSafe>(Terrain, Settings);
+	Context.Job = Job;
+	Context.bIsPaused = true;
+	const TWeakPtr<FPCGContextHandle> Handle = Context.GetOrCreateHandle();
+	Async(EAsyncExecution::ThreadPool, [Job, Handle] {
+		Job->Run();
+		AsyncTask(ENamedThreads::GameThread, [Handle] { Resume(Handle); });
+	});
+	return true;
+}
+
+void FVoxelLandPCGVoxelSurfaceSamplerElement::Resume(const TWeakPtr<FPCGContextHandle>& Handle)
+{
+	check(IsInGameThread());
+	const FPCGContext::FSharedContext<FPCGContext> SharedContext(Handle);
+	if (FPCGContext* Context = SharedContext.Get())
+	{
+		Context->bIsPaused = false;
+	}
 }

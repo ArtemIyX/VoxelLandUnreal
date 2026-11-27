@@ -1,6 +1,8 @@
 #include "VoxelLandPCGComponent.h"
 
 #include "VoxelLandPCGCell.h"
+#include "VoxelLandPCGGraphPolicy.h"
+#include "VoxelLandPCGWorkFence.h"
 #include "VoxelLandPCGTerrainData.h"
 #include "Data/Field/Chunks/VoxelLandChunkData.h"
 #include "Data/Terrain/Worlds/VoxelLandWorldConfig.h"
@@ -39,20 +41,9 @@ bool UVoxelLandPCGComponent::ValidateLayers()
 			PlacementStatus = TEXT("Each PCG layer requires a unique name, a graph, and one mesh");
 			return false;
 		}
-		for (const UPCGNode* Node : Layer.Graph->GetGraph()->GetNodes())
+		if (!FVoxelLandPCGGraphPolicy::Validate(*Layer.Graph->GetGraph(), PlacementStatus))
 		{
-			const UPCGSettings* Settings = Node ? Node->GetSettings() : nullptr;
-			if (!Settings)
-			{
-				continue;
-			}
-			const FString Name = Settings->GetClass()->GetName();
-			if (Name.Contains(TEXT("Spawner")) || Name.Contains(TEXT("SpawnActor")) || Name.Contains(TEXT("Subgraph"))
-				|| Name.Contains(TEXT("Blueprint")))
-			{
-				PlacementStatus = TEXT("Connect the graph to a point output. The VoxelLand layer publishes its mesh.");
-				return false;
-			}
+			return false;
 		}
 		IDs.Add(Layer.LayerId);
 	}
@@ -211,8 +202,13 @@ int32 UVoxelLandPCGComponent::GetCellSeed(const FVoxelLandPCGCellKey& Key) const
 void UVoxelLandPCGComponent::ProcessCells()
 {
 	const double Deadline = FPlatformTime::Seconds() + 0.001;
-	int32 Jobs = 0;
+	DetachedCells.RemoveAll([](const FVoxelLandPCGDetachedCell& Cell) { return !Cell.Work->HasWorkers(); });
+	int32 Jobs = DetachedCells.Num();
 	int64 PendingFieldBytes = 0;
+	for (const FVoxelLandPCGDetachedCell& Cell : DetachedCells)
+	{
+		PendingFieldBytes += Cell.FieldBytes;
+	}
 	for (const TPair<FVoxelLandPCGCellKey, FVoxelLandPCGCellRecord>& Entry : Cells)
 	{
 		if (Entry.Value.Lease.IsValid() || Entry.Value.Pending.IsValid())
@@ -403,7 +399,17 @@ void UVoxelLandPCGComponent::CancelCell(FVoxelLandPCGCellRecord& Record)
 	ReleaseLease(Record);
 	if (AVoxelLandPCGCell* Pending = Record.Pending.Get())
 	{
+		const UPCGVoxelTerrainData* Snapshot = Pending->GetTerrainData();
+		TSharedPtr<FVoxelLandPCGWorkFence, ESPMode::ThreadSafe> Work;
+		if (Snapshot)
+		{
+			Work = Snapshot->GetWorkFence();
+		}
 		Pending->StopExecution();
+		if (Work && Work->HasWorkers())
+		{
+			DetachedCells.Add({Work, Record.Dependencies.Num() * FVoxelLandPCGFieldReservation::BytesPerChunk});
+		}
 		Pending->Destroy();
 	}
 	Record.Pending.Reset();

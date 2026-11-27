@@ -3,6 +3,7 @@
 #include "PCGData.h"
 #include "VoxelLandPCGTerrainDataStatus.h"
 #include "VoxelLandPCGTerrainDataType.h"
+#include "VoxelLandPCGWorkFence.h"
 #include "World/Collision/VoxelLandCollisionWorldView.h"
 
 #include "VoxelLandPCGTerrainData.generated.h"
@@ -38,8 +39,9 @@ public:
 	const IVoxelLandMaterialSignalSource* GetTerrainSignals() const { return TerrainSignals.Get(); }
 	uint64 GetMaskSeed() const { return MaskSeed; }
 
-	void Cancel() { bCancelled.Store(true); }
-	bool IsCancelled() const { return bCancelled.Load(); }
+	void Cancel() { WorkFence->Cancel(); }
+	bool IsCancelled() const { return WorkFence->IsCancelled(); }
+	const TSharedRef<FVoxelLandPCGWorkFence, ESPMode::ThreadSafe>& GetWorkFence() const { return WorkFence; }
 	FVoxelLandTerrainPlacementInput GetPlacementInput() const;
 #if WITH_EDITOR
 	void EnableCandidateDebug() { bCaptureCandidates = true; }
@@ -58,7 +60,8 @@ private:
 	TSharedPtr<const FVoxelLandMaskGraphProgram, ESPMode::ThreadSafe> MaskProgram;
 	TSharedPtr<const IVoxelLandMaterialSignalSource, ESPMode::ThreadSafe> TerrainSignals;
 	uint64 MaskSeed = 0;
-	TAtomic<bool> bCancelled{false};
+	TSharedRef<FVoxelLandPCGWorkFence, ESPMode::ThreadSafe> WorkFence =
+		MakeShared<FVoxelLandPCGWorkFence, ESPMode::ThreadSafe>();
 #if WITH_EDITOR
 	mutable FCriticalSection DebugCandidateLock;
 	mutable TArray<FVector> DebugCandidates;

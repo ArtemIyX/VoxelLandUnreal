@@ -29,3 +29,19 @@ $Trace = Join-Path $env:TEMP 'VoxelLandPCGForest.utrace'
 For a longer run, change the test filter to **VoxelLand.PCG.Forest.Integration.InfiniteRuntime** and add `-VoxelLandPCGForestStress`. Its defaults request a 560 m generation radius, cap resident cells at 96, and move the camera about 1.2 km before revisiting the center. Override them with `-VoxelLandPCGForestStressRadiusCm`, `-VoxelLandPCGForestStressCells`, and `-VoxelLandPCGForestStressTravelCm`. Use `-VoxelLandPCGForestStressCellChunks=2` and `-VoxelLandPCGForestStressVerticalCells=0` to profile wider cells on the same height fixture. The test waits three seconds once the destination has four populated cells. Override the hold and concurrency with `-VoxelLandPCGForestStressHoldSeconds` and `-VoxelLandPCGForestStressJobs`. The log records actual XY travel, published cell reach, and requested radius separately.
 
 Pass `-VoxelLandPCGForestSkeletalMesh=/Game/YourAsset.YourAsset` to run the fixture with an imported skeletal mesh. Record that asset, layer settings, view distances, instance counts, and game-thread timings with the result. The provided marker fixture can verify scheduling, deterministic placement, and publication. Long-distance art and performance acceptance needs the project's intended tree assets.
+
+## Windows UE 5.7 reference results
+
+The focused release suite passed **25 tests**. It covered finite editor preview, grayscale Mask Graph preview, native placement in finite and infinite Height and Direct Density, projection, deterministic revisit, and cleanup on source shutdown. Both saved maps opened in standalone. Dedicated NullRHI startup loaded the infinite map, ran terrain work, and recorded zero VoxelLand PCG or render-upload scopes.
+
+The settled skinned fixture used the optional engine mannequin in reference pose, the RTX 5080 and Ryzen 9 9950X3D workstation, 64 m cells, up to 256 resident cells and eight active cell jobs. After moving 1.184 km, the fixture held at the destination for 18 seconds. It recorded 64 populated cells, 431 instances and a farthest published cell center 324 m from the view, with 560 m requested. The fixture returned to the original region and verified the same center placement.
+
+| Unreal Insights scope | p95 ms | p99 ms | Max ms |
+|---|---:|---:|---:|
+| PCG scheduler on game thread | 0.321 | 0.402 | 1.633 |
+| Apply a cell on game thread | 0.280 | 0.368 | 0.860 |
+| Publish instances on game thread | 0.203 | 0.288 | 0.717 |
+| Canonical surface worker | 19.399 | 20.899 | 22.034 |
+| Whole game-thread frame during the active test | 9.329 | 14.711 | 28.366 |
+
+All 148 canonical surface jobs ran on background threads. The initial render trace had game-thread canonical sampling up to 6.629 ms. These figures describe the reference workload, including its terrain settings and stock asset. Profile the imported trees and animation setup to establish production distance and frame cost.

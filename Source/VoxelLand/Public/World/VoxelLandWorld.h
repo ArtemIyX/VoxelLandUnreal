@@ -3,9 +3,16 @@
 #include "GameFramework/Actor.h"
 #include "Async/Future.h"
 #include "Data/Field/Chunks/VoxelLandChunkData.h"
+#include "Data/Collision/Chaos/VoxelLandChaosCollisionSettings.h"
+#include "Data/Collision/Chaos/VoxelLandChaosCollisionOverride.h"
+#include "World/Collision/Chaos/VoxelLandChaosReadiness.h"
+#include "World/Collision/Chaos/VoxelLandChaosCookHookForTests.h"
 #include "VoxelLandWorld.generated.h"
 
 class FVoxelLandGenerator;
+class FVoxelLandChaosWorld;
+struct FVoxelLandChaosStats;
+struct FVoxelLandChaosTileInfo;
 class UVoxelLandWorldConfig;
 class UVoxelLandWorldSource;
 class UVoxelLandWorldConfig;
@@ -128,6 +135,40 @@ public:
 	// Pending keys are absent from the immutable view and resolve to Missing when sampled.
 	[[nodiscard]] bool CaptureCollisionView(const FGuid& ConsumerId, FVoxelLandCollisionWorldView& Out) const;
 	[[nodiscard]] bool IsCollisionViewCurrent(const FVoxelLandCollisionWorldView& View) const;
+
+	// Chaos terrain is independent of the SDF and disabled unless explicitly enabled for this world.
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Chaos Collision")
+	bool SetChaosTerrainCollisionEnabled(bool bEnabled);
+	[[nodiscard]] bool ConfigureChaosTerrainCollision(
+		const FVoxelLandChaosCollisionSettings& Settings, FString& OutError);
+	[[nodiscard]] EVoxelLandChaosReadiness UpdateChaosCollisionLease(const FGuid& ConsumerId, const FBox& LocalBounds);
+	[[nodiscard]] EVoxelLandChaosReadiness UpdateChaosCollisionTiles(
+		const FGuid& ConsumerId, TConstArrayView<FVoxelLandChunkKey> Tiles);
+	void ReleaseChaosCollisionLease(const FGuid& ConsumerId);
+	EVoxelLandChaosReadiness GetChaosCollisionReadiness(const FGuid& ConsumerId) const;
+	[[nodiscard]] bool CaptureChaosCollisionView(const FGuid& ConsumerId, FVoxelLandCollisionWorldView& Out) const;
+	[[nodiscard]] bool SetChaosCollisionOverride(
+		TConstArrayView<FVoxelLandChunkKey> Tiles, const FVoxelLandChaosCollisionOverride& Override);
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Chaos Collision")
+	bool SetChaosCollisionTileOverride(FIntVector Coordinate, const FVoxelLandChaosCollisionOverride& Override);
+	// A future authoritative update applies one complete batch per monotonically increasing revision.
+	[[nodiscard]] bool ApplyChaosCollisionOverrideRevision(TConstArrayView<FVoxelLandChunkKey> Tiles,
+		const FVoxelLandChaosCollisionOverride& Override, uint64 PolicyRevision);
+	[[nodiscard]] bool GetChaosCollisionTileInfo(const FVoxelLandChunkKey& Key, FVoxelLandChaosTileInfo& Out) const;
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Chaos Collision")
+	bool SetChaosCollisionBoundsOverride(const FBox& LocalBounds, const FVoxelLandChaosCollisionOverride& Override);
+	[[nodiscard]] bool RequestChaosCollisionRebuild(TConstArrayView<FVoxelLandChunkKey> Tiles);
+	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Chaos Collision")
+	bool RequestChaosCollisionRebuildForBounds(const FBox& LocalBounds);
+	[[nodiscard]] bool NotifyChaosCollisionSourceChanged(
+		TConstArrayView<FVoxelLandChunkKey> Tiles, uint64 SourceRevision);
+	[[nodiscard]] bool RegisterChaosProp(
+		UPrimitiveComponent& Component, FGuid& OutConsumerId, bool bSimulateWhenReady = true);
+	void UnregisterChaosProp(const FGuid& ConsumerId);
+	FVoxelLandChaosStats GetChaosCollisionStats() const;
+#if WITH_DEV_AUTOMATION_TESTS
+	void SetChaosCookHookForTests(FVoxelLandChaosCookHookForTests Hook);
+#endif
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Data")
 	bool RequestDataChunk(FIntVector Coordinate);
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Data")
@@ -231,6 +272,11 @@ private:
 	void DiscardM7Staging();
 	void RetireChunk(const FVoxelLandChunkKey& Key);
 	bool CanRequestChunk(const FVoxelLandChunkKey& Key, bool bLogRejection = false) const;
+	bool CollectCollisionDemandKeys(const FBox& LocalBounds, TArray<FVoxelLandChunkKey>& Out) const;
+	int32 ResolveChaosRenderLod(const FVoxelLandChunkKey& Key) const;
+	void AdvanceChaosCollision();
+	void StopChaosCollision(bool bDestroyBodies);
+	friend class FVoxelLandChaosWorld;
 	void PumpCompletions();
 	void Dispatch();
 	void HandleWorldBeginTearDown(UWorld* World);
@@ -268,6 +314,8 @@ private:
 	TFunction<void()> ShutdownHookForTests;
 	bool bFailWorkerStartForTests = false;
 #endif
+	FVoxelLandChaosCollisionSettings ChaosCollisionSettings;
+	TUniquePtr<FVoxelLandChaosWorld> ChaosCollision;
 	TUniquePtr<FVoxelLandWorldState> State;
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<AVoxelLandRegion>> Regions;

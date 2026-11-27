@@ -1,5 +1,6 @@
 #include "World/VoxelLandWorld.h"
 #include "World/VoxelLandWorldCoordinates.h"
+#include "Collision/Chaos/VoxelLandChaosWorld.h"
 #include "Streaming/Clipmap/VoxelLandClipmapRenderWork.h"
 #if !UE_SERVER
 #include "Rendering/Components/VoxelLandChunkComponent.h"
@@ -581,6 +582,8 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 	ActiveMaterialSourceIdentity.Reset();
 	StopDemo();
 	StopPendingInitialization();
+	StopChaosCollision(bDestroyRegionActors);
+	ChaosCollisionSettings = {};
 	if (!State)
 	{
 		return;
@@ -1425,6 +1428,10 @@ void AVoxelLandWorld::Tick(float DeltaSeconds)
 		RetireChunk(Key);
 	}
 	PumpCompletions();
+	if (ChaosCollision)
+	{
+		AdvanceChaosCollision();
+	}
 	AdvanceM7Publication();
 	if (!State)
 	{

@@ -5,7 +5,7 @@ public class VoxelLand : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PublicDependencyModuleNames.AddRange(new[] { "Core", "CoreUObject", "Engine", "VoxelLandData", "VoxelLandAlgo" });
-        PrivateDependencyModuleNames.Add("InputCore");
+        PrivateDependencyModuleNames.AddRange(new[] { "InputCore", "PhysicsCore" });
         if (Target.Type != TargetType.Server)
         {
             PrivateDependencyModuleNames.Add("VoxelLandRender");

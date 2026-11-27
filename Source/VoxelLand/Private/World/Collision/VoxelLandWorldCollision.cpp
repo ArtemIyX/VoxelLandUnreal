@@ -153,6 +153,12 @@ bool AVoxelLandWorld::UpdateCollisionDemand(const FGuid& ConsumerId, TConstArray
 
 bool AVoxelLandWorld::UpdateCollisionDemandForBounds(const FGuid& ConsumerId, const FBox& LocalBounds)
 {
+	TArray<FVoxelLandChunkKey> Keys;
+	return CollectCollisionDemandKeys(LocalBounds, Keys) && UpdateCollisionDemand(ConsumerId, Keys);
+}
+
+bool AVoxelLandWorld::CollectCollisionDemandKeys(const FBox& LocalBounds, TArray<FVoxelLandChunkKey>& Out) const
+{
 	using namespace VoxelLandWorldCollision;
 	check(IsInGameThread());
 	const UWorld* World = GetWorld();
@@ -191,7 +197,8 @@ bool AVoxelLandWorld::UpdateCollisionDemandForBounds(const FGuid& ConsumerId, co
 			MaxCell[Axis] = FMath::Min(MaxCell[Axis], LastBoundaryCell);
 			if (MinCell[Axis] > MaxCell[Axis])
 			{
-				return UpdateCollisionDemand(ConsumerId, {});
+				Out.Reset();
+				return true;
 			}
 		}
 	}
@@ -213,7 +220,7 @@ bool AVoxelLandWorld::UpdateCollisionDemandForBounds(const FGuid& ConsumerId, co
 		}
 		Count *= static_cast<int32>(Span);
 	}
-	TArray<FVoxelLandChunkKey, TInlineAllocator<MaxKeysPerConsumer>> Keys;
+	TArray<FVoxelLandChunkKey> Keys;
 	Keys.Reserve(Count);
 	for (int64 Z = FirstKey->Coordinate.Z; Z <= LastKey->Coordinate.Z; ++Z)
 	{
@@ -226,7 +233,8 @@ bool AVoxelLandWorld::UpdateCollisionDemandForBounds(const FGuid& ConsumerId, co
 			}
 		}
 	}
-	return UpdateCollisionDemand(ConsumerId, Keys);
+	Out = MoveTemp(Keys);
+	return true;
 }
 
 void AVoxelLandWorld::ReleaseCollisionDemand(const FGuid& ConsumerId)

@@ -122,7 +122,7 @@ public:
 		virtual ~FInitializationRequest() = default;
 		virtual bool IsCurrent() const = 0;
 		virtual TOptional<TSoftObjectPtr<UVoxelLandMaterialSetup>> GetPresentationSetup() const { return {}; }
-		virtual UVoxelLandWorldConfig* GetMaterialWorldConfig() const { return nullptr; }
+		virtual UVoxelLandWorldConfig* GetWorldConfig() const { return nullptr; }
 		virtual void ApplyDemand(AVoxelLandWorld&) const = 0;
 		virtual TOptional<FVoxelLandChunkKey> GetStartup() const { return {}; }
 #if WITH_EDITOR
@@ -192,7 +192,7 @@ public:
 			return {};
 		}
 
-		UVoxelLandWorldConfig* GetMaterialWorldConfig() const override { return WeakSettings.Get(); }
+		UVoxelLandWorldConfig* GetWorldConfig() const override { return WeakSettings.Get(); }
 
 		bool IsCurrent() const override
 		{
@@ -629,7 +629,7 @@ public:
 			return {};
 		}
 
-		UVoxelLandWorldConfig* GetMaterialWorldConfig() const override { return WeakConfig.Get(); }
+		UVoxelLandWorldConfig* GetWorldConfig() const override { return WeakConfig.Get(); }
 
 #if WITH_EDITOR
 		bool References(const UObject* Object) const override
@@ -1826,7 +1826,7 @@ void AVoxelLandWorld::PollInitialization()
 		PresentationSetup = Job->Request->GetPresentationSetup();
 		if (PresentationSetup.IsSet())
 		{
-			MaterialConfig.Reset(Job->Request->GetMaterialWorldConfig());
+			MaterialConfig.Reset(Job->Request->GetWorldConfig());
 			Presentation.Emplace(
 				MaterialConfig ? FVoxelLandTerrainPresentationResolver::Resolve(this, *MaterialConfig, CapturedSignals)
 							   : FVoxelLandTerrainPresentationResolver::Resolve(this, PresentationSetup.GetValue()));
@@ -1896,6 +1896,14 @@ void AVoxelLandWorld::PollInitialization()
 		return;
 	}
 	Job->Request->ApplyDemand(*this);
+	if (const UVoxelLandWorldConfig* Config = Job->Request->GetWorldConfig())
+	{
+		FString ChaosError;
+		if (!ConfigureChaosTerrainCollision(Config->ChaosCollision, ChaosError))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("VoxelLand Chaos collision is disabled: %s"), *ChaosError);
+		}
+	}
 	if (Presentation.IsSet())
 	{
 		SetTerrainMaterial(Presentation->Material.Get());

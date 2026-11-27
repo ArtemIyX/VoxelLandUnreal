@@ -468,7 +468,7 @@ public:
 		FM4InitializationRequest(UVoxelLandWorldConfig& Config, FVoxelLandM4WorldSnapshot&& InSnapshot,
 			FIntVector InStartup, TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InLease,
 			TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> InValidationLease,
-			TOptional<FVoxelLandM6WorldOverlay>&& InOverlay)
+			TOptional<FVoxelLandM6WorldOverlay>&& InOverlay, bool bInHasStartup)
 			: WeakConfig(&Config)
 			, AuthoredGraph(Config.Graph)
 			, Continental(Config.Continental.Graph)
@@ -477,6 +477,7 @@ public:
 			, ValidationLease(MoveTemp(InValidationLease))
 			, Snapshot(MoveTemp(InSnapshot))
 			, Startup(InStartup)
+			, bHasStartup(bInHasStartup)
 			, Lease(MoveTemp(InLease))
 			, Overlay(MoveTemp(InOverlay))
 		{
@@ -611,6 +612,10 @@ public:
 
 		TOptional<FVoxelLandChunkKey> GetStartup() const override
 		{
+			if (!bHasStartup)
+			{
+				return {};
+			}
 			FVoxelLandChunkKey Key;
 			Key.Coordinate = Startup;
 			return Key;
@@ -708,33 +713,9 @@ public:
 			{
 				return;
 			}
-			// Validate the entire requested startup bubble before publishing the generator.
-			for (int32 Z = -Snapshot.VerticalRadius; Z <= Snapshot.VerticalRadius; ++Z)
+			if (bHasStartup && !ValidateStartup(*Result, *Cancel, OutError))
 			{
-				for (int32 Y = -Snapshot.HorizontalRadius; Y <= Snapshot.HorizontalRadius; ++Y)
-				{
-					for (int32 X = -Snapshot.HorizontalRadius; X <= Snapshot.HorizontalRadius; ++X)
-					{
-						if (Cancel->Load())
-						{
-							return;
-						}
-						const int64 CX = int64(Startup.X) + X, CY = int64(Startup.Y) + Y, CZ = int64(Startup.Z) + Z;
-						if (CX < MIN_int32 || CX > MAX_int32 || CY < MIN_int32 || CY > MAX_int32 || CZ < MIN_int32
-							|| CZ > MAX_int32)
-						{
-							OutError = TEXT("M4 startup demand coordinate overflows");
-							return;
-						}
-						FVoxelLandChunkKey Key;
-						Key.Coordinate = FIntVector(int32(CX), int32(CY), int32(CZ));
-						if (const FVoxelLandError Failure = Result->ValidateM4ChunkDemand(Key))
-						{
-							OutError = FString::Printf(TEXT("M4 startup demand is invalid: %s"), *Failure.Message);
-							return;
-						}
-					}
-				}
+				return;
 			}
 			TArray<uint8> M6Identity;
 			if (ActiveOverlay && !Cancel->Load() && !EncodeM6Identity(*Result, M6Identity, OutError))
@@ -749,6 +730,39 @@ public:
 		}
 
 	private:
+		bool ValidateStartup(
+			const FVoxelLandGenerator& Generator, const TAtomic<bool>& Cancel, FString& OutError) const
+		{
+			for (int32 Z = -Snapshot.VerticalRadius; Z <= Snapshot.VerticalRadius; ++Z)
+			{
+				for (int32 Y = -Snapshot.HorizontalRadius; Y <= Snapshot.HorizontalRadius; ++Y)
+				{
+					for (int32 X = -Snapshot.HorizontalRadius; X <= Snapshot.HorizontalRadius; ++X)
+					{
+						if (Cancel.Load())
+						{
+							return false;
+						}
+						const int64 CX = int64(Startup.X) + X, CY = int64(Startup.Y) + Y, CZ = int64(Startup.Z) + Z;
+						if (CX < MIN_int32 || CX > MAX_int32 || CY < MIN_int32 || CY > MAX_int32 || CZ < MIN_int32
+							|| CZ > MAX_int32)
+						{
+							OutError = TEXT("M4 startup demand coordinate overflows");
+							return false;
+						}
+						FVoxelLandChunkKey Key;
+						Key.Coordinate = FIntVector(int32(CX), int32(CY), int32(CZ));
+						if (const FVoxelLandError Failure = Generator.ValidateM4ChunkDemand(Key))
+						{
+							OutError = FString::Printf(TEXT("M4 startup demand is invalid: %s"), *Failure.Message);
+							return false;
+						}
+					}
+				}
+			}
+			return true;
+		}
+
 		bool EncodeM6Identity(const FVoxelLandGenerator& Generator, TArray<uint8>& Identity, FString& Error) const
 		{
 			FVoxelLandM4IdentityRecord Baseline;
@@ -783,6 +797,7 @@ public:
 		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> ValidationLease;
 		FVoxelLandM4WorldSnapshot Snapshot;
 		FIntVector Startup;
+		bool bHasStartup = true;
 		TSharedPtr<const FVoxelLandM4GridLease, ESPMode::ThreadSafe> Lease;
 		TOptional<FVoxelLandM4IdentityRecord> SavedIdentity;
 		TSharedPtr<const FVoxelLandWorldSourceSnapshot, ESPMode::ThreadSafe> DefinitionSource;
@@ -1381,7 +1396,7 @@ bool AVoxelLandWorld::InitializeFromConfig(UVoxelLandWorldConfig* Config, FIntVe
 			LastInitializationError = TEXT("Clipmap LODs are unavailable for Direct Density terrain.");
 			return false;
 		}
-		if (!Config->IsInfinite() && !Config->DensityBounds.Contains(StartupChunk))
+		if (!bIsEditorTerrainPreview && !Config->IsInfinite() && !Config->DensityBounds.Contains(StartupChunk))
 		{
 			LastInitializationError = TEXT("The startup chunk must be inside the finite direct-density bounds.");
 			return false;
@@ -1396,7 +1411,7 @@ bool AVoxelLandWorld::InitializeDirectDensity(UVoxelLandWorldConfig* Settings, F
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
 	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
-		|| World->bIsTearingDown || !HasActorBegunPlay())
+		|| World->bIsTearingDown || (!HasActorBegunPlay() && !bIsEditorTerrainPreview))
 	{
 		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
 		return false;
@@ -1442,7 +1457,8 @@ bool AVoxelLandWorld::InitializeDirectDensity(UVoxelLandWorldConfig* Settings, F
 	Profile.VoxelSizeCm = Settings->DirectVoxelSizeCm;
 	const TSharedRef<FVoxelLandWorldSettingsInitInternals::FSettingsInitializationRequest, ESPMode::ThreadSafe>
 		Request = MakeShared<FVoxelLandWorldSettingsInitInternals::FSettingsInitializationRequest, ESPMode::ThreadSafe>(
-			*Settings, MoveTemp(Snapshot), Payload, MoveTemp(Profile), &StartupChunk, bCompileProjection);
+			*Settings, MoveTemp(Snapshot), Payload, MoveTemp(Profile),
+			bIsEditorTerrainPreview ? nullptr : &StartupChunk, bCompileProjection);
 	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
 		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
 	PendingInitialization = Job;
@@ -1577,7 +1593,7 @@ bool AVoxelLandWorld::InitializeAuthoredM4(UVoxelLandWorldConfig* Settings, FInt
 	check(IsInGameThread());
 	UWorld* World = GetWorld();
 	if (bLifecycleEnded || IsActorBeingDestroyed() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed) || !World
-		|| World->bIsTearingDown || !HasActorBegunPlay())
+		|| World->bIsTearingDown || (!HasActorBegunPlay() && !bIsEditorTerrainPreview))
 	{
 		LastInitializationError = TEXT("World actor is not ready for explicit initialization");
 		return false;
@@ -1657,7 +1673,8 @@ bool AVoxelLandWorld::InitializeAuthoredM4(UVoxelLandWorldConfig* Settings, FInt
 		return false;
 	}
 	const TSharedRef<FRequest, ESPMode::ThreadSafe> Request = MakeShared<FRequest, ESPMode::ThreadSafe>(
-		*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease), MoveTemp(Captured));
+		*Settings, MoveTemp(Snapshot), StartupChunk, MoveTemp(Lease), MoveTemp(ValidationLease),
+		MoveTemp(Captured), !bIsEditorTerrainPreview);
 	const TSharedRef<FVoxelLandInitializationJob, ESPMode::ThreadSafe> Job =
 		MakeShared<FVoxelLandInitializationJob, ESPMode::ThreadSafe>(Request);
 	PendingInitialization = Job;
@@ -1896,12 +1913,15 @@ void AVoxelLandWorld::PollInitialization()
 		return;
 	}
 	Job->Request->ApplyDemand(*this);
-	if (const UVoxelLandWorldConfig* Config = Job->Request->GetWorldConfig())
+	if (!bIsEditorTerrainPreview)
 	{
-		FString ChaosError;
-		if (!ConfigureChaosTerrainCollision(Config->ChaosCollision, ChaosError))
+		if (const UVoxelLandWorldConfig* Config = Job->Request->GetWorldConfig())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("VoxelLand Chaos collision is disabled: %s"), *ChaosError);
+			FString ChaosError;
+			if (!ConfigureChaosTerrainCollision(Config->ChaosCollision, ChaosError))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("VoxelLand Chaos collision is disabled: %s"), *ChaosError);
+			}
 		}
 	}
 	if (Presentation.IsSet())

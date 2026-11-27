@@ -237,6 +237,46 @@ bool AVoxelLandWorld::CollectCollisionDemandKeys(const FBox& LocalBounds, TArray
 	return true;
 }
 
+bool AVoxelLandWorld::GetTerrainPlacementGrid(double& OutChunkSizeCm, uint64& OutEpoch) const
+{
+	check(IsInGameThread());
+	if (!State)
+	{
+		return false;
+	}
+	OutChunkSizeCm = FVoxelLandChunkData::Cells * State->Generator->GetProfile().VoxelSizeCm;
+	OutEpoch = ConfigurationEpoch;
+	return true;
+}
+
+bool AVoxelLandWorld::CollectTerrainPlacementKeys(const FBox& LocalBounds, TArray<FVoxelLandChunkKey>& Out) const
+{
+	if (!CollectCollisionDemandKeys(LocalBounds, Out))
+	{
+		return false;
+	}
+	Out.RemoveAll([this](const FVoxelLandChunkKey& Key) { return !CanRequestChunk(Key); });
+	return true;
+}
+
+bool AVoxelLandWorld::GetTerminalTerrainPlacementError(const FIntVector Coordinate, FString& OutError) const
+{
+	check(IsInGameThread());
+	if (!State)
+	{
+		return false;
+	}
+	const FVoxelLandChunkKey Key{Coordinate, 0};
+	const VoxelLandWorldPrivate::FRecord* Record = State->Records.Find(Key);
+	if (!Record || Record->Data || !Record->bFailed
+		|| Record->CollisionRetries < VoxelLandWorldPrivate::FRecord::MaxCollisionRetries)
+	{
+		return false;
+	}
+	OutError = Record->Error;
+	return true;
+}
+
 void AVoxelLandWorld::ReleaseCollisionDemand(const FGuid& ConsumerId)
 {
 	check(IsInGameThread());

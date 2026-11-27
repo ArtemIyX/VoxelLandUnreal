@@ -13,11 +13,17 @@
 	"IsBetaVersion": false,
 	"IsExperimentalVersion": false,
 	"Installed": false,
-	"Plugins": [{ "Name": "FastNoise", "Enabled": true }],
+	"Plugins": [{ "Name": "FastNoise", "Enabled": true }, { "Name": "PCG", "Enabled": true }],
 	"Modules": [
 		{
 			"Name": "VoxelLand",
 			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "VoxelLandPCG",
+			"Type": "Runtime",
+			"TargetDenyList": ["Server"],
 			"LoadingPhase": "Default"
 		},
 		{

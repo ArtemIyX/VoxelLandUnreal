@@ -571,6 +571,10 @@ void AVoxelLandWorld::ShutdownInternal(bool bDestroyRegionActors)
 {
 	check(IsInGameThread());
 	SetActorTickEnabled(false);
+#if WITH_EDITOR
+	EditorTerrainPreviewKeys.Reset();
+	bHasEditorTerrainPreviewDemand = false;
+#endif
 	M4RejectedCameraDemandCount = 0;
 	M4FirstCameraDemandRejection.Reset();
 	M7ClipmapError.Reset();
@@ -908,7 +912,7 @@ void AVoxelLandWorld::DumpStats() const
 void AVoxelLandWorld::UpdateDemand()
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(VoxelLand_UpdateDemand);
-	if (!State || State->bServer)
+	if (!State || State->bServer || bIsEditorTerrainPreview)
 	{
 		return;
 	}
@@ -1210,6 +1214,15 @@ void AVoxelLandWorld::PumpCompletions()
 			FActorSpawnParameters Params;
 			Params.Owner = this;
 			Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+#if WITH_EDITOR
+			if (bIsEditorTerrainPreview)
+			{
+				Params.ObjectFlags |= RF_Transient | RF_DuplicateTransient | RF_TextExportTransient;
+				Params.OverrideLevel = GetLevel();
+				Params.bHideFromSceneOutliner = true;
+				Params.bTemporaryEditorActor = true;
+			}
+#endif
 			Region =
 				GetWorld()->SpawnActor<AVoxelLandRegion>(AVoxelLandRegion::StaticClass(), FTransform::Identity, Params);
 			if (!Region)
@@ -1224,6 +1237,12 @@ void AVoxelLandWorld::PumpCompletions()
 			Regions.Add(Region);
 			State->RegionMap.Add(RegionKey, Region);
 			Region->SetActorHiddenInGame(State->HiddenRegions.Contains(RegionKey));
+#if WITH_EDITOR
+			if (bIsEditorTerrainPreview)
+			{
+				Region->SetIsTemporarilyHiddenInEditor(!bIsEditorTerrainPreviewVisible);
+			}
+#endif
 		}
 		const FIntVector C = Done.Job.Key.Coordinate;
 		if (!Region->Publish(C, VoxelLandMeshCoordinates::RenderOrigin(C, State->Generator->GetProfile().VoxelSizeCm),

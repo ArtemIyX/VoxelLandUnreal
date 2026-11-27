@@ -73,6 +73,9 @@ public:
 	virtual ~AVoxelLandWorld() override;
 
 	virtual void Tick(float DeltaSeconds) override;
+#if WITH_EDITOR
+	virtual bool ShouldTickIfViewportsOnly() const override;
+#endif
 
 protected:
 	virtual void BeginPlay() override;
@@ -92,6 +95,13 @@ public:
 	// Copies settings on the game thread and initializes asynchronously. No work starts in BeginPlay.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Initialization")
 	bool InitializeFromConfig(UVoxelLandWorldConfig* Config, FIntVector StartupChunk);
+#if WITH_EDITOR
+	[[nodiscard]] bool InitializeFiniteEditorPreview(UVoxelLandWorldConfig* Config);
+	[[nodiscard]] bool RequestEditorPreviewBounds(const FBox& Bounds, FBox& OutClippedBounds, FString& OutError);
+	// Returns true on success or terminal failure. OutError distinguishes the two.
+	[[nodiscard]] bool PollEditorTerrainPreview(FString& OutError) const;
+	void SetEditorTerrainPreviewVisible(bool bVisible);
+#endif
 	// Initializes cave-disabled finite definitions asynchronously. The initial
 	// chunk is selected near the control-grid center and its demand bubble must fit.
 	// Enabled caves and other definitions remain rejected pending preparation.
@@ -135,6 +145,10 @@ public:
 	// Pending keys are absent from the immutable view and resolve to Missing when sampled.
 	[[nodiscard]] bool CaptureCollisionView(const FGuid& ConsumerId, FVoxelLandCollisionWorldView& Out) const;
 	[[nodiscard]] bool IsCollisionViewCurrent(const FVoxelLandCollisionWorldView& View) const;
+	// Shared completed-field consumers use the same logical grid and admission rules.
+	[[nodiscard]] bool GetTerrainPlacementGrid(double& OutChunkSizeCm, uint64& OutEpoch) const;
+	[[nodiscard]] bool CollectTerrainPlacementKeys(const FBox& LocalBounds, TArray<FVoxelLandChunkKey>& Out) const;
+	[[nodiscard]] bool GetTerminalTerrainPlacementError(FIntVector Coordinate, FString& OutError) const;
 
 	// Chaos terrain is independent of the SDF and disabled unless explicitly enabled for this world.
 	UFUNCTION(BlueprintCallable, Category = "VoxelLand|Chaos Collision")
@@ -310,6 +324,12 @@ private:
 	TArray<uint8> ActiveMaterialSourceIdentity;
 	uint64 ConfigurationEpoch = 0;
 	bool bLifecycleEnded = false;
+	bool bIsEditorTerrainPreview = false;
+#if WITH_EDITOR
+	bool bIsEditorTerrainPreviewVisible = false;
+	bool bHasEditorTerrainPreviewDemand = false;
+	TArray<FVoxelLandChunkKey> EditorTerrainPreviewKeys;
+#endif
 	FDelegateHandle WorldTearDownHandle;
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<void()> PresentationHookForTests;

@@ -5,6 +5,7 @@
 #include "Data/Terrain/Controls/VoxelLandControlConfig.h"
 #include "Data/Terrain/Shaping/VoxelLandHeightDetailConfig.h"
 #include "Data/Caves/Planning/VoxelLandCaveSettings.h"
+#include "Data/Collision/Chaos/VoxelLandChaosCollisionSettings.h"
 #include "Data/Graph/Sources/VoxelLandParameterOverride.h"
 #include "Data/TerrainOverlay/Configuration/VoxelLandTerrainOverlay.h"
 #include "Data/World/Configuration/VoxelLandDensityBounds.h"
@@ -119,6 +120,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "World")
 	EVoxelLandWorldExtent WorldExtent = EVoxelLandWorldExtent::Finite;
+
+	// Presentation policy is captured independently of the terrain generation identity.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Chaos Terrain Collision", meta = (ShowOnlyInnerProperties))
+	FVoxelLandChaosCollisionSettings ChaosCollision;
 
 	bool IsInfinite() const { return WorldExtent == EVoxelLandWorldExtent::Infinite; }
 	bool IsDirectDensity() const { return TerrainSource == EVoxelLandTerrainSource::DirectDensity; }

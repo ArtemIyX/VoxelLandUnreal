@@ -4,12 +4,12 @@
 
 ## Planned multiplayer flow
 
-1. The server resolves the selected recipe and prepares the authoritative terrain. A separate VoxelLand session actor replicates the seed, recipe ID, world generation identity, and expected fingerprints. Its content manifest identifies required generation packs by stable ID, version, and fingerprint.
+1. The server resolves the selected recipe and prepares the authoritative terrain. A separate VoxelLand session actor replicates the seed, recipe ID, world generation identity, and expected fingerprints. The recipe resolves against cooked project content. The fingerprint covers terrain-affecting dependencies. Mod loading and pack manifests belong to a future milestone.
 2. A joining client receives the session actor and an owner-only spawn ticket. The client resolves matching local content and regenerates the terrain for its spawn area. Terrain fields, meshes, and cosmetic PCG instances are generated locally.
-3. The client sends readiness through its owning PlayerController. The server checks the current world and ticket, verifies generation evidence, and independently prepares the required LOD 0 fields and halo before allowing possession.
-4. Late joiners receive the current descriptor. Map travel retires the old session actor and pending work. The destination gameplay world publishes a fresh descriptor and issues fresh tickets, including when a PlayerController survives seamless travel.
+3. The client sends readiness through a VoxelLand endpoint actor that the server automatically creates and assigns to the owning PlayerController. The server checks the current world and ticket, verifies generation evidence, and independently prepares the required LOD 0 fields and halo before allowing possession.
+4. Late joiners receive the current descriptor. Map travel retires the old session actor, player endpoints, and pending work. The destination gameplay world publishes a fresh descriptor and issues fresh tickets, including when a PlayerController survives seamless travel.
 
-The host chooses its own `GameStateClass`, recipe, and spawn rules. The module requires no GameState subclass or changes to GameState. Listen hosts use their authoritative terrain locally. Dedicated servers prepare data without voxel rendering or cosmetic PCG work. Single-player uses the same preparation and spawn-readiness path without Iris or a gameplay NetDriver.
+The host chooses its own `GameStateClass`, recipe, and spawn rules. VoxelLand sets up networking automatically for active VoxelLand gameplay sessions. Host projects add no GameState or PlayerController subclass, component, or networking actor. The existing spawn flow calls the admission API before possession. Failures expose a stable numeric enum, a gameplay tag, a developer message, and an optional diagnostic fingerprint. The host decides how to recover. Listen hosts use their authoritative terrain locally. Dedicated servers prepare data without voxel rendering or cosmetic PCG work. Single-player uses the same preparation and spawn-readiness path without Iris or a gameplay NetDriver.
 
 > VoxelLand multiplayer replication requires Iris on the active gameplay NetDriver. The planned runtime check will log a warning and block VoxelLand multiplayer admission if the driver uses another backend. The host can surface that failure to players.
 
